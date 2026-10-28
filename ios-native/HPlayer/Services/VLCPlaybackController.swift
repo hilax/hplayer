@@ -93,7 +93,7 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
             volume = value
             return
         }
-        audio.volume = Int((value * 200).rounded())
+        audio.volume = Int32((value * 200).rounded())
         if value > 0 { audio.isMuted = false }
         volume = value
         muted = audio.isMuted
