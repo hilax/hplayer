@@ -31,11 +31,13 @@ struct PlayerView: View {
     @State private var loading = true
     @State private var originalURL: URL?
     @State private var qualities: [Open115Quality] = []
+    @State private var directQualities: [Direct115Stream] = []
     @State private var selectedQuality = "原画"
     @State private var isOfficialQuality = false
     @State private var switchingQuality = false
     @State private var qualityError = ""
     @State private var visible = true
+    @State private var playerObservation: NSKeyValueObservation?
 
     var body: some View {
         NavigationStack {
@@ -102,6 +104,27 @@ struct PlayerView: View {
                     .padding(.horizontal)
                     .padding(.vertical, 12)
                 }
+                if !directQualities.isEmpty {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("115 在线画质").font(.headline)
+                            Text("手机直连，画质与账号及片源有关")
+                                .font(.caption).foregroundColor(.secondary)
+                        }
+                        Spacer()
+                        if switchingQuality { ProgressView().padding(.trailing, 4) }
+                        Menu {
+                            ForEach(directQualities) { quality in
+                                Button(quality.title) { Task { await selectDirect(quality) } }
+                            }
+                        } label: {
+                            Label(selectedQuality, systemImage: "chevron.up.chevron.down")
+                                .font(.subheadline.weight(.medium))
+                        }
+                        .disabled(switchingQuality)
+                    }
+                    .padding(.horizontal).padding(.vertical, 12)
+                }
                 if !qualityError.isEmpty {
                     Text(qualityError)
                         .font(.caption).foregroundColor(.red)
@@ -123,6 +146,7 @@ struct PlayerView: View {
             }
             .onDisappear {
                 visible = false
+                playerObservation = nil
                 player?.currentItem?.cancelPendingSeeks()
                 player?.pause()
             }
@@ -144,12 +168,44 @@ struct PlayerView: View {
         loading = true
         error = ""
 
+        if appState.isDirect, case .p115(_, let pickCode) = source {
+            await loadDirect(pickCode)
+            loading = false
+            return
+        }
+
         await loadOriginal()
         loading = false
         if case .p115(_, let pickCode) = source, !Task.isCancelled {
             // A failure here (for example, Cookie mode) must not interrupt original playback.
             await loadQualities(pickCode)
         }
+    }
+
+    private func loadDirect(_ pickCode: String) async {
+        guard let client = appState.directClient() else { error = "请先登录 115"; return }
+        do {
+            let streams = try await client.streams(pickCode: pickCode)
+            guard visible && !Task.isCancelled, let first = streams.first else { return }
+            directQualities = streams
+            selectedQuality = first.title
+            play(first.url, preservingPosition: false, directHeaders: true)
+        } catch { self.error = error.localizedDescription }
+    }
+
+    private func selectDirect(_ quality: Direct115Stream) async {
+        guard case .p115(_, let pickCode) = source, let client = appState.directClient() else { return }
+        switchingQuality = true
+        qualityError = ""
+        defer { switchingQuality = false }
+        do {
+            let streams = try await client.streams(pickCode: pickCode)
+            guard visible && !Task.isCancelled else { return }
+            guard let fresh = streams.first(where: { $0.title == quality.title }) else { throw APIError.server("该画质暂不可用") }
+            directQualities = streams
+            selectedQuality = fresh.title
+            play(fresh.url, preservingPosition: true, directHeaders: true)
+        } catch { qualityError = error.localizedDescription }
     }
 
     private func loadOriginal() async {
@@ -234,10 +290,23 @@ struct PlayerView: View {
         }
     }
 
-    private func play(_ url: URL, preservingPosition: Bool) {
+    private func play(_ url: URL, preservingPosition: Bool, directHeaders: Bool = false) {
         let position = preservingPosition ? player?.currentTime() : nil
         let shouldPlay = player?.timeControlStatus != .paused || player == nil
-        let item = AVPlayerItem(url: url)
+        let asset: AVURLAsset
+        if directHeaders {
+            asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": ["User-Agent": Direct115Client.userAgent, "Referer": "https://115.com/"]])
+        } else {
+            asset = AVURLAsset(url: url)
+        }
+        let item = AVPlayerItem(asset: asset)
+        playerObservation = item.observe(\.status, options: [.new]) { item, _ in
+            guard item.status == .failed else { return }
+            DispatchQueue.main.async {
+                guard visible, player?.currentItem === item else { return }
+                qualityError = "播放失败，请尝试其他画质或检查 115 账号权益。"
+            }
+        }
         let currentPlayer = player ?? AVPlayer()
         currentPlayer.replaceCurrentItem(with: item)
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)

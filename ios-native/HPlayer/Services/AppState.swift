@@ -2,18 +2,23 @@ import Foundation
 
 @MainActor
 final class AppState: ObservableObject {
+    enum ConnectionMode: String { case device, server }
     @Published var serverURLString: String
     @Published var isAuthenticated = false
     @Published var isLoading = true
+    @Published private(set) var mode: ConnectionMode
 
     private var token: String?
 
     private static let serverKey = "hplayer.serverURL"
     private static let tokenKey = "hplayer.token"
+    private static let modeKey = "hplayer.mode"
+    private static let cookieKey = "hplayer.115.cookie"
 
     init() {
         serverURLString = UserDefaults.standard.string(forKey: Self.serverKey) ?? ""
         token = Keychain.load(Self.tokenKey)
+        mode = ConnectionMode(rawValue: UserDefaults.standard.string(forKey: Self.modeKey) ?? "") ?? .device
     }
 
     var serverURL: URL? {
@@ -25,6 +30,27 @@ final class AppState: ObservableObject {
 
     var hasServer: Bool {
         !serverURLString.isEmpty && serverURL != nil
+    }
+
+    var isDirect: Bool { mode == .device }
+    var directCookie: String? { Keychain.load(Self.cookieKey) }
+
+    func setMode(_ newMode: ConnectionMode) {
+        guard mode != newMode else { return }
+        mode = newMode
+        UserDefaults.standard.set(newMode.rawValue, forKey: Self.modeKey)
+        isAuthenticated = newMode == .device && directCookie != nil
+    }
+
+    func connectDirect(cookie: String) async throws {
+        _ = try await Direct115Client(cookie: cookie).user()
+        Keychain.save(cookie, for: Self.cookieKey)
+        isAuthenticated = true
+    }
+
+    func directClient() -> Direct115Client? {
+        guard isDirect, let cookie = directCookie, !cookie.isEmpty else { return nil }
+        return Direct115Client(cookie: cookie)
     }
 
     func setServer(_ value: String) {
@@ -42,6 +68,11 @@ final class AppState: ObservableObject {
     }
 
     func checkAuth() async {
+        if isDirect {
+            isAuthenticated = directCookie != nil
+            isLoading = false
+            return
+        }
         guard let serverURL else {
             isAuthenticated = false
             isLoading = false
@@ -69,12 +100,18 @@ final class AppState: ObservableObject {
     }
 
     func logout() {
+        if isDirect {
+            Keychain.delete(Self.cookieKey)
+            isAuthenticated = false
+            return
+        }
         token = nil
         Keychain.delete(Self.tokenKey)
         isAuthenticated = false
     }
 
     func client() -> APIClient? {
+        guard !isDirect else { return nil }
         guard let serverURL else { return nil }
         return APIClient(baseURL: serverURL, token: token)
     }

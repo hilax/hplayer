@@ -84,16 +84,22 @@ struct DirectoryView: View {
     }
 
     private func load() async {
-        guard appState.isAuthenticated, let client = appState.client() else {
+        guard appState.isAuthenticated else {
             loading = false
-            error = "请先在设置中连接服务器并登录"
+            error = appState.isDirect ? "请先登录 115" : "请先在设置中连接服务器并登录"
             return
         }
         loading = true
         error = ""
         do {
-            let response: FileListResponse = try await client.get("/api/files?cid=\(cid)")
-            files = response.files
+            let listed: [P115File]
+            if let direct = appState.directClient() {
+                listed = try await direct.files(cid: cid)
+            } else if let client = appState.client() {
+                let response: FileListResponse = try await client.get("/api/files?cid=\(cid)")
+                listed = response.files
+            } else { throw APIError.server("未连接 115") }
+            files = listed
                 .filter { $0.isDir || $0.isVideo }
                 .sorted { a, b in
                     if a.isDir != b.isDir { return a.isDir }

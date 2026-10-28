@@ -10,6 +10,7 @@ struct LibraryTab: View {
     @State private var showAddSource = false
     @State private var showSetup = false
     @State private var showOfficial = false
+    @State private var showDirectLogin = false
     @State private var connecting = false
     @State private var connectionError = ""
 
@@ -87,6 +88,15 @@ struct LibraryTab: View {
                 .environmentObject(appState)
         }
         .sheet(isPresented: $showSetup) { SettingsView() }
+        .sheet(isPresented: $showDirectLogin) {
+            NavigationStack {
+                CookieWebLoginView {
+                    showDirectLogin = false
+                    path.append(Crumb(cid: "0", name: "115 网盘"))
+                }
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { showDirectLogin = false } } }
+            }
+        }
         .sheet(isPresented: $showOfficial) {
             NavigationStack {
                 Official115SettingsView {
@@ -96,13 +106,14 @@ struct LibraryTab: View {
             }
         }
         .alert("无法连接 115", isPresented: Binding(get: { !connectionError.isEmpty }, set: { if !$0 { connectionError = "" } })) {
-            Button("115 授权设置") { connectionError = ""; showOfficial = true }
+            Button("重新登录 115") { connectionError = ""; if appState.isDirect { showDirectLogin = true } else { showOfficial = true } }
             Button("关闭", role: .cancel) { connectionError = "" }
         } message: { Text(connectionError) }
         .task {
             await load()
         }
         .onChange(of: appState.isAuthenticated) { _ in Task { await load() } }
+        .onChange(of: appState.mode) { _ in status = nil; quota = nil; path.removeAll(); Task { await load() } }
     }
 
     private var searchEntry: some View {
@@ -215,11 +226,19 @@ struct LibraryTab: View {
     }
 
     private func load() async {
-        guard appState.isAuthenticated, let client = appState.client() else {
+        guard appState.isAuthenticated else {
             status = nil
             quota = nil
             return
         }
+
+        if appState.isDirect {
+            guard let direct = appState.directClient() else { return }
+            status = try? await direct.user()
+            quota = try? await direct.quota()
+            return
+        }
+        guard let client = appState.client() else { return }
 
         do {
             status = try await client.get("/api/115/status")
@@ -236,6 +255,16 @@ struct LibraryTab: View {
 
     private func open115() async {
         guard !connecting else { return }
+        if appState.isDirect {
+            guard let direct = appState.directClient() else { showDirectLogin = true; return }
+            connecting = true
+            defer { connecting = false }
+            do {
+                status = try await direct.user()
+                path.append(Crumb(cid: "0", name: "115 网盘"))
+            } catch { connectionError = error.localizedDescription }
+            return
+        }
         guard appState.hasServer, appState.isAuthenticated, let client = appState.client() else {
             showSetup = true
             return

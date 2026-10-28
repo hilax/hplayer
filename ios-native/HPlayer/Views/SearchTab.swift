@@ -23,7 +23,7 @@ struct SearchView: View {
                 EmptyStateView(
                     icon: "magnifyingglass",
                     title: "登录后才能搜索",
-                    message: "到「设置」里连接服务器并登录 115 账号"
+                    message: appState.isDirect ? "到「资源库」登录 115 账号" : "到「设置」里连接服务器并登录 115 账号"
                 )
             } else if loading {
                 ProgressView()
@@ -88,15 +88,19 @@ struct SearchView: View {
 
     private func search() async {
         let query = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty, let client = appState.client() else { return }
+        guard !query.isEmpty else { return }
 
         loading = true
         error = ""
         do {
-            let response: SearchResponse = try await client.get(
-                "/api/search?q=\(query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")"
-            )
-            results = response.files.filter { !$0.isDir }
+            let files: [P115File]
+            if let direct = appState.directClient() {
+                files = try await direct.search(query)
+            } else if let client = appState.client() {
+                let response: SearchResponse = try await client.get("/api/search?q=\(query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")")
+                files = response.files
+            } else { throw APIError.server("请先登录 115") }
+            results = files.filter { !$0.isDir && $0.isVideo }
         } catch let err {
             error = err.localizedDescription
         }

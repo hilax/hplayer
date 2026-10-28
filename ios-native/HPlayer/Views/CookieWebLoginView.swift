@@ -1,7 +1,7 @@
 import SwiftUI
 import WebKit
 
-/// 在独立的网页会话内登录 115，仅把该域名的必要 Cookie 交给自己的后端。
+/// 在独立的网页会话内登录 115。
 struct CookieWebLoginView: View {
     let onConnected: () -> Void
     @EnvironmentObject private var appState: AppState
@@ -54,16 +54,18 @@ struct CookieWebLoginView: View {
     }
 
     private func connect(_ cookie: String) async {
-        guard !checking, let client = appState.client(), appState.isAuthenticated else {
-            error = "请先连接服务器并登录 HPlayer"
-            return
-        }
+        guard !checking else { return }
         checking = true
         lastAttempt = cookie
         error = ""
         defer { checking = false }
         do {
-            let _: CookieResponse = try await client.post("/api/115/cookie", body: ["cookie": cookie])
+            if appState.isDirect {
+                try await appState.connectDirect(cookie: cookie)
+            } else {
+                guard let client = appState.client(), appState.isAuthenticated else { throw APIError.server("请先登录服务器") }
+                let _: CookieResponse = try await client.post("/api/115/cookie", body: ["cookie": cookie])
+            }
             candidate = ""
             lastAttempt = ""
             onConnected()

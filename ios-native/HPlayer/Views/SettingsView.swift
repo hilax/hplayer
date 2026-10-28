@@ -24,6 +24,38 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 Section {
+                    Picker("连接方式", selection: Binding(get: { appState.mode }, set: { mode in
+                        appState.setMode(mode)
+                        status = nil
+                        error = ""
+                        Task { await appState.checkAuth(); await loadStatus() }
+                    })) {
+                        Text("手机直连").tag(AppState.ConnectionMode.device)
+                        Text("服务器").tag(AppState.ConnectionMode.server)
+                    }
+                    .pickerStyle(.segmented)
+                } footer: {
+                    Text(appState.isDirect ? "115 登录、浏览和在线播放直接在手机进行，无需电脑开机。" : "连接自己的后端，可使用服务器转封装与原有开放平台功能。")
+                }
+
+                if appState.isDirect {
+                    Section("115 账号") {
+                        statusRow
+                        NavigationLink {
+                            CookieWebLoginView(onConnected: { Task { await loadStatus() } })
+                        } label: {
+                            Label(appState.isAuthenticated ? "重新登录 115" : "登录 115", systemImage: "person.badge.key.fill")
+                        }
+                        if appState.isAuthenticated {
+                            Button("退出 115", role: .destructive) { appState.logout(); status = nil }
+                        }
+                    }
+                    Section {
+                        Text("手机直连播放使用 115 在线画质，具体可播格式和清晰度取决于 115 账号及片源。")
+                            .font(.footnote).foregroundColor(.secondary)
+                    }
+                } else {
+                Section {
                     TextField("https://hplayer.example.com", text: $serverURL)
                         .focused($focusedField, equals: .server)
                         .keyboardType(.URL)
@@ -95,6 +127,7 @@ struct SettingsView: View {
                     }
                     .disabled(!appState.isAuthenticated || saving)
                 }
+                }
 
                 if !error.isEmpty {
                     Section {
@@ -128,7 +161,7 @@ struct SettingsView: View {
     @ViewBuilder
     private var statusRow: some View {
         if !appState.isAuthenticated {
-            Text("登录后可查看").foregroundColor(.secondary)
+            Text(appState.isDirect ? "尚未登录 115" : "登录后可查看").foregroundColor(.secondary)
         } else if let status {
             if !status.configured {
                 Text(status.message ?? "未配置 Cookie")
@@ -163,9 +196,13 @@ struct SettingsView: View {
     }
 
     private func loadStatus() async {
-        guard appState.isAuthenticated, let client = appState.client() else { return }
+        guard appState.isAuthenticated else { return }
         do {
-            status = try await client.get("/api/115/status")
+            if appState.isDirect, let direct = appState.directClient() {
+                status = try await direct.user()
+            } else if let client = appState.client() {
+                status = try await client.get("/api/115/status")
+            }
         } catch let err {
             error = err.localizedDescription
         }
