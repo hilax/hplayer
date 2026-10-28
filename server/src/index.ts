@@ -8,7 +8,8 @@ if (!config.password) {
   process.exit(1)
 }
 
-const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? 'info' } })
+// OAuth 回调的查询参数包含一次性授权码，不把请求 URL 写入日志。
+const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? 'info' }, disableRequestLogging: true })
 
 await app.register(cookie)
 

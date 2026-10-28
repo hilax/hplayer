@@ -15,10 +15,11 @@ let refreshCount = 0
 let downloadUA = ''
 const ok = (data: unknown, extra: object = {}) => new Response(JSON.stringify({ state: true, code: 0, data, ...extra }), { status: 200, headers: { 'content-type': 'application/json' } })
 globalThis.fetch = async (input, init) => {
-  const url = new URL(String(input)); const body = init?.body as FormData | undefined
+  const url = new URL(String(input)); const body = init?.body as FormData | URLSearchParams | undefined
   const headers = new Headers(init?.headers)
   switch (url.pathname) {
     case '/open/authDeviceCode':
+      assert.ok(body instanceof URLSearchParams)
       assert.equal(body?.get('client_id'), 'test-app-id')
       assert.equal(body?.get('code_challenge_method'), 'sha256')
       challenge = String(body?.get('code_challenge'))
@@ -27,10 +28,12 @@ globalThis.fetch = async (input, init) => {
       assert.equal(url.searchParams.get('uid'), 'test-uid')
       return ok({ status: 2 }, { state: 1 })
     case '/open/deviceCodeToToken':
+      assert.ok(body instanceof URLSearchParams)
       verifier = String(body?.get('code_verifier'))
       assert.equal(challenge, createHash('sha256').update(verifier).digest('base64url'))
       return ok({ access_token: 'access-1', refresh_token: 'refresh-1', expires_in: 3600 })
     case '/open/refreshToken':
+      assert.ok(body instanceof URLSearchParams)
       assert.equal(body?.get('refresh_token'), refreshCount === 0 ? 'refresh-1' : 'refresh-2')
       refreshCount++
       return ok({ access_token: `access-${refreshCount + 1}`, refresh_token: `refresh-${refreshCount + 1}`, expires_in: 3600 })

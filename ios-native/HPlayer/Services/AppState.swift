@@ -17,7 +17,10 @@ final class AppState: ObservableObject {
     }
 
     var serverURL: URL? {
-        URL(string: serverURLString)
+        guard let url = URL(string: serverURLString),
+              let scheme = url.scheme?.lowercased(), ["http", "https"].contains(scheme),
+              url.host != nil, url.user == nil, url.password == nil else { return nil }
+        return url
     }
 
     var hasServer: Bool {
@@ -29,12 +32,18 @@ final class AppState: ObservableObject {
         while trimmed.hasSuffix("/") {
             trimmed.removeLast()
         }
+        if trimmed != serverURLString {
+            token = nil
+            Keychain.delete(Self.tokenKey)
+            isAuthenticated = false
+        }
         serverURLString = trimmed
         UserDefaults.standard.set(trimmed, forKey: Self.serverKey)
     }
 
     func checkAuth() async {
         guard let serverURL else {
+            isAuthenticated = false
             isLoading = false
             return
         }

@@ -8,6 +8,8 @@ struct SettingsTab: View {
 
 struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
+    private enum Field: Hashable { case server, password, cookie }
+    @FocusState private var focusedField: Field?
 
     @State private var status: P115Status?
     @State private var cookie = ""
@@ -23,9 +25,12 @@ struct SettingsView: View {
             Form {
                 Section {
                     TextField("https://hplayer.example.com", text: $serverURL)
+                        .focused($focusedField, equals: .server)
                         .keyboardType(.URL)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
+                        .submitLabel(.done)
+                        .onSubmit { focusedField = nil }
 
                     Button("保存地址") {
                         appState.setServer(serverURL)
@@ -49,7 +54,10 @@ struct SettingsView: View {
                         }
                     } else {
                         SecureField("访问密码", text: $password)
+                            .focused($focusedField, equals: .password)
                             .textContentType(.password)
+                            .submitLabel(.done)
+                            .onSubmit { focusedField = nil }
                         Button(loggingIn ? "登录中…" : "登录") {
                             Task { await login() }
                         }
@@ -74,6 +82,7 @@ struct SettingsView: View {
 
                 Section("更新 Cookie") {
                     TextEditor(text: $cookie)
+                        .focused($focusedField, equals: .cookie)
                         .frame(minHeight: 100)
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
@@ -97,6 +106,13 @@ struct SettingsView: View {
                     Section {
                         Text(message).foregroundColor(.green)
                     }
+                }
+            }
+            .scrollDismissesKeyboard(.interactively)
+            .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("完成") { focusedField = nil }
                 }
             }
             .navigationTitle("设置")

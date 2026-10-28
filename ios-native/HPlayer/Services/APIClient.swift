@@ -37,7 +37,7 @@ struct APIClient {
 
         var request = URLRequest(url: url)
         request.httpMethod = method
-        request.timeoutInterval = 60
+        request.timeoutInterval = path == "/api/115/torrent/upload" ? 180 : (path == "/api/115/status" ? 15 : 45)
         request.setValue("application/json", forHTTPHeaderField: "Accept")
 
         if let body {

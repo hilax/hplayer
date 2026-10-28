@@ -19,7 +19,8 @@ import {
   searchFiles,
 } from '../p115/client.js'
 import { getCookie, isCookieComplete, setCookie } from '../p115/store.js'
-import { configureOpen, openRequest, openState, openUser, pollOpenAuth, setSource, startOpenAuth, useOpen } from '../p115/open.js'
+import { completeWebAuth, configureOpen, failWebAuth, openRequest, openState, openUser, pollOpenAuth, setSource, startOpenAuth, startWebAuth, useOpen, webAuthStatus } from '../p115/open.js'
+import { addTorrent, parseTorrent, torrentDirectory, torrentTasks, uploadTorrent } from '../p115/torrent.js'
 import { closeSession, ensureSession, getSession, readPlaylist, readSegment } from '../media/hls.js'
 import { probe } from '../media/probe.js'
 
@@ -87,6 +88,19 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.post('/api/115/open/auth/poll', { preHandler: requireAuth }, async (_request, reply) => {
     try { return await pollOpenAuth() } catch (error) { return sendP115Error(reply, error) }
   })
+  app.post('/api/115/open/auth/web/start', { preHandler: requireAuth }, async (request, reply) => {
+    const { clientSecret, redirectUri } = (request.body ?? {}) as { clientSecret?: unknown; redirectUri?: unknown }
+    if (typeof clientSecret !== 'string' || typeof redirectUri !== 'string') return reply.code(400).send({ error: '请填写 AppSecret 和 HTTPS 回调地址' })
+    try { return startWebAuth(clientSecret.trim(), redirectUri.trim()) } catch (error) { return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) }) }
+  })
+  app.get('/api/115/open/auth/web/status', { preHandler: requireAuth }, async () => webAuthStatus())
+  app.get('/api/115/open/auth/callback', async (request, reply) => {
+    const query = request.query as { state?: unknown; code?: unknown }
+    if (typeof query.state === 'string' && typeof query.code !== 'string') failWebAuth(query.state)
+    const ok = typeof query.state === 'string' && typeof query.code === 'string' && await completeWebAuth(query.state, query.code)
+    reply.header('Cache-Control', 'no-store').header('Referrer-Policy', 'no-referrer').type('text/html; charset=utf-8')
+    return reply.send(`<!doctype html><html lang="zh-CN"><meta name="viewport" content="width=device-width,initial-scale=1"><title>HPlayer 115 授权</title><body style="font-family:system-ui;text-align:center;padding:15vh 24px"><h2>${ok ? '115 授权成功' : '授权未完成'}</h2><p>${ok ? '请返回 HPlayer，继续浏览网盘。' : '请返回 HPlayer 重新发起授权，并检查 AppSecret 和回调域名。'}</p></body></html>`)
+  })
   app.get('/api/115/open/play', { preHandler: requireAuth }, async (request, reply) => {
     const { pickCode } = request.query as { pickCode?: string }
     if (!pickCode) return reply.code(400).send({ error: '缺少 pickCode' })
@@ -96,6 +110,33 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       const values = Array.isArray(result.data?.video_url) ? result.data.video_url : []
       return { qualities: values.map((v: any) => ({ url: String(v.url ?? ''), title: String(v.title ?? ''), definition: String(v.definition ?? ''), width: Number(v.width ?? 0), height: Number(v.height ?? 0) })).filter((v: any) => v.url) }
     } catch (error) { return sendP115Error(reply, error) }
+  })
+
+  // ---- BT 种子与 115 云下载 ----
+  app.get('/api/115/torrent/files', { preHandler: requireAuth }, async (request, reply) => {
+    if (!useOpen()) return reply.code(400).send({ error: '请先使用 115 官方授权' })
+    const { cid = '0', offset = '0' } = request.query as { cid?: string; offset?: string }
+    try { return await torrentDirectory(cid, Number(offset)) } catch (error) { return sendP115Error(reply, error) }
+  })
+  app.post('/api/115/torrent/upload', { preHandler: requireAuth, bodyLimit: 6 * 1024 * 1024 }, async (request, reply) => {
+    if (!useOpen()) return reply.code(400).send({ error: '请先使用 115 官方授权' })
+    const body = (request.body ?? {}) as { name?: unknown; data?: unknown }
+    if (typeof body.name !== 'string' || typeof body.data !== 'string') return reply.code(400).send({ error: '缺少种子文件' })
+    try { return await uploadTorrent(body.name, body.data) } catch (error) { return sendP115Error(reply, error) }
+  })
+  app.post('/api/115/torrent/parse', { preHandler: requireAuth }, async (request, reply) => {
+    if (!useOpen()) return reply.code(400).send({ error: '请先使用 115 官方授权' })
+    const body = (request.body ?? {}) as { sha1?: string; pickCode?: string }
+    try { return await parseTorrent(String(body.sha1 ?? ''), String(body.pickCode ?? '')) } catch (error) { return sendP115Error(reply, error) }
+  })
+  app.post('/api/115/torrent/tasks', { preHandler: requireAuth }, async (request, reply) => {
+    if (!useOpen()) return reply.code(400).send({ error: '请先使用 115 官方授权' })
+    try { await addTorrent((request.body ?? {}) as Record<string, unknown>); return { ok: true } } catch (error) { return sendP115Error(reply, error) }
+  })
+  app.get('/api/115/torrent/tasks', { preHandler: requireAuth }, async (request, reply) => {
+    if (!useOpen()) return reply.code(400).send({ error: '请先使用 115 官方授权' })
+    const { page = '1' } = request.query as { page?: string }
+    try { return await torrentTasks(Number(page)) } catch (error) { return sendP115Error(reply, error) }
   })
 
   app.post('/api/115/cookie', { preHandler: requireAuth }, async (request, reply) => {

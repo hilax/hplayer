@@ -84,7 +84,11 @@ struct DirectoryView: View {
     }
 
     private func load() async {
-        guard let client = appState.client() else { return }
+        guard appState.isAuthenticated, let client = appState.client() else {
+            loading = false
+            error = "请先在设置中连接服务器并登录"
+            return
+        }
         loading = true
         error = ""
         do {

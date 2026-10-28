@@ -9,6 +9,8 @@ const path = join(config.dataDir, '115-open.json')
 interface Saved { clientId: string; accessToken?: string; refreshToken?: string; expiresAt?: number; source?: 'open' | 'cookie' }
 interface Pending { uid: string; time: string; sign: string; verifier: string; expiresAt: number }
 let pending: Pending | undefined
+interface WebPending { state: string; clientId: string; secret?: string; redirectUri: string; expiresAt: number; status: 'pending' | 'authorized' | 'failed'; processing?: boolean }
+let webPending: WebPending | undefined
 let refreshing: Promise<void> | undefined
 let polling: Promise<{ status: 'pending' | 'authorized' | 'expired'; message?: string }> | undefined
 
@@ -27,6 +29,7 @@ export function configureOpen(clientId: string): void {
   const old = load()
   save(old.clientId === id ? old : { clientId: id })
   pending = undefined
+  webPending = undefined
 }
 export function openState() {
   const saved = load()
@@ -65,7 +68,7 @@ export async function startOpenAuth() {
   const verifier = randomBytes(32).toString('base64url')
   const challenge = createHash('sha256').update(verifier).digest('base64url')
   const result = await json('https://passportapi.115.com/open/authDeviceCode', {
-    method: 'POST', body: form({ client_id: clientId, code_challenge: challenge, code_challenge_method: 'sha256' }),
+    method: 'POST', body: new URLSearchParams({ client_id: clientId, code_challenge: challenge, code_challenge_method: 'sha256' }),
   })
   const d = result.data
   if (!d?.uid || !d?.time || !d?.sign || !d?.qrcode) throw new Error('115 未返回完整的扫码授权信息')
@@ -92,7 +95,7 @@ async function doPollOpenAuth() {
   const status = Number(d?.status)
   if (status === -1 || status === -2) { pending = undefined; return { status: 'expired' as const, message: '二维码已失效或授权已取消' } }
   if (status !== 2) return { status: 'pending' as const, message: status === 1 ? '已扫码，请在 115 中确认授权' : '等待扫码' }
-  const tokens = await json('https://passportapi.115.com/open/deviceCodeToToken', { method: 'POST', body: form({ uid: current.uid, code_verifier: current.verifier }) })
+  const tokens = await json('https://passportapi.115.com/open/deviceCodeToToken', { method: 'POST', body: new URLSearchParams({ uid: current.uid, code_verifier: current.verifier }) })
   if (pending !== current) throw new Error('授权请求已被新的配置替换，请重新开始')
   storeTokens(tokens.data)
   setSource('open')
@@ -103,7 +106,7 @@ async function refresh(): Promise<void> {
   if (!refreshing) refreshing = (async () => {
     const saved = load()
     if (!saved.refreshToken) throw new Error('请先授权 115 开放平台')
-    const result = await json('https://passportapi.115.com/open/refreshToken', { method: 'POST', body: form({ refresh_token: saved.refreshToken }) })
+    const result = await json('https://passportapi.115.com/open/refreshToken', { method: 'POST', body: new URLSearchParams({ refresh_token: saved.refreshToken }) })
     const current = load()
     if (current.clientId !== saved.clientId || current.refreshToken !== saved.refreshToken) throw new Error('115 授权已变更，请重试')
     storeTokens(result.data)
@@ -130,6 +133,54 @@ async function request(endpoint: string, options: { params?: Record<string, stri
   }
 }
 export const openRequest = request
+
+/** 授权码模式需要已登记的 HTTPS 回调；secret 只在本次授权期间保存在内存。 */
+export function startWebAuth(secret: string, redirectUri: string) {
+  const { clientId } = load()
+  if (!clientId) throw new Error('请先保存 AppID')
+  if (!secret || secret.length > 1024) throw new Error('请填写 AppSecret')
+  let url: URL
+  try { url = new URL(redirectUri) } catch { throw new Error('请填写有效的 HTTPS 回调地址') }
+  if (url.protocol !== 'https:' || url.username || url.password || url.pathname !== '/api/115/open/auth/callback' || url.search || url.hash) throw new Error('回调地址必须是已在 115 登记的 HTTPS 域名，并以 /api/115/open/auth/callback 结尾')
+  const state = randomBytes(32).toString('base64url')
+  const current: WebPending = { state, clientId, secret, redirectUri: url.toString(), expiresAt: Date.now() + 10 * 60_000, status: 'pending' }
+  webPending = current
+  setTimeout(() => { if (webPending === current) { current.secret = undefined; webPending = undefined } }, 10 * 60_000).unref()
+  const authorization = new URL('https://passportapi.115.com/open/authorize')
+  authorization.search = new URLSearchParams({ client_id: clientId, redirect_uri: url.toString(), response_type: 'code', state }).toString()
+  return { authorizationUrl: authorization.toString(), expiresIn: 600 }
+}
+
+export function webAuthStatus() {
+  if (!webPending || Date.now() >= webPending.expiresAt) { webPending = undefined; return { status: 'expired' } }
+  return { status: webPending.status }
+}
+
+export function failWebAuth(state: string): void {
+  if (webPending && webPending.state === state && webPending.status === 'pending' && !webPending.processing) {
+    webPending.secret = undefined
+    webPending.status = 'failed'
+  }
+}
+
+export async function completeWebAuth(state: string, code: string): Promise<boolean> {
+  const current = webPending
+  if (!current || Date.now() >= current.expiresAt || current.state !== state || current.status !== 'pending' || current.processing || !code || code.length > 4096) return false
+  current.processing = true
+  try {
+    const result = await json('https://passportapi.115.com/open/authCodeToToken', { method: 'POST', body: new URLSearchParams({ client_id: current.clientId, client_secret: current.secret ?? '', code, redirect_uri: current.redirectUri, grant_type: 'authorization_code' }) })
+    if (webPending !== current || load().clientId !== current.clientId) return false
+    storeTokens(result.data)
+    setSource('open')
+    current.status = 'authorized'
+    return true
+  } catch {
+    if (webPending === current) current.status = 'failed'
+    return false
+  } finally {
+    current.secret = undefined
+  }
+}
 function listFile(f: any, parent: string): P115File {
   const isDir = String(f.fc) === '0'
   return { id: String(f.fid ?? ''), parentId: String(f.pid ?? parent), name: String(f.fn ?? ''), isDir,

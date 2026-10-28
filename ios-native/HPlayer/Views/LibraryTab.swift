@@ -8,6 +8,10 @@ struct LibraryTab: View {
     @State private var path: [Crumb] = []
     @State private var playing: PlaybackSource?
     @State private var showAddSource = false
+    @State private var showSetup = false
+    @State private var showOfficial = false
+    @State private var connecting = false
+    @State private var connectionError = ""
 
     private let columns = [
         GridItem(.flexible(), spacing: 14),
@@ -28,6 +32,23 @@ struct LibraryTab: View {
                         p115Card
                         addCard
                     }
+                    NavigationLink {
+                        TorrentView()
+                    } label: {
+                        HStack(spacing: 14) {
+                            Image(systemName: "arrow.down.doc.fill")
+                                .font(.title2).foregroundStyle(Theme.accent)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("BT 种子与云下载").font(.headline)
+                                Text("解析种子、选择文件并查看任务")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right").foregroundStyle(.secondary)
+                        }
+                        .padding(18).glassCard(cornerRadius: 20)
+                    }
+                    .buttonStyle(.plain)
                 }
                 .padding(.horizontal, 20)
                 .padding(.bottom, 40)
@@ -37,7 +58,7 @@ struct LibraryTab: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         Button("115 网盘", systemImage: "cloud.fill") {
-                            path.append(Crumb(cid: "0", name: "115 网盘"))
+                            Task { await open115() }
                         }
                         Button("WebDAV", systemImage: "externaldrive.fill") { }
                             .disabled(true)
@@ -65,9 +86,23 @@ struct LibraryTab: View {
             PlayerView(source: source)
                 .environmentObject(appState)
         }
+        .sheet(isPresented: $showSetup) { SettingsView() }
+        .sheet(isPresented: $showOfficial) {
+            NavigationStack {
+                Official115SettingsView {
+                    showOfficial = false
+                    Task { await open115() }
+                }
+            }
+        }
+        .alert("无法连接 115", isPresented: Binding(get: { !connectionError.isEmpty }, set: { if !$0 { connectionError = "" } })) {
+            Button("115 授权设置") { connectionError = ""; showOfficial = true }
+            Button("关闭", role: .cancel) { connectionError = "" }
+        } message: { Text(connectionError) }
         .task {
             await load()
         }
+        .onChange(of: appState.isAuthenticated) { _ in Task { await load() } }
     }
 
     private var searchEntry: some View {
@@ -91,7 +126,7 @@ struct LibraryTab: View {
 
     private var p115Card: some View {
         Button {
-            path.append(Crumb(cid: "0", name: "115 网盘"))
+            Task { await open115() }
         } label: {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(alignment: .top) {
@@ -99,14 +134,14 @@ struct LibraryTab: View {
                         .font(.headline)
                         .lineLimit(1)
                     Spacer()
-                    Circle()
+                    if connecting { ProgressView().frame(width: 34, height: 34) } else { Circle()
                         .fill(Theme.accentGradient)
                         .frame(width: 34, height: 34)
                         .overlay(
                             Text("5")
                                 .font(.headline)
                                 .foregroundStyle(.white)
-                        )
+                        ) }
                 }
 
                 Spacer(minLength: 8)
@@ -130,6 +165,7 @@ struct LibraryTab: View {
             .glassCard()
         }
         .buttonStyle(.plain)
+        .disabled(connecting)
     }
 
     private var addCard: some View {
@@ -151,7 +187,7 @@ struct LibraryTab: View {
         .buttonStyle(.plain)
         .confirmationDialog("添加资源", isPresented: $showAddSource, titleVisibility: .visible) {
             Button("115 网盘") {
-                path.append(Crumb(cid: "0", name: "115 网盘"))
+                Task { await open115() }
             }
             Button("WebDAV") { }
                 .disabled(true)
@@ -173,7 +209,9 @@ struct LibraryTab: View {
     }
 
     private var syncText: String {
-        appState.isAuthenticated ? "已连接" : "未连接"
+        guard appState.isAuthenticated else { return "未连接" }
+        guard let status else { return "待检查" }
+        return status.configured && status.error == nil ? "已连接" : "待授权"
     }
 
     private func load() async {
@@ -193,6 +231,29 @@ struct LibraryTab: View {
             quota = try await client.get("/api/115/quota")
         } catch {
             quota = nil
+        }
+    }
+
+    private func open115() async {
+        guard !connecting else { return }
+        guard appState.hasServer, appState.isAuthenticated, let client = appState.client() else {
+            showSetup = true
+            return
+        }
+        connecting = true
+        defer { connecting = false }
+        do {
+            let current: P115Status = try await client.get("/api/115/status")
+            status = current
+            if !current.configured {
+                showOfficial = true
+            } else if let problem = current.error {
+                connectionError = current.message ?? problem
+            } else {
+                path.append(Crumb(cid: "0", name: "115 网盘"))
+            }
+        } catch {
+            connectionError = error.localizedDescription
         }
     }
 }
