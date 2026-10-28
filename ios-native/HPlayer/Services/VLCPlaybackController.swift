@@ -47,8 +47,9 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
             media.addOption(":http-user-agent=\(Direct115Client.userAgent)")
             media.addOption(":http-referrer=https://115.com/")
             media.addOption(":http-forward-cookies=1")
-            if !directCookie.isEmpty {
-                media.addOption(":http-cookies=\(directCookie)")
+            if let cookieOptions = Self.cookieOptions(directCookie) {
+                media.addOption(":http-cookies=\(cookieOptions)")
+                Self.storeCookies(directCookie, on: media, for: url)
             }
         }
         player.media = media
@@ -122,6 +123,30 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
             buffering = false
             error = "播放失败，请尝试其他画质或检查网络。"
         }
+    }
+
+    private static func cookieOptions(_ header: String) -> String? {
+        let cookies = cookiePairs(header).map { "\($0); Path=/" }
+        return cookies.isEmpty ? nil : cookies.joined(separator: "\n")
+    }
+
+    private static func storeCookies(_ header: String, on media: VLCMedia, for url: URL) {
+        guard let host = url.host, !host.isEmpty else { return }
+        for pair in cookiePairs(header) {
+            _ = media.storeCookie("\(pair); Path=/; HttpOnly", forHost: host, path: "/")
+        }
+    }
+
+    private static func cookiePairs(_ header: String) -> [String] {
+        header.split(separator: ";")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { pair in
+                guard let equals = pair.firstIndex(of: "=") else { return false }
+                let name = String(pair[..<equals])
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .lowercased()
+                return !name.isEmpty && !["path", "domain", "expires", "max-age", "samesite"].contains(name)
+            }
     }
 }
 
