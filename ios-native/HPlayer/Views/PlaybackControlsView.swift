@@ -390,14 +390,25 @@ struct PlaybackControlsView: View {
             .onChanged { value in
                 guard !locked, !showList, !boosting, size.width > 0, size.height > 0 else { return }
 
-                if adjustment == nil {
+                let expectedKind: PlaybackAdjustment.Kind
+                if abs(value.translation.width) >= abs(value.translation.height) {
+                    expectedKind = .seek
+                } else if value.startLocation.x < size.width / 2 {
+                    expectedKind = .brightness
+                } else {
+                    expectedKind = .volume
+                }
+
+                if adjustment?.kind != expectedKind {
+                    guard expectedKind != .seek || playback.duration > 0 else { return }
+                    adjustmentHideTask?.cancel()
                     hideTask?.cancel()
                     adjustmentStartTime = playback.currentTime
                     adjustmentStartBrightness = UIScreen.main.brightness
                     adjustmentStartVolume = playback.volume
 
-                    if abs(value.translation.width) >= abs(value.translation.height) {
-                        guard playback.duration > 0 else { return }
+                    switch expectedKind {
+                    case .seek:
                         adjustment = PlaybackAdjustment(
                             kind: .seek,
                             title: "横向快进/快退",
@@ -405,7 +416,7 @@ struct PlaybackControlsView: View {
                             progress: playback.duration > 0 ? playback.currentTime / playback.duration : 0,
                             targetTime: playback.currentTime
                         )
-                    } else if value.startLocation.x < size.width / 2 {
+                    case .brightness:
                         adjustment = PlaybackAdjustment(
                             kind: .brightness,
                             title: "亮度",
@@ -413,7 +424,7 @@ struct PlaybackControlsView: View {
                             progress: adjustmentStartBrightness,
                             targetTime: nil
                         )
-                    } else {
+                    case .volume:
                         adjustment = PlaybackAdjustment(
                             kind: .volume,
                             title: "音量",
@@ -471,7 +482,7 @@ struct PlaybackControlsView: View {
     private func hideAdjustmentSoon() {
         adjustmentHideTask?.cancel()
         adjustmentHideTask = Task {
-            try? await Task.sleep(nanoseconds: 850_000_000)
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
             guard !Task.isCancelled else { return }
             adjustment = nil
             revealControls()
