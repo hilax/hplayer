@@ -418,7 +418,6 @@ private struct HeroMediaCard: View {
             .padding(.bottom, 20)
           }
         .frame(width: geometry.size.width, height: geometry.size.height)
-        .accessibilityIdentifier("home.hero")
         .overlay(alignment: .topLeading) {
             Text(item.metadata?.isSeries == true ? "剧集精选" : "电影精选")
                 .font(.caption.bold())
