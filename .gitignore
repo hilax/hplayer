@@ -7,6 +7,7 @@ android/
 Payload/
 *.m4s
 server/init.mp4
+build/
 .DS_Store
 .env
 *.log
