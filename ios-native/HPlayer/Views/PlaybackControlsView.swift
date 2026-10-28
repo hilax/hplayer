@@ -44,6 +44,7 @@ struct PlaybackControlsView: View {
             ZStack {
                 Color.black
                 VLCVideoSurface(playback: playback)
+                    .allowsHitTesting(false)
                 Color.clear.contentShape(Rectangle())
                     .accessibilityIdentifier("playback.surface")
                     .gesture(tapGesture)
@@ -68,11 +69,14 @@ struct PlaybackControlsView: View {
                     .padding(.bottom, max(geometry.safeAreaInsets.bottom, 14))
                     .background(alignment: .top) { LinearGradient(colors: [.black.opacity(0.7), .clear], startPoint: .top, endPoint: .bottom).frame(height: 125).allowsHitTesting(false) }
                     .background(alignment: .bottom) { LinearGradient(colors: [.clear, .black.opacity(0.8)], startPoint: .top, endPoint: .bottom).frame(height: landscape ? 190 : 210).allowsHitTesting(false) }
+                    .zIndex(2)
                 } else if controlsVisible && locked {
                     HStack {
-                        Button { locked = false; revealControls() } label: { controlIcon("lock.fill", label: "解锁") }
+                        Button(action: unlock) { controlIcon("lock.fill", label: "解锁") }
+                            .accessibilityIdentifier("playback.unlock")
                         Spacer()
                     }.padding(.horizontal, 28)
+                        .zIndex(3)
                 }
 
                 if boosting {
@@ -87,6 +91,7 @@ struct PlaybackControlsView: View {
             .foregroundColor(.white)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .ignoresSafeArea()
+            .accessibilityValue(locked ? "locked" : "unlocked")
         }
         .statusBarHidden(true)
         .onAppear { revealControls() }
@@ -129,11 +134,14 @@ struct PlaybackControlsView: View {
                 Text(timeText(playback.duration)).monospacedDigit().font(.caption)
             }
             HStack(spacing: 0) {
-                Button { locked = true; showList = false; revealControls() } label: { controlIcon("lock", label: "锁定") }
+                Button(action: lock) { controlIcon("lock", label: "锁定") }
+                    .accessibilityIdentifier("playback.lock")
                 Spacer(minLength: 4)
                 if landscape { Button { move(-1) } label: { controlIcon("backward.end.fill", label: "上一个") }.disabled(previousID == nil) }
                 Button { playback.skip(-10); revealControls() } label: { controlIcon("gobackward.10", label: "后退 10 秒") }
                 Button { playback.toggle(); revealControls() } label: { controlIcon(playback.playing ? "pause.fill" : "play.fill", label: playback.playing ? "暂停" : "播放", size: 27) }
+                    .accessibilityIdentifier("playback.playPause")
+                    .accessibilityValue(playback.playing ? "playing" : "paused")
                 Button { playback.skip(10); revealControls() } label: { controlIcon("goforward.10", label: "前进 10 秒") }
                 if landscape { Button { move(1) } label: { controlIcon("forward.end.fill", label: "下一个") }.disabled(nextID == nil) }
                 Spacer(minLength: 4)
@@ -150,7 +158,9 @@ struct PlaybackControlsView: View {
                     } label: { Text(selectedQuality.isEmpty ? "画质" : selectedQuality).font(.caption.weight(.semibold)).lineLimit(1).frame(minWidth: 42, minHeight: 44) }
                 }
                 Button { toggleOrientation(landscape: landscape) } label: { controlIcon(landscape ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right", label: landscape ? "竖屏" : "横屏") }
+                    .accessibilityIdentifier("playback.orientation")
                 Button { showList = true; hideTask?.cancel() } label: { controlIcon("list.bullet", label: "播放列表") }
+                    .accessibilityIdentifier("playback.playlist")
             }
             .buttonStyle(.plain)
         }
@@ -180,7 +190,9 @@ struct PlaybackControlsView: View {
                                     }
                                     Spacer()
                                 }.padding(.vertical, 12)
-                            }.buttonStyle(.plain)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("playback.item.\(item.id)")
                         }
                     }
                 }
@@ -197,7 +209,11 @@ struct PlaybackControlsView: View {
         }.padding(16).background(.black.opacity(0.75), in: RoundedRectangle(cornerRadius: 14))
     }
     private func controlIcon(_ name: String, label: String, size: CGFloat = 20) -> some View {
-        Image(systemName: name).font(.system(size: size, weight: .semibold)).frame(width: 44, height: 44).accessibilityLabel(label)
+        Image(systemName: name)
+            .font(.system(size: size, weight: .semibold))
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
+            .accessibilityLabel(label)
     }
     private var previousID: String? { adjacent(-1) }
     private var nextID: String? { adjacent(1) }
@@ -206,6 +222,15 @@ struct PlaybackControlsView: View {
         return items[i + offset].id
     }
     private func move(_ offset: Int) { if let id = adjacent(offset) { onSelect(id); revealControls() } }
+    private func lock() {
+        locked = true
+        showList = false
+        revealControls()
+    }
+    private func unlock() {
+        locked = false
+        revealControls()
+    }
     private func timeText(_ value: Double) -> String {
         guard value.isFinite && value >= 0 else { return "00:00" }
         let seconds = Int(value)
