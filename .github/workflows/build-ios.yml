@@ -102,6 +102,39 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             -quiet
 
+      - name: Test VLC playback and controls on iPhone simulator
+        run: |
+          device=$(xcrun simctl list devices available --json | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; devices=[x for group in d.values() for x in group if x.get("isAvailable") and x["name"].startswith("iPhone")]; preferred=next((x for x in devices if "Pro" in x["name"]), devices[0] if devices else None); print(preferred["udid"] if preferred else "")')
+          test -n "$device"
+          python3 -m http.server 8765 --bind 127.0.0.1 --directory ios-native/scripts > "$RUNNER_TEMP/player-http.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          xcodebuild test \
+            -project ios-native/HPlayer.xcodeproj \
+            -scheme HPlayer \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=$device" \
+            -derivedDataPath "$RUNNER_TEMP/hplayer-simulator" \
+            -resultBundlePath "$RUNNER_TEMP/player-tests.xcresult" \
+            CODE_SIGNING_ALLOWED=NO \
+            -quiet
+
+      - name: Export player UI screenshots
+        if: always()
+        continue-on-error: true
+        run: |
+          if [[ -d "$RUNNER_TEMP/player-tests.xcresult" ]]; then
+            xcrun xcresulttool export attachments --path "$RUNNER_TEMP/player-tests.xcresult" --output-path "$RUNNER_TEMP/player-ui"
+          fi
+
+      - name: Upload player UI screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HPlayer-player-ui-test
+          path: ${{ runner.temp }}/player-ui
+          if-no-files-found: ignore
+
       - name: Package into IPA
         run: |
           mkdir -p Payload

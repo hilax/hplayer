@@ -46,6 +46,7 @@ struct PlaybackControlsView: View {
                 Color.black
                 VLCVideoSurface(playback: playback)
                 Color.clear.contentShape(Rectangle())
+                    .accessibilityIdentifier("playback.surface")
                     .gesture(tapGesture)
                     .simultaneousGesture(longPressGesture)
 

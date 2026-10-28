@@ -1,6 +1,7 @@
 import AVFoundation
 import Foundation
 import MobileVLCKit
+import SwiftUI
 import UIKit
 
 /// 统一使用 VideoLAN 的 VLC 播放内核；视频控制界面由 HPlayer 自己绘制。

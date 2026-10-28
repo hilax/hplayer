@@ -76,3 +76,26 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: NO
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+
+  HPlayerUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: HPlayerUITests
+    dependencies:
+      - target: HPlayer
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.hplayer.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: HPlayer
+
+schemes:
+  HPlayer:
+    build:
+      targets:
+        HPlayer: all
+        HPlayerUITests: [test]
+    test:
+      targets:
+        - HPlayerUITests
