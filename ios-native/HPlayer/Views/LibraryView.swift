@@ -9,11 +9,14 @@ struct DirectoryView: View {
     let cid: String
     let onOpenDir: (Crumb) -> Void
     let onPlay: (P115File, [P115File]) -> Void
+    var onImported: (() -> Void)? = nil
 
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var mediaLibrary: MediaLibraryStore
     @State private var files: [P115File] = []
     @State private var loading = true
     @State private var error = ""
+    @State private var addedToHome = false
 
     var body: some View {
         Group {
@@ -53,6 +56,22 @@ struct DirectoryView: View {
         }
         .task(id: cid) {
             await load()
+        }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    mediaLibrary.add(files, for: appState)
+                    if let onImported { onImported() } else { addedToHome = true }
+                } label: {
+                    Label("加入首页", systemImage: "rectangle.stack.badge.plus")
+                }
+                .disabled(loading || !files.contains { $0.isVideo && !$0.pickCode.isEmpty })
+            }
+        }
+        .alert("已加入首页媒体库", isPresented: $addedToHome) {
+            Button("好", role: .cancel) { }
+        } message: {
+            Text("首页会自动匹配这些视频的海报，点击海报即可在线播放。")
         }
     }
 

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct HomeView: View {
     @StateObject private var recents = RecentStore()
+    @StateObject private var mediaLibrary = MediaLibraryStore()
 
     var body: some View {
         TabView {
@@ -26,6 +27,7 @@ struct HomeView: View {
                 }
         }
         .environmentObject(recents)
+        .environmentObject(mediaLibrary)
         .tint(Theme.accent)
         .toolbarBackground(.visible, for: .tabBar)
         .toolbarBackground(Theme.pageBackground.opacity(0.96), for: .tabBar)

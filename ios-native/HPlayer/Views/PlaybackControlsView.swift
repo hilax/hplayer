@@ -380,7 +380,7 @@ struct PlaybackControlsView: View {
         }
     }
     private var gestureStatus: String {
-        "\(lastAdjustment); brightness=\(String(format: "%.3f", UIScreen.main.brightness)); volume=\(String(format: "%.3f", playback.volume)); rate=\(String(format: "%g", boosting ? 3 : playback.rate))"
+        "\(lastAdjustment); brightness=\(String(format: "%.3f", UIScreen.main.brightness)); volume=\(String(format: "%.3f", playback.volume)); time=\(Double(playback.player.time.intValue) / 1000); rate=\(String(format: "%g", boosting ? 3 : playback.rate))"
     }
 
     private func toggleControls() {
@@ -392,7 +392,7 @@ struct PlaybackControlsView: View {
         if enabled {
             guard !locked, !showList, panKind == nil, playback.playing else { return }
             boosting = true
-            lastAdjustment = "?? 3?"
+            lastAdjustment = "长按 3×"
             playback.setBoost(true)
             hideTask?.cancel()
         } else if boosting {
@@ -432,18 +432,18 @@ struct PlaybackControlsView: View {
             let target = min(max(adjustmentStartTime + Double(translation.x / size.width) * range, 0), max(0, playback.duration - 0.25))
             let delta = Int((target - adjustmentStartTime).rounded())
             adjustment = PlaybackAdjustment(
-                kind: .seek, title: delta >= 0 ? "??" : "??",
-                valueText: "\(delta >= 0 ? "+" : "")\(delta) ? ? \(timeText(target))",
+                kind: .seek, title: delta >= 0 ? "快进" : "快退",
+                valueText: "\(delta >= 0 ? "+" : "")\(delta) 秒 · \(timeText(target))",
                 progress: target / playback.duration, targetTime: target
             )
         case .brightness:
             let value = min(max(adjustmentStartBrightness - Double(translation.y / size.height) * 1.2, 0.05), 1)
             UIScreen.main.brightness = value
-            adjustment = PlaybackAdjustment(kind: .brightness, title: "??", valueText: "\(Int((value * 100).rounded()))%", progress: value, targetTime: nil)
+            adjustment = PlaybackAdjustment(kind: .brightness, title: "亮度", valueText: "\(Int((value * 100).rounded()))%", progress: value, targetTime: nil)
         case .volume:
             let value = min(max(adjustmentStartVolume - Double(translation.y / size.height) * 1.2, 0), 1)
             playback.setVolume(value)
-            adjustment = PlaybackAdjustment(kind: .volume, title: "??", valueText: "\(Int((value * 100).rounded()))%", progress: value, targetTime: nil)
+            adjustment = PlaybackAdjustment(kind: .volume, title: "音量", valueText: "\(Int((value * 100).rounded()))%", progress: value, targetTime: nil)
         }
         if let adjustment { lastAdjustment = "\(adjustment.title) \(adjustment.valueText)" }
         if state == .ended {

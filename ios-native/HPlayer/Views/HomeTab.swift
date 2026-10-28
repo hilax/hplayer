@@ -3,6 +3,8 @@ import UniformTypeIdentifiers
 
 struct HomeTab: View {
     @EnvironmentObject private var recents: RecentStore
+    @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var mediaLibrary: MediaLibraryStore
     @StateObject private var localStore = LocalMediaStore()
     @StateObject private var metadataStore = MediaMetadataStore()
 
@@ -10,11 +12,15 @@ struct HomeTab: View {
     @State private var playing: PlaybackQueue?
     @State private var importError = ""
     @State private var heroSelection = 0
+    @State private var showCloudBrowser = false
+    @State private var matchingItem: HomeMediaItem?
+
+    private var libraryFiles: [LibraryMedia] {
+        localStore.files.map(LibraryMedia.init(local:)) + mediaLibrary.files(for: appState).map(LibraryMedia.init(cloud:))
+    }
 
     private var items: [HomeMediaItem] {
-        localStore.files.map {
-            HomeMediaItem(media: $0, metadata: metadataStore.metadataByMediaID[$0.id])
-        }
+        libraryFiles.map { HomeMediaItem(media: $0, metadata: metadataStore.metadataByMediaID[$0.id]) }
     }
 
     private var featured: [HomeMediaItem] {
@@ -42,7 +48,7 @@ struct HomeTab: View {
                     LazyVStack(alignment: .leading, spacing: 26) {
                         header
 
-                        if localStore.files.isEmpty {
+                        if items.isEmpty {
                             emptyState
                         } else {
                             if !featured.isEmpty {
@@ -104,12 +110,13 @@ struct HomeTab: View {
             } message: {
                 Text(importError)
             }
-            .task {
-                localStore.refresh()
-                metadataStore.sync(files: localStore.files)
-            }
-            .onChange(of: localStore.files) { files in
-                metadataStore.sync(files: files)
+            .task { localStore.refresh() }
+            .task(id: libraryFiles) { metadataStore.sync(files: libraryFiles) }
+            .sheet(isPresented: $showCloudBrowser) { HomeCloudBrowser() }
+            .sheet(item: $matchingItem) { item in
+                MetadataMatchView(file: item.media, current: item.metadata) { metadata in
+                    await metadataStore.match(metadata, to: item.media)
+                }
             }
             .onChange(of: featured.count) { count in
                 if heroSelection >= count { heroSelection = 0 }
@@ -129,16 +136,15 @@ struct HomeTab: View {
 
             Spacer()
 
-            Button {
-                showImporter = true
+            Menu {
+                Button("导入本地视频", systemImage: "folder.badge.plus") { showImporter = true }
+                Button("添加 115 文件夹", systemImage: "cloud") { showCloudBrowser = true }
             } label: {
-                Label("文件源", systemImage: "folder.badge.plus")
+                Label("文件源", systemImage: "folder")
                     .font(.subheadline.weight(.semibold))
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .glassCapsule()
+                    .padding(.horizontal, 14).padding(.vertical, 10).glassCapsule()
             }
-            .buttonStyle(.plain)
+            .accessibilityIdentifier("home.sources")
 
             Menu {
                 Button("刷新媒体库", systemImage: "arrow.clockwise") {
@@ -167,10 +173,11 @@ struct HomeTab: View {
                     play(item)
                 }
                 .tag(index)
+                .contextMenu { Button("匹配封面", systemImage: "photo") { matchingItem = item } }
             }
         }
         .tabViewStyle(.page(indexDisplayMode: featured.count > 1 ? .always : .never))
-        .frame(height: 438)
+        .frame(height: 380)
         .clipShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 30, style: .continuous)
@@ -195,7 +202,10 @@ struct HomeTab: View {
                         PosterCard(item: item) {
                             play(item)
                         } onDelete: {
-                            localStore.delete(item.media)
+                            if let local = localStore.files.first(where: { $0.id == item.id }) { localStore.delete(local) }
+                            else { mediaLibrary.remove(pickCode: item.media.pickCode, for: appState) }
+                        } onMatch: {
+                            matchingItem = item
                         }
                     }
                 }
@@ -267,11 +277,11 @@ struct HomeTab: View {
                         .font(.system(size: 62, weight: .light))
                         .foregroundStyle(Theme.accentGradient)
 
-                    Text("把视频变成一张电影海报墙")
+                    Text("把片库变成海报墙")
                         .font(.title3.bold())
                         .multilineTextAlignment(.center)
 
-                    Text("导入文件后，HPlayer 会根据文件名或文件哈希自动匹配封面、年份、评分和剧情简介。")
+                    Text("导入本地视频或添加 115 文件夹，自动整理电影与剧集。相同文件再次加入或改名后，可用 SHA-1 识别已匹配的封面。")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -284,6 +294,8 @@ struct HomeTab: View {
                     ) {
                         showImporter = true
                     }
+                    Button("添加 115 文件夹") { showCloudBrowser = true }
+                        .font(.subheadline.weight(.semibold))
                 }
                 .padding(28)
             }
@@ -293,22 +305,23 @@ struct HomeTab: View {
     }
 
     private func play(_ item: HomeMediaItem) {
-        let source = PlaybackSource.direct(title: item.media.name, url: item.media.url)
-        let queue = items.map {
-            PlaybackSource.direct(title: $0.media.name, url: $0.media.url)
-        }
-        playing = PlaybackQueue(source: source, items: queue)
+        let queue: [HomeMediaItem]
+        if let metadata = item.metadata, metadata.isSeries {
+            queue = items.filter { $0.metadata?.imdbID == metadata.imdbID }
+                .sorted { $0.media.name.localizedStandardCompare($1.media.name) == .orderedAscending }
+        } else { queue = items }
+        playing = PlaybackQueue(source: item.media.source, items: queue.map { $0.media.source })
     }
 }
 
 private struct HomeMediaItem: Identifiable {
-    let media: LocalMedia
+    let media: LibraryMedia
     let metadata: MediaMetadata?
 
     var id: String { media.id }
     var title: String { metadata?.title ?? MediaNameParser.parse(media.name).title }
     var year: String { metadata?.year ?? "" }
-    var posterURL: String { metadata?.posterURL ?? "" }
+    var posterURL: String { metadata?.posterURL ?? media.thumbnail }
     var backgroundURL: String { metadata?.backgroundURL ?? "" }
     var subtitle: String {
         let parsed = MediaNameParser.parse(media.name)
@@ -348,6 +361,7 @@ private struct HeroMediaCard: View {
                         .frame(maxWidth: 250, maxHeight: 70, alignment: .leading)
                 } else {
                     Text(item.title)
+                        .accessibilityIdentifier("home.heroTitle")
                         .font(.system(size: 31, weight: .black, design: .rounded))
                         .lineLimit(2)
                 }
@@ -381,7 +395,7 @@ private struct HeroMediaCard: View {
                     }
                     .buttonStyle(.plain)
 
-                    Text(item.metadata?.matchedByHash == true ? "哈希匹配" : "名称匹配")
+                    Text(item.metadata == nil ? "等待匹配" : (item.metadata?.matchedByHash == true ? "SHA-1 识别" : "已匹配"))
                         .font(.caption2.weight(.semibold))
                         .padding(.horizontal, 10)
                         .padding(.vertical, 7)
@@ -394,7 +408,9 @@ private struct HeroMediaCard: View {
                     .lineLimit(1)
             }
             .padding(22)
+            .padding(.bottom, 20)
         }
+        .accessibilityIdentifier("home.hero")
         .overlay(alignment: .topLeading) {
             Text(item.metadata?.isSeries == true ? "剧集精选" : "电影精选")
                 .font(.caption.bold())
@@ -404,7 +420,7 @@ private struct HeroMediaCard: View {
                 .padding(18)
         }
         .contentShape(Rectangle())
-        .onTapGesture(perform: onPlay)
+
     }
 }
 
@@ -412,6 +428,7 @@ private struct PosterCard: View {
     let item: HomeMediaItem
     let onPlay: () -> Void
     let onDelete: () -> Void
+    let onMatch: () -> Void
 
     var body: some View {
         Button(action: onPlay) {
@@ -447,16 +464,18 @@ private struct PosterCard: View {
                     .lineLimit(1)
                     .frame(width: 146, alignment: .leading)
 
-                Text(item.year.isEmpty ? "本地视频" : item.year)
+                Text([item.year, item.media.localURL == nil ? "115 网盘" : "本地视频"].filter { !$0.isEmpty }.joined(separator: " · "))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .frame(width: 146, alignment: .leading)
             }
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier("home.poster.\(item.metadata?.imdbID ?? item.id)")
         .contextMenu {
             Button("播放", systemImage: "play.fill", action: onPlay)
-            Button("删除", systemImage: "trash", role: .destructive, action: onDelete)
+            Button("匹配封面", systemImage: "photo", action: onMatch)
+            Button(item.media.localURL == nil ? "从媒体库移除" : "删除本地文件", systemImage: "trash", role: .destructive, action: onDelete)
         }
     }
 }

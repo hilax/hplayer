@@ -26,64 +26,77 @@ final class MediaMetadataStore: ObservableObject {
     @Published private(set) var metadataByMediaID: [String: MediaMetadata] = [:]
     @Published private(set) var resolvingIDs: Set<String> = []
 
-    private let storageKey = "hplayer.mediaMetadata.v1"
+    private let storageKey = "hplayer.mediaMetadata.v2"
     private var hashCache: [String: MediaMetadata] = [:]
     private var titleCache: [String: MediaMetadata] = [:]
-    private var runningIDs: Set<String> = []
+    private var pendingMedia: [LibraryMedia] = []
+    private var syncTask: Task<Void, Never>?
+    private var validMediaIDs: Set<String> = []
 
     init() {
         load()
     }
 
-    func sync(files: [LocalMedia]) {
+    func sync(files: [LibraryMedia]) {
         let validIDs = Set(files.map(\.id))
+        validMediaIDs = validIDs
         metadataByMediaID = metadataByMediaID.filter { validIDs.contains($0.key) }
-
-        for file in files where metadataByMediaID[file.id] == nil && !runningIDs.contains(file.id) {
-            runningIDs.insert(file.id)
-            resolvingIDs.insert(file.id)
-            Task { [weak self] in
-                guard let self else { return }
-                let metadata = await self.resolve(file)
-                if let metadata {
-                    self.metadataByMediaID[file.id] = metadata
+        pendingMedia = files.filter { metadataByMediaID[$0.id] == nil }
+        guard syncTask == nil else { return }
+        syncTask = Task {
+            while !pendingMedia.isEmpty && !Task.isCancelled {
+                let file = pendingMedia.removeFirst()
+                guard metadataByMediaID[file.id] == nil else { continue }
+                resolvingIDs.insert(file.id)
+                if let metadata = await resolve(file), validMediaIDs.contains(file.id), metadataByMediaID[file.id] == nil {
+                    metadataByMediaID[file.id] = metadata
                 }
-                self.runningIDs.remove(file.id)
-                self.resolvingIDs.remove(file.id)
+                resolvingIDs.remove(file.id)
             }
+            syncTask = nil
         }
     }
 
-    private func resolve(_ file: LocalMedia) async -> MediaMetadata? {
-        let fingerprint = await MediaFingerprint.make(for: file.url)
-        if let fingerprint, let cached = hashCache[fingerprint] {
-            var metadata = cached
-            metadata.matchedByHash = true
-            return metadata
-        }
+    func match(_ metadata: MediaMetadata, to file: LibraryMedia) async {
+        var value = metadata
+        value.matchedByHash = false
+        metadataByMediaID[file.id] = value
+        titleCache[titleKey(file.name)] = value
+        if let hash = await fingerprint(file) { hashCache[hash] = value }
+        save()
+    }
 
+    private func titleKey(_ filename: String) -> String {
+        let parsed = MediaNameParser.parse(filename)
+        return "\(MediaNameParser.cacheKey(parsed.title))|\(parsed.year ?? "")|\(parsed.season != nil || parsed.episode != nil ? "series" : "movie")"
+    }
+
+    private func fingerprint(_ file: LibraryMedia) async -> String? {
+        if file.sha1.count == 40, file.sha1.allSatisfy(\.isHexDigit) { return "sha1:\(file.sha1.lowercased())" }
+        guard let localURL = file.localURL else { return nil }
+        return await MediaFingerprint.make(for: localURL).map { "sha1:\($0)" }
+    }
+
+    private func resolve(_ file: LibraryMedia) async -> MediaMetadata? {
+        let hash = await fingerprint(file)
+        if let hash, var cached = hashCache[hash] {
+            cached.matchedByHash = true
+            return cached
+        }
+        let key = titleKey(file.name)
+        if var cached = titleCache[key] {
+            cached.matchedByHash = false
+            if let hash { hashCache[hash] = cached; save() }
+            return cached
+        }
         let parsed = MediaNameParser.parse(file.name)
-        let titleKey = MediaNameParser.cacheKey(parsed.title)
-        if let cached = titleCache[titleKey] {
-            var metadata = cached
-            metadata.matchedByHash = false
-            if let fingerprint { hashCache[fingerprint] = metadata }
-            save()
-            return metadata
-        }
-
         guard !parsed.title.isEmpty,
               let metadata = await CinemetaClient.shared.lookup(
-                  title: parsed.title,
-                  year: parsed.year,
-                  season: parsed.season,
-                  episode: parsed.episode
-              ) else {
-            return nil
-        }
-
-        titleCache[titleKey] = metadata
-        if let fingerprint { hashCache[fingerprint] = metadata }
+                  title: parsed.title, year: parsed.year,
+                  season: parsed.season ?? (parsed.episode == nil ? nil : 1), episode: parsed.episode
+              ) else { return nil }
+        titleCache[key] = metadata
+        if let hash { hashCache[hash] = metadata }
         save()
         return metadata
     }
@@ -109,42 +122,22 @@ final class MediaMetadataStore: ObservableObject {
     }
 }
 
-private enum MediaFingerprint {
+enum MediaFingerprint {
     static func make(for url: URL) async -> String? {
         await Task.detached(priority: .utility) {
-            let chunkSize = 64 * 1024
             guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
             defer { try? handle.close() }
-
-            guard let size = try? handle.seekToEnd() else { return nil }
-            if size < UInt64(chunkSize * 2) {
-                guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else { return nil }
-                return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-            }
-
-            guard let first = try? handle.read(upToCount: chunkSize),
-                  (try? handle.seek(toOffset: size - UInt64(chunkSize))) != nil,
-                  let last = try? handle.read(upToCount: chunkSize) else {
-                return nil
-            }
-
-            var checksum = size
-            addChecksum(first, to: &checksum)
-            addChecksum(last, to: &checksum)
-            return String(format: "%016llx", checksum)
+            var hash = Insecure.SHA1()
+            do {
+                while !Task.isCancelled {
+                    guard let data = try handle.read(upToCount: 1024 * 1024), !data.isEmpty else {
+                        return hash.finalize().map { String(format: "%02x", $0) }.joined()
+                    }
+                    hash.update(data: data)
+                }
+            } catch { }
+            return nil
         }.value
-    }
-
-    private static func addChecksum(_ data: Data, to checksum: inout UInt64) {
-        var offset = 0
-        while offset + 8 <= data.count {
-            var value: UInt64 = 0
-            for index in 0..<8 {
-                value |= UInt64(data[offset + index]) << UInt64(index * 8)
-            }
-            checksum &+= value
-            offset += 8
-        }
     }
 }
 
@@ -157,19 +150,22 @@ enum MediaNameParser {
     }
 
     static func parse(_ filename: String) -> ParsedName {
-        var value = (filename as NSString).deletingPathExtension
+        let extensions: Set<String> = ["mp4", "mkv", "mov", "m4v", "avi", "ts", "webm", "flv", "wmv", "m2ts", "mpg", "mpeg"]
+        var value = extensions.contains((filename as NSString).pathExtension.lowercased()) ? (filename as NSString).deletingPathExtension : filename
         value = value.replacingOccurrences(of: "[._]+", with: " ", options: .regularExpression)
         value = value.replacingOccurrences(of: "[()\\[\\]【】]", with: " ", options: .regularExpression)
 
         let seasonEpisode = capture(#"(?i)\bS(\d{1,2})E(\d{1,3})\b"#, in: value)
         let chineseEpisode = capture(#"第\s*(\d{1,4})\s*[集话話]"#, in: value)
+        let episodeOnly = capture(#"(?i)\bE(\d{1,4})\b"#, in: value)
         let season = seasonEpisode.first.flatMap(Int.init)
         let episode = seasonEpisode.dropFirst().first.flatMap(Int.init)
-            ?? chineseEpisode.first.flatMap(Int.init)
+            ?? chineseEpisode.first.flatMap(Int.init) ?? episodeOnly.first.flatMap(Int.init)
 
         let year = capture(#"\b(19\d{2}|20\d{2})\b"#, in: value).first
         let releaseMarkers = [
             #"(?i)\bS\d{1,2}E\d{1,3}\b"#,
+            #"(?i)\bE\d{1,4}\b"#,
             #"(?i)\b(?:19|20)\d{2}\b"#,
             #"(?i)\b(?:2160p|1080p|720p|480p|4k|uhd)\b"#,
             #"(?i)\b(?:WEB[- ]?DL|WEBRip|BluRay|BDRip|HDTV|HDRip|DVDRip)\b"#,
@@ -216,8 +212,14 @@ enum MediaNameParser {
     }
 }
 
-private actor CinemetaClient {
+actor CinemetaClient {
     static let shared = CinemetaClient()
+    private var endpoint: String {
+        #if DEBUG
+        if let value = ProcessInfo.processInfo.environment["HPLAYER_METADATA_TEST_ENDPOINT"] { return value }
+        #endif
+        return "https://v3-cinemeta.strem.io"
+    }
 
     func lookup(title: String, year: String?, season: Int?, episode: Int?) async -> MediaMetadata? {
         async let movies = search(title: title, type: "movie")
@@ -231,6 +233,8 @@ private actor CinemetaClient {
                 > score(rhs.element, title: title, year: year, preferredSeries: season != nil)
         }
         guard let selected = ranked.first?.element else { return nil }
+        let usesTranslatedTitle = title.range(of: #"\p{Han}"#, options: .regularExpression) != nil
+        guard usesTranslatedTitle || score(selected, title: title, year: year, preferredSeries: season != nil) >= 100 else { return nil }
 
         let detail = await detail(type: selected.type, id: selected.id)
         return MediaMetadata(
@@ -250,10 +254,23 @@ private actor CinemetaClient {
         )
     }
 
+    func candidates(query: String) async -> [MediaMetadata] {
+        let parsed = MediaNameParser.parse(query)
+        async let movies = search(title: parsed.title, type: "movie")
+        async let series = search(title: parsed.title, type: "series")
+        let results = await (movies, series)
+        return (results.0 + results.1).map { item in
+            MediaMetadata(imdbID: item.id, type: item.type, title: item.name,
+                year: extractYear(item.releaseInfo), posterURL: item.poster,
+                backgroundURL: item.background, logoURL: "", overview: "", rating: "",
+                genres: [], country: "", season: parsed.season, episode: parsed.episode)
+        }
+    }
+
     private func search(title: String, type: String) async -> [CinemetaSearchItem] {
-        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~ "))
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~")
         guard let encoded = title.addingPercentEncoding(withAllowedCharacters: allowed),
-              let url = URL(string: "https://v3-cinemeta.strem.io/catalog/\(type)/top/search=\(encoded.replacingOccurrences(of: " ", with: "%20")).json") else {
+              let url = URL(string: "\(endpoint)/catalog/\(type)/top/search=\(encoded.replacingOccurrences(of: " ", with: "%20")).json") else {
             return []
         }
         guard let envelope: CinemetaSearchEnvelope = await request(url) else { return [] }
@@ -261,7 +278,7 @@ private actor CinemetaClient {
     }
 
     private func detail(type: String, id: String) async -> CinemetaDetail? {
-        guard let url = URL(string: "https://v3-cinemeta.strem.io/meta/\(type)/\(id).json"),
+        guard let url = URL(string: "\(endpoint)/meta/\(type)/\(id).json"),
               let envelope: CinemetaDetailEnvelope = await request(url) else {
             return nil
         }

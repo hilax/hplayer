@@ -22,6 +22,8 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
     private var shouldPauseAfterOpening = false
     private var boosted = false
     private var openTimeoutTask: Task<Void, Never>?
+    private var pendingSeek: Double?
+    private var pauseAfterSeek = false
 
     override init() {
         super.init()
@@ -35,6 +37,8 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
         preservingPosition: Bool = false
     ) {
         openTimeoutTask?.cancel()
+        pendingSeek = nil
+        pauseAfterSeek = false
         let oldTime = preservingPosition ? currentTime : 0
         let oldPlaying = preservingPosition ? playing : true
         player.stop()
@@ -67,13 +71,18 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
     }
 
     func toggle() {
+        pauseAfterSeek = false
         if player.isPlaying { player.pause() } else { player.play() }
     }
     func seek(to seconds: Double) {
         guard seconds.isFinite, seconds >= 0, player.isSeekable else { return }
         let target = duration > 0 ? min(seconds, duration) : seconds
+        pendingSeek = target
+        pauseAfterSeek = !player.isPlaying
         player.time = VLCTime(int: Int32(clamping: Int(target * 1000)))
         currentTime = target
+        // HLS needs a decoded frame at the requested time before it can pause again.
+        if pauseAfterSeek { player.play() }
     }
     func skip(_ seconds: Double) { seek(to: max(0, currentTime + seconds)) }
     func setRate(_ value: Float) { rate = value; if !boosted { player.rate = value } }
@@ -100,6 +109,8 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
     }
     func stop(detach: Bool = true) {
         openTimeoutTask?.cancel()
+        pendingSeek = nil
+        pauseAfterSeek = false
         player.stop()
         if detach { player.drawable = nil }
         playing = false; buffering = false; bufferProgress = 0; resumeTime = nil; shouldPauseAfterOpening = false
@@ -122,7 +133,15 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
         if playing { openTimeoutTask?.cancel() }
         buffering = !player.isPlaying && (state == .opening || state == .buffering)
         seekable = player.isSeekable
-        currentTime = max(0, Double(player.time.intValue) / 1000)
+        let decodedTime = max(0, Double(player.time.intValue) / 1000)
+        if let pendingSeek {
+            currentTime = pendingSeek
+            if abs(decodedTime - pendingSeek) < 1 {
+                self.pendingSeek = nil
+                currentTime = decodedTime
+                if pauseAfterSeek { pauseAfterSeek = false; player.pause() }
+            }
+        } else { currentTime = decodedTime }
         let length = Double(player.media?.length.intValue ?? 0) / 1000
         duration = length.isFinite && length > 0 ? length : 0
         if let audio = player.audio {
