@@ -29,6 +29,7 @@ export function configureOpen(clientId: string): void {
   const old = load()
   save(old.clientId === id ? old : { clientId: id })
   pending = undefined
+  if (webPending) webPending.secret = undefined
   webPending = undefined
 }
 export function openState() {
@@ -72,6 +73,8 @@ export async function startOpenAuth() {
   })
   const d = result.data
   if (!d?.uid || !d?.time || !d?.sign || !d?.qrcode) throw new Error('115 未返回完整的扫码授权信息')
+  if (webPending) webPending.secret = undefined
+  webPending = undefined
   // The endpoint does not supply an expiry; cap the local session to five minutes.
   pending = { uid: String(d.uid), time: String(d.time), sign: String(d.sign), verifier, expiresAt: Date.now() + 300_000 }
   return { verificationUri: String(d.qrcode), userCode: '', expiresIn: 300 }
@@ -143,6 +146,8 @@ export function startWebAuth(secret: string, redirectUri: string) {
   try { url = new URL(redirectUri) } catch { throw new Error('请填写有效的 HTTPS 回调地址') }
   if (url.protocol !== 'https:' || url.username || url.password || url.pathname !== '/api/115/open/auth/callback' || url.search || url.hash) throw new Error('回调地址必须是已在 115 登记的 HTTPS 域名，并以 /api/115/open/auth/callback 结尾')
   const state = randomBytes(32).toString('base64url')
+  pending = undefined
+  if (webPending) webPending.secret = undefined
   const current: WebPending = { state, clientId, secret, redirectUri: url.toString(), expiresAt: Date.now() + 10 * 60_000, status: 'pending' }
   webPending = current
   setTimeout(() => { if (webPending === current) { current.secret = undefined; webPending = undefined } }, 10 * 60_000).unref()
@@ -152,7 +157,7 @@ export function startWebAuth(secret: string, redirectUri: string) {
 }
 
 export function webAuthStatus() {
-  if (!webPending || Date.now() >= webPending.expiresAt) { webPending = undefined; return { status: 'expired' } }
+  if (!webPending || Date.now() >= webPending.expiresAt) { if (webPending) webPending.secret = undefined; webPending = undefined; return { status: 'expired' } }
   return { status: webPending.status }
 }
 
