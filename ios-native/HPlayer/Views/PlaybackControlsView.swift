@@ -356,6 +356,11 @@ struct PlaybackControlsView: View {
     private func revealControls() {
         controlsVisible = true
         hideTask?.cancel()
+#if DEBUG
+        if ProcessInfo.processInfo.environment["HPLAYER_UI_TEST_KEEP_CONTROLS_VISIBLE"] == "1" {
+            return
+        }
+#endif
         hideTask = Task {
             try? await Task.sleep(nanoseconds: 5_000_000_000)
             if !Task.isCancelled && !showList && !dragging && !boosting && adjustment == nil && !playback.buffering {
