@@ -10,6 +10,8 @@ final class HomeUITests: XCTestCase {
         let dune = app.buttons["home.poster.tt1160419"].firstMatch
         XCTAssertTrue(dune.waitForExistence(timeout: 30), "Imported movie should receive metadata")
         XCTAssertTrue(app.buttons["home.sources"].exists)
+        XCTAssertTrue(app.buttons["home.heroPlay"].firstMatch.isHittable, "Featured play button must fit inside the card")
+        XCTAssertTrue(app.descendants(matching: .any)["home.artwork.Dune"].firstMatch.waitForExistence(timeout: 25), "Artwork should load successfully")
         let frame = app.windows.firstMatch.frame
         XCTAssertGreaterThan(frame.height, frame.width, "The home screen stays in portrait")
         let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())

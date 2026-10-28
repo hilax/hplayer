@@ -323,6 +323,10 @@ private struct HomeMediaItem: Identifiable {
     var year: String { metadata?.year ?? "" }
     var posterURL: String { metadata?.posterURL ?? media.thumbnail }
     var backgroundURL: String { metadata?.backgroundURL ?? "" }
+    var countryLabel: String {
+        guard let country = metadata?.country.components(separatedBy: ",").first else { return "" }
+        return ["China": "中国", "Japan": "日本", "United States": "美国", "Canada": "加拿大", "South Korea": "韩国"][country] ?? country
+    }
     var subtitle: String {
         let parsed = MediaNameParser.parse(media.name)
         guard let season = parsed.season, let episode = parsed.episode else { return formatSize(media.size) }
@@ -335,13 +339,15 @@ private struct HeroMediaCard: View {
     let onPlay: () -> Void
 
     var body: some View {
-        ZStack(alignment: .bottomLeading) {
+        GeometryReader { geometry in
+          ZStack(alignment: .bottomLeading) {
             ArtworkView(
                 urlString: item.backgroundURL.isEmpty ? item.posterURL : item.backgroundURL,
+                fallbackURLString: item.posterURL,
                 title: item.title
             )
             .scaledToFill()
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(width: geometry.size.width, height: geometry.size.height)
             .clipped()
 
             LinearGradient(
@@ -368,7 +374,7 @@ private struct HeroMediaCard: View {
 
                 HStack(spacing: 8) {
                     if !item.year.isEmpty { Text(item.year) }
-                    if let country = item.metadata?.country, !country.isEmpty { Text(country) }
+                    if !item.countryLabel.isEmpty { Text(item.countryLabel) }
                     if let rating = item.metadata?.rating, !rating.isEmpty {
                         Label(rating, systemImage: "star.fill")
                             .foregroundStyle(.yellow)
@@ -394,6 +400,7 @@ private struct HeroMediaCard: View {
                             .background(.white, in: Capsule())
                     }
                     .buttonStyle(.plain)
+                    .accessibilityIdentifier("home.heroPlay")
 
                     Text(item.metadata == nil ? "等待匹配" : (item.metadata?.matchedByHash == true ? "SHA-1 识别" : "已匹配"))
                         .font(.caption2.weight(.semibold))
@@ -409,7 +416,8 @@ private struct HeroMediaCard: View {
             }
             .padding(22)
             .padding(.bottom, 20)
-        }
+          }
+        .frame(width: geometry.size.width, height: geometry.size.height)
         .accessibilityIdentifier("home.hero")
         .overlay(alignment: .topLeading) {
             Text(item.metadata?.isSeries == true ? "剧集精选" : "电影精选")
@@ -420,7 +428,8 @@ private struct HeroMediaCard: View {
                 .padding(18)
         }
         .contentShape(Rectangle())
-
+        .clipped()
+        }
     }
 }
 
@@ -482,6 +491,7 @@ private struct PosterCard: View {
 
 private struct ArtworkView: View {
     let urlString: String
+    var fallbackURLString = ""
     let title: String
 
     var body: some View {
@@ -490,10 +500,12 @@ private struct ArtworkView: View {
                 switch phase {
                 case .success(let image):
                     image.resizable()
+                        .accessibilityLabel(title)
+                        .accessibilityIdentifier("home.artwork.\(title)")
                 case .failure:
-                    fallback
+                    secondaryArtwork
                 case .empty:
-                    fallback.overlay { ProgressView().tint(.white) }
+                    secondaryArtwork
                 @unknown default:
                     fallback
                 }
@@ -501,6 +513,16 @@ private struct ArtworkView: View {
         } else {
             fallback
         }
+    }
+
+    @ViewBuilder private var secondaryArtwork: some View {
+        if !fallbackURLString.isEmpty, fallbackURLString != urlString, let url = URL(string: fallbackURLString) {
+            AsyncImage(url: url) { phase in
+                if let image = phase.image {
+                    image.resizable().accessibilityLabel(title).accessibilityIdentifier("home.artwork.\(title)")
+                } else { fallback }
+            }
+        } else { fallback }
     }
 
     private var fallback: some View {
