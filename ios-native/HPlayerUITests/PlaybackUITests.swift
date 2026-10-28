@@ -7,6 +7,28 @@ final class PlaybackUITests: XCTestCase {
         app.launchEnvironment["HPLAYER_UI_TEST_URL"] = "http://127.0.0.1:8765/hls-fixture/index.m3u8"
         app.launchEnvironment["HPLAYER_UI_TEST_115_HEADERS"] = "1"
         app.launch()
+        let surface = app.otherElements["playback.surface"]
+        let orientation = app.buttons["playback.orientation"]
+        func waitForLayout(landscape: Bool, label: String, timeout: TimeInterval = 10) -> Bool {
+            let deadline = Date().addingTimeInterval(timeout)
+            repeat {
+                let frame = app.windows.firstMatch.frame
+                let surfaceFrame = surface.frame
+                let matchesOrientation = landscape
+                    ? frame.width > frame.height && surfaceFrame.width > surfaceFrame.height
+                    : frame.height > frame.width && surfaceFrame.height > surfaceFrame.width
+                if matchesOrientation
+                    && abs(surfaceFrame.width - frame.width) < 2
+                    && abs(surfaceFrame.height - frame.height) < 2
+                    && orientation.label == label {
+                    return true
+                }
+                Thread.sleep(forTimeInterval: 0.25)
+            } while Date() < deadline
+            return false
+        }
+        XCTAssertTrue(waitForLayout(landscape: true, label: "竖屏"), "Playback should start in landscape")
+
         let center = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.48))
         let pause = app.buttons["playback.playPause"]
         let elapsed = app.staticTexts["playback.elapsed"]
@@ -40,25 +62,12 @@ final class PlaybackUITests: XCTestCase {
         XCTAssertTrue(nextEpisode.waitForExistence(timeout: 3))
         nextEpisode.tap()
         XCTAssertTrue(app.staticTexts["测试下一集"].waitForExistence(timeout: 10))
-        if !app.buttons["playback.orientation"].exists { center.tap() }
-        app.buttons["playback.orientation"].tap()
-        let surface = app.otherElements["playback.surface"]
-        var rotated = false
-        for _ in 0..<20 {
-            let frame = app.windows.firstMatch.frame
-            let surfaceFrame = surface.frame
-            let orientationLabel = app.buttons["playback.orientation"].label
-            if frame.width > frame.height
-                && surfaceFrame.width > surfaceFrame.height
-                && abs(surfaceFrame.width - frame.width) < 2
-                && abs(surfaceFrame.height - frame.height) < 2
-                && orientationLabel == "竖屏" {
-                rotated = true
-                break
-            }
-            Thread.sleep(forTimeInterval: 0.5)
-        }
-        XCTAssertTrue(rotated, "Landscape button should relayout the player surface and controls")
+        if !orientation.exists { center.tap() }
+        orientation.tap()
+        XCTAssertTrue(waitForLayout(landscape: false, label: "横屏"), "Orientation button should switch to portrait")
+        if !orientation.exists { center.tap() }
+        orientation.tap()
+        XCTAssertTrue(waitForLayout(landscape: true, label: "竖屏"), "Orientation button should return to landscape")
         let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         attachment.name = "HPlayer landscape VLC controls"
         attachment.lifetime = .keepAlways

@@ -36,6 +36,7 @@ struct PlaybackControlsView: View {
     @State private var dragTime = 0.0
     @State private var hideTask: Task<Void, Never>?
     @State private var requestedLandscape = false
+    @State private var initialLandscapeRequested = false
     @State private var rotateError = ""
 
     var body: some View {
@@ -57,9 +58,7 @@ struct PlaybackControlsView: View {
                         if !error.isEmpty || !playback.error.isEmpty {
                             errorBanner(!error.isEmpty ? error : playback.error)
                         } else if loading || playback.buffering {
-                            HStack(spacing: 8) { ProgressView().tint(.white); Text(loadingText) }
-                                .font(.subheadline).padding(12).background(.black.opacity(0.6), in: Capsule())
-                                .allowsHitTesting(false)
+                            bufferingStatus
                         }
                         Spacer()
                         bottomBar(landscape: landscape)
@@ -93,7 +92,10 @@ struct PlaybackControlsView: View {
             .ignoresSafeArea()
         }
         .statusBarHidden(true)
-        .onAppear { revealControls() }
+        .onAppear {
+            revealControls()
+            enterLandscapeByDefault()
+        }
         .onDisappear {
             hideTask?.cancel()
             playback.setBoost(false)
@@ -123,6 +125,23 @@ struct PlaybackControlsView: View {
 
     private func bottomBar(landscape: Bool) -> some View {
         VStack(spacing: landscape ? 10 : 16) {
+            if playback.buffering {
+                HStack(spacing: 8) {
+                    if playback.bufferProgress > 0 {
+                        ProgressView(value: playback.bufferProgress)
+                            .progressViewStyle(.linear)
+                            .tint(.white)
+                            .frame(width: landscape ? 150 : 110)
+                    } else {
+                        ProgressView().controlSize(.mini).tint(.white)
+                    }
+                    Text(cacheText)
+                    Spacer()
+                }
+                .font(.caption2)
+                .foregroundColor(.white.opacity(0.78))
+                .accessibilityIdentifier("playback.cacheStatus")
+            }
             HStack(spacing: 12) {
                 Text(timeText(dragging ? dragTime : playback.currentTime)).monospacedDigit().font(.caption).accessibilityIdentifier("playback.elapsed")
                 Slider(value: Binding(get: { dragging ? dragTime : min(playback.currentTime, max(playback.duration, 1)) }, set: { dragTime = $0 }), in: 0...max(playback.duration, 1), onEditingChanged: { editing in
@@ -207,6 +226,29 @@ struct PlaybackControlsView: View {
             Button("重试") { onRetry(); revealControls() }.font(.subheadline.weight(.semibold))
         }.padding(16).background(.black.opacity(0.75), in: RoundedRectangle(cornerRadius: 14))
     }
+    private var bufferingStatus: some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 8) {
+                ProgressView().tint(.white)
+                Text(playback.buffering ? cacheText : loadingText)
+            }
+            if playback.buffering && playback.bufferProgress > 0 {
+                ProgressView(value: playback.bufferProgress)
+                    .progressViewStyle(.linear)
+                    .tint(.white)
+                    .frame(width: 180)
+            }
+        }
+        .font(.subheadline)
+        .padding(12)
+        .background(.black.opacity(0.6), in: Capsule())
+        .allowsHitTesting(false)
+    }
+    private var cacheText: String {
+        playback.bufferProgress > 0
+            ? "缓存 \(Int((playback.bufferProgress * 100).rounded()))%"
+            : "正在缓存"
+    }
     private func controlIcon(_ name: String, label: String, size: CGFloat = 20) -> some View {
         Image(systemName: name)
             .font(.system(size: size, weight: .semibold))
@@ -240,7 +282,9 @@ struct PlaybackControlsView: View {
         hideTask?.cancel()
         hideTask = Task {
             try? await Task.sleep(nanoseconds: 5_000_000_000)
-            if !Task.isCancelled && !showList && !dragging && !boosting { controlsVisible = false }
+            if !Task.isCancelled && !showList && !dragging && !boosting && !playback.buffering {
+                controlsVisible = false
+            }
         }
     }
     private var tapGesture: some Gesture {
@@ -269,6 +313,12 @@ struct PlaybackControlsView: View {
         requestedLandscape = !landscape
         requestOrientation(landscape ? .portrait : .landscapeRight)
         revealControls()
+    }
+    private func enterLandscapeByDefault() {
+        guard !initialLandscapeRequested else { return }
+        initialLandscapeRequested = true
+        requestedLandscape = true
+        requestOrientation(.landscapeRight)
     }
     private func requestOrientation(_ orientation: UIInterfaceOrientationMask) {
         guard let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first(where: { $0.activationState == .foregroundActive }) else { return }

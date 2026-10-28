@@ -13,6 +13,7 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
     @Published private(set) var currentTime: Double = 0
     @Published private(set) var duration: Double = 0
     @Published private(set) var seekable = false
+    @Published private(set) var bufferProgress: Double = 0
     @Published private(set) var muted = false
     @Published private(set) var error = ""
     @Published var rate: Float = 1
@@ -29,11 +30,12 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
         let oldTime = preservingPosition ? currentTime : 0
         let oldPlaying = preservingPosition ? playing : true
         player.stop()
-        error = ""; currentTime = 0; duration = 0; buffering = true; seekable = false
+        error = ""; currentTime = 0; duration = 0; buffering = true; seekable = false; bufferProgress = 0
         resumeTime = oldTime > 0 ? Int32(clamping: Int(oldTime * 1000)) : nil
         shouldPauseAfterOpening = !oldPlaying
         let media = VLCMedia(url: url)
-        media.addOption(":network-caching=1200")
+        media.addOption(":network-caching=3000")
+        media.addOption(":file-caching=2000")
         if direct115 {
             media.addOption(":http-user-agent=\(Direct115Client.userAgent)")
             media.addOption(":http-referrer=https://115.com/")
@@ -64,7 +66,7 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
     func stop(detach: Bool = true) {
         player.stop()
         if detach { player.drawable = nil }
-        playing = false; buffering = false; resumeTime = nil; shouldPauseAfterOpening = false
+        playing = false; buffering = false; bufferProgress = 0; resumeTime = nil; shouldPauseAfterOpening = false
     }
 
     nonisolated func mediaPlayerStateChanged(_ aNotification: Notification) {
@@ -72,6 +74,10 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
     }
     nonisolated func mediaPlayerTimeChanged(_ aNotification: Notification) {
         Task { @MainActor [weak self] in self?.refresh() }
+    }
+    nonisolated func mediaPlayerBufferingChanged(_ progress: Float) {
+        let value = Double(max(0, min(progress, 1)))
+        Task { @MainActor [weak self] in self?.bufferProgress = value }
     }
 
     private func refresh() {
