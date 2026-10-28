@@ -63,6 +63,45 @@ final class PlaybackUITests: XCTestCase {
         currentStep = "playback advanced"
         XCTAssertTrue(pause.exists, "VLC should start playing the test video")
 
+        let seekStart = app.coordinate(withNormalizedOffset: CGVector(dx: 0.42, dy: 0.55))
+        let seekForwardEnd = seekStart.withOffset(CGVector(dx: 130, dy: 0))
+        let elapsedBeforeForward = elapsed.label
+        seekStart.press(forDuration: 0.05, thenDragTo: seekForwardEnd)
+        let adjustmentHUD = app.otherElements["playback.adjustmentHUD"]
+        XCTAssertTrue(adjustmentHUD.waitForExistence(timeout: 2), "Horizontal swipe should show the seek HUD")
+        XCTAssertTrue(adjustmentHUD.label.contains("快进"))
+        Thread.sleep(forTimeInterval: 1)
+        XCTAssertNotEqual(elapsed.label, elapsedBeforeForward, "Right swipe should seek forward")
+        currentStep = "swipe forward"
+
+        Thread.sleep(forTimeInterval: 1)
+        let seekBackwardEnd = seekStart.withOffset(CGVector(dx: -130, dy: 0))
+        seekStart.press(forDuration: 0.05, thenDragTo: seekBackwardEnd)
+        XCTAssertTrue(app.otherElements["playback.adjustmentHUD"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.otherElements["playback.adjustmentHUD"].label.contains("快退"))
+        currentStep = "swipe backward"
+
+        Thread.sleep(forTimeInterval: 1)
+        let brightnessStart = app.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.68))
+        brightnessStart.press(
+            forDuration: 0.05,
+            thenDragTo: brightnessStart.withOffset(CGVector(dx: 0, dy: -90))
+        )
+        XCTAssertTrue(app.otherElements["playback.adjustmentHUD"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.otherElements["playback.adjustmentHUD"].label.contains("亮度"))
+        currentStep = "brightness"
+
+        Thread.sleep(forTimeInterval: 3)
+        let volumeStart = app.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.68))
+        volumeStart.press(
+            forDuration: 0.05,
+            thenDragTo: volumeStart.withOffset(CGVector(dx: 0, dy: -90))
+        )
+        XCTAssertTrue(app.otherElements["playback.adjustmentHUD"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.otherElements["playback.adjustmentHUD"].label.contains("音量"))
+        currentStep = "volume"
+
+        Thread.sleep(forTimeInterval: 2)
         center.doubleTap()
         XCTAssertTrue(pause.waitForExistence(timeout: 5), "Double tap should pause")
         expectation(for: NSPredicate(format: "value == %@", "paused"), evaluatedWith: pause)
@@ -74,45 +113,6 @@ final class PlaybackUITests: XCTestCase {
         center.press(forDuration: 1.2)
         XCTAssertTrue(pause.waitForExistence(timeout: 5), "Releasing a long press should keep playback running")
         currentStep = "double tap and long press"
-        Thread.sleep(forTimeInterval: 1)
-
-        let seekStart = app.coordinate(withNormalizedOffset: CGVector(dx: 0.42, dy: 0.55))
-        let seekForwardEnd = seekStart.withOffset(CGVector(dx: 130, dy: 0))
-        let elapsedBeforeForward = elapsed.label
-        seekStart.press(forDuration: 0.01, thenDragTo: seekForwardEnd)
-        let adjustmentHUD = app.otherElements["playback.adjustmentHUD"]
-        XCTAssertTrue(adjustmentHUD.waitForExistence(timeout: 2), "Horizontal swipe should show the seek HUD")
-        XCTAssertTrue(adjustmentHUD.label.contains("快进"))
-        Thread.sleep(forTimeInterval: 1)
-        XCTAssertNotEqual(elapsed.label, elapsedBeforeForward, "Right swipe should seek forward")
-        currentStep = "swipe forward"
-
-        Thread.sleep(forTimeInterval: 1)
-        let seekBackwardEnd = seekStart.withOffset(CGVector(dx: -130, dy: 0))
-        seekStart.press(forDuration: 0.01, thenDragTo: seekBackwardEnd)
-        XCTAssertTrue(app.otherElements["playback.adjustmentHUD"].waitForExistence(timeout: 2))
-        XCTAssertTrue(app.otherElements["playback.adjustmentHUD"].label.contains("快退"))
-        currentStep = "swipe backward"
-
-        Thread.sleep(forTimeInterval: 1)
-        let brightnessStart = app.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.68))
-        brightnessStart.press(
-            forDuration: 0.01,
-            thenDragTo: brightnessStart.withOffset(CGVector(dx: 0, dy: -90))
-        )
-        XCTAssertTrue(app.otherElements["playback.adjustmentHUD"].waitForExistence(timeout: 2))
-        XCTAssertTrue(app.otherElements["playback.adjustmentHUD"].label.contains("亮度"))
-        currentStep = "brightness"
-
-        Thread.sleep(forTimeInterval: 3)
-        let volumeStart = app.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.68))
-        volumeStart.press(
-            forDuration: 0.01,
-            thenDragTo: volumeStart.withOffset(CGVector(dx: 0, dy: -90))
-        )
-        XCTAssertTrue(app.otherElements["playback.adjustmentHUD"].waitForExistence(timeout: 2))
-        XCTAssertTrue(app.otherElements["playback.adjustmentHUD"].label.contains("音量"))
-        currentStep = "volume"
 
         Thread.sleep(forTimeInterval: 2)
         let lock = app.buttons["playback.lock"]
