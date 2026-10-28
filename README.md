@@ -177,6 +177,5 @@ HPlayer/
 │       ├── Models/         数据模型
 │       ├── Services/       API 客户端、Keychain、全局状态
 │       └── Views/          登录、文件库、播放器、设置
-├── scripts/gen-icons.py    生成 PWA 图标
 └── .github/workflows/      iOS 云构建（xcodegen + xcodebuild）
 ```
