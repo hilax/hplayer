@@ -57,8 +57,19 @@ struct SettingsView: View {
                     }
                 }
 
-                Section("115 账号") {
+                Section("当前 115 账号") {
                     statusRow
+                }
+
+                Section("115 开放平台") {
+                    NavigationLink {
+                        Official115SettingsView(onSourceChanged: {
+                            Task { await loadStatus() }
+                        })
+                    } label: {
+                        Label("115 开放平台授权", systemImage: "key.horizontal")
+                    }
+                    .disabled(!appState.isAuthenticated)
                 }
 
                 Section("更新 Cookie") {
@@ -70,6 +81,10 @@ struct SettingsView: View {
                         Task { await saveCookie() }
                     }
                     .disabled(cookie.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || saving)
+                    Button("使用已保存的 Cookie") {
+                        Task { await useSavedCookie() }
+                    }
+                    .disabled(!appState.isAuthenticated || saving)
                 }
 
                 if !error.isEmpty {
@@ -158,4 +173,23 @@ struct SettingsView: View {
         }
         saving = false
     }
+
+    private func useSavedCookie() async {
+        guard let client = appState.client() else { return }
+        saving = true
+        error = ""
+        message = ""
+        defer { saving = false }
+        do {
+            let _: SourceResponse = try await client.post("/api/115/open/source", body: ["source": "cookie"])
+            message = "已切换到 Cookie"
+            await loadStatus()
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+}
+
+private struct SourceResponse: Decodable {
+    let ok: Bool
 }

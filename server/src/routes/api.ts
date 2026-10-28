@@ -10,6 +10,7 @@ import {
 } from '../auth.js'
 import {
   getDownloadInfo,
+  getCookieUserInfo,
   getFileInfo,
   getQuota,
   getUserInfo,
@@ -18,6 +19,7 @@ import {
   searchFiles,
 } from '../p115/client.js'
 import { getCookie, isCookieComplete, setCookie } from '../p115/store.js'
+import { configureOpen, openRequest, openState, openUser, pollOpenAuth, setSource, startOpenAuth, useOpen } from '../p115/open.js'
 import { closeSession, ensureSession, getSession, readPlaylist, readSegment } from '../media/hls.js'
 import { probe } from '../media/probe.js'
 
@@ -44,7 +46,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   // ---- 115 账号 ----
   app.get('/api/115/status', { preHandler: requireAuth }, async () => {
     const cookie = getCookie()
-    if (!isCookieComplete(cookie)) {
+    if (!useOpen() && !isCookieComplete(cookie)) {
       return { configured: false, message: '未配置 Cookie，或缺少 UID/CID/SEID/KID' }
     }
     try {
@@ -54,9 +56,46 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       return {
         configured: true,
         error: error instanceof Error ? error.message : String(error),
-        message: 'Cookie 可能已失效，请重新获取',
+        message: useOpen() ? '暂时无法获取 115 账号信息，请检查网络和授权状态' : '暂时无法获取 115 账号信息，请检查网络和 Cookie',
       }
     }
+  })
+
+  app.get('/api/115/open/status', { preHandler: requireAuth }, async () => {
+    const state = openState()
+    if (!state.authorized) return { ...state, message: state.configured ? '请扫码授权 115' : '请先配置 AppID' }
+    try { const user = await openUser(); return { ...state, userName: user.userName } }
+    catch { return { ...state, message: '暂时无法验证授权，请检查网络和授权状态' } }
+  })
+
+  app.post('/api/115/open/config', { preHandler: requireAuth }, async (request, reply) => {
+    const { clientId } = (request.body ?? {}) as { clientId?: string }
+    try { configureOpen(clientId ?? ''); return { ok: true } }
+    catch (error) { return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) }) }
+  })
+  app.post('/api/115/open/source', { preHandler: requireAuth }, async (request, reply) => {
+    const { source } = (request.body ?? {}) as { source?: string }
+    if (source !== 'open' && source !== 'cookie') return reply.code(400).send({ error: '无效的数据来源' })
+    if (source === 'cookie' && !isCookieComplete(getCookie())) return reply.code(400).send({ error: '请先配置完整的 Cookie' })
+    try { setSource(source); return { ok: true, source } }
+    catch (error) { return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) }) }
+  })
+
+  app.post('/api/115/open/auth/start', { preHandler: requireAuth }, async (_request, reply) => {
+    try { return await startOpenAuth() } catch (error) { return sendP115Error(reply, error) }
+  })
+  app.post('/api/115/open/auth/poll', { preHandler: requireAuth }, async (_request, reply) => {
+    try { return await pollOpenAuth() } catch (error) { return sendP115Error(reply, error) }
+  })
+  app.get('/api/115/open/play', { preHandler: requireAuth }, async (request, reply) => {
+    const { pickCode } = request.query as { pickCode?: string }
+    if (!pickCode) return reply.code(400).send({ error: '缺少 pickCode' })
+    if (!useOpen()) return reply.code(400).send({ error: '请先授权 115 开放平台' })
+    try {
+      const result = await openRequest('/open/video/play', { params: { pick_code: pickCode } })
+      const values = Array.isArray(result.data?.video_url) ? result.data.video_url : []
+      return { qualities: values.map((v: any) => ({ url: String(v.url ?? ''), title: String(v.title ?? ''), definition: String(v.definition ?? ''), width: Number(v.width ?? 0), height: Number(v.height ?? 0) })).filter((v: any) => v.url) }
+    } catch (error) { return sendP115Error(reply, error) }
   })
 
   app.post('/api/115/cookie', { preHandler: requireAuth }, async (request, reply) => {
@@ -64,9 +103,10 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     if (!cookie || !isCookieComplete(cookie)) {
       return reply.code(400).send({ error: 'Cookie 不完整，需要包含 UID、CID、SEID、KID' })
     }
-    setCookie(cookie)
     try {
-      const user = await getUserInfo()
+      const user = await getCookieUserInfo(cookie)
+      setCookie(cookie)
+      setSource('cookie')
       return { ok: true, ...user }
     } catch (error) {
       return reply.code(400).send({
@@ -122,7 +162,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.get('/api/play/:pickcode', { preHandler: requireAuth }, async (request, reply) => {
     const { pickcode } = request.params as { pickcode: string }
     try {
-      const info = await getDownloadInfo(pickcode)
+      const info = await getDownloadInfo(pickcode, request.headers['user-agent'])
       return reply.redirect(info.url, 302)
     } catch (error) {
       return sendP115Error(reply, error)

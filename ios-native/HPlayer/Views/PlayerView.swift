@@ -1,6 +1,24 @@
 import AVKit
 import SwiftUI
 
+private struct Open115Playback: Decodable {
+    let qualities: [Open115Quality]
+}
+
+private struct Open115Quality: Decodable {
+    let url: String
+    let title: String
+    let definition: String
+    let width: Int
+    let height: Int
+
+    var label: String {
+        if !title.isEmpty { return title }
+        if height > 0 { return "\(height)P" }
+        return "清晰度 \(definition)"
+    }
+}
+
 struct PlayerView: View {
     let source: PlaybackSource
 
@@ -11,6 +29,13 @@ struct PlayerView: View {
     @State private var media: MediaInfo?
     @State private var error = ""
     @State private var loading = true
+    @State private var originalURL: URL?
+    @State private var qualities: [Open115Quality] = []
+    @State private var selectedQuality = "原画"
+    @State private var isOfficialQuality = false
+    @State private var switchingQuality = false
+    @State private var qualityError = ""
+    @State private var visible = true
 
     var body: some View {
         NavigationStack {
@@ -42,12 +67,46 @@ struct PlayerView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(codecLine(media))
                             .font(.subheadline)
-                        Text(media.directPlay ? "直连 115 CDN" : "服务端转封装")
+                        Text(isOfficialQuality ? "115 官方转码 · \(selectedQuality)" : (media.directPlay ? "直连 115 CDN" : "服务端转封装"))
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding()
+                }
+
+                if !qualities.isEmpty {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("播放画质").font(.headline)
+                            Text("115 官方转码画质与会员权益相关")
+                                .font(.caption).foregroundColor(.secondary)
+                        }
+                        Spacer()
+                        if switchingQuality { ProgressView().padding(.trailing, 4) }
+                        Menu {
+                            if originalURL != nil {
+                                Button("原画（原有播放方式）") { selectOriginal() }
+                            }
+                            ForEach(Array(qualities.enumerated()), id: \.offset) { _, quality in
+                                Button(quality.label) {
+                                    Task { await selectQuality(quality) }
+                                }
+                            }
+                        } label: {
+                            Label(selectedQuality, systemImage: "chevron.up.chevron.down")
+                                .font(.subheadline.weight(.medium))
+                        }
+                        .disabled(switchingQuality)
+                    }
+                    .padding(.horizontal)
+                    .padding(.vertical, 12)
+                }
+                if !qualityError.isEmpty {
+                    Text(qualityError)
+                        .font(.caption).foregroundColor(.red)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal)
                 }
 
                 Spacer()
@@ -63,6 +122,8 @@ struct PlayerView: View {
                 await load()
             }
             .onDisappear {
+                visible = false
+                player?.currentItem?.cancelPendingSeeks()
                 player?.pause()
             }
         }
@@ -83,6 +144,15 @@ struct PlayerView: View {
         loading = true
         error = ""
 
+        await loadOriginal()
+        loading = false
+        if case .p115(_, let pickCode) = source, !Task.isCancelled {
+            // A failure here (for example, Cookie mode) must not interrupt original playback.
+            await loadQualities(pickCode)
+        }
+    }
+
+    private func loadOriginal() async {
         do {
             let url: URL
 
@@ -107,18 +177,78 @@ struct PlayerView: View {
                 url = mediaURL
             }
 
-            let item = AVPlayerItem(url: url)
-            let newPlayer = AVPlayer(playerItem: item)
-
-            try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
-            try? AVAudioSession.sharedInstance().setActive(true)
-
-            player = newPlayer
-            newPlayer.play()
+            originalURL = url
+            guard !Task.isCancelled && visible else { return }
+            play(url, preservingPosition: false)
         } catch let err {
             error = err.localizedDescription
         }
+    }
 
-        loading = false
+    private func fetchQualities(_ pickCode: String) async throws -> [Open115Quality] {
+        guard let client = appState.client(),
+              let encoded = pickCode.addingPercentEncoding(withAllowedCharacters: .alphanumerics) else {
+            throw APIError.badURL
+        }
+        let result: Open115Playback = try await client.get("/api/115/open/play?pickCode=\(encoded)")
+        return result.qualities
+    }
+
+    private func loadQualities(_ pickCode: String) async {
+        guard let result = try? await fetchQualities(pickCode), !Task.isCancelled else { return }
+        qualities = result
+        if originalURL == nil && !result.isEmpty {
+            error = "原画暂时无法播放，可选择 115 官方转码画质。"
+            selectedQuality = "选择画质"
+        }
+    }
+
+    private func selectOriginal() {
+        guard let originalURL else { return }
+        qualityError = ""
+        selectedQuality = "原画"
+        isOfficialQuality = false
+        play(originalURL, preservingPosition: true)
+    }
+
+    private func selectQuality(_ quality: Open115Quality) async {
+        guard case .p115(_, let pickCode) = source else { return }
+        switchingQuality = true
+        qualityError = ""
+        defer { switchingQuality = false }
+        do {
+            // Playback URLs expire, so resolve a fresh URL each time a quality is selected.
+            let refreshed = try await fetchQualities(pickCode)
+            guard visible && !Task.isCancelled else { return }
+            guard let current = refreshed.first(where: { $0.definition == quality.definition && $0.title == quality.title }),
+                  let url = URL(string: current.url),
+                  let scheme = url.scheme?.lowercased(), ["https", "http"].contains(scheme), url.host != nil else {
+                throw APIError.server("该画质暂不可用，请重新选择")
+            }
+            qualities = refreshed
+            selectedQuality = current.label
+            isOfficialQuality = true
+            play(url, preservingPosition: true)
+        } catch {
+            qualityError = error.localizedDescription
+        }
+    }
+
+    private func play(_ url: URL, preservingPosition: Bool) {
+        let position = preservingPosition ? player?.currentTime() : nil
+        let shouldPlay = player?.timeControlStatus != .paused || player == nil
+        let item = AVPlayerItem(url: url)
+        let currentPlayer = player ?? AVPlayer()
+        currentPlayer.replaceCurrentItem(with: item)
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
+        try? AVAudioSession.sharedInstance().setActive(true)
+        player = currentPlayer
+        if let position, position.isNumeric, position.seconds > 0 {
+            currentPlayer.seek(to: position) { finished in
+                if finished && shouldPlay { currentPlayer.play() }
+            }
+        } else if shouldPlay {
+            currentPlayer.play()
+        }
     }
 }

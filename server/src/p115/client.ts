@@ -1,6 +1,7 @@
 import { config } from '../config.js'
 import { decode, encode, generateKey } from './crypto.js'
 import { getCookie } from './store.js'
+import { openDownload, openList, openSearch, openUser, useOpen } from './open.js'
 
 const API = {
   fileList: 'https://webapi.115.com/files',
@@ -46,8 +47,8 @@ export class P115Error extends Error {
   }
 }
 
-function headers(): Record<string, string> {
-  const cookie = getCookie()
+function headers(cookieOverride?: string): Record<string, string> {
+  const cookie = cookieOverride ?? getCookie()
   if (!cookie) throw new P115Error('未配置 115 Cookie')
   return {
     Cookie: cookie,
@@ -71,6 +72,7 @@ async function checkResponse(res: Response): Promise<any> {
 }
 
 export async function listDir(cid = '0', offset = 0, limit = 1000): Promise<P115File[]> {
+  if (useOpen()) return openList(cid, offset, limit)
   const params = new URLSearchParams({
     aid: '1',
     cid,
@@ -132,7 +134,8 @@ export interface DownloadInfo {
  * 用 pickcode 换取 CDN 直链。
  * 请求体是 115 私有加密格式，响应同样需要解密。
  */
-export async function getDownloadInfo(pickCode: string): Promise<DownloadInfo> {
+export async function getDownloadInfo(pickCode: string, userAgent = config.userAgent): Promise<DownloadInfo> {
+  if (useOpen()) return openDownload(pickCode, userAgent)
   const key = generateKey()
   const payload = Buffer.from(JSON.stringify({ pickcode: pickCode }))
   const data = encode(payload, key)
@@ -141,6 +144,7 @@ export async function getDownloadInfo(pickCode: string): Promise<DownloadInfo> {
     method: 'POST',
     headers: {
       ...headers(),
+      'User-Agent': userAgent,
       'Content-Type': 'application/x-www-form-urlencoded',
     },
     body: new URLSearchParams({ data }).toString(),
@@ -165,7 +169,12 @@ export async function getDownloadInfo(pickCode: string): Promise<DownloadInfo> {
 }
 
 export async function getUserInfo(): Promise<{ userId: number; userName: string; vip: number }> {
-  const res = await fetch(API.userInfo, { headers: headers() })
+  if (useOpen()) { const { userId, userName, vip } = await openUser(); return { userId, userName, vip } }
+  return getCookieUserInfo()
+}
+
+export async function getCookieUserInfo(cookieOverride?: string): Promise<{ userId: number; userName: string; vip: number }> {
+  const res = await fetch(API.userInfo, { headers: headers(cookieOverride) })
   const json = await checkResponse(res)
   const d = json.data ?? {}
   return { userId: Number(d.user_id ?? 0), userName: String(d.user_name ?? ''), vip: Number(d.vip ?? 0) }
@@ -180,6 +189,7 @@ export interface QuotaInfo {
 
 /** 115 容量信息，用于资源库卡片展示 */
 export async function getQuota(): Promise<QuotaInfo> {
+  if (useOpen()) return (await openUser()).quota
   const res = await fetch('https://webapi.115.com/user/space', { headers: headers() })
   const json = await checkResponse(res)
   const d = json.data ?? {}
@@ -192,6 +202,7 @@ export async function getQuota(): Promise<QuotaInfo> {
 }
 
 export async function searchFiles(keyword: string): Promise<P115File[]> {
+  if (useOpen()) return openSearch(keyword)
   const params = new URLSearchParams({
     aid: '1',
     search_value: keyword,
@@ -210,6 +221,10 @@ export async function searchFiles(keyword: string): Promise<P115File[]> {
 }
 
 export async function getFileInfo(pickCode: string): Promise<P115File | null> {
+  if (useOpen()) {
+    const info = await openDownload(pickCode)
+    return { id: '', parentId: '', name: info.fileName, isDir: false, kind: /\.(mp4|mkv|mov|m4v|avi|ts|webm|wmv|flv)$/i.test(info.fileName) ? 'video' : '', size: info.fileSize, pickCode, sha1: '', updatedAt: '', thumbUrl: '' }
+  }
   const res = await fetch(`${API.fileInfo}?pick_code=${encodeURIComponent(pickCode)}`, {
     headers: headers(),
   })
