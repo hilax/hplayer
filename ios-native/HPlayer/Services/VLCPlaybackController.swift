@@ -84,7 +84,7 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
         muted = audio.isMuted
         if !audio.isMuted && audio.volume == 0 {
             audio.volume = 100
-            volume = 0.5
+            volume = 1
         }
     }
     func setVolume(_ normalized: Double) {
@@ -93,7 +93,7 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
             volume = value
             return
         }
-        audio.volume = Int32((value * 200).rounded())
+        audio.volume = Int32((value * 100).rounded())
         if value > 0 { audio.isMuted = false }
         volume = value
         muted = audio.isMuted
@@ -126,7 +126,7 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
         let length = Double(player.media?.length.intValue ?? 0) / 1000
         duration = length.isFinite && length > 0 ? length : 0
         if let audio = player.audio {
-            volume = min(max(Double(audio.volume) / 200, 0), 1)
+            volume = min(max(Double(audio.volume) / 100, 0), 1)
         }
         if let resumeTime, state == .playing, player.isSeekable {
             player.time = VLCTime(int: resumeTime)

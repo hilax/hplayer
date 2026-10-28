@@ -125,6 +125,8 @@ jobs:
         run: |
           if [[ -d "$RUNNER_TEMP/player-tests.xcresult" ]]; then
             xcrun xcresulttool export attachments --path "$RUNNER_TEMP/player-tests.xcresult" --output-path "$RUNNER_TEMP/player-ui"
+            xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/player-tests.xcresult" > "$RUNNER_TEMP/player-ui/test-summary.json"
+            cat "$RUNNER_TEMP/player-ui/test-summary.json"
           fi
 
       - name: Upload player UI screenshots

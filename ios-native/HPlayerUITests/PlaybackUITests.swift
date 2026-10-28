@@ -3,157 +3,107 @@ import XCTest
 final class PlaybackUITests: XCTestCase {
     func testVLCPlaybackControlsAndLandscape() throws {
         continueAfterFailure = false
-        var currentStep = "launch"
-        addTeardownBlock {
-            let attachment = XCTAttachment(string: "Last completed step: \(currentStep)")
-            attachment.name = "Playback test step"
-            attachment.lifetime = .keepAlways
-            self.add(attachment)
-        }
         let app = XCUIApplication()
         app.launchEnvironment["HPLAYER_UI_TEST_URL"] = "http://127.0.0.1:8765/hls-fixture/index.m3u8"
         app.launchEnvironment["HPLAYER_UI_TEST_115_HEADERS"] = "1"
         app.launchEnvironment["HPLAYER_UI_TEST_115_COOKIE"] = "UID=ui-test; CID=ui-test; SEID=ui-test; KID=ui-test"
         app.launchEnvironment["HPLAYER_UI_TEST_KEEP_CONTROLS_VISIBLE"] = "1"
         app.launch()
+        addTeardownBlock {
+            if self.testRun?.hasSucceeded == false {
+                let hierarchy = XCTAttachment(string: app.debugDescription)
+                hierarchy.lifetime = .keepAlways
+                self.add(hierarchy)
+                let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+                screenshot.lifetime = .keepAlways
+                self.add(screenshot)
+            }
+        }
+
         let surface = app.otherElements["playback.surface"]
         let orientation = app.buttons["playback.orientation"]
-        func waitForLayout(landscape: Bool, label: String, timeout: TimeInterval = 10) -> Bool {
-            let deadline = Date().addingTimeInterval(timeout)
-            repeat {
-                let frame = app.windows.firstMatch.frame
-                let surfaceFrame = surface.frame
-                let matchesOrientation = landscape
-                    ? frame.width > frame.height && surfaceFrame.width > surfaceFrame.height
-                    : frame.height > frame.width && surfaceFrame.height > surfaceFrame.width
-                if matchesOrientation
-                    && abs(surfaceFrame.width - frame.width) < 2
-                    && abs(surfaceFrame.height - frame.height) < 2
-                    && orientation.label == label {
-                    return true
-                }
-                Thread.sleep(forTimeInterval: 0.25)
-            } while Date() < deadline
-            return false
-        }
-        let startedInLandscape = waitForLayout(landscape: true, label: "竖屏", timeout: 20)
-        if !startedInLandscape {
-            let hierarchy = XCTAttachment(string: app.debugDescription)
-            hierarchy.name = "Default landscape failure hierarchy"
-            hierarchy.lifetime = .keepAlways
-            add(hierarchy)
-            let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
-            screenshot.name = "Default landscape failure screen"
-            screenshot.lifetime = .keepAlways
-            add(screenshot)
-        }
-        XCTAssertTrue(startedInLandscape, "Playback should start in landscape")
-        currentStep = "initial landscape"
-        XCTAssertFalse(app.alerts.firstMatch.exists, "Landscape should not show an orientation error")
-
-        let center = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.48))
         let pause = app.buttons["playback.playPause"]
         let elapsed = app.staticTexts["playback.elapsed"]
-        var startedPlaying = false
-        for _ in 0..<45 {
-            if !pause.exists { center.tap() }
-            if pause.exists && (pause.value as? String) == "playing" {
-                startedPlaying = true
-                break
-            }
-            Thread.sleep(forTimeInterval: 1)
-        }
-        XCTAssertTrue(startedPlaying, "VLC should start playing the HLS test stream")
-        currentStep = "playback advanced"
-        if !elapsed.exists { center.tap() }
-        XCTAssertTrue(elapsed.waitForExistence(timeout: 3), "Playback controls should be visible")
+        XCTAssertTrue(wait { surface.exists && orientation.exists && app.windows.firstMatch.frame.width > app.windows.firstMatch.frame.height }, "Player should open in landscape")
+        XCTAssertFalse(app.alerts.firstMatch.exists)
+        XCTAssertTrue(wait { (pause.value as? String) == "playing" && self.seconds(elapsed.label) > 0 && app.sliders.firstMatch.isEnabled }, "HLS should play with working seeking")
 
-        let seekStart = app.coordinate(withNormalizedOffset: CGVector(dx: 0.42, dy: 0.55))
-        let seekForwardEnd = seekStart.withOffset(CGVector(dx: 130, dy: 0))
-        let elapsedBeforeForward = elapsed.label
-        seekStart.press(forDuration: 0.05, thenDragTo: seekForwardEnd)
-        let adjustmentHUD = app.otherElements["playback.adjustmentHUD"]
-        XCTAssertTrue(adjustmentHUD.waitForExistence(timeout: 2), "Horizontal swipe should show the seek HUD")
-        XCTAssertTrue(adjustmentHUD.label.contains("快进"))
-        Thread.sleep(forTimeInterval: 1)
-        XCTAssertNotEqual(elapsed.label, elapsedBeforeForward, "Right swipe should seek forward")
-        currentStep = "swipe forward"
+        pause.tap()
+        XCTAssertTrue(wait { (pause.value as? String) == "paused" })
+        let before = seconds(elapsed.label)
+        swipe(surface, from: CGVector(dx: 0.4, dy: 0.48), to: CGVector(dx: 0.65, dy: 0.48))
+        XCTAssertTrue(wait { (surface.value as? String)?.contains("??") == true })
+        XCTAssertTrue(wait { self.seconds(elapsed.label) > before + 2 }, "Right swipe must advance playback time")
+        let afterForward = seconds(elapsed.label)
+        swipe(surface, from: CGVector(dx: 0.65, dy: 0.48), to: CGVector(dx: 0.4, dy: 0.48))
+        XCTAssertTrue(wait { (surface.value as? String)?.contains("??") == true })
+        XCTAssertTrue(wait { self.seconds(elapsed.label) < afterForward - 2 }, "Left swipe must rewind playback time")
 
-        Thread.sleep(forTimeInterval: 1)
-        let seekBackwardEnd = seekStart.withOffset(CGVector(dx: -130, dy: 0))
-        seekStart.press(forDuration: 0.05, thenDragTo: seekBackwardEnd)
-        XCTAssertTrue(app.otherElements["playback.adjustmentHUD"].waitForExistence(timeout: 2))
-        XCTAssertTrue(app.otherElements["playback.adjustmentHUD"].label.contains("快退"))
-        currentStep = "swipe backward"
+        swipe(surface, from: CGVector(dx: 0.2, dy: 0.4), to: CGVector(dx: 0.2, dy: 0.65))
+        XCTAssertTrue(wait { (surface.value as? String)?.contains("??") == true })
+        let dimmed = metric("brightness", surface: surface)
+        swipe(surface, from: CGVector(dx: 0.2, dy: 0.65), to: CGVector(dx: 0.2, dy: 0.4))
+        XCTAssertTrue(wait { self.metric("brightness", surface: surface) > dimmed + 0.1 }, "Left vertical swipe must change brightness")
 
-        Thread.sleep(forTimeInterval: 1)
-        let brightnessStart = app.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.68))
-        brightnessStart.press(
-            forDuration: 0.05,
-            thenDragTo: brightnessStart.withOffset(CGVector(dx: 0, dy: -90))
-        )
-        XCTAssertTrue(app.otherElements["playback.adjustmentHUD"].waitForExistence(timeout: 2))
-        XCTAssertTrue(app.otherElements["playback.adjustmentHUD"].label.contains("亮度"))
-        currentStep = "brightness"
+        swipe(surface, from: CGVector(dx: 0.8, dy: 0.4), to: CGVector(dx: 0.8, dy: 0.65))
+        XCTAssertTrue(wait { (surface.value as? String)?.contains("??") == true })
+        let quieter = metric("volume", surface: surface)
+        swipe(surface, from: CGVector(dx: 0.8, dy: 0.65), to: CGVector(dx: 0.8, dy: 0.4))
+        XCTAssertTrue(wait { self.metric("volume", surface: surface) > quieter + 0.1 }, "Right vertical swipe must change volume")
 
-        Thread.sleep(forTimeInterval: 3)
-        let volumeStart = app.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.68))
-        volumeStart.press(
-            forDuration: 0.05,
-            thenDragTo: volumeStart.withOffset(CGVector(dx: 0, dy: -90))
-        )
-        XCTAssertTrue(app.otherElements["playback.adjustmentHUD"].waitForExistence(timeout: 2))
-        XCTAssertTrue(app.otherElements["playback.adjustmentHUD"].label.contains("音量"))
-        currentStep = "volume"
-
-        Thread.sleep(forTimeInterval: 2)
+        let center = surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45))
         center.doubleTap()
-        XCTAssertTrue(pause.waitForExistence(timeout: 5), "Double tap should pause")
-        expectation(for: NSPredicate(format: "value == %@", "paused"), evaluatedWith: pause)
-        waitForExpectations(timeout: 5)
-        center.doubleTap()
-        XCTAssertTrue(pause.waitForExistence(timeout: 5), "Double tap should resume")
-        expectation(for: NSPredicate(format: "value == %@", "playing"), evaluatedWith: pause)
-        waitForExpectations(timeout: 5)
+        XCTAssertTrue(wait { (pause.value as? String) == "playing" }, "Double tap should resume")
         center.press(forDuration: 1.2)
-        XCTAssertTrue(pause.waitForExistence(timeout: 5), "Releasing a long press should keep playback running")
-        currentStep = "double tap and long press"
+        XCTAssertTrue(wait { (surface.value as? String)?.contains("?? 3?") == true })
+        XCTAssertEqual(metric("rate", surface: surface), 1, accuracy: 0.01, "Releasing long press restores normal speed")
+        center.doubleTap()
+        XCTAssertTrue(wait { (pause.value as? String) == "paused" }, "Double tap should pause")
 
-        Thread.sleep(forTimeInterval: 2)
-        let lock = app.buttons["playback.lock"]
-        if !lock.exists || !lock.isHittable {
-            center.tap()
-            Thread.sleep(forTimeInterval: 0.5)
-        }
-        XCTAssertTrue(lock.waitForExistence(timeout: 3))
-        XCTAssertTrue(lock.isHittable)
-        lock.tap()
+        center.tap()
+        XCTAssertTrue(wait { !pause.exists }, "Tap should hide controls")
+        center.tap()
+        XCTAssertTrue(pause.waitForExistence(timeout: 3), "Tap should reveal controls")
+        app.buttons["playback.lock"].tap()
         XCTAssertTrue(app.buttons["playback.unlock"].waitForExistence(timeout: 3))
-        XCTAssertFalse(pause.exists, "Playback controls should be hidden while locked")
+        swipe(surface, from: CGVector(dx: 0.4, dy: 0.48), to: CGVector(dx: 0.65, dy: 0.48))
+        XCTAssertFalse(pause.exists, "Locked player hides playback buttons")
         app.buttons["playback.unlock"].tap()
-        currentStep = "lock and unlock"
+        XCTAssertTrue(pause.waitForExistence(timeout: 3))
 
-        let playlist = app.buttons["playback.playlist"]
-        if !playlist.exists || !playlist.isHittable {
-            center.tap()
-            Thread.sleep(forTimeInterval: 0.5)
-        }
-        XCTAssertTrue(playlist.waitForExistence(timeout: 3))
-        playlist.tap()
-        let nextEpisode = app.buttons["playback.item.direct|测试下一集|http://127.0.0.1:8765/hls-fixture/index.m3u8"]
-        XCTAssertTrue(nextEpisode.waitForExistence(timeout: 3))
-        nextEpisode.tap()
-        XCTAssertTrue(app.staticTexts["测试下一集"].waitForExistence(timeout: 10))
-        currentStep = "playlist selection"
-        if !orientation.exists { center.tap() }
+        app.buttons["playback.playlist"].tap()
+        let next = app.buttons["playback.item.direct|?????|http://127.0.0.1:8765/hls-fixture/index.m3u8"]
+        XCTAssertTrue(next.waitForExistence(timeout: 3))
+        next.tap()
+        XCTAssertTrue(app.staticTexts["?????"].waitForExistence(timeout: 5))
+        XCTAssertTrue(wait { (pause.value as? String) == "playing" })
         orientation.tap()
-        XCTAssertTrue(waitForLayout(landscape: false, label: "横屏"), "Orientation button should switch to portrait")
-        if !orientation.exists { center.tap() }
+        XCTAssertTrue(wait { orientation.label == "??" && surface.frame.height > surface.frame.width })
         orientation.tap()
-        XCTAssertTrue(waitForLayout(landscape: true, label: "竖屏"), "Orientation button should return to landscape")
-        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
-        attachment.name = "HPlayer landscape VLC controls"
-        attachment.lifetime = .keepAlways
-        add(attachment)
+        XCTAssertTrue(wait { orientation.label == "??" && surface.frame.width > surface.frame.height })
+        let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        screenshot.name = "HPlayer landscape gestures"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+    }
+
+    private func swipe(_ surface: XCUIElement, from: CGVector, to: CGVector) {
+        surface.coordinate(withNormalizedOffset: from).press(forDuration: 0.05, thenDragTo: surface.coordinate(withNormalizedOffset: to))
+    }
+
+    private func wait(timeout: TimeInterval = 15, _ predicate: @escaping () -> Bool) -> Bool {
+        XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in predicate() }, object: nil)], timeout: timeout) == .completed
+    }
+
+    private func seconds(_ text: String) -> Double {
+        text.split(separator: ":").reduce(0) { $0 * 60 + (Double($1) ?? 0) }
+    }
+
+    private func metric(_ name: String, surface: XCUIElement) -> Double {
+        let text = surface.value as? String ?? ""
+        return text.components(separatedBy: ";").compactMap { part -> Double? in
+            let components = part.trimmingCharacters(in: .whitespaces).components(separatedBy: "=")
+            return components.count == 2 && components[0] == name ? Double(components[1]) : nil
+        }.first ?? -1
     }
 }

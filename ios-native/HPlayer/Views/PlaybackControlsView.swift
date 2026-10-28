@@ -104,6 +104,9 @@ struct PlaybackControlsView: View {
     @State private var adjustmentStartBrightness = 0.0
     @State private var adjustmentStartVolume = 1.0
     @State private var adjustmentHideTask: Task<Void, Never>?
+    @State private var panKind: PlaybackAdjustment.Kind?
+    @State private var lastAdjustment = ""
+    @State private var originalBrightness: CGFloat?
 
     var body: some View {
         GeometryReader { geometry in
@@ -112,11 +115,17 @@ struct PlaybackControlsView: View {
                 Color.black
                 VLCVideoSurface(playback: playback)
                     .allowsHitTesting(false)
-                Color.clear.contentShape(Rectangle())
-                    .accessibilityIdentifier("playback.surface")
-                    .gesture(tapGesture)
-                    .simultaneousGesture(longPressGesture)
-                    .simultaneousGesture(adjustmentGesture(size: geometry.size))
+                PlaybackGestureSurface(
+                    status: gestureStatus,
+                    onTap: toggleControls,
+                    onDoubleTap: {
+                        guard !locked else { revealControls(); return }
+                        playback.toggle()
+                        revealControls()
+                    },
+                    onBoost: setBoost,
+                    onPan: handlePan
+                )
 
                 if controlsVisible && !locked {
                     VStack(spacing: 0) {
@@ -165,6 +174,7 @@ struct PlaybackControlsView: View {
         }
         .statusBarHidden(true)
         .onAppear {
+            originalBrightness = UIScreen.main.brightness
             revealControls()
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 350_000_000)
@@ -175,6 +185,7 @@ struct PlaybackControlsView: View {
             hideTask?.cancel()
             adjustmentHideTask?.cancel()
             playback.setBoost(false)
+            if let originalBrightness { UIScreen.main.brightness = originalBrightness }
             if requestedLandscape { OrientationSupport.restorePortrait() }
         }
         .alert("无法切换屏幕方向", isPresented: Binding(get: { !rotateError.isEmpty }, set: { if !$0 { rotateError = "" } })) {
@@ -368,123 +379,78 @@ struct PlaybackControlsView: View {
             }
         }
     }
-    private var tapGesture: some Gesture {
-        TapGesture(count: 2).onEnded {
-            guard !locked else { revealControls(); return }
-            playback.toggle(); revealControls()
-        }.exclusively(before: TapGesture().onEnded {
-            if controlsVisible { controlsVisible = false; hideTask?.cancel() } else { revealControls() }
-        })
+    private var gestureStatus: String {
+        "\(lastAdjustment); brightness=\(String(format: "%.3f", UIScreen.main.brightness)); volume=\(String(format: "%.3f", playback.volume)); rate=\(String(format: "%g", boosting ? 3 : playback.rate))"
     }
-    private var longPressGesture: some Gesture {
-        LongPressGesture(minimumDuration: 0.7, maximumDistance: 8)
-            .sequenced(before: DragGesture(minimumDistance: 0))
-            .onChanged { value in
-                guard !locked, !boosting, adjustment == nil, playback.playing else { return }
-                if case .second(true, _) = value {
-                    boosting = true; playback.setBoost(true); hideTask?.cancel()
-                }
-            }
-            .onEnded { _ in
-                guard boosting else { return }
-                playback.setBoost(false)
-                boosting = false; revealControls()
-            }
+
+    private func toggleControls() {
+        if controlsVisible { controlsVisible = false; hideTask?.cancel() }
+        else { revealControls() }
     }
-    private func adjustmentGesture(size: CGSize) -> some Gesture {
-        DragGesture(minimumDistance: 18, coordinateSpace: .local)
-            .onChanged { value in
-                guard !locked, !showList, !boosting, size.width > 0, size.height > 0 else { return }
-                adjustmentHideTask?.cancel()
 
-                let expectedKind: PlaybackAdjustment.Kind
-                if abs(value.translation.width) >= abs(value.translation.height) {
-                    expectedKind = .seek
-                } else if value.startLocation.x < size.width / 2 {
-                    expectedKind = .brightness
-                } else {
-                    expectedKind = .volume
-                }
+    private func setBoost(_ enabled: Bool) {
+        if enabled {
+            guard !locked, !showList, panKind == nil, playback.playing else { return }
+            boosting = true
+            lastAdjustment = "?? 3?"
+            playback.setBoost(true)
+            hideTask?.cancel()
+        } else if boosting {
+            boosting = false
+            playback.setBoost(false)
+            revealControls()
+        }
+    }
 
-                if adjustment?.kind != expectedKind {
-                    guard expectedKind != .seek || playback.duration > 0 else { return }
-                    adjustmentHideTask?.cancel()
-                    hideTask?.cancel()
-                    adjustmentStartTime = playback.currentTime
-                    adjustmentStartBrightness = UIScreen.main.brightness
-                    adjustmentStartVolume = playback.volume
-
-                    switch expectedKind {
-                    case .seek:
-                        adjustment = PlaybackAdjustment(
-                            kind: .seek,
-                            title: "横向快进/快退",
-                            valueText: timeText(playback.currentTime),
-                            progress: playback.duration > 0 ? playback.currentTime / playback.duration : 0,
-                            targetTime: playback.currentTime
-                        )
-                    case .brightness:
-                        adjustment = PlaybackAdjustment(
-                            kind: .brightness,
-                            title: "亮度",
-                            valueText: "\(Int((adjustmentStartBrightness * 100).rounded()))%",
-                            progress: adjustmentStartBrightness,
-                            targetTime: nil
-                        )
-                    case .volume:
-                        adjustment = PlaybackAdjustment(
-                            kind: .volume,
-                            title: "音量",
-                            valueText: "\(Int((adjustmentStartVolume * 100).rounded()))%",
-                            progress: adjustmentStartVolume,
-                            targetTime: nil
-                        )
-                    }
-                }
-
-                guard let kind = adjustment?.kind else { return }
-                switch kind {
-                case .seek:
-                    let seconds = Double(value.translation.width / size.width) * 180
-                    let target = min(max(adjustmentStartTime + seconds, 0), playback.duration)
-                    let change = Int((target - adjustmentStartTime).rounded())
-                    let direction = change >= 0 ? "快进" : "快退"
-                    adjustment = PlaybackAdjustment(
-                        kind: .seek,
-                        title: direction,
-                        valueText: "\(change >= 0 ? "+" : "")\(change) 秒 · \(timeText(target))",
-                        progress: playback.duration > 0 ? target / playback.duration : 0,
-                        targetTime: target
-                    )
-                case .brightness:
-                    let value = min(max(adjustmentStartBrightness - Double(value.translation.height / size.height) * 1.2, 0), 1)
-                    UIScreen.main.brightness = value
-                    adjustment = PlaybackAdjustment(
-                        kind: .brightness,
-                        title: "亮度",
-                        valueText: "\(Int((value * 100).rounded()))%",
-                        progress: value,
-                        targetTime: nil
-                    )
-                case .volume:
-                    let value = min(max(adjustmentStartVolume - Double(value.translation.height / size.height) * 1.2, 0), 1)
-                    playback.setVolume(value)
-                    adjustment = PlaybackAdjustment(
-                        kind: .volume,
-                        title: "音量",
-                        valueText: "\(Int((value * 100).rounded()))%",
-                        progress: value,
-                        targetTime: nil
-                    )
-                }
+    private func handlePan(_ state: UIGestureRecognizer.State, origin: CGPoint, translation: CGPoint, size: CGSize) {
+        if state == .cancelled || state == .failed {
+            panKind = nil
+            adjustment = nil
+            revealControls()
+            return
+        }
+        guard !locked, !showList, size.width > 0, size.height > 0 else { return }
+        if state == .began {
+            setBoost(false)
+            adjustmentHideTask?.cancel()
+            hideTask?.cancel()
+            adjustmentStartTime = playback.currentTime
+            adjustmentStartBrightness = UIScreen.main.brightness
+            adjustmentStartVolume = playback.volume
+            if abs(translation.x) > abs(translation.y) {
+                guard playback.seekable, playback.duration > 0 else { panKind = nil; return }
+                panKind = .seek
+            } else {
+                panKind = origin.x < size.width / 2 ? .brightness : .volume
             }
-            .onEnded { _ in
-                guard let current = adjustment else { return }
-                if current.kind == .seek, let target = current.targetTime {
-                    playback.seek(to: target)
-                }
-                hideAdjustmentSoon()
-            }
+        }
+        guard let panKind else { return }
+        adjustmentHideTask?.cancel()
+        switch panKind {
+        case .seek:
+            let range = min(180, max(30, playback.duration / 5))
+            let target = min(max(adjustmentStartTime + Double(translation.x / size.width) * range, 0), max(0, playback.duration - 0.25))
+            let delta = Int((target - adjustmentStartTime).rounded())
+            adjustment = PlaybackAdjustment(
+                kind: .seek, title: delta >= 0 ? "??" : "??",
+                valueText: "\(delta >= 0 ? "+" : "")\(delta) ? ? \(timeText(target))",
+                progress: target / playback.duration, targetTime: target
+            )
+        case .brightness:
+            let value = min(max(adjustmentStartBrightness - Double(translation.y / size.height) * 1.2, 0.05), 1)
+            UIScreen.main.brightness = value
+            adjustment = PlaybackAdjustment(kind: .brightness, title: "??", valueText: "\(Int((value * 100).rounded()))%", progress: value, targetTime: nil)
+        case .volume:
+            let value = min(max(adjustmentStartVolume - Double(translation.y / size.height) * 1.2, 0), 1)
+            playback.setVolume(value)
+            adjustment = PlaybackAdjustment(kind: .volume, title: "??", valueText: "\(Int((value * 100).rounded()))%", progress: value, targetTime: nil)
+        }
+        if let adjustment { lastAdjustment = "\(adjustment.title) \(adjustment.valueText)" }
+        if state == .ended {
+            if let target = adjustment?.targetTime { playback.seek(to: target) }
+            self.panKind = nil
+            hideAdjustmentSoon()
+        }
     }
     private func hideAdjustmentSoon() {
         adjustmentHideTask?.cancel()
