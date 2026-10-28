@@ -7,7 +7,7 @@
 ## 架构
 
 ```
-iPhone（Safari / PWA / 内嵌 App）
+iPhone（原生 SwiftUI App / Safari PWA）
         │  HTTPS
         ▼
 Cloudflare Tunnel（免费，自带域名和证书）
@@ -122,6 +122,8 @@ cloudflared tunnel run hplayer
 
 ## 打包 iOS App
 
+iOS 端是 **SwiftUI 原生实现**（`ios-native/`），不是 WebView 套壳。工程文件用 XcodeGen 从 `project.yml` 生成，所以 `HPlayer.xcodeproj` 不入库，避免手写 pbxproj。
+
 Windows 上无法编译 iOS，用 GitHub Actions 的 macOS runner 云构建：
 
 1. 把项目推到 GitHub（公开/私有都行）
@@ -133,6 +135,17 @@ Windows 上无法编译 iOS，用 GitHub Actions 的 macOS runner 云构建：
 首次打开 App 会让你填服务器地址（就是上面的 Cloudflare Tunnel 域名，比如 `https://hplayer.你的域名.com`）。
 
 > 构建产物是**未签名** IPA，不需要 Apple 开发者账号。签名和有效期取决于你的全能签证书。
+>
+> 原生版 Bundle ID 是 `app.hplayer.native`。如果全能签证书不支持，改 `ios-native/project.yml` 里的 `PRODUCT_BUNDLE_IDENTIFIER` 后重新构建。
+
+### 本地有 Mac 时
+
+```bash
+cd ios-native
+brew install xcodegen
+xcodegen generate
+open HPlayer.xcodeproj
+```
 
 ## 已知限制
 
@@ -154,11 +167,16 @@ HPlayer/
 │       ├── p115/           115 客户端（含私有加密协议）
 │       ├── media/          ffprobe 探测、ffmpeg 转封装
 │       └── routes/api.ts   全部 API
-├── web/                    前端（React + Vite）
+├── web/                    Web 前端（React + Vite，可作 PWA）
 │   └── src/
 │       ├── pages/          登录、文件库、播放器、设置
 │       └── lib/api.ts      请求封装、token、服务器地址
+├── ios-native/             iOS 原生 App（SwiftUI）
+│   ├── project.yml         XcodeGen 工程描述
+│   └── HPlayer/
+│       ├── Models/         数据模型
+│       ├── Services/       API 客户端、Keychain、全局状态
+│       └── Views/          登录、文件库、播放器、设置
 ├── scripts/gen-icons.py    生成 PWA 图标
-├── capacitor.config.ts     iOS 壳配置
-└── .github/workflows/      iOS 云构建
+└── .github/workflows/      iOS 云构建（xcodegen + xcodebuild）
 ```

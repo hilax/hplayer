@@ -8,6 +8,9 @@ Payload/
 *.m4s
 server/init.mp4
 build/
+ios-native/build/
+ios-native/*.xcodeproj/
+ios-native/HPlayer/Info.plist
 .DS_Store
 .env
 *.log
