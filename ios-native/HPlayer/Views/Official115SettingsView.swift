@@ -30,7 +30,7 @@ private struct Open115WebStart: Decodable {
 }
 
 struct Official115SettingsView: View {
-    private enum Field: Hashable { case clientId, clientSecret, redirectURI }
+    private enum Field: Hashable { case clientId, clientSecret, redirectURI, cookie }
     @FocusState private var focusedField: Field?
     let onSourceChanged: () -> Void
     @EnvironmentObject private var appState: AppState
@@ -41,6 +41,7 @@ struct Official115SettingsView: View {
     @State private var clientId = ""
     @State private var clientSecret = ""
     @State private var redirectURI = ""
+    @State private var cookie = ""
     @State private var authorization: Open115Start?
     @State private var pollTask: Task<Void, Never>?
     @State private var webDeadline: Date?
@@ -66,6 +67,24 @@ struct Official115SettingsView: View {
                 .padding(.vertical, 6)
             } header: {
                 Text("连接状态")
+            }
+
+            Section {
+                TextEditor(text: $cookie)
+                    .focused($focusedField, equals: .cookie)
+                    .frame(minHeight: 90)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                Button {
+                    Task { await connectCookie() }
+                } label: {
+                    Label("连接已登录的 115 Cookie", systemImage: "link")
+                }
+                .disabled(busy || cookie.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            } header: {
+                Text("Cookie 连接（无需 AppID）")
+            } footer: {
+                Text("粘贴包含 UID、CID、SEID、KID 的登录 Cookie。Cookie 可能过期，仅保存在你的服务器；BT 云下载使用下方官方授权。")
             }
 
             Section {
@@ -268,6 +287,18 @@ struct Official115SettingsView: View {
         } catch {
             self.error = error.localizedDescription
         }
+    }
+
+    private func connectCookie() async {
+        guard let client = appState.client() else { return }
+        busy = true; error = ""; message = ""
+        defer { busy = false }
+        do {
+            let _: CookieResponse = try await client.post("/api/115/cookie", body: ["cookie": cookie])
+            cookie = ""
+            focusedField = nil
+            onSourceChanged()
+        } catch { self.error = error.localizedDescription }
     }
 
     private func startAuthorization() async {
