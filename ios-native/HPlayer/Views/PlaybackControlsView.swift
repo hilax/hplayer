@@ -372,7 +372,8 @@ struct PlaybackControlsView: View {
         })
     }
     private var longPressGesture: some Gesture {
-        LongPressGesture(minimumDuration: 0.4).sequenced(before: DragGesture(minimumDistance: 0))
+        LongPressGesture(minimumDuration: 0.7, maximumDistance: 8)
+            .sequenced(before: DragGesture(minimumDistance: 0))
             .onChanged { value in
                 guard !locked, !boosting, adjustment == nil, playback.playing else { return }
                 if case .second(true, _) = value {
