@@ -24,7 +24,8 @@ tracker.listen(0, '127.0.0.1', () => {
   function publish() {
     if (seeded && announced && !published) {
       published = true
-      fs.writeFileSync(resultFile, JSON.stringify({ magnet: torrent.magnetURI, size: bytes.length, videoFile }))
+      const magnet = `${torrent.magnetURI}&x.pe=127.0.0.1:${client.torrentPort}`
+      fs.writeFileSync(resultFile, JSON.stringify({ magnet, size: bytes.length, videoFile }))
     }
   }
 })

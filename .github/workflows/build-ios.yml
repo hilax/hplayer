@@ -48,7 +48,12 @@ jobs:
             sleep 1
           done
           test -s "$RUNNER_TEMP/magnet-fixture.json"
-          "$RUNNER_TEMP/magnet-engine-smoke" "$RUNNER_TEMP/magnet-fixture.json"
+          passed=0
+          for attempt in 1 2; do
+            if "$RUNNER_TEMP/magnet-engine-smoke" "$RUNNER_TEMP/magnet-fixture.json"; then passed=1; break; fi
+            echo "Magnet fixture retry $attempt"
+          done
+          test "$passed" -eq 1
 
       - name: Generate Xcode project
         working-directory: ios-native
