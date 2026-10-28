@@ -114,7 +114,7 @@ struct PlaybackControlsView: View {
                     .allowsHitTesting(false)
                 Color.clear.contentShape(Rectangle())
                     .accessibilityIdentifier("playback.surface")
-                    .highPriorityGesture(tapGesture)
+                    .gesture(tapGesture)
                     .simultaneousGesture(longPressGesture)
                     .simultaneousGesture(adjustmentGesture(size: geometry.size))
 
