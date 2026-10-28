@@ -102,7 +102,7 @@ struct PlaybackControlsView: View {
         .onDisappear {
             hideTask?.cancel()
             playback.setBoost(false)
-            if requestedLandscape { requestOrientation(.portrait) }
+            if requestedLandscape { OrientationSupport.restorePortrait() }
         }
         .alert("无法切换屏幕方向", isPresented: Binding(get: { !rotateError.isEmpty }, set: { if !$0 { rotateError = "" } })) {
             Button("好", role: .cancel) { rotateError = "" }
@@ -314,20 +314,20 @@ struct PlaybackControlsView: View {
     }
     private func toggleOrientation(landscape: Bool) {
         requestedLandscape = !landscape
-        requestOrientation(landscape ? .portrait : .landscapeRight)
+        requestOrientation(landscape ? .portrait : .landscape)
         revealControls()
     }
     private func enterLandscapeByDefault() {
         guard !initialLandscapeRequested else { return }
         initialLandscapeRequested = true
         requestedLandscape = true
-        requestOrientation(.landscapeRight)
+        requestOrientation(.landscape)
     }
     private func requestOrientation(_ orientation: UIInterfaceOrientationMask) {
-        guard let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first(where: { $0.activationState == .foregroundActive }) else { return }
-        scene.windows.first?.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
-        scene.requestGeometryUpdate(.iOS(interfaceOrientations: orientation)) { error in
-            DispatchQueue.main.async { rotateError = error.localizedDescription }
+        OrientationSupport.request(orientation) { _ in
+            DispatchQueue.main.async {
+                rotateError = "当前页面暂时无法切换横竖屏，请退出播放器后重试。"
+            }
         }
     }
 }
