@@ -111,7 +111,7 @@ final class AppState: ObservableObject {
     }
 
     func client() -> APIClient? {
-        guard !isDirect else { return nil }
+        if isDirect { return APIClient(baseURL: URL(string: "https://115.com/")!, token: nil, direct: true) }
         guard let serverURL else { return nil }
         return APIClient(baseURL: serverURL, token: token)
     }

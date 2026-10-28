@@ -69,7 +69,7 @@ struct Official115SettingsView: View {
                 Text("连接状态")
             }
 
-            Section {
+            if !appState.isDirect { Section {
                 NavigationLink {
                     CookieWebLoginView(onConnected: onSourceChanged)
                 } label: {
@@ -90,7 +90,7 @@ struct Official115SettingsView: View {
                 Text("Cookie 连接（无需 AppID）")
             } footer: {
                 Text("可在应用内登录并自动连接，也可以手动粘贴包含 UID、CID、SEID、KID 的 Cookie。Cookie 可能过期，仅保存在你的服务器；BT 云下载使用下方官方授权。")
-            }
+            } }
 
             Section {
                 TextField("AppID / Client ID", text: $clientId)
@@ -109,7 +109,7 @@ struct Official115SettingsView: View {
                 Text("填写开放平台批准的 AppID。扫码授权使用 PKCE，无需提供 AppSecret。")
             }
 
-            Section {
+            if !appState.isDirect { Section {
                 SecureField("AppSecret", text: $clientSecret)
                     .focused($focusedField, equals: .clientSecret)
                     .textInputAutocapitalization(.never)
@@ -133,7 +133,7 @@ struct Official115SettingsView: View {
                 Text("115 官方登录")
             } footer: {
                 Text("需要已获批的 AppSecret，以及在 115 平台登记过的 HTTPS 回调域名。登录后返回 HPlayer；AppSecret 仅用于本次授权。")
-            }
+            } }
 
             Section {
                 Button(authorization == nil ? "开始 115 授权" : "重新获取授权码") {
@@ -199,7 +199,7 @@ struct Official115SettingsView: View {
                 Text("无需 AppSecret 或回调域名。授权码有有效期，如果失效可重新获取。")
             }
 
-            Section {
+            if !appState.isDirect { Section {
                 Button {
                     Task { await selectOfficialSource() }
                 } label: {
@@ -208,7 +208,7 @@ struct Official115SettingsView: View {
                 .disabled(busy || status?.authorized != true)
             } footer: {
                 Text("授权成功后，切换到官方接口浏览和播放。")
-            }
+            } }
 
             if !message.isEmpty {
                 Section { Label(message, systemImage: "checkmark.circle").foregroundColor(.green) }

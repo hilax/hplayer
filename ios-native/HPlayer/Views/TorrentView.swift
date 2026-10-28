@@ -82,6 +82,17 @@ struct TorrentView: View {
 
     var body: some View {
         List {
+            if appState.isDirect {
+                Section {
+                    NavigationLink {
+                        Official115SettingsView(onSourceChanged: { Task { await loadTasks(page: 1) } })
+                    } label: {
+                        Label("115 云下载授权", systemImage: "key.horizontal")
+                    }
+                } footer: {
+                    Text("BT 云下载可在手机直接使用，但需在 115 开放平台申请 AppID 和上传、云下载权限。")
+                }
+            }
             Section {
                 Button { importing = true } label: {
                     Label("从手机导入 .torrent", systemImage: "doc.badge.plus")

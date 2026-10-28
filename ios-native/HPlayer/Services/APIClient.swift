@@ -20,6 +20,13 @@ enum APIError: LocalizedError {
 struct APIClient {
     let baseURL: URL
     let token: String?
+    let direct: Bool
+
+    init(baseURL: URL, token: String?, direct: Bool = false) {
+        self.baseURL = baseURL
+        self.token = token
+        self.direct = direct
+    }
 
     func get<T: Decodable>(_ path: String) async throws -> T {
         try await send(path: path, method: "GET", body: nil)
@@ -31,6 +38,10 @@ struct APIClient {
     }
 
     private func send<T: Decodable>(path: String, method: String, body: Data?) async throws -> T {
+        if direct {
+            let result = try await Direct115Open.shared.route(path: path, method: method, body: body)
+            return try JSONDecoder().decode(T.self, from: result)
+        }
         guard let url = URL(string: path, relativeTo: baseURL) else {
             throw APIError.badURL
         }
