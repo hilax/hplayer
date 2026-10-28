@@ -77,7 +77,7 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
     private func refresh() {
         let state = player.state
         playing = player.isPlaying
-        buffering = state == .opening || state == .buffering
+        buffering = !player.isPlaying && (state == .opening || state == .buffering)
         seekable = player.isSeekable
         currentTime = max(0, Double(player.time.intValue) / 1000)
         let length = Double(player.media?.length.intValue ?? 0) / 1000

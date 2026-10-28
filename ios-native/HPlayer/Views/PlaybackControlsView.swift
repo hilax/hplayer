@@ -32,7 +32,6 @@ struct PlaybackControlsView: View {
     @State private var locked = false
     @State private var showList = false
     @State private var boosting = false
-    @State private var wasPlayingBeforeBoost = false
     @State private var dragging = false
     @State private var dragTime = 0.0
     @State private var hideTask: Task<Void, Never>?
@@ -59,6 +58,7 @@ struct PlaybackControlsView: View {
                         } else if loading || playback.buffering {
                             HStack(spacing: 8) { ProgressView().tint(.white); Text(loadingText) }
                                 .font(.subheadline).padding(12).background(.black.opacity(0.6), in: Capsule())
+                                .allowsHitTesting(false)
                         }
                         Spacer()
                         bottomBar(landscape: landscape)
@@ -230,17 +230,14 @@ struct PlaybackControlsView: View {
     private var longPressGesture: some Gesture {
         LongPressGesture(minimumDuration: 0.4).sequenced(before: DragGesture(minimumDistance: 0))
             .onChanged { value in
-                guard !locked, !boosting else { return }
+                guard !locked, !boosting, playback.playing else { return }
                 if case .second(true, _) = value {
-                    wasPlayingBeforeBoost = playback.playing
-                    if !wasPlayingBeforeBoost { playback.toggle() }
                     boosting = true; playback.setBoost(true); hideTask?.cancel()
                 }
             }
             .onEnded { _ in
                 guard boosting else { return }
                 playback.setBoost(false)
-                if !wasPlayingBeforeBoost && playback.playing { playback.toggle() }
                 boosting = false; revealControls()
             }
     }
