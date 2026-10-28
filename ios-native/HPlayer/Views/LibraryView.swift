@@ -5,49 +5,6 @@ struct Crumb: Hashable {
     let name: String
 }
 
-struct LibraryView: View {
-    @EnvironmentObject private var appState: AppState
-    @State private var path: [Crumb] = []
-    @State private var selectedFile: P115File?
-    @State private var showSettings = false
-
-    var body: some View {
-        NavigationStack(path: $path) {
-            DirectoryView(
-                cid: "0",
-                onOpenDir: { path.append($0) },
-                onPlay: { selectedFile = $0 }
-            )
-            .navigationTitle("全部文件")
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button {
-                        showSettings = true
-                    } label: {
-                        Image(systemName: "gearshape")
-                    }
-                }
-            }
-            .navigationDestination(for: Crumb.self) { crumb in
-                DirectoryView(
-                    cid: crumb.cid,
-                    onOpenDir: { path.append($0) },
-                    onPlay: { selectedFile = $0 }
-                )
-                .navigationTitle(crumb.name)
-            }
-        }
-        .sheet(item: $selectedFile) { file in
-            PlayerView(file: file)
-                .environmentObject(appState)
-        }
-        .sheet(isPresented: $showSettings) {
-            SettingsView()
-                .environmentObject(appState)
-        }
-    }
-}
-
 struct DirectoryView: View {
     let cid: String
     let onOpenDir: (Crumb) -> Void

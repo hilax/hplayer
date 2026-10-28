@@ -2,7 +2,7 @@ import AVKit
 import SwiftUI
 
 struct PlayerView: View {
-    let file: P115File
+    let source: PlaybackSource
 
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
@@ -52,7 +52,7 @@ struct PlayerView: View {
 
                 Spacer()
             }
-            .navigationTitle(file.name)
+            .navigationTitle(source.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -80,25 +80,31 @@ struct PlayerView: View {
     }
 
     private func load() async {
-        guard let client = appState.client() else {
-            error = "未连接服务器"
-            loading = false
-            return
-        }
-
         loading = true
         error = ""
 
         do {
-            let info: MediaInfo = try await client.get("/api/probe?pickcode=\(file.pickCode)")
-            media = info
+            let url: URL
 
-            let path = info.directPlay
-                ? "/api/play/\(file.pickCode)"
-                : "/api/hls/\(file.pickCode)/index.m3u8"
+            switch source {
+            case .direct(_, let directURL):
+                url = directURL
 
-            guard let url = appState.mediaURL(path) else {
-                throw APIError.badURL
+            case .p115(_, let pickCode):
+                guard let client = appState.client() else {
+                    throw APIError.server("未连接服务器")
+                }
+                let info: MediaInfo = try await client.get("/api/probe?pickcode=\(pickCode)")
+                media = info
+
+                let path = info.directPlay
+                    ? "/api/play/\(pickCode)"
+                    : "/api/hls/\(pickCode)/index.m3u8"
+
+                guard let mediaURL = appState.mediaURL(path) else {
+                    throw APIError.badURL
+                }
+                url = mediaURL
             }
 
             let item = AVPlayerItem(url: url)

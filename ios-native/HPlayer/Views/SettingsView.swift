@@ -1,8 +1,13 @@
 import SwiftUI
 
+struct SettingsTab: View {
+    var body: some View {
+        SettingsView()
+    }
+}
+
 struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
-    @Environment(\.dismiss) private var dismiss
 
     @State private var status: P115Status?
     @State private var cookie = ""
@@ -10,18 +15,45 @@ struct SettingsView: View {
     @State private var error = ""
     @State private var saving = false
     @State private var serverURL = ""
+    @State private var password = ""
+    @State private var loggingIn = false
 
     var body: some View {
         NavigationStack {
             Form {
-                Section("服务器地址") {
-                    TextField("https://...", text: $serverURL)
+                Section {
+                    TextField("https://hplayer.example.com", text: $serverURL)
                         .keyboardType(.URL)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
+
                     Button("保存地址") {
                         appState.setServer(serverURL)
                         Task { await appState.checkAuth() }
+                    }
+                } header: {
+                    Text("服务器")
+                } footer: {
+                    Text("HPlayer 后端地址，需要以 http:// 或 https:// 开头")
+                }
+
+                Section("登录") {
+                    if appState.isAuthenticated {
+                        HStack {
+                            Text("已登录")
+                            Spacer()
+                            Button("退出", role: .destructive) {
+                                appState.logout()
+                                status = nil
+                            }
+                        }
+                    } else {
+                        SecureField("访问密码", text: $password)
+                            .textContentType(.password)
+                        Button(loggingIn ? "登录中…" : "登录") {
+                            Task { await login() }
+                        }
+                        .disabled(password.isEmpty || loggingIn || !appState.hasServer)
                     }
                 }
 
@@ -51,21 +83,8 @@ struct SettingsView: View {
                         Text(message).foregroundColor(.green)
                     }
                 }
-
-                Section {
-                    Button("退出登录", role: .destructive) {
-                        appState.logout()
-                        dismiss()
-                    }
-                }
             }
             .navigationTitle("设置")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("完成") { dismiss() }
-                }
-            }
             .task {
                 await loadStatus()
             }
@@ -77,7 +96,9 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var statusRow: some View {
-        if let status {
+        if !appState.isAuthenticated {
+            Text("登录后可查看").foregroundColor(.secondary)
+        } else if let status {
             if !status.configured {
                 Text(status.message ?? "未配置 Cookie")
                     .foregroundColor(.secondary)
@@ -97,8 +118,21 @@ struct SettingsView: View {
         }
     }
 
+    private func login() async {
+        loggingIn = true
+        error = ""
+        do {
+            try await appState.login(password: password)
+            password = ""
+            await loadStatus()
+        } catch let err {
+            error = err.localizedDescription
+        }
+        loggingIn = false
+    }
+
     private func loadStatus() async {
-        guard let client = appState.client() else { return }
+        guard appState.isAuthenticated, let client = appState.client() else { return }
         do {
             status = try await client.get("/api/115/status")
         } catch let err {
