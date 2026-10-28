@@ -106,7 +106,7 @@ jobs:
         run: |
           device=$(xcrun simctl list devices available --json | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; devices=[x for group in d.values() for x in group if x.get("isAvailable") and x["name"].startswith("iPhone")]; preferred=next((x for x in devices if "Pro" in x["name"]), devices[0] if devices else None); print(preferred["udid"] if preferred else "")')
           test -n "$device"
-          python3 -m http.server 8765 --bind 127.0.0.1 --directory ios-native/scripts > "$RUNNER_TEMP/player-http.log" 2>&1 &
+          python3 ios-native/scripts/player-test-server.py > "$RUNNER_TEMP/player-http.log" 2>&1 &
           server_pid=$!
           trap 'kill "$server_pid" 2>/dev/null || true' EXIT
           xcodebuild test \

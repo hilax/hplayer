@@ -120,7 +120,7 @@ struct PlaybackControlsView: View {
     private func bottomBar(landscape: Bool) -> some View {
         VStack(spacing: landscape ? 10 : 16) {
             HStack(spacing: 12) {
-                Text(timeText(dragging ? dragTime : playback.currentTime)).monospacedDigit().font(.caption)
+                Text(timeText(dragging ? dragTime : playback.currentTime)).monospacedDigit().font(.caption).accessibilityIdentifier("playback.elapsed")
                 Slider(value: Binding(get: { dragging ? dragTime : min(playback.currentTime, max(playback.duration, 1)) }, set: { dragTime = $0 }), in: 0...max(playback.duration, 1), onEditingChanged: { editing in
                     dragging = editing
                     if !editing { playback.seek(to: dragTime); revealControls() }

@@ -68,7 +68,12 @@ struct PlayerView: View {
             case .direct(_, let url):
                 originalURL = url
                 guard visible && !Task.isCancelled && current == source else { return }
-                playback.open(url)
+                #if DEBUG
+                let use115Headers = ProcessInfo.processInfo.environment["HPLAYER_UI_TEST_115_HEADERS"] == "1"
+                #else
+                let use115Headers = false
+                #endif
+                playback.open(url, direct115: use115Headers)
             case .p115(_, let pickCode):
                 if appState.isDirect {
                     guard let client = appState.directClient() else { throw APIError.server("请先登录 115") }
