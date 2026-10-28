@@ -1,0 +1,12 @@
+node_modules/
+dist/
+data/
+ios/
+android/
+*.ipa
+Payload/
+*.m4s
+server/init.mp4
+.DS_Store
+.env
+*.log
