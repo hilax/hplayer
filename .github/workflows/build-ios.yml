@@ -10,12 +10,13 @@ on:
         options:
           - macos-15
           - macos-26
+          - macos-15-intel
   push:
     branches: [main]
 
 jobs:
   build:
-    # macOS 15 runner also includes Xcode 26; select it explicitly.
+    # Select an installed stable Xcode 26 toolchain on either supported architecture.
     runs-on: ${{ inputs.runner || 'macos-15' }}
     steps:
       - uses: actions/checkout@v4
