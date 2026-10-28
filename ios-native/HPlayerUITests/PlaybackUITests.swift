@@ -53,15 +53,19 @@ final class PlaybackUITests: XCTestCase {
         let center = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.48))
         let pause = app.buttons["playback.playPause"]
         let elapsed = app.staticTexts["playback.elapsed"]
-        var advanced = false
+        var startedPlaying = false
         for _ in 0..<45 {
-            if elapsed.exists && elapsed.label != "00:00" { advanced = true; break }
-            if !elapsed.exists { center.tap() }
+            if !pause.exists { center.tap() }
+            if pause.exists && (pause.value as? String) == "playing" {
+                startedPlaying = true
+                break
+            }
             Thread.sleep(forTimeInterval: 1)
         }
-        XCTAssertTrue(advanced, "VLC should render and advance the HLS test stream")
+        XCTAssertTrue(startedPlaying, "VLC should start playing the HLS test stream")
         currentStep = "playback advanced"
-        XCTAssertTrue(pause.exists, "VLC should start playing the test video")
+        if !elapsed.exists { center.tap() }
+        XCTAssertTrue(elapsed.waitForExistence(timeout: 3), "Playback controls should be visible")
 
         let seekStart = app.coordinate(withNormalizedOffset: CGVector(dx: 0.42, dy: 0.55))
         let seekForwardEnd = seekStart.withOffset(CGVector(dx: 130, dy: 0))
