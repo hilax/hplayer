@@ -39,6 +39,7 @@ final class PlaybackUITests: XCTestCase {
             add(screenshot)
         }
         XCTAssertTrue(startedInLandscape, "Playback should start in landscape")
+        XCTAssertFalse(app.alerts.firstMatch.exists, "Landscape should not show an orientation error")
 
         let center = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.48))
         let pause = app.buttons["playback.playPause"]

@@ -19,8 +19,13 @@ enum OrientationSupport {
 
         // UIKit recalculates the presented controller's mask after the current run loop.
         DispatchQueue.main.async {
-            refreshSupportedOrientations(controllers)
-            scene.requestGeometryUpdate(.iOS(interfaceOrientations: orientations), errorHandler: completion)
+            performRequest(
+                scene: scene,
+                controllers: controllers,
+                orientations: orientations,
+                completion: completion,
+                retryCount: 1
+            )
         }
     }
 
@@ -41,6 +46,49 @@ enum OrientationSupport {
     private static func refreshSupportedOrientations(_ controllers: [UIViewController]) {
         controllers.forEach { $0.setNeedsUpdateOfSupportedInterfaceOrientations() }
         UIViewController.attemptRotationToDeviceOrientation()
+    }
+
+    private static func performRequest(
+        scene: UIWindowScene,
+        controllers: [UIViewController],
+        orientations: UIInterfaceOrientationMask,
+        completion: @escaping (Error?) -> Void,
+        retryCount: Int
+    ) {
+        refreshSupportedOrientations(controllers)
+        scene.requestGeometryUpdate(.iOS(interfaceOrientations: orientations)) { error in
+            // Some iOS versions report an error for the first request while UIKit is
+            // still recalculating a presented controller's supported orientations.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+                if matches(scene.effectiveGeometry.interfaceOrientation, orientations) {
+                    completion(nil)
+                } else if retryCount > 0 {
+                    performRequest(
+                        scene: scene,
+                        controllers: controllers,
+                        orientations: orientations,
+                        completion: completion,
+                        retryCount: retryCount - 1
+                    )
+                } else {
+                    completion(error)
+                }
+            }
+        }
+    }
+
+    private static func matches(
+        _ orientation: UIInterfaceOrientation,
+        _ mask: UIInterfaceOrientationMask
+    ) -> Bool {
+        switch orientation {
+        case .portrait, .portraitUpsideDown:
+            return mask.contains(.portrait)
+        case .landscapeLeft, .landscapeRight:
+            return mask.contains(.landscape)
+        default:
+            return false
+        }
     }
 
     private static func viewControllers(startingAt root: UIViewController) -> [UIViewController] {

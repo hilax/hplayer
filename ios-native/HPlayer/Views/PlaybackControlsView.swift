@@ -324,7 +324,8 @@ struct PlaybackControlsView: View {
         requestOrientation(.landscape)
     }
     private func requestOrientation(_ orientation: UIInterfaceOrientationMask) {
-        OrientationSupport.request(orientation) { _ in
+        OrientationSupport.request(orientation) { error in
+            guard error != nil else { return }
             DispatchQueue.main.async {
                 rotateError = "当前页面暂时无法切换横竖屏，请退出播放器后重试。"
             }
