@@ -8,7 +8,17 @@ expected_cookies = ("UID=ui-test", "CID=ui-test", "SEID=ui-test", "KID=ui-test")
 
 
 class PlayerTestHandler(SimpleHTTPRequestHandler):
+    def log_playback_request(self):
+        print(
+            f"{self.command} {self.path} "
+            f"UA={self.headers.get('User-Agent', '')!r} "
+            f"Referer={self.headers.get('Referer', '')!r} "
+            f"Cookie={self.headers.get('Cookie', '')!r}",
+            flush=True,
+        )
+
     def do_GET(self):
+        self.log_playback_request()
         cookie = self.headers.get("Cookie", "")
         if (
             self.headers.get("User-Agent") != expected_agent
@@ -20,6 +30,7 @@ class PlayerTestHandler(SimpleHTTPRequestHandler):
         super().do_GET()
 
     def do_HEAD(self):
+        self.log_playback_request()
         cookie = self.headers.get("Cookie", "")
         if (
             self.headers.get("User-Agent") != expected_agent

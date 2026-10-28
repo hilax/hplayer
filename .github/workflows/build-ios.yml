@@ -135,6 +135,14 @@ jobs:
           path: ${{ runner.temp }}/player-ui
           if-no-files-found: ignore
 
+      - name: Upload player HTTP log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HPlayer-player-http-log
+          path: ${{ runner.temp }}/player-http.log
+          if-no-files-found: ignore
+
       - name: Package into IPA
         run: |
           mkdir -p Payload
