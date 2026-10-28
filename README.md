@@ -32,6 +32,7 @@ Node 后端
 - 115 目录浏览、面包屑导航
 - 115 官方登录授权、BT 种子解析与云下载任务
 - 磁力链接手机端解析和边缓冲边播放（无需 115 账号或服务器）
+- VLC 播放内核，自定义横屏控制、锁屏、长按快进、双击暂停和播放列表
 - 自动判断直连 / 转封装
 - HLS 播放，支持拖动进度（已生成的片段）
 - 单用户密码保护
@@ -79,9 +80,11 @@ npm run start
 
 ## 磁力播放
 
-「资源库 → 磁力在线播放」可粘贴磁力链接；从其他 App 交给 HPlayer 的 `magnet:` 链接也会进入此页面。链接由手机上的 BT 引擎解析，选择视频后按需缓冲，无需 115 凭证或外部后端。能否播放取决于节点、网络及视频编码；当前系统播放器支持 MP4、MOV、M4V 中 iOS 可解码的格式。磁力播放会使用网络流量和手机缓存。
+「资源库 → 磁力在线播放」可粘贴磁力链接；从其他 App 交给 HPlayer 的 `magnet:` 链接也会进入此页面。链接由手机上的 BT 引擎解析，选择视频后按需缓冲，无需 115 凭证或外部后端。VLC 支持 MP4、MOV、MKV 等常见格式；能否播放取决于节点、网络及视频编码。磁力播放会使用网络流量和手机缓存。
 
 磁力功能使用 [Nuvio Engine v0.1.6](https://github.com/NuvioMedia/nuvio-engine/tree/v0.1.6)（GPL-3.0），其授权及第三方许可文件包含在 App 中；分发包含此组件的应用时需遵守其许可证。此组件要求 iOS 16.1 及以上。构建脚本下载官方发布的 XCFramework 并校验 SHA-256。
+
+视频播放使用 [VideoLAN VLCKit](https://github.com/videolan/vlckit) 3.6.0（LGPL-2.1-or-later）；构建脚本下载官方 iOS 包并校验 SHA-256。播放时可按横屏按钮切换方向；长按画面以 2× 快进，松开恢复，双击画面暂停或继续，锁定后可点击锁图标解锁。
 
 后端数据目录包含授权令牌和登录密钥，应仅由服务器的使用者访问，不要提交到 Git 或发给其他人。外网访问建议使用 HTTPS。授权或接口权限尚未获批时，真实接口和播放效果需要获批后再验证。
 
@@ -163,6 +166,7 @@ Windows 上无法编译 iOS，用 GitHub Actions 的 macOS runner 云构建：
 cd ios-native
 brew install xcodegen
 bash scripts/prepare-nuvio.sh
+bash scripts/prepare-vlc.sh
 xcodegen generate
 open HPlayer.xcodeproj
 ```

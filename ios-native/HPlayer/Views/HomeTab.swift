@@ -6,7 +6,7 @@ struct HomeTab: View {
     @StateObject private var localStore = LocalMediaStore()
 
     @State private var showImporter = false
-    @State private var playing: PlaybackSource?
+    @State private var playing: PlaybackQueue?
     @State private var importError = ""
 
     var body: some View {
@@ -41,7 +41,7 @@ struct HomeTab: View {
 
                     Button {
                         if let first = localStore.files.first {
-                            playing = .direct(title: first.name, url: first.url)
+                            playLocal(first)
                         }
                     } label: {
                         Image(systemName: "play.circle")
@@ -62,7 +62,7 @@ struct HomeTab: View {
             }
             .fileImporter(
                 isPresented: $showImporter,
-                allowedContentTypes: [.movie, .video, .mpeg4Movie, .quickTimeMovie],
+                allowedContentTypes: [.movie, .video, .mpeg4Movie, .quickTimeMovie, .data],
                 allowsMultipleSelection: true
             ) { result in
                 switch result {
@@ -72,8 +72,8 @@ struct HomeTab: View {
                     importError = error.localizedDescription
                 }
             }
-            .fullScreenCover(item: $playing) { source in
-                PlayerView(source: source)
+            .fullScreenCover(item: $playing) { queue in
+                PlayerView(source: queue.source, playlist: queue.items)
                     .environmentObject(recents)
             }
             .alert("导入失败", isPresented: Binding(
@@ -124,7 +124,7 @@ struct HomeTab: View {
 
             ForEach(localStore.files) { media in
                 Button {
-                    playing = .direct(title: media.name, url: media.url)
+                    playLocal(media)
                 } label: {
                     HStack(spacing: 14) {
                         Image(systemName: "play.rectangle.fill")
@@ -167,7 +167,8 @@ struct HomeTab: View {
             ForEach(recents.items) { item in
                 Button {
                     if let url = URL(string: item.url) {
-                        playing = .direct(title: item.title, url: url)
+                        let source = PlaybackSource.direct(title: item.title, url: url)
+                        playing = PlaybackQueue(source: source, items: [source])
                     }
                 } label: {
                     HStack(spacing: 12) {
@@ -194,5 +195,11 @@ struct HomeTab: View {
                 .buttonStyle(.plain)
             }
         }
+    }
+
+    private func playLocal(_ media: LocalMedia) {
+        let source = PlaybackSource.direct(title: media.name, url: media.url)
+        let items = localStore.files.map { PlaybackSource.direct(title: $0.name, url: $0.url) }
+        playing = PlaybackQueue(source: source, items: items)
     }
 }

@@ -21,6 +21,9 @@ jobs:
       - name: Download verified torrent engine
         run: bash ios-native/scripts/prepare-nuvio.sh
 
+      - name: Download verified VLC playback engine
+        run: bash ios-native/scripts/prepare-vlc.sh
+
       - name: Verify torrent engine lifecycle
         run: |
           engine=ios-native/Vendor/NuvioEngine/NuvioEngine.xcframework/macos-arm64_x86_64

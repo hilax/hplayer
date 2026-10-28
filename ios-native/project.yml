@@ -23,10 +23,25 @@ targets:
     dependencies:
       - framework: Vendor/NuvioEngine/NuvioEngine.xcframework
         embed: false
+      - framework: Vendor/MobileVLCKit/MobileVLCKit.xcframework
+        embed: true
       - sdk: libc++.tbd
       - sdk: Security.framework
       - sdk: SystemConfiguration.framework
       - sdk: CoreFoundation.framework
+      - sdk: QuartzCore.framework
+      - sdk: CoreText.framework
+      - sdk: AVFoundation.framework
+      - sdk: CFNetwork.framework
+      - sdk: AudioToolbox.framework
+      - sdk: OpenGLES.framework
+      - sdk: CoreGraphics.framework
+      - sdk: VideoToolbox.framework
+      - sdk: CoreMedia.framework
+      - sdk: libxml2.tbd
+      - sdk: libz.tbd
+      - sdk: libbz2.tbd
+      - sdk: libiconv.tbd
     info:
       path: HPlayer/Info.plist
       properties:

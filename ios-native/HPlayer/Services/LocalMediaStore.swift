@@ -58,6 +58,7 @@ final class LocalMediaStore: ObservableObject {
 
     func importFiles(_ urls: [URL]) {
         for url in urls {
+            guard videoExtensions.contains(url.pathExtension.lowercased()) else { continue }
             let scoped = url.startAccessingSecurityScopedResource()
             defer {
                 if scoped { url.stopAccessingSecurityScopedResource() }

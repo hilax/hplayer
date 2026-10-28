@@ -1,11 +1,11 @@
-import AVKit
 import Foundation
 
 /// 使用本机 BT 引擎和本机 HTTP 流，不依赖 HPlayer 服务器或 115 账号。
 @MainActor
 final class MagnetController: ObservableObject {
     @Published private(set) var files: [NuvioTorrentFile] = []
-    @Published private(set) var player: AVPlayer?
+    let playback = VLCPlaybackController()
+    @Published private(set) var ready = false
     @Published private(set) var working = false
     @Published private(set) var status = ""
     @Published private(set) var error = ""
@@ -18,10 +18,9 @@ final class MagnetController: ObservableObject {
     private var operation: Task<Void, Never>?
     private var cleanup: Task<Void, Never>?
     private var monitor: Task<Void, Never>?
-    private var playerObserver: NSKeyValueObservation?
 
     static func supported(_ file: NuvioTorrentFile) -> Bool {
-        ["mp4", "m4v", "mov"].contains((file.path as NSString).pathExtension.lowercased())
+        ["mp4", "m4v", "mov", "mkv", "avi", "wmv", "ts", "webm", "flv"].contains((file.path as NSString).pathExtension.lowercased())
     }
 
     func start(_ raw: String) {
@@ -60,11 +59,11 @@ final class MagnetController: ObservableObject {
                 self.torrentID = torrent
                 let entries = try await created.files(for: torrent)
                 self.files = entries.filter {
-                    ["mp4", "m4v", "mov", "mkv", "avi", "wmv", "ts", "webm"].contains(($0.path as NSString).pathExtension.lowercased())
+                    ["mp4", "m4v", "mov", "mkv", "avi", "wmv", "ts", "webm", "flv"].contains(($0.path as NSString).pathExtension.lowercased())
                 }.sorted { $0.size > $1.size }
                 guard !self.files.isEmpty else { throw APIError.server("这个磁力链接中没有找到视频文件。") }
                 guard let first = self.files.first(where: Self.supported) else {
-                    self.status = "已解析到视频，但当前播放器支持 MP4、MOV 和 M4V。"
+                    self.status = "已解析到视频，但没有可选的视频文件。"
                     self.working = false
                     return
                 }
@@ -76,7 +75,7 @@ final class MagnetController: ObservableObject {
 
     func select(_ file: NuvioTorrentFile) {
         guard !working else { return }
-        guard Self.supported(file) else { error = "当前播放器暂不支持此封装格式，请选择 MP4、MOV 或 M4V 文件。"; return }
+        guard Self.supported(file) else { error = "当前文件格式暂不支持播放。"; return }
         working = true; error = ""
         operation = Task { [weak self] in
             guard let self else { return }
@@ -89,23 +88,15 @@ final class MagnetController: ObservableObject {
     private func prepare(_ file: NuvioTorrentFile) async throws {
         guard let engine, let torrentID else { throw APIError.server("磁力任务已关闭") }
         status = "正在准备并缓冲视频…"
-        player?.pause(); player = nil; playerObserver = nil
+        playback.stop(detach: false)
         monitor?.cancel(); monitor = nil
         if let old = stream { try? await engine.stopStream(old.id); stream = nil }
         let next = try await engine.prepareStream(torrentID: torrentID, fileIndex: file.index)
         stream = next
         _ = try await engine.preloadStream(next, minimumContiguousBytes: min(next.fileSize, 1024 * 1024))
         guard !Task.isCancelled else { return }
-        let item = AVPlayerItem(url: next.url)
-        playerObserver = item.observe(\.status, options: [.new]) { [weak self] item, _ in
-            guard item.status == .failed else { return }
-            DispatchQueue.main.async { self?.error = "视频解码失败，可能是编码不受 iPhone 支持。" }
-        }
-        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
-        try? AVAudioSession.sharedInstance().setActive(true)
-        let current = AVPlayer(playerItem: item)
-        player = current; selectedIndex = file.index; status = "正在播放"; working = false
-        current.play()
+        selectedIndex = file.index; status = "正在播放"; working = false; ready = true
+        playback.open(next.url)
         monitor = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
@@ -121,7 +112,7 @@ final class MagnetController: ObservableObject {
         let previousOperation = operation
         previousOperation?.cancel(); operation = nil
         monitor?.cancel(); monitor = nil
-        player?.pause(); player = nil; playerObserver = nil
+        playback.stop(); ready = false
         let oldEngine = engine, oldStream = stream, oldTorrent = torrentID
         engine = nil; stream = nil; torrentID = nil; selectedIndex = nil
         working = false; status = ""; peerInfo = ""; files = []; error = ""

@@ -6,7 +6,7 @@ struct LibraryTab: View {
     @State private var status: P115Status?
     @State private var quota: QuotaResponse?
     @State private var path: [Crumb] = []
-    @State private var playing: PlaybackSource?
+    @State private var playing: PlaybackQueue?
     @State private var showAddSource = false
     @State private var showSetup = false
     @State private var showOfficial = false
@@ -93,15 +93,17 @@ struct LibraryTab: View {
                 DirectoryView(
                     cid: crumb.cid,
                     onOpenDir: { path.append($0) },
-                    onPlay: { file in
-                        playing = .p115(title: file.name, pickCode: file.pickCode)
+                    onPlay: { file, files in
+                        let source = PlaybackSource.p115(title: file.name, pickCode: file.pickCode)
+                        let items = files.map { PlaybackSource.p115(title: $0.name, pickCode: $0.pickCode) }
+                        playing = PlaybackQueue(source: source, items: items)
                     }
                 )
                 .navigationTitle(crumb.name)
             }
         }
-        .fullScreenCover(item: $playing) { source in
-            PlayerView(source: source)
+        .fullScreenCover(item: $playing) { queue in
+            PlayerView(source: queue.source, playlist: queue.items)
                 .environmentObject(appState)
         }
         .sheet(isPresented: $showSetup) { SettingsView() }

@@ -8,7 +8,7 @@ struct Crumb: Hashable {
 struct DirectoryView: View {
     let cid: String
     let onOpenDir: (Crumb) -> Void
-    let onPlay: (P115File) -> Void
+    let onPlay: (P115File, [P115File]) -> Void
 
     @EnvironmentObject private var appState: AppState
     @State private var files: [P115File] = []
@@ -41,7 +41,7 @@ struct DirectoryView: View {
                         if file.isDir {
                             onOpenDir(Crumb(cid: file.id, name: file.name))
                         } else {
-                            onPlay(file)
+                            onPlay(file, files.filter { !$0.isDir && $0.isVideo && !$0.pickCode.isEmpty })
                         }
                     } label: {
                         row(for: file)

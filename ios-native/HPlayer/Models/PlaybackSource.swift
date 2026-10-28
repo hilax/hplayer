@@ -25,6 +25,12 @@ enum PlaybackSource: Identifiable, Hashable {
     }
 }
 
+struct PlaybackQueue: Identifiable {
+    let source: PlaybackSource
+    let items: [PlaybackSource]
+    var id: String { source.id }
+}
+
 struct RecentItem: Codable, Identifiable, Hashable {
     let id: String
     let title: String

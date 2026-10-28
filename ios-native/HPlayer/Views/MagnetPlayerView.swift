@@ -1,4 +1,3 @@
-import AVKit
 import SwiftUI
 import UIKit
 
@@ -6,6 +5,7 @@ struct MagnetPlayerView: View {
     var initialMagnet = ""
     @StateObject private var controller = MagnetController()
     @State private var magnet = ""
+    @State private var showPlayer = false
     @FocusState private var inputFocused: Bool
     @Environment(\.dismiss) private var dismiss
 
@@ -26,14 +26,7 @@ struct MagnetPlayerView: View {
             } header: { Text("磁力链接") }
             footer: { Text("无需 115 账号或电脑。播放时使用 BT 节点并占用手机网络和缓存。") }
 
-            if let player = controller.player {
-                Section {
-                    VideoPlayer(player: player)
-                        .aspectRatio(16 / 9, contentMode: .fit)
-                        .listRowInsets(EdgeInsets())
-                    if !controller.peerInfo.isEmpty { Text(controller.peerInfo).font(.caption).foregroundStyle(.secondary) }
-                }
-            }
+            if controller.ready { Section { Button("打开播放器") { showPlayer = true } } }
 
             if controller.working || !controller.status.isEmpty {
                 Section {
@@ -63,9 +56,9 @@ struct MagnetPlayerView: View {
                         }.buttonStyle(.plain).disabled(controller.working)
                     }
                 } header: { Text("视频文件") }
-                footer: { Text("目前支持 MP4、MOV、M4V；具体编码仍需 iPhone 支持。") }
+                footer: { Text("VLC 支持 MP4、MOV、MKV 等常见格式，实际播放取决于视频编码和可用节点。") }
             }
-            if controller.working || controller.player != nil || !controller.files.isEmpty {
+            if controller.working || controller.ready || !controller.files.isEmpty {
                 Section { Button("结束当前磁力任务", role: .destructive) { controller.close() } }
             }
         }
@@ -81,6 +74,31 @@ struct MagnetPlayerView: View {
             magnet = initialMagnet
             controller.start(initialMagnet)
         }
-        .onDisappear { controller.close() }
+        .onChange(of: controller.ready) { ready in if ready { showPlayer = true } }
+        .fullScreenCover(isPresented: $showPlayer) {
+            MagnetWatchView(controller: controller) { showPlayer = false; controller.close() }
+        }
+        .onDisappear { if !showPlayer { controller.close() } }
+    }
+}
+
+private struct MagnetWatchView: View {
+    @ObservedObject var controller: MagnetController
+    let onClose: () -> Void
+
+    private var selected: NuvioTorrentFile? { controller.files.first { $0.index == controller.selectedIndex } }
+    var body: some View {
+        PlaybackControlsView(
+            playback: controller.playback,
+            title: selected?.path ?? "磁力在线播放",
+            loading: controller.working,
+            loadingText: controller.status,
+            error: controller.error,
+            items: controller.files.map { PlaybackListItem(id: String($0.index), title: $0.path, subtitle: formatSize(Int(clamping: $0.size))) },
+            selectedID: controller.selectedIndex.map(String.init) ?? "",
+            onSelect: { id in if let index = UInt32(id), let file = controller.files.first(where: { $0.index == index }) { controller.select(file) } },
+            onRetry: { if let file = selected { controller.select(file) } },
+            onClose: onClose
+        )
     }
 }

@@ -15,7 +15,7 @@ struct SearchView: View {
     @State private var results: [P115File] = []
     @State private var loading = false
     @State private var error = ""
-    @State private var playing: PlaybackSource?
+    @State private var playing: PlaybackQueue?
 
     var body: some View {
         Group {
@@ -47,7 +47,9 @@ struct SearchView: View {
                         if file.isDir {
                             // 目录暂不展开，先只处理文件
                         } else {
-                            playing = .p115(title: file.name, pickCode: file.pickCode)
+                            let source = PlaybackSource.p115(title: file.name, pickCode: file.pickCode)
+                            let items = results.filter { !$0.isDir && !$0.pickCode.isEmpty }.map { PlaybackSource.p115(title: $0.name, pickCode: $0.pickCode) }
+                            playing = PlaybackQueue(source: source, items: items)
                         }
                     } label: {
                         HStack(spacing: 12) {
@@ -80,8 +82,8 @@ struct SearchView: View {
         .onSubmit(of: .search) {
             Task { await search() }
         }
-        .fullScreenCover(item: $playing) { source in
-            PlayerView(source: source)
+        .fullScreenCover(item: $playing) { queue in
+            PlayerView(source: queue.source, playlist: queue.items)
                 .environmentObject(appState)
         }
     }
