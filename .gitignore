@@ -10,6 +10,7 @@ server/init.mp4
 build/
 ios-native/build/
 ios-native/*.xcodeproj/
+ios-native/Vendor/NuvioEngine/NuvioEngine.xcframework/
 ios-native/HPlayer/Info.plist
 .DS_Store
 .env

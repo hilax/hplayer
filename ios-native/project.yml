@@ -3,7 +3,7 @@ name: HPlayer
 options:
   bundleIdPrefix: app.hplayer
   deploymentTarget:
-    iOS: "16.0"
+    iOS: "16.1"
   createIntermediateGroups: true
 
 settings:
@@ -11,7 +11,7 @@ settings:
     SWIFT_VERSION: "5.9"
     MARKETING_VERSION: "1.0"
     CURRENT_PROJECT_VERSION: "1"
-    IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "16.1"
 
 targets:
   HPlayer:
@@ -19,6 +19,14 @@ targets:
     platform: iOS
     sources:
       - path: HPlayer
+      - path: Vendor/NuvioEngine/Sources
+    dependencies:
+      - framework: Vendor/NuvioEngine/NuvioEngine.xcframework
+        embed: false
+      - sdk: libc++.tbd
+      - sdk: Security.framework
+      - sdk: SystemConfiguration.framework
+      - sdk: CoreFoundation.framework
     info:
       path: HPlayer/Info.plist
       properties:
@@ -38,6 +46,12 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
+          NSAllowsLocalNetworking: true
+        NSLocalNetworkUsageDescription: "用于磁力播放时在本机播放缓存并发现局域网节点。"
+        CFBundleURLTypes:
+          - CFBundleURLName: app.hplayer.magnet
+            CFBundleURLSchemes:
+              - magnet
         UIBackgroundModes:
           - audio
     settings:

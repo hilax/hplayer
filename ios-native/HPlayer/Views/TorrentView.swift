@@ -102,7 +102,7 @@ struct TorrentView: View {
                 }.disabled(busy || !appState.isAuthenticated)
                 if busy { HStack { ProgressView(); Text(busyText).foregroundStyle(.secondary) } }
             } header: { Text("添加种子") }
-            footer: { Text("需要先连接服务器并使用 115 官方授权。手机导入的种子会上传到你的 115 网盘根目录。") }
+            footer: { Text(appState.isDirect ? "需要先完成上方 115 官方授权。手机导入的种子会上传到你的 115 网盘根目录。" : "需要先连接服务器并使用 115 官方授权。手机导入的种子会上传到你的 115 网盘根目录。") }
 
             if let info {
                 Section {

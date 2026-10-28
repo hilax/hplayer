@@ -34,6 +34,23 @@ struct LibraryTab: View {
                         addCard
                     }
                     NavigationLink {
+                        MagnetPlayerView()
+                    } label: {
+                        HStack(spacing: 14) {
+                            Image(systemName: "play.circle.fill")
+                                .font(.title2).foregroundStyle(Theme.accent)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("磁力在线播放").font(.headline)
+                                Text("粘贴磁力链接，边缓冲边播放")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right").foregroundStyle(.secondary)
+                        }
+                        .padding(18).glassCard(cornerRadius: 20)
+                    }
+                    .buttonStyle(.plain)
+                    NavigationLink {
                         TorrentView()
                     } label: {
                         HStack(spacing: 14) {

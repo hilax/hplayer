@@ -18,6 +18,21 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      - name: Download verified torrent engine
+        run: bash ios-native/scripts/prepare-nuvio.sh
+
+      - name: Verify torrent engine lifecycle
+        run: |
+          engine=ios-native/Vendor/NuvioEngine/NuvioEngine.xcframework/macos-arm64_x86_64
+          xcrun swiftc -parse-as-library \
+            -I "$engine/Headers" \
+            ios-native/Vendor/NuvioEngine/Sources/*.swift \
+            ios-native/scripts/MagnetEngineSmoke.swift \
+            "$engine/libCNuvioEngine.a" -Xlinker -lc++ \
+            -framework Security -framework SystemConfiguration -framework CoreFoundation \
+            -o "$RUNNER_TEMP/magnet-engine-smoke"
+          "$RUNNER_TEMP/magnet-engine-smoke"
+
       - name: Generate Xcode project
         working-directory: ios-native
         run: xcodegen generate
