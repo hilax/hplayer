@@ -42,13 +42,19 @@ final class PlaybackUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["测试下一集"].waitForExistence(timeout: 10))
         if !app.buttons["playback.orientation"].exists { center.tap() }
         app.buttons["playback.orientation"].tap()
+        let surface = app.otherElements["playback.surface"]
         var rotated = false
         for _ in 0..<20 {
             let frame = app.windows.firstMatch.frame
-            if frame.width > frame.height { rotated = true; break }
+            let surfaceFrame = surface.frame
+            let orientationLabel = app.buttons["playback.orientation"].label
+            if frame.width > frame.height && surfaceFrame.width > surfaceFrame.height && orientationLabel == "竖屏" {
+                rotated = true
+                break
+            }
             Thread.sleep(forTimeInterval: 0.5)
         }
-        XCTAssertTrue(rotated, "Landscape button should rotate the player window")
+        XCTAssertTrue(rotated, "Landscape button should relayout the player surface and controls")
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.name = "HPlayer landscape VLC controls"
         attachment.lifetime = .keepAlways
