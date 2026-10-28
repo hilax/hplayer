@@ -94,7 +94,10 @@ struct PlaybackControlsView: View {
         .statusBarHidden(true)
         .onAppear {
             revealControls()
-            enterLandscapeByDefault()
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 350_000_000)
+                enterLandscapeByDefault()
+            }
         }
         .onDisappear {
             hideTask?.cancel()

@@ -27,7 +27,18 @@ final class PlaybackUITests: XCTestCase {
             } while Date() < deadline
             return false
         }
-        XCTAssertTrue(waitForLayout(landscape: true, label: "竖屏"), "Playback should start in landscape")
+        let startedInLandscape = waitForLayout(landscape: true, label: "竖屏", timeout: 20)
+        if !startedInLandscape {
+            let hierarchy = XCTAttachment(string: app.debugDescription)
+            hierarchy.name = "Default landscape failure hierarchy"
+            hierarchy.lifetime = .keepAlways
+            add(hierarchy)
+            let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+            screenshot.name = "Default landscape failure screen"
+            screenshot.lifetime = .keepAlways
+            add(screenshot)
+        }
+        XCTAssertTrue(startedInLandscape, "Playback should start in landscape")
 
         let center = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.48))
         let pause = app.buttons["playback.playPause"]
