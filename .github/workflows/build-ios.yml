@@ -29,7 +29,7 @@ jobs:
             ios-native/Vendor/NuvioEngine/Sources/*.swift \
             ios-native/scripts/MagnetEngineSmoke.swift \
             "$engine/libCNuvioEngine.a" -Xlinker -lc++ \
-            -framework Security -framework SystemConfiguration -framework CoreFoundation \
+            -framework Security -framework SystemConfiguration -framework CoreFoundation -framework AVFoundation \
             -o "$RUNNER_TEMP/magnet-engine-smoke"
           "$RUNNER_TEMP/magnet-engine-smoke"
 
@@ -37,7 +37,7 @@ jobs:
         run: |
           npm install --prefix "$RUNNER_TEMP/hplayer-peer" webtorrent@3.0.21 bittorrent-tracker@11.2.3 --omit=optional --no-package-lock --no-audit --no-fund
           cp ios-native/scripts/seed-fixture.mjs "$RUNNER_TEMP/hplayer-peer/seed-fixture.mjs"
-          node "$RUNNER_TEMP/hplayer-peer/seed-fixture.mjs" "$RUNNER_TEMP/magnet-fixture.json" &
+          node "$RUNNER_TEMP/hplayer-peer/seed-fixture.mjs" "$RUNNER_TEMP/magnet-fixture.json" "$PWD/ios-native/scripts/magnet-fixture.mp4" &
           seed_pid=$!
           trap 'kill "$seed_pid" 2>/dev/null || true' EXIT
           for _ in {1..30}; do

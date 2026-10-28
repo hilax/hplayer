@@ -1,4 +1,5 @@
 import Foundation
+import AVFoundation
 
 @main
 struct MagnetEngineSmoke {
@@ -25,7 +26,10 @@ struct MagnetEngineSmoke {
         if CommandLine.arguments.count > 1 {
             let data = try Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[1]))
             guard let fixture = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let magnet = fixture["magnet"] as? String else { fatalError("Invalid fixture") }
+                  let magnet = fixture["magnet"] as? String,
+                  let mediaPath = fixture["videoFile"] as? String else { fatalError("Invalid fixture") }
+            let media = try Data(contentsOf: URL(fileURLWithPath: mediaPath))
+            guard media.count > 65536 else { fatalError("Media fixture is too small") }
             let liveID = try await withThrowingTaskGroup(of: String.self) { group in
                 group.addTask { try await engine.addMagnet(magnet) }
                 group.addTask { try await Task.sleep(nanoseconds: 60_000_000_000); throw NSError(domain: "MagnetSmoke", code: 1) }
@@ -34,7 +38,7 @@ struct MagnetEngineSmoke {
                 return value
             }
             let liveFiles = try await engine.files(for: liveID)
-            guard liveFiles.count == 1, liveFiles[0].path == "fixture.mp4", liveFiles[0].size == 262144 else { fatalError("Magnet metadata mismatch") }
+            guard liveFiles.count == 1, liveFiles[0].path == "fixture.mp4", liveFiles[0].size == UInt64(media.count) else { fatalError("Magnet metadata mismatch") }
             let liveStream = try await engine.prepareStream(torrentID: liveID, fileIndex: liveFiles[0].index)
             let stats = try await engine.preloadStream(liveStream, minimumContiguousBytes: 65536)
             guard stats.contiguousReadyBytes >= 65536 else { fatalError("Preload did not become ready") }
@@ -42,11 +46,21 @@ struct MagnetEngineSmoke {
             request.setValue("bytes=0-65535", forHTTPHeaderField: "Range")
             request.timeoutInterval = 30
             let (actual, response) = try await URLSession.shared.data(for: request)
-            let expected = Data((0..<65536).map { UInt8($0 % 251) })
+            let expected = Data(media.prefix(65536))
             guard (response as? HTTPURLResponse)?.statusCode == 206, actual == expected else { fatalError("Peer-streamed bytes differ from seed") }
+            let player = AVPlayer(url: liveStream.url)
+            player.play()
+            var advanced = false
+            for _ in 0..<100 {
+                if player.currentItem?.status == .failed { throw player.currentItem?.error ?? NSError(domain: "MagnetPlayback", code: 1) }
+                if player.currentTime().seconds.isFinite && player.currentTime().seconds > 0.25 { advanced = true; break }
+                try await Task.sleep(nanoseconds: 200_000_000)
+            }
+            player.pause()
+            guard advanced else { fatalError("AVPlayer did not advance") }
             try await engine.stopStream(liveStream.id)
             try await engine.removeTorrent(liveID)
-            print("Magnet metadata, peer transfer, preload, and HTTP range passed")
+            print("Magnet metadata, peer transfer, HTTP range, and AVPlayer playback passed")
         }
         await engine.shutdown()
         print("Torrent engine metadata, local stream, and lifecycle passed")
