@@ -8,7 +8,15 @@ import {
   setSessionCookie,
   verifyToken,
 } from '../auth.js'
-import { getDownloadInfo, getFileInfo, getUserInfo, listDir, P115Error } from '../p115/client.js'
+import {
+  getDownloadInfo,
+  getFileInfo,
+  getQuota,
+  getUserInfo,
+  listDir,
+  P115Error,
+  searchFiles,
+} from '../p115/client.js'
 import { getCookie, isCookieComplete, setCookie } from '../p115/store.js'
 import { closeSession, ensureSession, getSession, readPlaylist, readSegment } from '../media/hls.js'
 import { probe } from '../media/probe.js'
@@ -64,6 +72,25 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(400).send({
         error: error instanceof Error ? error.message : String(error),
       })
+    }
+  })
+
+  // ---- 容量与搜索 ----
+  app.get('/api/115/quota', { preHandler: requireAuth }, async (_request, reply) => {
+    try {
+      return await getQuota()
+    } catch (error) {
+      return sendP115Error(reply, error)
+    }
+  })
+
+  app.get('/api/search', { preHandler: requireAuth }, async (request, reply) => {
+    const { q } = request.query as { q?: string }
+    if (!q) return reply.code(400).send({ error: '缺少搜索关键词' })
+    try {
+      return { files: await searchFiles(q) }
+    } catch (error) {
+      return sendP115Error(reply, error)
     }
   })
 

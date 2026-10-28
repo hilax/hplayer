@@ -5,19 +5,24 @@ struct HomeView: View {
 
     var body: some View {
         TabView {
-            PlayTab()
+            HomeTab()
                 .tabItem {
-                    Label("播放", systemImage: "play.circle.fill")
+                    Label("首页", systemImage: "play.rectangle.fill")
                 }
 
             LibraryTab()
                 .tabItem {
-                    Label("115", systemImage: "cloud.fill")
+                    Label("资源库", systemImage: "externaldrive.fill")
                 }
 
             SettingsTab()
                 .tabItem {
                     Label("设置", systemImage: "gearshape.fill")
+                }
+
+            SearchTab()
+                .tabItem {
+                    Label("搜索", systemImage: "magnifyingglass")
                 }
         }
         .environmentObject(recents)

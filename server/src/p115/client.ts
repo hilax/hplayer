@@ -88,22 +88,24 @@ export async function listDir(cid = '0', offset = 0, limit = 1000): Promise<P115
   const res = await fetch(`${API.fileList}?${params}`, { headers: headers() })
   const json = await checkResponse(res)
   const list = (json.data ?? []) as RawFile[]
-  return list.map((f) => {
-    // 目录项没有 fid，用 cid 作为 id
-    const isDir = !f.fid
-    return {
-      id: isDir ? String(f.cid ?? '') : String(f.fid),
-      parentId: String(f.pid ?? cid),
-      name: f.n ?? '',
-      isDir,
-      kind: f.ico ?? '',
-      size: Number(f.s ?? 0),
-      pickCode: f.pc ?? '',
-      sha1: f.sha ?? '',
-      updatedAt: f.t ?? '',
-      thumbUrl: f.u ?? '',
-    }
-  })
+  return list.map((f) => toFile(f, cid))
+}
+
+function toFile(f: RawFile, fallbackParent: string): P115File {
+  // 目录项没有 fid，用 cid 作为 id
+  const isDir = !f.fid
+  return {
+    id: isDir ? String(f.cid ?? '') : String(f.fid),
+    parentId: String(f.pid ?? fallbackParent),
+    name: f.n ?? '',
+    isDir,
+    kind: f.ico ?? '',
+    size: Number(f.s ?? 0),
+    pickCode: f.pc ?? '',
+    sha1: f.sha ?? '',
+    updatedAt: f.t ?? '',
+    thumbUrl: f.u ?? '',
+  }
 }
 
 /** 递归取完一个目录下的所有文件（115 单页上限 1000） */
@@ -167,6 +169,44 @@ export async function getUserInfo(): Promise<{ userId: number; userName: string;
   const json = await checkResponse(res)
   const d = json.data ?? {}
   return { userId: Number(d.user_id ?? 0), userName: String(d.user_name ?? ''), vip: Number(d.vip ?? 0) }
+}
+
+export interface QuotaInfo {
+  usedText: string
+  totalText: string
+  usedBytes: number
+  totalBytes: number
+}
+
+/** 115 容量信息，用于资源库卡片展示 */
+export async function getQuota(): Promise<QuotaInfo> {
+  const res = await fetch('https://webapi.115.com/user/space', { headers: headers() })
+  const json = await checkResponse(res)
+  const d = json.data ?? {}
+  return {
+    usedText: String(d.all_use?.size ?? ''),
+    totalText: String(d.all_total?.size ?? ''),
+    usedBytes: Number(d.all_use?.size_byte ?? 0),
+    totalBytes: Number(d.all_total?.size_byte ?? 0),
+  }
+}
+
+export async function searchFiles(keyword: string): Promise<P115File[]> {
+  const params = new URLSearchParams({
+    aid: '1',
+    search_value: keyword,
+    offset: '0',
+    limit: '100',
+    show_dir: '1',
+    format: 'json',
+    fc_mix: '0',
+  })
+  const res = await fetch(`https://webapi.115.com/files/search?${params}`, {
+    headers: headers(),
+  })
+  const json = await checkResponse(res)
+  const list = (json.data ?? []) as RawFile[]
+  return list.map((f) => toFile(f, '0'))
 }
 
 export async function getFileInfo(pickCode: string): Promise<P115File | null> {

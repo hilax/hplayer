@@ -7,9 +7,13 @@ on:
 
 jobs:
   build:
-    runs-on: macos-latest
+    # Liquid Glass 需要 Xcode 26 / iOS 26 SDK，macos-latest 只有 Xcode 16
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: xcodebuild -version && xcrun --sdk iphoneos --show-sdk-version
 
       - name: Install XcodeGen
         run: brew install xcodegen

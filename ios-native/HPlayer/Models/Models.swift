@@ -59,6 +59,17 @@ struct ErrorResponse: Codable {
     let error: String
 }
 
+struct QuotaResponse: Codable {
+    let usedText: String
+    let totalText: String
+    let usedBytes: Int
+    let totalBytes: Int
+}
+
+struct SearchResponse: Codable {
+    let files: [P115File]
+}
+
 func formatSize(_ bytes: Int) -> String {
     guard bytes > 0 else { return "" }
     let units = ["B", "KB", "MB", "GB", "TB"]
