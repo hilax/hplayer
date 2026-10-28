@@ -2,15 +2,10 @@
   "name": "hplayer",
   "private": true,
   "workspaces": [
-    "server",
-    "web"
+    "server"
   ],
   "scripts": {
-    "dev": "concurrently -n server,web -c blue,green \"npm -w server run dev\" \"npm -w web run dev\"",
-    "build": "npm -w web run build",
+    "dev": "npm -w server run dev",
     "start": "npm -w server run start"
-  },
-  "devDependencies": {
-    "concurrently": "^9.1.0"
   }
 }

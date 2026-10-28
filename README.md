@@ -2,12 +2,12 @@
 
 把 115 网盘变成自己的在线影视库，在 iPhone 上直接播放。
 
-后端跑在你的 Windows 电脑 / NAS / VPS 上，前端既可以当网页用，也可以打包成 iOS App（未签名 IPA + 全能签自签）。
+后端跑在你的 Windows 电脑 / NAS / VPS 上，iOS 端是原生 SwiftUI App（未签名 IPA + 全能签自签）。
 
 ## 架构
 
 ```
-iPhone（原生 SwiftUI App / Safari PWA）
+iPhone（原生 SwiftUI App）
         │  HTTPS
         ▼
 Cloudflare Tunnel（免费，自带域名和证书）
@@ -20,8 +20,8 @@ Node 后端
   └─ ffmpeg 实时转封装：mkv/DTS → HLS(fMP4)
 ```
 
-- **能直连就直连**：Safari 原生支持的格式直接 302 到 115 CDN，不占服务器带宽。
-- **播不了才转**：mkv、DTS/AC3 这类 Safari 不支持的组合，后端用 ffmpeg 做 remux（视频流 `copy`，音频转 AAC），CPU 开销很小。
+- **能直连就直连**：AVPlayer 原生支持的格式直接 302 到 115 CDN，不占服务器带宽。
+- **播不了才转**：mkv、DTS/AC3 这类 AVPlayer 不支持的组合，后端用 ffmpeg 做 remux（视频流 `copy`，音频转 AAC），CPU 开销很小。
 
 ## 功能
 
@@ -29,8 +29,8 @@ Node 后端
 - 自动判断直连 / 转封装
 - HLS 播放，支持拖动进度（已生成的片段）
 - 单用户密码保护
-- PWA：Safari「添加到主屏幕」全屏使用
-- Capacitor 打包 iOS App
+- 原生 iOS App：本地视频导入、网络地址直接播放、最近播放
+- Liquid Glass 界面（iOS 26），低版本自动降级毛玻璃
 
 ## 前置要求
 
@@ -58,15 +58,7 @@ cp server/.env.example server/.env
 npm run start
 ```
 
-打开 <http://localhost:8787>，用密码登录。
-
-开发模式（前端热更新）：
-
-```bash
-npm run dev
-```
-
-前端在 <http://localhost:5173>，API 自动代理到 8787。
+服务监听 `http://localhost:8787`，只提供 API，没有网页界面。打开 App，在「设置」里填这个地址、输入密码登录即可。
 
 ## 获取 115 Cookie
 
@@ -167,10 +159,6 @@ HPlayer/
 │       ├── p115/           115 客户端（含私有加密协议）
 │       ├── media/          ffprobe 探测、ffmpeg 转封装
 │       └── routes/api.ts   全部 API
-├── web/                    Web 前端（React + Vite，可作 PWA）
-│   └── src/
-│       ├── pages/          登录、文件库、播放器、设置
-│       └── lib/api.ts      请求封装、token、服务器地址
 ├── ios-native/             iOS 原生 App（SwiftUI）
 │   ├── project.yml         XcodeGen 工程描述
 │   └── HPlayer/
