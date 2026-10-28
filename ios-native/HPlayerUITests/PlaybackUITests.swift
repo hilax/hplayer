@@ -103,7 +103,7 @@ final class PlaybackUITests: XCTestCase {
         XCTAssertTrue(app.otherElements["playback.adjustmentHUD"].label.contains("亮度"))
         currentStep = "brightness"
 
-        Thread.sleep(forTimeInterval: 1)
+        Thread.sleep(forTimeInterval: 3)
         let volumeStart = app.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.68))
         volumeStart.press(
             forDuration: 0.1,
