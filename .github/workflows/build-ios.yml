@@ -7,10 +7,21 @@ on:
 
 jobs:
   build:
-    # Liquid Glass 需要 Xcode 26 / iOS 26 SDK，macos-latest 只有 Xcode 16
-    runs-on: macos-26
+    # macOS 15 runner also includes Xcode 26; select it explicitly.
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+
+      - name: Select Xcode 26
+        run: |
+          for app in /Applications/Xcode_26.3.app /Applications/Xcode_26.2.app /Applications/Xcode_26.1.1.app /Applications/Xcode_26.0.1.app; do
+            if [[ -d "$app/Contents/Developer" ]]; then
+              echo "DEVELOPER_DIR=$app/Contents/Developer" >> "$GITHUB_ENV"
+              exit 0
+            fi
+          done
+          echo 'Xcode 26 is unavailable on this runner' >&2
+          exit 1
 
       - name: Show toolchain
         run: xcodebuild -version && xcrun --sdk iphoneos --show-sdk-version
@@ -18,11 +29,29 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      - name: Restore verified native frameworks
+        id: native-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ios-native/Vendor/NuvioEngine/NuvioEngine.xcframework
+            ios-native/Vendor/MobileVLCKit/MobileVLCKit.xcframework
+          key: hplayer-nuvio-0.1.6-vlc-3.6.0-v1
+
       - name: Download verified torrent engine
         run: bash ios-native/scripts/prepare-nuvio.sh
 
       - name: Download verified VLC playback engine
         run: bash ios-native/scripts/prepare-vlc.sh
+
+      - name: Cache verified native frameworks
+        if: steps.native-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ios-native/Vendor/NuvioEngine/NuvioEngine.xcframework
+            ios-native/Vendor/MobileVLCKit/MobileVLCKit.xcframework
+          key: hplayer-nuvio-0.1.6-vlc-3.6.0-v1
 
       - name: Verify torrent engine lifecycle
         run: |
