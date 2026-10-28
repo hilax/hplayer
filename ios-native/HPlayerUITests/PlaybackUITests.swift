@@ -48,14 +48,18 @@ final class PlaybackUITests: XCTestCase {
             let frame = app.windows.firstMatch.frame
             let surfaceFrame = surface.frame
             let orientationLabel = app.buttons["playback.orientation"].label
-            if frame.width > frame.height && surfaceFrame.width > surfaceFrame.height && orientationLabel == "竖屏" {
+            if frame.width > frame.height
+                && surfaceFrame.width > surfaceFrame.height
+                && abs(surfaceFrame.width - frame.width) < 2
+                && abs(surfaceFrame.height - frame.height) < 2
+                && orientationLabel == "竖屏" {
                 rotated = true
                 break
             }
             Thread.sleep(forTimeInterval: 0.5)
         }
         XCTAssertTrue(rotated, "Landscape button should relayout the player surface and controls")
-        let attachment = XCTAttachment(screenshot: app.screenshot())
+        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         attachment.name = "HPlayer landscape VLC controls"
         attachment.lifetime = .keepAlways
         add(attachment)
