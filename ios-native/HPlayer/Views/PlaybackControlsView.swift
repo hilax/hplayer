@@ -91,7 +91,6 @@ struct PlaybackControlsView: View {
             .foregroundColor(.white)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .ignoresSafeArea()
-            .accessibilityValue(locked ? "locked" : "unlocked")
         }
         .statusBarHidden(true)
         .onAppear { revealControls() }
