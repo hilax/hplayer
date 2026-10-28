@@ -13,7 +13,18 @@ tracker.listen(0, '127.0.0.1', () => {
   const url = `http://127.0.0.1:${tracker.http.address().port}/announce`
   const client = new WebTorrent({ dht: false })
   client.on('error', (error) => { console.error(error.message); process.exit(1) })
-  client.seed(bytes, { name: 'fixture.mp4', announce: [url], private: true }, (torrent) => {
-    fs.writeFileSync(resultFile, JSON.stringify({ magnet: torrent.magnetURI, size: bytes.length, videoFile }))
+  let seeded = false
+  let announced = false
+  let published = false
+  const torrent = client.seed(bytes, { name: 'fixture.mp4', announce: [url], private: true }, () => {
+    seeded = true
+    publish()
   })
+  torrent.on('trackerAnnounce', () => { announced = true; publish() })
+  function publish() {
+    if (seeded && announced && !published) {
+      published = true
+      fs.writeFileSync(resultFile, JSON.stringify({ magnet: torrent.magnetURI, size: bytes.length, videoFile }))
+    }
+  }
 })
