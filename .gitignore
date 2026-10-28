@@ -16,3 +16,4 @@ ios-native/HPlayer/Info.plist
 .DS_Store
 .env
 *.log
+__pycache__/

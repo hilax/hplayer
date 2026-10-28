@@ -107,6 +107,7 @@ struct PlaybackControlsView: View {
     @State private var panKind: PlaybackAdjustment.Kind?
     @State private var lastAdjustment = ""
     @State private var originalBrightness: CGFloat?
+    @State private var brightnessLevel: Double = 0.5
 
     var body: some View {
         GeometryReader { geometry in
@@ -175,6 +176,7 @@ struct PlaybackControlsView: View {
         .statusBarHidden(true)
         .onAppear {
             originalBrightness = UIScreen.main.brightness
+            brightnessLevel = UIScreen.main.brightness
             revealControls()
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 350_000_000)
@@ -380,7 +382,7 @@ struct PlaybackControlsView: View {
         }
     }
     private var gestureStatus: String {
-        "\(lastAdjustment); brightness=\(String(format: "%.3f", UIScreen.main.brightness)); volume=\(String(format: "%.3f", playback.volume)); time=\(Double(playback.player.time.intValue) / 1000); rate=\(String(format: "%g", boosting ? 3 : playback.rate))"
+        "\(lastAdjustment); brightness=\(String(format: "%.3f", brightnessLevel)); volume=\(String(format: "%.3f", playback.volume)); time=\(Double(playback.player.time.intValue) / 1000); rate=\(String(format: "%g", boosting ? 3 : playback.rate))"
     }
 
     private func toggleControls() {
@@ -415,7 +417,7 @@ struct PlaybackControlsView: View {
             adjustmentHideTask?.cancel()
             hideTask?.cancel()
             adjustmentStartTime = playback.currentTime
-            adjustmentStartBrightness = UIScreen.main.brightness
+            adjustmentStartBrightness = brightnessLevel
             adjustmentStartVolume = playback.volume
             if abs(translation.x) > abs(translation.y) {
                 guard playback.seekable, playback.duration > 0 else { panKind = nil; return }
@@ -439,6 +441,7 @@ struct PlaybackControlsView: View {
         case .brightness:
             let value = min(max(adjustmentStartBrightness - Double(translation.y / size.height) * 1.2, 0.05), 1)
             UIScreen.main.brightness = value
+            brightnessLevel = value
             adjustment = PlaybackAdjustment(kind: .brightness, title: "亮度", valueText: "\(Int((value * 100).rounded()))%", progress: value, targetTime: nil)
         case .volume:
             let value = min(max(adjustmentStartVolume - Double(translation.y / size.height) * 1.2, 0), 1)

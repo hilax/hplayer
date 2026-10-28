@@ -1,0 +1,46 @@
+[
+    {
+        "id":  "tt1160419",
+        "type":  "movie",
+        "name":  "Dune",
+        "poster":  "https://images.metahub.space/poster/small/tt1160419/img",
+        "background":  "https://images.metahub.space/background/medium/tt1160419/img",
+        "releaseInfo":  "2021",
+        "imdbRating":  "8.0",
+        "genres":  [
+                       "Action",
+                       "Adventure",
+                       "Drama"
+                   ],
+        "country":  "Canada, United States"
+    },
+    {
+        "id":  "tt2543164",
+        "type":  "movie",
+        "name":  "Arrival",
+        "poster":  "https://images.metahub.space/poster/small/tt2543164/img",
+        "background":  "https://images.metahub.space/background/medium/tt2543164/img",
+        "releaseInfo":  "2016",
+        "imdbRating":  "7.9",
+        "genres":  [
+                       "Drama",
+                       "Mystery",
+                       "Sci-Fi"
+                   ],
+        "country":  "Canada, United States"
+    },
+    {
+        "id":  "tt27497430",
+        "type":  "series",
+        "name":  "The Demon Hunter",
+        "poster":  "https://live.metahub.space/poster/small/tt27497430/img",
+        "background":  "https://live.metahub.space/background/medium/tt27497430/img",
+        "releaseInfo":  "2023â",
+        "imdbRating":  "8.3",
+        "genres":  [
+                       "Animation",
+                       "Action \u0026 Adventure"
+                   ],
+        "country":  "China"
+    }
+]
