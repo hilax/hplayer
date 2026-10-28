@@ -6,6 +6,7 @@ final class PlaybackUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchEnvironment["HPLAYER_UI_TEST_URL"] = "http://127.0.0.1:8765/hls-fixture/index.m3u8"
         app.launchEnvironment["HPLAYER_UI_TEST_115_HEADERS"] = "1"
+        app.launchEnvironment["HPLAYER_UI_TEST_115_COOKIE"] = "UID=ui-test; CID=ui-test; SEID=ui-test; KID=ui-test"
         app.launch()
         let surface = app.otherElements["playback.surface"]
         let orientation = app.buttons["playback.orientation"]

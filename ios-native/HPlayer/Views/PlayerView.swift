@@ -70,17 +70,19 @@ struct PlayerView: View {
                 guard visible && !Task.isCancelled && current == source else { return }
                 #if DEBUG
                 let use115Headers = ProcessInfo.processInfo.environment["HPLAYER_UI_TEST_115_HEADERS"] == "1"
+                let testCookie = ProcessInfo.processInfo.environment["HPLAYER_UI_TEST_115_COOKIE"] ?? ""
                 #else
                 let use115Headers = false
+                let testCookie = ""
                 #endif
-                playback.open(url, direct115: use115Headers)
+                playback.open(url, direct115: use115Headers, directCookie: testCookie)
             case .p115(_, let pickCode):
                 if appState.isDirect {
                     guard let client = appState.directClient() else { throw APIError.server("请先登录 115") }
                     let streams = try await client.streams(pickCode: pickCode)
                     guard visible && !Task.isCancelled && current == source, let first = streams.first else { return }
                     directQualities = streams; selectedQuality = first.title
-                    playback.open(first.url, direct115: true)
+                    playback.open(first.url, direct115: true, directCookie: client.cookie)
                 } else {
                     guard let url = appState.mediaURL("/api/play/\(pickCode)") else { throw APIError.server("未连接服务器") }
                     originalURL = url; selectedQuality = "原画"
@@ -113,7 +115,7 @@ struct PlayerView: View {
                 guard visible && !Task.isCancelled && current == source else { return }
                 guard let fresh = refreshed.first(where: { $0.title == old.title }) else { throw APIError.server("该画质暂不可用") }
                 directQualities = refreshed; selectedQuality = fresh.title
-                playback.open(fresh.url, direct115: true, preservingPosition: true)
+                playback.open(fresh.url, direct115: true, directCookie: client.cookie, preservingPosition: true)
             } else if id.hasPrefix("open-"), let index = Int(id.dropFirst(5)), qualities.indices.contains(index) {
                 let old = qualities[index]
                 let refreshed = try await fetchQualities(pickCode)

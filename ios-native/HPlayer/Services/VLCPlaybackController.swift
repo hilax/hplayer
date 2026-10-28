@@ -20,13 +20,20 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
     private var resumeTime: Int32?
     private var shouldPauseAfterOpening = false
     private var boosted = false
+    private var openTimeoutTask: Task<Void, Never>?
 
     override init() {
         super.init()
         player.delegate = self
     }
 
-    func open(_ url: URL, direct115: Bool = false, preservingPosition: Bool = false) {
+    func open(
+        _ url: URL,
+        direct115: Bool = false,
+        directCookie: String = "",
+        preservingPosition: Bool = false
+    ) {
+        openTimeoutTask?.cancel()
         let oldTime = preservingPosition ? currentTime : 0
         let oldPlaying = preservingPosition ? playing : true
         player.stop()
@@ -39,11 +46,22 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
         if direct115 {
             media.addOption(":http-user-agent=\(Direct115Client.userAgent)")
             media.addOption(":http-referrer=https://115.com/")
+            media.addOption(":http-forward-cookies=1")
+            if !directCookie.isEmpty {
+                media.addOption(":http-cookies=\(directCookie)")
+            }
         }
         player.media = media
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
         try? AVAudioSession.sharedInstance().setActive(true)
         player.play()
+        openTimeoutTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 20_000_000_000)
+            guard let self, !Task.isCancelled, !self.playing, self.currentTime < 0.1, self.error.isEmpty else { return }
+            self.buffering = false
+            self.player.stop()
+            self.error = "视频加载超时，请重新打开或切换画质。"
+        }
     }
 
     func toggle() {
@@ -64,6 +82,7 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
         muted = audio.isMuted
     }
     func stop(detach: Bool = true) {
+        openTimeoutTask?.cancel()
         player.stop()
         if detach { player.drawable = nil }
         playing = false; buffering = false; bufferProgress = 0; resumeTime = nil; shouldPauseAfterOpening = false
@@ -83,6 +102,7 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
     private func refresh() {
         let state = player.state
         playing = player.isPlaying
+        if playing { openTimeoutTask?.cancel() }
         buffering = !player.isPlaying && (state == .opening || state == .buffering)
         seekable = player.isSeekable
         currentTime = max(0, Double(player.time.intValue) / 1000)
@@ -98,6 +118,7 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
             if shouldPauseAfterOpening { shouldPauseAfterOpening = false; player.pause() }
         }
         if state == .error {
+            openTimeoutTask?.cancel()
             buffering = false
             error = "播放失败，请尝试其他画质或检查网络。"
         }
