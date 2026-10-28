@@ -70,6 +70,11 @@ struct Official115SettingsView: View {
             }
 
             Section {
+                NavigationLink {
+                    CookieWebLoginView(onConnected: onSourceChanged)
+                } label: {
+                    Label("打开 115 登录并自动连接", systemImage: "person.badge.key.fill")
+                }
                 TextEditor(text: $cookie)
                     .focused($focusedField, equals: .cookie)
                     .frame(minHeight: 90)
@@ -84,7 +89,7 @@ struct Official115SettingsView: View {
             } header: {
                 Text("Cookie 连接（无需 AppID）")
             } footer: {
-                Text("粘贴包含 UID、CID、SEID、KID 的登录 Cookie。Cookie 可能过期，仅保存在你的服务器；BT 云下载使用下方官方授权。")
+                Text("可在应用内登录并自动连接，也可以手动粘贴包含 UID、CID、SEID、KID 的 Cookie。Cookie 可能过期，仅保存在你的服务器；BT 云下载使用下方官方授权。")
             }
 
             Section {

@@ -30,6 +30,7 @@ interface RawFile {
   pid?: string
   n?: string
   ico?: string
+  isv?: string | number
   s?: number | string
   pc?: string
   sha?: string
@@ -87,7 +88,7 @@ export async function listDir(cid = '0', offset = 0, limit = 1000): Promise<P115
     format: 'json',
     fc_mix: '0',
   })
-  const res = await fetch(`${API.fileList}?${params}`, { headers: headers() })
+  const res = await fetch(`${API.fileList}?${params}`, { headers: headers(), signal: AbortSignal.timeout(20_000) })
   const json = await checkResponse(res)
   const list = (json.data ?? []) as RawFile[]
   return list.map((f) => toFile(f, cid))
@@ -101,7 +102,7 @@ function toFile(f: RawFile, fallbackParent: string): P115File {
     parentId: String(f.pid ?? fallbackParent),
     name: f.n ?? '',
     isDir,
-    kind: f.ico ?? '',
+    kind: isDir ? 'folder' : Number(f.isv) === 1 || f.ico === 'video' || /\.(mp4|mkv|mov|m4v|avi|ts|webm|wmv|flv|m2ts|mpg|mpeg)$/i.test(f.n ?? '') ? 'video' : f.ico ?? '',
     size: Number(f.s ?? 0),
     pickCode: f.pc ?? '',
     sha1: f.sha ?? '',
@@ -148,6 +149,7 @@ export async function getDownloadInfo(pickCode: string, userAgent = config.userA
       'Content-Type': 'application/x-www-form-urlencoded',
     },
     body: new URLSearchParams({ data }).toString(),
+    signal: AbortSignal.timeout(20_000),
   })
   const json = await checkResponse(res)
   const encoded = json.data
@@ -174,10 +176,12 @@ export async function getUserInfo(): Promise<{ userId: number; userName: string;
 }
 
 export async function getCookieUserInfo(cookieOverride?: string): Promise<{ userId: number; userName: string; vip: number }> {
-  const res = await fetch(API.userInfo, { headers: headers(cookieOverride) })
+  const res = await fetch(API.userInfo, { headers: headers(cookieOverride), signal: AbortSignal.timeout(12_000) })
   const json = await checkResponse(res)
   const d = json.data ?? {}
-  return { userId: Number(d.user_id ?? 0), userName: String(d.user_name ?? ''), vip: Number(d.vip ?? 0) }
+  const userId = Number(d.user_id ?? 0)
+  if (!Number.isFinite(userId) || userId <= 0) throw new P115Error('115 登录状态无效，请重新登录')
+  return { userId, userName: String(d.user_name ?? ''), vip: Number(d.vip ?? 0) }
 }
 
 export interface QuotaInfo {
@@ -190,7 +194,7 @@ export interface QuotaInfo {
 /** 115 容量信息，用于资源库卡片展示 */
 export async function getQuota(): Promise<QuotaInfo> {
   if (useOpen()) return (await openUser()).quota
-  const res = await fetch('https://webapi.115.com/user/space', { headers: headers() })
+  const res = await fetch('https://webapi.115.com/user/space', { headers: headers(), signal: AbortSignal.timeout(20_000) })
   const json = await checkResponse(res)
   const d = json.data ?? {}
   return {
@@ -214,6 +218,7 @@ export async function searchFiles(keyword: string): Promise<P115File[]> {
   })
   const res = await fetch(`https://webapi.115.com/files/search?${params}`, {
     headers: headers(),
+    signal: AbortSignal.timeout(20_000),
   })
   const json = await checkResponse(res)
   const list = (json.data ?? []) as RawFile[]
@@ -227,6 +232,7 @@ export async function getFileInfo(pickCode: string): Promise<P115File | null> {
   }
   const res = await fetch(`${API.fileInfo}?pick_code=${encodeURIComponent(pickCode)}`, {
     headers: headers(),
+    signal: AbortSignal.timeout(20_000),
   })
   const json = await checkResponse(res)
   const f = (json.data ?? [])[0] as RawFile | undefined

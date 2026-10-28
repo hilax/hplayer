@@ -57,7 +57,7 @@ globalThis.fetch = async (input, init) => {
       return ok({ user_id: 2, user_name: 'Cookie user' })
     case '/files':
       assert.match(headers.get('cookie') ?? '', /UID=123/)
-      return ok([{ fid: '12', n: 'Legacy.mp4', pc: 'old' }])
+      return ok([{ fid: '12', n: 'Legacy.mp4', pc: 'old', ico: 'mp4' }])
     default: throw new Error(`Unexpected URL: ${url}`)
   }
 }
@@ -101,7 +101,9 @@ try {
   assert.equal(JSON.parse(readFileSync(storedPath, 'utf8')).refreshToken, 'refresh-3')
   setCookie('UID=123; CID=456; SEID=789; KID=000')
   assert.equal((await send('POST', '/api/115/open/source', { source: 'cookie' })).statusCode, 200)
-  assert.equal((await send('GET', '/api/files')).json().files[0].name, 'Legacy.mp4')
+  const cookieFiles = (await send('GET', '/api/files')).json().files
+  assert.equal(cookieFiles[0].name, 'Legacy.mp4')
+  assert.equal(cookieFiles[0].kind, 'video')
   assert.equal((await send('POST', '/api/115/open/source', { source: 'open' })).statusCode, 200)
   assert.equal((await send('GET', '/api/files')).json().files[1].name, 'Movie.mp4')
   assert.equal((await send('POST', '/api/115/cookie', { cookie: 'UID=new; CID=456; SEID=789; KID=000' })).json().userName, 'Cookie user')
