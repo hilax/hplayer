@@ -33,6 +33,20 @@ jobs:
             -o "$RUNNER_TEMP/magnet-engine-smoke"
           "$RUNNER_TEMP/magnet-engine-smoke"
 
+      - name: Verify magnet transfer from a local peer
+        run: |
+          npm install --prefix "$RUNNER_TEMP/hplayer-peer" webtorrent@3.0.21 bittorrent-tracker@11.2.3 --omit=optional --no-package-lock --no-audit --no-fund
+          cp ios-native/scripts/seed-fixture.mjs "$RUNNER_TEMP/hplayer-peer/seed-fixture.mjs"
+          node "$RUNNER_TEMP/hplayer-peer/seed-fixture.mjs" "$RUNNER_TEMP/magnet-fixture.json" &
+          seed_pid=$!
+          trap 'kill "$seed_pid" 2>/dev/null || true' EXIT
+          for _ in {1..30}; do
+            [[ -s "$RUNNER_TEMP/magnet-fixture.json" ]] && break
+            sleep 1
+          done
+          test -s "$RUNNER_TEMP/magnet-fixture.json"
+          "$RUNNER_TEMP/magnet-engine-smoke" "$RUNNER_TEMP/magnet-fixture.json"
+
       - name: Generate Xcode project
         working-directory: ios-native
         run: xcodegen generate

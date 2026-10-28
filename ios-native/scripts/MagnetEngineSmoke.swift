@@ -21,6 +21,33 @@ struct MagnetEngineSmoke {
         guard snapshot.fileSize == 4 else { fatalError("Invalid stream status") }
         try await engine.stopStream(stream.id)
         try await engine.removeTorrent(id)
+
+        if CommandLine.arguments.count > 1 {
+            let data = try Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[1]))
+            guard let fixture = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let magnet = fixture["magnet"] as? String else { fatalError("Invalid fixture") }
+            let liveID = try await withThrowingTaskGroup(of: String.self) { group in
+                group.addTask { try await engine.addMagnet(magnet) }
+                group.addTask { try await Task.sleep(nanoseconds: 60_000_000_000); throw NSError(domain: "MagnetSmoke", code: 1) }
+                guard let value = try await group.next() else { fatalError("Missing magnet result") }
+                group.cancelAll()
+                return value
+            }
+            let liveFiles = try await engine.files(for: liveID)
+            guard liveFiles.count == 1, liveFiles[0].path == "fixture.mp4", liveFiles[0].size == 262144 else { fatalError("Magnet metadata mismatch") }
+            let liveStream = try await engine.prepareStream(torrentID: liveID, fileIndex: liveFiles[0].index)
+            let stats = try await engine.preloadStream(liveStream, minimumContiguousBytes: 65536)
+            guard stats.contiguousReadyBytes >= 65536 else { fatalError("Preload did not become ready") }
+            var request = URLRequest(url: liveStream.url)
+            request.setValue("bytes=0-65535", forHTTPHeaderField: "Range")
+            request.timeoutInterval = 30
+            let (actual, response) = try await URLSession.shared.data(for: request)
+            let expected = Data((0..<65536).map { UInt8($0 % 251) })
+            guard (response as? HTTPURLResponse)?.statusCode == 206, actual == expected else { fatalError("Peer-streamed bytes differ from seed") }
+            try await engine.stopStream(liveStream.id)
+            try await engine.removeTorrent(liveID)
+            print("Magnet metadata, peer transfer, preload, and HTTP range passed")
+        }
         await engine.shutdown()
         print("Torrent engine metadata, local stream, and lifecycle passed")
     }

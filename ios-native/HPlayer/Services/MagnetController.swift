@@ -27,7 +27,10 @@ final class MagnetController: ObservableObject {
     func start(_ raw: String) {
         let magnet = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let components = URLComponents(string: magnet), components.scheme?.lowercased() == "magnet",
-              (components.queryItems ?? []).contains(where: { $0.name.lowercased() == "xt" && ($0.value ?? "").lowercased().hasPrefix("urn:btih:") }),
+              (components.queryItems ?? []).contains(where: {
+                  let value = ($0.value ?? "").lowercased()
+                  return $0.name.lowercased() == "xt" && (value.hasPrefix("urn:btih:") || value.hasPrefix("urn:btmh:"))
+              }),
               magnet.utf8.count <= 8192 else {
             error = "请输入包含 BT 信息哈希的有效磁力链接。"
             return
@@ -121,7 +124,7 @@ final class MagnetController: ObservableObject {
         player?.pause(); player = nil; playerObserver = nil
         let oldEngine = engine, oldStream = stream, oldTorrent = torrentID
         engine = nil; stream = nil; torrentID = nil; selectedIndex = nil
-        working = false; status = ""; peerInfo = ""
+        working = false; status = ""; peerInfo = ""; files = []; error = ""
         let previousCleanup = cleanup
         cleanup = Task {
             await previousCleanup?.value
