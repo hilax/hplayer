@@ -18,6 +18,7 @@ jobs:
   build:
     # Select an installed stable Xcode 26 toolchain on either supported architecture.
     runs-on: ${{ inputs.runner || 'macos-15' }}
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -111,10 +112,25 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             -quiet
 
+      - name: Package into IPA
+        run: |
+          mkdir -p Payload
+          cp -R ios-native/build/Build/Products/Release-iphoneos/HPlayer.app Payload/
+          zip -r HPlayer-unsigned.ipa Payload
+          ls -lh HPlayer-unsigned.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: HPlayer-unsigned-ipa
+          path: HPlayer-unsigned.ipa
+          retention-days: 30
+
       - name: Test VLC playback and controls on iPhone simulator
+        timeout-minutes: 8
         run: |
           device=$(xcrun simctl list devices available --json | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; devices=[x for group in d.values() for x in group if x.get("isAvailable") and x["name"].startswith("iPhone")]; preferred=next((x for x in devices if "Pro" in x["name"]), devices[0] if devices else None); print(preferred["udid"] if preferred else "")')
           test -n "$device"
+          xcrun simctl boot "$device" || true
           python3 ios-native/scripts/player-test-server.py > "$RUNNER_TEMP/player-http.log" 2>&1 &
           server_pid=$!
           trap 'kill "$server_pid" 2>/dev/null || true' EXIT
@@ -123,6 +139,8 @@ jobs:
             -scheme HPlayer \
             -configuration Debug \
             -destination "platform=iOS Simulator,id=$device" \
+            -parallel-testing-enabled NO \
+            -destination-timeout 90 \
             -derivedDataPath "$RUNNER_TEMP/hplayer-simulator" \
             -resultBundlePath "$RUNNER_TEMP/player-tests.xcresult" \
             CODE_SIGNING_ALLOWED=NO \
@@ -154,15 +172,3 @@ jobs:
           path: ${{ runner.temp }}/player-http.log
           if-no-files-found: ignore
 
-      - name: Package into IPA
-        run: |
-          mkdir -p Payload
-          cp -R ios-native/build/Build/Products/Release-iphoneos/HPlayer.app Payload/
-          zip -r HPlayer-unsigned.ipa Payload
-          ls -lh HPlayer-unsigned.ipa
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: HPlayer-unsigned-ipa
-          path: HPlayer-unsigned.ipa
-          retention-days: 30
