@@ -2,19 +2,27 @@ name: Build unsigned iOS IPA
 
 on:
   workflow_dispatch:
+    inputs:
+      runner:
+        description: macOS runner image
+        type: choice
+        default: macos-15
+        options:
+          - macos-15
+          - macos-26
   push:
     branches: [main]
 
 jobs:
   build:
     # macOS 15 runner also includes Xcode 26; select it explicitly.
-    runs-on: macos-15
+    runs-on: ${{ inputs.runner || 'macos-15' }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Select Xcode 26
         run: |
-          for app in /Applications/Xcode_26.3.app /Applications/Xcode_26.2.app /Applications/Xcode_26.1.1.app /Applications/Xcode_26.0.1.app; do
+          for app in /Applications/Xcode_26.6.app /Applications/Xcode_26.5.app /Applications/Xcode_26.4.app /Applications/Xcode_26.3.app /Applications/Xcode_26.2.app /Applications/Xcode_26.1.1.app /Applications/Xcode_26.0.1.app; do
             if [[ -d "$app/Contents/Developer" ]]; then
               echo "DEVELOPER_DIR=$app/Contents/Developer" >> "$GITHUB_ENV"
               exit 0
