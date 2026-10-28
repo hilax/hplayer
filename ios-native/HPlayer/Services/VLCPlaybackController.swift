@@ -15,6 +15,7 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
     @Published private(set) var seekable = false
     @Published private(set) var bufferProgress: Double = 0
     @Published private(set) var muted = false
+    @Published private(set) var volume: Double = 1
     @Published private(set) var error = ""
     @Published var rate: Float = 1
     private var resumeTime: Int32?
@@ -76,10 +77,25 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
     }
     func skip(_ seconds: Double) { seek(to: max(0, currentTime + seconds)) }
     func setRate(_ value: Float) { rate = value; if !boosted { player.rate = value } }
-    func setBoost(_ enabled: Bool) { boosted = enabled; player.rate = enabled ? 2 : rate }
+    func setBoost(_ enabled: Bool) { boosted = enabled; player.rate = enabled ? 3 : rate }
     func toggleMute() {
         guard let audio = player.audio else { return }
         audio.isMuted.toggle()
+        muted = audio.isMuted
+        if !audio.isMuted && audio.volume == 0 {
+            audio.volume = 100
+            volume = 0.5
+        }
+    }
+    func setVolume(_ normalized: Double) {
+        let value = min(max(normalized, 0), 1)
+        guard let audio = player.audio else {
+            volume = value
+            return
+        }
+        audio.volume = Int((value * 200).rounded())
+        if value > 0 { audio.isMuted = false }
+        volume = value
         muted = audio.isMuted
     }
     func stop(detach: Bool = true) {
@@ -109,12 +125,15 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
         currentTime = max(0, Double(player.time.intValue) / 1000)
         let length = Double(player.media?.length.intValue ?? 0) / 1000
         duration = length.isFinite && length > 0 ? length : 0
+        if let audio = player.audio {
+            volume = min(max(Double(audio.volume) / 200, 0), 1)
+        }
         if let resumeTime, state == .playing, player.isSeekable {
             player.time = VLCTime(int: resumeTime)
             self.resumeTime = nil
         }
         if state == .playing {
-            let targetRate: Float = boosted ? 2 : rate
+            let targetRate: Float = boosted ? 3 : rate
             if abs(player.rate - targetRate) > 0.01 { player.rate = targetRate }
             if shouldPauseAfterOpening { shouldPauseAfterOpening = false; player.pause() }
         }

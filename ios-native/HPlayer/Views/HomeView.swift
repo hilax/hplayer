@@ -26,5 +26,8 @@ struct HomeView: View {
                 }
         }
         .environmentObject(recents)
+        .tint(Theme.accent)
+        .toolbarBackground(.visible, for: .tabBar)
+        .toolbarBackground(Theme.pageBackground.opacity(0.96), for: .tabBar)
     }
 }

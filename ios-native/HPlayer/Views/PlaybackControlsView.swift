@@ -7,12 +7,73 @@ struct PlaybackListItem: Identifiable, Hashable {
     var subtitle: String = ""
 }
 
+private struct PlaybackAdjustmentHUD: View {
+    let adjustment: PlaybackAdjustment
+
+    var body: some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 10) {
+                Image(systemName: icon)
+                    .font(.title3.weight(.semibold))
+                    .frame(width: 28)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(adjustment.title)
+                        .font(.subheadline.weight(.semibold))
+                    Text(adjustment.valueText)
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.white.opacity(0.72))
+                }
+            }
+            ProgressView(value: min(max(adjustment.progress, 0), 1))
+                .progressViewStyle(.linear)
+                .tint(.white)
+                .frame(width: 210)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 14)
+        .background(.black.opacity(0.76), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(.white.opacity(0.12), lineWidth: 1)
+        }
+        .allowsHitTesting(false)
+        .accessibilityElement(children: .ignore)
+        .accessibilityIdentifier("playback.adjustmentHUD")
+        .accessibilityLabel("\(adjustment.title) \(adjustment.valueText)")
+    }
+
+    private var icon: String {
+        switch adjustment.kind {
+        case .seek:
+            return adjustment.valueText.hasPrefix("-") ? "gobackward" : "goforward"
+        case .brightness:
+            return "sun.max.fill"
+        case .volume:
+            return adjustment.progress == 0 ? "speaker.slash.fill" : "speaker.wave.3.fill"
+        }
+    }
+}
+
 struct PlaybackChoice: Identifiable, Hashable {
     let id: String
     let title: String
 }
 
 /// 横竖屏共享的播放器控制层，视频画面由 VLC 绘制。
+private struct PlaybackAdjustment {
+    enum Kind: Equatable {
+        case seek
+        case brightness
+        case volume
+    }
+
+    let kind: Kind
+    let title: String
+    let valueText: String
+    let progress: Double
+    let targetTime: Double?
+}
+
 struct PlaybackControlsView: View {
     @ObservedObject var playback: VLCPlaybackController
     let title: String
@@ -38,6 +99,11 @@ struct PlaybackControlsView: View {
     @State private var requestedLandscape = false
     @State private var initialLandscapeRequested = false
     @State private var rotateError = ""
+    @State private var adjustment: PlaybackAdjustment?
+    @State private var adjustmentStartTime = 0.0
+    @State private var adjustmentStartBrightness = 0.0
+    @State private var adjustmentStartVolume = 1.0
+    @State private var adjustmentHideTask: Task<Void, Never>?
 
     var body: some View {
         GeometryReader { geometry in
@@ -50,6 +116,7 @@ struct PlaybackControlsView: View {
                     .accessibilityIdentifier("playback.surface")
                     .gesture(tapGesture)
                     .simultaneousGesture(longPressGesture)
+                    .simultaneousGesture(adjustmentGesture(size: geometry.size))
 
                 if controlsVisible && !locked {
                     VStack(spacing: 0) {
@@ -79,11 +146,16 @@ struct PlaybackControlsView: View {
                 }
 
                 if boosting {
-                    Label("2× 快进", systemImage: "forward.fill")
+                    Label("3× 快进", systemImage: "forward.fill")
                         .font(.subheadline.weight(.semibold)).padding(.horizontal, 16).padding(.vertical, 9)
                         .background(.black.opacity(0.65), in: Capsule())
                         .frame(maxHeight: .infinity, alignment: .top).padding(.top, max(geometry.safeAreaInsets.top, 20) + 12)
                         .allowsHitTesting(false)
+                }
+                if let adjustment {
+                    PlaybackAdjustmentHUD(adjustment: adjustment)
+                        .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                        .zIndex(4)
                 }
                 if showList && !locked { playlistPanel(landscape: landscape) }
             }
@@ -101,6 +173,7 @@ struct PlaybackControlsView: View {
         }
         .onDisappear {
             hideTask?.cancel()
+            adjustmentHideTask?.cancel()
             playback.setBoost(false)
             if requestedLandscape { OrientationSupport.restorePortrait() }
         }
@@ -285,7 +358,7 @@ struct PlaybackControlsView: View {
         hideTask?.cancel()
         hideTask = Task {
             try? await Task.sleep(nanoseconds: 5_000_000_000)
-            if !Task.isCancelled && !showList && !dragging && !boosting && !playback.buffering {
+            if !Task.isCancelled && !showList && !dragging && !boosting && adjustment == nil && !playback.buffering {
                 controlsVisible = false
             }
         }
@@ -301,7 +374,7 @@ struct PlaybackControlsView: View {
     private var longPressGesture: some Gesture {
         LongPressGesture(minimumDuration: 0.4).sequenced(before: DragGesture(minimumDistance: 0))
             .onChanged { value in
-                guard !locked, !boosting, playback.playing else { return }
+                guard !locked, !boosting, adjustment == nil, playback.playing else { return }
                 if case .second(true, _) = value {
                     boosting = true; playback.setBoost(true); hideTask?.cancel()
                 }
@@ -311,6 +384,98 @@ struct PlaybackControlsView: View {
                 playback.setBoost(false)
                 boosting = false; revealControls()
             }
+    }
+    private func adjustmentGesture(size: CGSize) -> some Gesture {
+        DragGesture(minimumDistance: 18, coordinateSpace: .local)
+            .onChanged { value in
+                guard !locked, !showList, !boosting, size.width > 0, size.height > 0 else { return }
+
+                if adjustment == nil {
+                    hideTask?.cancel()
+                    adjustmentStartTime = playback.currentTime
+                    adjustmentStartBrightness = UIScreen.main.brightness
+                    adjustmentStartVolume = playback.volume
+
+                    if abs(value.translation.width) >= abs(value.translation.height) {
+                        guard playback.duration > 0 else { return }
+                        adjustment = PlaybackAdjustment(
+                            kind: .seek,
+                            title: "横向快进/快退",
+                            valueText: timeText(playback.currentTime),
+                            progress: playback.duration > 0 ? playback.currentTime / playback.duration : 0,
+                            targetTime: playback.currentTime
+                        )
+                    } else if value.startLocation.x < size.width / 2 {
+                        adjustment = PlaybackAdjustment(
+                            kind: .brightness,
+                            title: "亮度",
+                            valueText: "\(Int((adjustmentStartBrightness * 100).rounded()))%",
+                            progress: adjustmentStartBrightness,
+                            targetTime: nil
+                        )
+                    } else {
+                        adjustment = PlaybackAdjustment(
+                            kind: .volume,
+                            title: "音量",
+                            valueText: "\(Int((adjustmentStartVolume * 100).rounded()))%",
+                            progress: adjustmentStartVolume,
+                            targetTime: nil
+                        )
+                    }
+                }
+
+                guard let kind = adjustment?.kind else { return }
+                switch kind {
+                case .seek:
+                    let seconds = Double(value.translation.width / size.width) * 180
+                    let target = min(max(adjustmentStartTime + seconds, 0), playback.duration)
+                    let change = Int((target - adjustmentStartTime).rounded())
+                    let direction = change >= 0 ? "快进" : "快退"
+                    adjustment = PlaybackAdjustment(
+                        kind: .seek,
+                        title: direction,
+                        valueText: "\(change >= 0 ? "+" : "")\(change) 秒 · \(timeText(target))",
+                        progress: playback.duration > 0 ? target / playback.duration : 0,
+                        targetTime: target
+                    )
+                case .brightness:
+                    let value = min(max(adjustmentStartBrightness - Double(value.translation.height / size.height) * 1.2, 0), 1)
+                    UIScreen.main.brightness = value
+                    adjustment = PlaybackAdjustment(
+                        kind: .brightness,
+                        title: "亮度",
+                        valueText: "\(Int((value * 100).rounded()))%",
+                        progress: value,
+                        targetTime: nil
+                    )
+                case .volume:
+                    let value = min(max(adjustmentStartVolume - Double(value.translation.height / size.height) * 1.2, 0), 1)
+                    playback.setVolume(value)
+                    adjustment = PlaybackAdjustment(
+                        kind: .volume,
+                        title: "音量",
+                        valueText: "\(Int((value * 100).rounded()))%",
+                        progress: value,
+                        targetTime: nil
+                    )
+                }
+            }
+            .onEnded { _ in
+                guard let current = adjustment else { return }
+                if current.kind == .seek, let target = current.targetTime {
+                    playback.seek(to: target)
+                }
+                hideAdjustmentSoon()
+            }
+    }
+    private func hideAdjustmentSoon() {
+        adjustmentHideTask?.cancel()
+        adjustmentHideTask = Task {
+            try? await Task.sleep(nanoseconds: 850_000_000)
+            guard !Task.isCancelled else { return }
+            adjustment = nil
+            revealControls()
+        }
     }
     private func toggleOrientation(landscape: Bool) {
         requestedLandscape = !landscape

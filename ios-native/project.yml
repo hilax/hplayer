@@ -90,12 +90,26 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         TEST_TARGET_NAME: HPlayer
 
+  HPlayerTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: HPlayerTests
+    dependencies:
+      - target: HPlayer
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.hplayer.tests
+        GENERATE_INFOPLIST_FILE: YES
+
 schemes:
   HPlayer:
     build:
       targets:
         HPlayer: all
         HPlayerUITests: [test]
+        HPlayerTests: [test]
     test:
       targets:
+        - HPlayerTests
         - HPlayerUITests
