@@ -3,6 +3,13 @@ import XCTest
 final class PlaybackUITests: XCTestCase {
     func testVLCPlaybackControlsAndLandscape() throws {
         continueAfterFailure = false
+        var currentStep = "launch"
+        addTeardownBlock {
+            let attachment = XCTAttachment(string: "Last completed step: \(currentStep)")
+            attachment.name = "Playback test step"
+            attachment.lifetime = .keepAlways
+            self.add(attachment)
+        }
         let app = XCUIApplication()
         app.launchEnvironment["HPLAYER_UI_TEST_URL"] = "http://127.0.0.1:8765/hls-fixture/index.m3u8"
         app.launchEnvironment["HPLAYER_UI_TEST_115_HEADERS"] = "1"
@@ -40,6 +47,7 @@ final class PlaybackUITests: XCTestCase {
             add(screenshot)
         }
         XCTAssertTrue(startedInLandscape, "Playback should start in landscape")
+        currentStep = "initial landscape"
         XCTAssertFalse(app.alerts.firstMatch.exists, "Landscape should not show an orientation error")
 
         let center = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.48))
@@ -52,6 +60,7 @@ final class PlaybackUITests: XCTestCase {
             Thread.sleep(forTimeInterval: 1)
         }
         XCTAssertTrue(advanced, "VLC should render and advance the HLS test stream")
+        currentStep = "playback advanced"
         XCTAssertTrue(pause.exists, "VLC should start playing the test video")
 
         center.doubleTap()
@@ -64,6 +73,7 @@ final class PlaybackUITests: XCTestCase {
         waitForExpectations(timeout: 5)
         center.press(forDuration: 1.2)
         XCTAssertTrue(pause.waitForExistence(timeout: 5), "Releasing a long press should keep playback running")
+        currentStep = "double tap and long press"
 
         let seekStart = app.coordinate(withNormalizedOffset: CGVector(dx: 0.42, dy: 0.55))
         let seekForwardEnd = seekStart.withOffset(CGVector(dx: 130, dy: 0))
@@ -74,12 +84,14 @@ final class PlaybackUITests: XCTestCase {
         XCTAssertTrue(adjustmentHUD.label.contains("快进"))
         Thread.sleep(forTimeInterval: 1)
         XCTAssertNotEqual(elapsed.label, elapsedBeforeForward, "Right swipe should seek forward")
+        currentStep = "swipe forward"
 
         Thread.sleep(forTimeInterval: 1)
         let seekBackwardEnd = seekStart.withOffset(CGVector(dx: -130, dy: 0))
         seekStart.press(forDuration: 0.1, thenDragTo: seekBackwardEnd)
         XCTAssertTrue(app.otherElements["playback.adjustmentHUD"].waitForExistence(timeout: 2))
         XCTAssertTrue(app.otherElements["playback.adjustmentHUD"].label.contains("快退"))
+        currentStep = "swipe backward"
 
         Thread.sleep(forTimeInterval: 1)
         let brightnessStart = app.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.68))
@@ -89,6 +101,7 @@ final class PlaybackUITests: XCTestCase {
         )
         XCTAssertTrue(app.otherElements["playback.adjustmentHUD"].waitForExistence(timeout: 2))
         XCTAssertTrue(app.otherElements["playback.adjustmentHUD"].label.contains("亮度"))
+        currentStep = "brightness"
 
         Thread.sleep(forTimeInterval: 1)
         let volumeStart = app.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.68))
@@ -98,17 +111,34 @@ final class PlaybackUITests: XCTestCase {
         )
         XCTAssertTrue(app.otherElements["playback.adjustmentHUD"].waitForExistence(timeout: 2))
         XCTAssertTrue(app.otherElements["playback.adjustmentHUD"].label.contains("音量"))
+        currentStep = "volume"
 
-        app.buttons["playback.lock"].tap()
+        Thread.sleep(forTimeInterval: 2)
+        let lock = app.buttons["playback.lock"]
+        if !lock.exists || !lock.isHittable {
+            center.tap()
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+        XCTAssertTrue(lock.waitForExistence(timeout: 3))
+        XCTAssertTrue(lock.isHittable)
+        lock.tap()
         XCTAssertTrue(app.buttons["playback.unlock"].waitForExistence(timeout: 3))
         XCTAssertFalse(pause.exists, "Playback controls should be hidden while locked")
         app.buttons["playback.unlock"].tap()
+        currentStep = "lock and unlock"
 
-        app.buttons["playback.playlist"].tap()
+        let playlist = app.buttons["playback.playlist"]
+        if !playlist.exists || !playlist.isHittable {
+            center.tap()
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+        XCTAssertTrue(playlist.waitForExistence(timeout: 3))
+        playlist.tap()
         let nextEpisode = app.buttons["playback.item.direct|测试下一集|http://127.0.0.1:8765/hls-fixture/index.m3u8"]
         XCTAssertTrue(nextEpisode.waitForExistence(timeout: 3))
         nextEpisode.tap()
         XCTAssertTrue(app.staticTexts["测试下一集"].waitForExistence(timeout: 10))
+        currentStep = "playlist selection"
         if !orientation.exists { center.tap() }
         orientation.tap()
         XCTAssertTrue(waitForLayout(landscape: false, label: "横屏"), "Orientation button should switch to portrait")
