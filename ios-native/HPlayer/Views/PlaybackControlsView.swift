@@ -390,6 +390,7 @@ struct PlaybackControlsView: View {
         DragGesture(minimumDistance: 18, coordinateSpace: .local)
             .onChanged { value in
                 guard !locked, !showList, !boosting, size.width > 0, size.height > 0 else { return }
+                adjustmentHideTask?.cancel()
 
                 let expectedKind: PlaybackAdjustment.Kind
                 if abs(value.translation.width) >= abs(value.translation.height) {
