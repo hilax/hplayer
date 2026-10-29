@@ -100,3 +100,30 @@ struct EmptyStateView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
+
+/// 黄色文件夹图标：橙色背板（带标签）加黄色前板，用在资源库列表里。
+/// 只用圆角矩形拼成，任意尺寸都清晰，浅色和深色模式下颜色不变。
+struct FolderGlyph: View {
+    var body: some View {
+        GeometryReader { proxy in
+            let width = proxy.size.width
+            let height = proxy.size.height
+            let corner = min(width, height) * 0.16
+
+            ZStack(alignment: .topLeading) {
+                RoundedRectangle(cornerRadius: corner, style: .continuous)
+                    .fill(Theme.folderBack)
+                    .frame(width: width * 0.46, height: height * 0.42)
+                RoundedRectangle(cornerRadius: corner, style: .continuous)
+                    .fill(Theme.folderBack)
+                    .frame(width: width, height: height * 0.84)
+                    .offset(y: height * 0.16)
+                RoundedRectangle(cornerRadius: corner, style: .continuous)
+                    .fill(Theme.folderFront)
+                    .frame(width: width, height: height * 0.72)
+                    .offset(y: height * 0.28)
+            }
+        }
+        .accessibilityHidden(true)
+    }
+}

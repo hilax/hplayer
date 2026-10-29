@@ -24,6 +24,7 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
     private var boosted = false
     private var openTimeoutTask: Task<Void, Never>?
     private var pendingSeek: Double?
+    private var pendingSeekStarted = Date.distantPast
     private var pauseAfterSeek = false
 
     override init() {
@@ -83,6 +84,7 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
         guard seconds.isFinite, seconds >= 0, player.isSeekable else { return }
         let target = duration > 0 ? min(seconds, duration) : seconds
         pendingSeek = target
+        pendingSeekStarted = Date()
         pauseAfterSeek = !player.isPlaying
         player.time = VLCTime(int: Int32(clamping: Int(target * 1000)))
         currentTime = target
@@ -157,7 +159,11 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
         let decodedTime = max(0, Double(player.time.intValue) / 1000)
         if let pendingSeek {
             currentTime = pendingSeek
-            if abs(decodedTime - pendingSeek) < 1 {
+            // 在线 HLS 的关键帧间隔可能有好几秒，定位后实际落点和目标会差出一截。
+            // 只等「落点到位」会让进度一直卡在目标时间上，所以不在缓冲时最多等 5 秒就以真实时间为准。
+            let landed = abs(decodedTime - pendingSeek) < 1
+            let gaveUp = !buffering && Date().timeIntervalSince(pendingSeekStarted) > 5
+            if landed || gaveUp {
                 self.pendingSeek = nil
                 currentTime = decodedTime
                 if pauseAfterSeek { pauseAfterSeek = false; player.pause() }

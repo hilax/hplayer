@@ -105,6 +105,14 @@ enum Theme {
         dark: UIColor(hex: 0x5B8CFF, alpha: 0.16)
     ))
 
+    /// 文件夹图标：橙色背板、黄色前板，放在一块淡灰蓝的圆角底上。
+    static let folderBack = Color(uiColor: UIColor(hex: 0xF0A23C))
+    static let folderFront = Color(uiColor: UIColor(hex: 0xF7CB4D))
+    static let folderTile = Color(uiColor: .adaptive(
+        light: UIColor(hex: 0xF3F4F9),
+        dark: UIColor(white: 1, alpha: 0.09)
+    ))
+
     static let success = Color(uiColor: .systemGreen)
     static let warning = Color(uiColor: .systemOrange)
 

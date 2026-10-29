@@ -18,6 +18,7 @@ private struct PlaybackAdjustment {
         case seek
         case brightness
         case volume
+        case notice
     }
 
     let kind: Kind
@@ -61,6 +62,10 @@ struct PlaybackControlsView: View {
     @State private var adjustmentStartVolume = 1.0
     @State private var adjustmentHideTask: Task<Void, Never>?
     @State private var panKind: PlaybackAdjustment.Kind?
+    /// 一次拖动手势是否还在处理中；方向锁定之前 panKind 为空，不能靠它判断。
+    @State private var panActive = false
+    /// 方向锁定时手指已经走过的位移，后面的调节量从这里开始算，画面不会突然跳一下。
+    @State private var panBase = CGPoint.zero
     @State private var lastAdjustment = ""
     @State private var originalBrightness: CGFloat?
     @State private var brightnessLevel: Double = 0.5
@@ -535,6 +540,11 @@ struct PlaybackControlsView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                         .padding(.top, insets.top + (controlsVisible && !locked ? 64 : 18))
                         .transition(.opacity)
+                case .notice:
+                    NoticeHUD(text: adjustment.valueText)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        .padding(.top, insets.top + (controlsVisible && !locked ? 64 : 18))
+                        .transition(.opacity)
                 }
             }
         }
@@ -674,8 +684,14 @@ struct PlaybackControlsView: View {
 
     // MARK: 手势
 
+    /// 手指走出这么远（点）才锁定是横滑还是竖滑。
+    /// 手势刚识别出来时只走了十个点左右，真人拇指横滑起手常带一点斜向，
+    /// 此时就定方向很容易把横滑误判成竖滑，变成调亮度或音量而不是快进快退。
+    private static let panLockDistance: CGFloat = 18
+
     private func handlePan(_ state: UIGestureRecognizer.State, origin: CGPoint, translation: CGPoint, size: CGSize) {
         if state == .cancelled || state == .failed {
+            panActive = false
             panKind = nil
             adjustment = nil
             revealControls()
@@ -689,8 +705,31 @@ struct PlaybackControlsView: View {
             adjustmentStartTime = playback.currentTime
             adjustmentStartBrightness = brightnessLevel
             adjustmentStartVolume = systemVolume.level
-            if abs(translation.x) > abs(translation.y) {
-                guard playback.seekable, playback.duration > 0 else { panKind = nil; return }
+            panKind = nil
+            panBase = .zero
+            panActive = true
+        }
+        guard panActive else { return }
+
+        if panKind == nil {
+            let dx = abs(translation.x)
+            let dy = abs(translation.y)
+            guard max(dx, dy) >= Self.panLockDistance else {
+                // 还没走够，先不定方向；这次拖动很短就结束了，什么也不做
+                if state == .ended {
+                    panActive = false
+                    revealControls()
+                }
+                return
+            }
+            panBase = translation
+            // 横向略占优势就算横滑：竖滑要调亮度和音量，起手更不容易带横向分量
+            if dx > dy * 0.8 {
+                guard playback.seekable, playback.duration > 0 else {
+                    panActive = false
+                    showNotice(playback.duration > 0 ? "视频还在加载，暂时不能拖动进度" : "这个视频不支持拖动进度")
+                    return
+                }
                 panKind = .seek
             } else {
                 panKind = origin.x < size.width / 2 ? .brightness : .volume
@@ -698,10 +737,14 @@ struct PlaybackControlsView: View {
         }
         guard let panKind else { return }
         adjustmentHideTask?.cancel()
+        let moveX = translation.x - panBase.x
+        let moveY = translation.y - panBase.y
         switch panKind {
+        case .notice:
+            break
         case .seek:
             let range = min(180, max(30, playback.duration / 5))
-            let target = min(max(adjustmentStartTime + Double(translation.x / size.width) * range, 0), max(0, playback.duration - 0.25))
+            let target = min(max(adjustmentStartTime + Double(moveX / size.width) * range, 0), max(0, playback.duration - 0.25))
             let delta = Int((target - adjustmentStartTime).rounded())
             adjustment = PlaybackAdjustment(
                 kind: .seek,
@@ -712,13 +755,13 @@ struct PlaybackControlsView: View {
                 targetTime: target
             )
         case .brightness:
-            let value = min(max(adjustmentStartBrightness - Double(translation.y / size.height) * 1.2, 0.02), 1)
+            let value = min(max(adjustmentStartBrightness - Double(moveY / size.height) * 1.2, 0.02), 1)
             UIScreen.main.brightness = CGFloat(value)
             brightnessLevel = value
             brightnessAdjusted = true
             adjustment = PlaybackAdjustment(kind: .brightness, title: "亮度", valueText: "\(Int((value * 100).rounded()))%", progress: value)
         case .volume:
-            let value = min(max(adjustmentStartVolume - Double(translation.y / size.height) * 1.2, 0), 1)
+            let value = min(max(adjustmentStartVolume - Double(moveY / size.height) * 1.2, 0), 1)
             applyVolume(value)
             adjustment = PlaybackAdjustment(kind: .volume, title: "音量", valueText: "\(Int((value * 100).rounded()))%", progress: value)
         }
@@ -726,8 +769,17 @@ struct PlaybackControlsView: View {
         if state == .ended {
             if let target = adjustment?.targetTime { playback.seek(to: target) }
             self.panKind = nil
+            panActive = false
             hideAdjustmentSoon()
         }
+    }
+
+    /// 横滑用不了时给一句提示，不要什么反应都没有。
+    private func showNotice(_ text: String) {
+        adjustmentHideTask?.cancel()
+        adjustment = PlaybackAdjustment(kind: .notice, title: "提示", valueText: text, progress: 0)
+        lastAdjustment = "提示 \(text)"
+        hideAdjustmentSoon()
     }
 
     /// 按音量键或在控制中心调节时，同样用小胶囊提示当前音量。
@@ -808,7 +860,29 @@ private struct LevelHUD: View {
             return "speaker.wave.3.fill"
         case .seek:
             return "goforward"
+        case .notice:
+            return "exclamationmark.circle"
         }
+    }
+}
+
+/// 一句话提示：例如视频暂时不能拖动进度
+private struct NoticeHUD: View {
+    let text: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.circle")
+                .font(.system(size: 13, weight: .semibold))
+            Text(text)
+                .font(.footnote.weight(.medium))
+                .lineLimit(1)
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 14)
+        .frame(height: 34)
+        .background(.black.opacity(0.6), in: Capsule())
+        .overlay { Capsule().strokeBorder(.white.opacity(0.12), lineWidth: 0.5) }
     }
 }
 

@@ -53,8 +53,8 @@ struct SearchView: View {
                     }
                     .buttonStyle(.plain)
                     .listRowBackground(Color.clear)
-                    .listRowSeparatorTint(Theme.hairline)
-                    .listRowInsets(EdgeInsets(top: 8, leading: 18, bottom: 8, trailing: 18))
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: 7, leading: 16, bottom: 7, trailing: 16))
                 }
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
