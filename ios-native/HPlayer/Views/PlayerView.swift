@@ -40,6 +40,7 @@ struct PlayerView: View {
             selectedID: current.id,
             qualities: qualityChoices,
             selectedQuality: selectedQuality,
+            seekPreview: true,
             onSelect: { id in
                 guard let selected = playlist.first(where: { $0.id == id }), selected != current else { return }
                 saveProgress(force: true)

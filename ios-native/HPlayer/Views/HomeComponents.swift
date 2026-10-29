@@ -562,3 +562,55 @@ struct ArtworkView: View {
         }
     }
 }
+
+// MARK: - 首页底色
+
+/// 首页整页的底色：把当前精选图放大模糊铺满全屏，再盖一层半透明的浅色或深色，
+/// 横幅和下面的电影、剧集列表都压在这层取自精选图的颜色上；切换精选时淡入淡出。
+struct AmbientBackdrop: View {
+    let urlString: String
+    var fallbackURLString = ""
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack {
+                Theme.pageBackground
+                if !urlString.isEmpty || !fallbackURLString.isEmpty {
+                    ArtworkView(urlString: urlString, fallbackURLString: fallbackURLString, title: "", letterSize: 1)
+                        .scaledToFill()
+                        .frame(width: proxy.size.width, height: proxy.size.height)
+                        .clipped()
+                        .blur(radius: 60, opaque: true)
+                        .saturation(1.4)
+                        .opacity(colorScheme == .dark ? 0.9 : 0.75)
+                        .id(urlString)
+                        .transition(.opacity)
+                }
+                veil
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height)
+            .clipped()
+        }
+        .animation(.easeInOut(duration: 0.6), value: urlString)
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    /// 半透明的一层：留住图片的颜色，又让文字看得清
+    private var veil: Color {
+        colorScheme == .dark ? Color.black.opacity(0.5) : Color.white.opacity(0.5)
+    }
+}
+
+extension View {
+    /// 首页列表里的卡片：半透明磨砂，透出下面精选图的颜色
+    func translucentCard(cornerRadius: CGFloat = 22) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        return self
+            .background(.ultraThinMaterial, in: shape)
+            .overlay { shape.strokeBorder(Theme.hairline, lineWidth: 0.5) }
+    }
+}

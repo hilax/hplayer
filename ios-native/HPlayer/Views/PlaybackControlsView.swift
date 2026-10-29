@@ -42,18 +42,23 @@ struct PlaybackControlsView: View {
     var selectedQuality = ""
     /// 边下边播时的网络状态，例如「12 个节点 · 1.2 MB/s」
     var networkStatus = ""
+    /// 拖动进度时取目标位置的画面做预览（需要能另开一路读取视频，磁力边下边播不开）
+    var seekPreview = false
     var onSelect: (String) -> Void = { _ in }
     var onQuality: (String) -> Void = { _ in }
     var onRetry: () -> Void = { }
     var onClose: () -> Void
 
     @StateObject private var systemVolume = SystemVolumeController()
+    @StateObject private var preview = SeekPreviewLoader()
     @State private var controlsVisible = true
     @State private var locked = false
     @State private var showList = false
     @State private var boosting = false
     @State private var dragging = false
     @State private var dragTime = 0.0
+    /// 拖进度条开始时的播放位置，用来算「+ 00:20」
+    @State private var scrubStart = 0.0
     @State private var hideTask: Task<Void, Never>?
     @State private var requestedLandscape = false
     @State private var initialLandscapeRequested = false
@@ -97,7 +102,7 @@ struct PlaybackControlsView: View {
 
                 if controlsVisible && !locked {
                     VStack(spacing: 0) {
-                        topBar
+                        topBar(landscape: landscape)
                         Spacer(minLength: 0)
                         bottomBar(landscape: landscape)
                     }
@@ -198,7 +203,7 @@ struct PlaybackControlsView: View {
 
     // MARK: 顶部
 
-    private var topBar: some View {
+    private func topBar(landscape: Bool) -> some View {
         HStack(spacing: 12) {
             Button { onClose() } label: { roundIcon("xmark") }
                 .buttonStyle(.plain)
@@ -217,6 +222,13 @@ struct PlaybackControlsView: View {
             }
 
             Spacer(minLength: 8)
+
+            Button { toggleOrientation(landscape: landscape) } label: {
+                roundIcon(landscape ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(landscape ? "竖屏" : "横屏")
+            .accessibilityIdentifier("playback.orientation")
 
             Menu {
                 if !qualities.isEmpty {
@@ -252,27 +264,32 @@ struct PlaybackControlsView: View {
 
     // MARK: 底部
 
+    /// 进度条在上，两头是当前时间和总时长；下面一行：锁定在左，上一集、暂停、下一集在正中，播放列表在右。
     private func bottomBar(landscape: Bool) -> some View {
-        VStack(spacing: landscape ? 4 : 12) {
+        VStack(spacing: landscape ? 2 : 10) {
             HStack(spacing: 12) {
                 Text(timeText(dragging ? dragTime : playback.currentTime))
-                    .font(.caption.weight(.medium).monospacedDigit())
-                    .frame(minWidth: 42, alignment: .leading)
+                    .font(.caption.weight(.semibold).monospacedDigit())
+                    .frame(minWidth: 44, alignment: .leading)
                     .accessibilityIdentifier("playback.elapsed")
 
                 PlayerScrubber(
                     value: dragging ? dragTime : min(playback.currentTime, max(playback.duration, 1)),
                     upperBound: max(playback.duration, 1),
                     enabled: playback.seekable && playback.duration > 0,
-                    onScrub: { dragTime = $0 },
+                    onScrub: scrubbed,
                     onEditingChanged: { editing in
                         if editing {
                             dragging = true
+                            scrubStart = playback.currentTime
                             hideTask?.cancel()
+                            adjustmentHideTask?.cancel()
+                            preview.reset()
+                            scrubbed(dragTime)
                         } else if dragging {
                             dragging = false
                             playback.seek(to: dragTime)
-                            revealControls()
+                            hideAdjustmentSoon()
                         }
                     },
                     onCommit: { value in
@@ -283,53 +300,45 @@ struct PlaybackControlsView: View {
                 .frame(height: 32)
 
                 Text(timeText(playback.duration))
-                    .font(.caption.weight(.medium).monospacedDigit())
-                    .foregroundStyle(.white.opacity(0.75))
-                    .frame(minWidth: 42, alignment: .trailing)
+                    .font(.caption.weight(.semibold).monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.7))
+                    .frame(minWidth: 44, alignment: .trailing)
             }
 
-            HStack(spacing: 0) {
-                Button(action: lock) { controlIcon("lock.open", label: "锁定") }
-                    .accessibilityIdentifier("playback.lock")
-                Spacer(minLength: 4)
-                // 快进快退靠左右拖动画面，这里只留上一集、暂停、下一集
-                Button { move(-1) } label: { controlIcon("backward.end.fill", label: "上一个", size: 18) }
-                    .disabled(previousID == nil)
-                    .opacity(previousID == nil ? 0.35 : 1)
-                Button { playback.toggle(); revealControls() } label: {
-                    controlIcon(playback.playing ? "pause.fill" : "play.fill", label: playback.playing ? "暂停" : "播放", size: 30, frame: 64)
+            ZStack {
+                HStack(spacing: 0) {
+                    Button(action: lock) { controlIcon("lock.open", label: "锁定") }
+                        .accessibilityIdentifier("playback.lock")
+                    Spacer(minLength: 0)
+                    Button { openList() } label: { controlIcon("list.bullet", label: "播放列表") }
+                        .accessibilityIdentifier("playback.playlist")
                 }
-                .accessibilityIdentifier("playback.playPause")
-                .accessibilityValue(playback.playing ? "playing" : "paused")
-                Button { move(1) } label: { controlIcon("forward.end.fill", label: "下一个", size: 18) }
-                    .disabled(nextID == nil)
-                    .opacity(nextID == nil ? 0.35 : 1)
-                Spacer(minLength: 4)
-                if landscape {
-                    Menu { speedButtons } label: {
-                        textChip("\(String(format: "%g", playback.rate))×")
+
+                // 快进快退靠左右拖动画面，这里只留上一集、暂停、下一集，暂停键固定在屏幕正中
+                HStack(spacing: landscape ? 44 : 30) {
+                    Button { move(-1) } label: { controlIcon("backward.end.fill", label: "上一个", size: 20) }
+                        .disabled(previousID == nil)
+                        .opacity(previousID == nil ? 0.35 : 1)
+                    Button { playback.toggle(); revealControls() } label: {
+                        controlIcon(playback.playing ? "pause.fill" : "play.fill", label: playback.playing ? "暂停" : "播放", size: 34, frame: 64)
                     }
-                    .accessibilityLabel("播放速度")
+                    .accessibilityIdentifier("playback.playPause")
+                    .accessibilityValue(playback.playing ? "playing" : "paused")
+                    Button { move(1) } label: { controlIcon("forward.end.fill", label: "下一个", size: 20) }
+                        .disabled(nextID == nil)
+                        .opacity(nextID == nil ? 0.35 : 1)
                 }
-                if landscape && !qualities.isEmpty {
-                    Menu {
-                        ForEach(qualities) { choice in
-                            Button(choice.title) { onQuality(choice.id); revealControls() }
-                        }
-                    } label: {
-                        textChip(selectedQuality.isEmpty ? "画质" : selectedQuality)
-                    }
-                    .accessibilityLabel("画质")
-                }
-                Button { toggleOrientation(landscape: landscape) } label: {
-                    controlIcon(landscape ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right", label: landscape ? "竖屏" : "横屏", size: 18)
-                }
-                .accessibilityIdentifier("playback.orientation")
-                Button { openList() } label: { controlIcon("list.bullet", label: "播放列表") }
-                    .accessibilityIdentifier("playback.playlist")
             }
             .buttonStyle(.plain)
         }
+    }
+
+    /// 拖进度条时，画面中间显示和左右滑动一样的跳转提示和预览
+    private func scrubbed(_ value: Double) {
+        dragTime = value
+        guard dragging, playback.duration > 0 else { return }
+        adjustment = seekAdjustment(target: value, from: scrubStart)
+        requestPreview(value)
     }
 
     @ViewBuilder
@@ -486,19 +495,19 @@ struct PlaybackControlsView: View {
         }
     }
 
+    /// 缓冲时画面中间一个转圈，下面是当前网速
     private var bufferingPill: some View {
-        HStack(spacing: 9) {
+        VStack(spacing: 10) {
             ProgressView()
-                .controlSize(.small)
+                .controlSize(.large)
                 .tint(.white)
             Text(bufferingText)
-                .font(.footnote.weight(.medium))
+                .font(.footnote.weight(.semibold).monospacedDigit())
+                .multilineTextAlignment(.center)
                 .lineLimit(2)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 9)
-        .frame(maxWidth: 300)
-        .background(.black.opacity(0.55), in: Capsule())
+        .frame(maxWidth: 260)
+        .shadow(color: .black.opacity(0.55), radius: 6, y: 1)
         .allowsHitTesting(false)
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("playback.cacheStatus")
@@ -510,6 +519,11 @@ struct PlaybackControlsView: View {
                 .font(.system(size: 11, weight: .bold))
             Text("\(String(format: "%g", VLCPlaybackController.boostRate))× 快进中")
                 .font(.footnote.weight(.semibold))
+            if !speedLabel.isEmpty {
+                Text(speedLabel)
+                    .font(.footnote.weight(.medium).monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.7))
+            }
         }
         .padding(.horizontal, 13)
         .padding(.vertical, 7)
@@ -518,15 +532,20 @@ struct PlaybackControlsView: View {
         .accessibilityElement(children: .combine)
     }
 
-    /// 亮度、音量提示在画面上方，拖动进度提示在正中间；都只有一个小胶囊或小卡片大小。
+    /// 亮度、音量提示在画面上方，只有小图标和百分比；拖动进度提示和预览画面在正中间。
     @ViewBuilder
     private func hudLayer(insets: EdgeInsets) -> some View {
         ZStack {
             if let adjustment {
                 switch adjustment.kind {
                 case .seek:
-                    SeekHUD(adjustment: adjustment)
-                        .transition(.opacity)
+                    SeekHUD(
+                        adjustment: adjustment,
+                        showsPreview: seekPreview,
+                        image: preview.image,
+                        loading: preview.loading
+                    )
+                    .transition(.opacity)
                 case .brightness, .volume:
                     LevelHUD(adjustment: adjustment)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -547,9 +566,22 @@ struct PlaybackControlsView: View {
     }
 
     private var bufferingText: String {
-        let base = playback.buffering ? cacheText : loadingText
-        guard playback.buffering, !networkStatus.isEmpty else { return base }
-        return "\(base) · \(networkStatus)"
+        guard playback.buffering else { return loadingText }
+        return speedLabel.isEmpty ? cacheText : speedLabel
+    }
+
+    /// 磁力边下边播用它自己的节点和速度，其他视频用 VLC 每秒读到的字节数
+    private var speedLabel: String {
+        if !networkStatus.isEmpty { return networkStatus }
+        guard playback.downloadSpeed > 0 else { return "" }
+        return Self.speedText(playback.downloadSpeed)
+    }
+
+    private static func speedText(_ bytesPerSecond: Double) -> String {
+        if bytesPerSecond >= 1_048_576 {
+            return String(format: "%.1f MB/s", bytesPerSecond / 1_048_576)
+        }
+        return String(format: "%.0f KB/s", max(bytesPerSecond / 1024, 1))
     }
 
     private var cacheText: String {
@@ -576,16 +608,6 @@ struct PlaybackControlsView: View {
             .frame(width: frame, height: 44)
             .contentShape(Rectangle())
             .accessibilityLabel(label)
-    }
-
-    /// 倍速、画质：纯文字，不加底色
-    private func textChip(_ text: String) -> some View {
-        Text(text)
-            .font(.subheadline.weight(.bold))
-            .lineLimit(1)
-            .padding(.horizontal, 8)
-            .frame(minWidth: 40, minHeight: 44)
-            .contentShape(Rectangle())
     }
 
     // MARK: 状态
@@ -681,6 +703,7 @@ struct PlaybackControlsView: View {
             panActive = false
             panKind = nil
             adjustment = nil
+            preview.reset()
             revealControls()
             return
         }
@@ -695,6 +718,7 @@ struct PlaybackControlsView: View {
             panKind = nil
             panBase = .zero
             panActive = true
+            preview.reset()
         }
         guard panActive else { return }
 
@@ -732,15 +756,8 @@ struct PlaybackControlsView: View {
         case .seek:
             let range = min(180, max(30, playback.duration / 5))
             let target = min(max(adjustmentStartTime + Double(moveX / size.width) * range, 0), max(0, playback.duration - 0.25))
-            let delta = Int((target - adjustmentStartTime).rounded())
-            adjustment = PlaybackAdjustment(
-                kind: .seek,
-                title: delta >= 0 ? "快进" : "快退",
-                valueText: "\(delta >= 0 ? "+" : "")\(delta) 秒",
-                progress: target / playback.duration,
-                detail: "\(timeText(target)) / \(timeText(playback.duration))",
-                targetTime: target
-            )
+            adjustment = seekAdjustment(target: target, from: adjustmentStartTime)
+            requestPreview(target)
         case .brightness:
             let value = min(max(adjustmentStartBrightness - Double(moveY / size.height) * 1.2, 0.02), 1)
             UIScreen.main.brightness = CGFloat(value)
@@ -759,6 +776,23 @@ struct PlaybackControlsView: View {
             panActive = false
             hideAdjustmentSoon()
         }
+    }
+
+    private func seekAdjustment(target: Double, from start: Double) -> PlaybackAdjustment {
+        let delta = (target - start).rounded()
+        return PlaybackAdjustment(
+            kind: .seek,
+            title: delta >= 0 ? "快进" : "快退",
+            valueText: "\(delta >= 0 ? "+" : "-") \(timeText(abs(delta)))",
+            progress: playback.duration > 0 ? target / playback.duration : 0,
+            detail: "\(timeText(target)) / \(timeText(playback.duration))",
+            targetTime: target
+        )
+    }
+
+    private func requestPreview(_ target: Double) {
+        guard seekPreview, playback.duration > 0 else { return }
+        preview.request(fraction: target / playback.duration, from: playback)
     }
 
     /// 横滑用不了时给一句提示，不要什么反应都没有。
@@ -786,6 +820,7 @@ struct PlaybackControlsView: View {
             try? await Task.sleep(nanoseconds: 900_000_000)
             guard !Task.isCancelled else { return }
             adjustment = nil
+            preview.reset()
             if revealing { revealControls() }
         }
     }
@@ -812,28 +847,21 @@ struct PlaybackControlsView: View {
 
 // MARK: - 提示视图
 
-/// 亮度、音量：一条细进度加百分比的小胶囊
+/// 亮度、音量：只有一个小图标和百分比，不加底板，靠阴影在亮画面上也看得清
 private struct LevelHUD: View {
     let adjustment: PlaybackAdjustment
 
     private var value: Double { min(max(adjustment.progress, 0), 1) }
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 5) {
             Image(systemName: icon)
-                .font(.system(size: 13, weight: .semibold))
-                .frame(width: 18)
-            LevelBar(value: value)
-                .frame(width: 92, height: 4)
-            Text("\(Int((value * 100).rounded()))")
-                .font(.caption.weight(.semibold).monospacedDigit())
-                .frame(width: 26, alignment: .trailing)
+                .font(.system(size: 12, weight: .semibold))
+            Text("\(Int((value * 100).rounded()))%")
+                .font(.footnote.weight(.semibold).monospacedDigit())
         }
         .foregroundStyle(.white)
-        .padding(.horizontal, 14)
-        .frame(height: 34)
-        .background(.black.opacity(0.6), in: Capsule())
-        .overlay { Capsule().strokeBorder(.white.opacity(0.12), lineWidth: 0.5) }
+        .shadow(color: .black.opacity(0.6), radius: 4, y: 1)
     }
 
     private var icon: String {
@@ -873,33 +901,50 @@ private struct NoticeHUD: View {
     }
 }
 
-/// 左右拖动进度：画面中央的小卡片，显示跳转秒数和目标时间
+/// 拖动进度：目标时间 / 总时长、一条小进度、跳转了多少，下面是目标位置的画面
 private struct SeekHUD: View {
     let adjustment: PlaybackAdjustment
+    var showsPreview = false
+    var image: UIImage?
+    var loading = false
 
     var body: some View {
-        VStack(spacing: 6) {
-            HStack(spacing: 6) {
-                Image(systemName: adjustment.title == "快退" ? "backward.fill" : "forward.fill")
-                    .font(.system(size: 12, weight: .bold))
-                Text(adjustment.valueText)
-                    .font(.system(size: 19, weight: .bold).monospacedDigit())
-            }
+        VStack(spacing: 8) {
             Text(adjustment.detail)
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.white.opacity(0.72))
+                .font(.system(size: 22, weight: .bold).monospacedDigit())
             LevelBar(value: adjustment.progress)
-                .frame(width: 124, height: 3)
-                .padding(.top, 2)
+                .frame(width: 150, height: 3)
+            Text(adjustment.valueText)
+                .font(.subheadline.weight(.semibold).monospacedDigit())
+                .foregroundStyle(.white.opacity(0.85))
+            if showsPreview {
+                previewBox
+                    .padding(.top, 6)
+            }
         }
         .foregroundStyle(.white)
-        .padding(.horizontal, 18)
-        .padding(.vertical, 12)
-        .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(.white.opacity(0.12), lineWidth: 0.5)
+        .shadow(color: .black.opacity(0.55), radius: 6, y: 1)
+    }
+
+    private var previewBox: some View {
+        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
+        return ZStack {
+            Color.black.opacity(0.55)
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            }
+            if image == nil || loading {
+                ProgressView()
+                    .tint(.white)
+                    .opacity(image == nil ? 1 : 0.8)
+            }
         }
+        .frame(width: 224, height: 126)
+        .clipShape(shape)
+        .overlay { shape.strokeBorder(.white.opacity(0.9), lineWidth: 1.5) }
+        .animation(.easeOut(duration: 0.12), value: image)
     }
 }
 
@@ -909,7 +954,7 @@ private struct LevelBar: View {
     var body: some View {
         GeometryReader { proxy in
             ZStack(alignment: .leading) {
-                Capsule().fill(.white.opacity(0.25))
+                Capsule().fill(.white.opacity(0.3))
                 Capsule()
                     .fill(.white)
                     .frame(width: proxy.size.width * min(max(value, 0), 1))
@@ -920,7 +965,7 @@ private struct LevelBar: View {
 
 // MARK: - 进度条
 
-/// 细轨道、小圆点的进度条；按住时圆点放大，方便拖动。
+/// 圆头粗轨道：白色是已播放，半透明是剩下的；按住时轨道变粗、圆点放大，方便拖动。
 private struct PlayerScrubber: UIViewRepresentable {
     var value: Double
     var upperBound: Double
@@ -937,9 +982,7 @@ private struct PlayerScrubber: UIViewRepresentable {
         slider.maximumValue = Float(max(upperBound, 1))
         slider.value = Float(value)
         slider.isContinuous = true
-        slider.minimumTrackTintColor = Theme.accentUIColor.resolvedColor(with: UITraitCollection(userInterfaceStyle: .dark))
-        slider.maximumTrackTintColor = UIColor.white.withAlphaComponent(0.28)
-        slider.setThumbImage(Self.thumbImage(diameter: 13), for: .normal)
+        slider.setThumbImage(Self.thumbImage(diameter: 12), for: .normal)
         slider.setThumbImage(Self.thumbImage(diameter: 20), for: .highlighted)
         slider.accessibilityLabel = "播放进度"
         slider.accessibilityIdentifier = "playback.scrubber"
@@ -976,6 +1019,7 @@ private struct PlayerScrubber: UIViewRepresentable {
 
         @objc func touchDown(_ slider: UISlider) {
             touching = true
+            (slider as? ScrubberSlider)?.setExpanded(true)
             parent.onScrub(Double(slider.value))
             parent.onEditingChanged(true)
         }
@@ -992,6 +1036,7 @@ private struct PlayerScrubber: UIViewRepresentable {
         @objc func touchUp(_ slider: UISlider) {
             guard touching else { return }
             touching = false
+            (slider as? ScrubberSlider)?.setExpanded(false)
             parent.onScrub(Double(slider.value))
             parent.onEditingChanged(false)
         }
@@ -999,9 +1044,48 @@ private struct PlayerScrubber: UIViewRepresentable {
 }
 
 private final class ScrubberSlider: UISlider {
+    private static let normalHeight: CGFloat = 5
+    private static let expandedHeight: CGFloat = 9
+    private var trackHeight = ScrubberSlider.normalHeight
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        applyTrackImages()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        applyTrackImages()
+    }
+
     override func trackRect(forBounds bounds: CGRect) -> CGRect {
         let base = super.trackRect(forBounds: bounds)
-        return CGRect(x: base.minX, y: bounds.midY - 1.5, width: base.width, height: 3)
+        return CGRect(x: base.minX, y: bounds.midY - trackHeight / 2, width: base.width, height: trackHeight)
+    }
+
+    func setExpanded(_ expanded: Bool) {
+        let height = expanded ? Self.expandedHeight : Self.normalHeight
+        guard height != trackHeight else { return }
+        trackHeight = height
+        applyTrackImages()
+        setNeedsLayout()
+        UIView.animate(withDuration: 0.16) { self.layoutIfNeeded() }
+    }
+
+    /// 轨道图片和轨道一样高，两头是半圆，拉伸时只拉中间
+    private func applyTrackImages() {
+        setMinimumTrackImage(Self.capsule(.white, height: trackHeight), for: .normal)
+        setMaximumTrackImage(Self.capsule(UIColor.white.withAlphaComponent(0.3), height: trackHeight), for: .normal)
+    }
+
+    private static func capsule(_ color: UIColor, height: CGFloat) -> UIImage {
+        let radius = height / 2
+        let size = CGSize(width: height + 2, height: height)
+        let image = UIGraphicsImageRenderer(size: size).image { _ in
+            color.setFill()
+            UIBezierPath(roundedRect: CGRect(origin: .zero, size: size), cornerRadius: radius).fill()
+        }
+        return image.resizableImage(withCapInsets: UIEdgeInsets(top: 0, left: radius, bottom: 0, right: radius), resizingMode: .stretch)
     }
 }
 

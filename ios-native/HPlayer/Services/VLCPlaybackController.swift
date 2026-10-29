@@ -24,8 +24,14 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
     private var resumeTime: Int32?
     private var shouldPauseAfterOpening = false
     private var boosted = false
-    /// 长按快进时暂时关掉的音轨，松手后还原
-    private var suspendedAudioTrack: Int32?
+    /// 最近一秒的下载速度（字节/秒），缓冲时显示给用户看
+    @Published private(set) var downloadSpeed: Double = 0
+    private var speedTask: Task<Void, Never>?
+    private var lastReadBytes = 0
+    /// 当前打开的地址和 115 请求头，拖动预览要另开一路取画面时照着用
+    private var currentURL: URL?
+    private var currentDirect115 = false
+    private var currentCookie = ""
     private var openTimeoutTask: Task<Void, Never>?
     private var pendingSeek: Double?
     private var pendingSeekStarted = Date.distantPast
@@ -48,8 +54,10 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
         pendingSeek = nil
         pauseAfterSeek = false
         boosted = false
-        suspendedAudioTrack = nil
         ended = false
+        currentURL = url
+        currentDirect115 = direct115
+        currentCookie = directCookie
         let oldTime = preservingPosition ? currentTime : max(0, startTime ?? 0)
         let oldPlaying = preservingPosition ? playing : true
         player.stop()
@@ -62,19 +70,12 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
         // 1.5 秒对 115 CDN 和本机磁力流都够用，起播和拖动进度也更快。
         media.addOption(":network-caching=1500")
         media.addOption(":file-caching=800")
-        if direct115 {
-            media.addOption(":http-user-agent=\(Direct115Client.userAgent)")
-            media.addOption(":http-referrer=https://115.com/")
-            media.addOption(":http-forward-cookies=1")
-            if let cookieOptions = Self.cookieOptions(directCookie) {
-                media.addOption(":http-cookies=\(cookieOptions)")
-                Self.storeCookies(directCookie, on: media, for: url)
-            }
-        }
+        Self.applyRequestOptions(to: media, url: url, direct115: direct115, cookie: directCookie)
         player.media = media
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
         try? AVAudioSession.sharedInstance().setActive(true)
         player.play()
+        startSpeedSampling()
         openTimeoutTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: openTimeoutSeconds * 1_000_000_000)
             guard let self, !Task.isCancelled, !self.playing, self.currentTime < 0.1, self.error.isEmpty else { return }
@@ -102,37 +103,72 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
     func skip(_ seconds: Double) { seek(to: max(0, currentTime + seconds)) }
     func setRate(_ value: Float) { rate = value; if !boosted { player.rate = value } }
 
-    /// 长按快进：快进期间关掉音轨，只让画面按 3× 走，松手再打开音轨。
+    /// 长按快进：声音跟着一起 3× 加速。
     ///
-    /// VLC 变速前已经把后面一两秒的声音按旧速度解码进了音频缓冲：
-    /// 按下时这段声音要跟着变速、和时钟重新对齐，画面容易顿一下；
-    /// 松手时原来靠「原地重新定位」清掉错位的声音，可网络视频定位要重新缓冲，又卡一秒左右。
-    /// 关掉音轨就没有要变速的声音；松手重新打开音轨时，新的音频解码器直接从当前位置出声，
-    /// 不用定位，画面也不用重新缓冲。
+    /// 变速前 VLC 已经按旧速度把后面一两秒的声音解码进了音频缓冲，松手回到 1× 时这段声音会错位，
+    /// 接着补一段静音才追上画面。以前靠「原地重新定位」清掉它，可网络视频定位要重新缓冲，画面卡一秒左右。
+    /// 现在松手时只把音轨关掉再打开：清掉错位的声音，新的音频解码器从当前位置接着出声，画面不受影响。
     func setBoost(_ enabled: Bool) {
         guard boosted != enabled else { return }
         boosted = enabled
-        if enabled {
-            suspendAudio()
-            player.rate = Self.boostRate
-        } else {
-            player.rate = rate
-            resumeAudio()
+        player.rate = enabled ? Self.boostRate : rate
+        if !enabled { flushAudio() }
+    }
+
+    private func flushAudio() {
+        guard player.numberOfAudioTracks > 0 else { return }
+        let track = player.currentAudioTrackIndex
+        guard track >= 0 else { return }
+        player.currentAudioTrackIndex = -1
+        player.currentAudioTrackIndex = track
+    }
+
+    // MARK: 网速与预览
+
+    /// 每秒看一次读了多少字节，换算成下载速度
+    private func startSpeedSampling() {
+        speedTask?.cancel()
+        lastReadBytes = 0
+        downloadSpeed = 0
+        speedTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard let self, !Task.isCancelled else { return }
+                self.sampleSpeed()
+            }
         }
     }
 
-    private func suspendAudio() {
-        guard suspendedAudioTrack == nil, player.numberOfAudioTracks > 0 else { return }
-        let track = player.currentAudioTrackIndex
-        guard track >= 0 else { return }
-        suspendedAudioTrack = track
-        player.currentAudioTrackIndex = -1
+    private func sampleSpeed() {
+        guard let media = player.media else {
+            downloadSpeed = 0
+            return
+        }
+        let bytes = Int(media.numberOfReadBytesOnInput)
+        let delta = bytes - lastReadBytes
+        lastReadBytes = bytes
+        downloadSpeed = delta > 0 ? Double(delta) : 0
     }
 
-    private func resumeAudio() {
-        guard let track = suspendedAudioTrack else { return }
-        suspendedAudioTrack = nil
-        player.currentAudioTrackIndex = track
+    /// 给拖动预览用的同一个视频：不要声音，缓存短一点，带上同样的 115 请求头
+    func makePreviewMedia() -> VLCMedia? {
+        guard let url = currentURL else { return nil }
+        let media = VLCMedia(url: url)
+        media.addOption(":no-audio")
+        media.addOption(":network-caching=800")
+        Self.applyRequestOptions(to: media, url: url, direct115: currentDirect115, cookie: currentCookie)
+        return media
+    }
+
+    private static func applyRequestOptions(to media: VLCMedia, url: URL, direct115: Bool, cookie: String) {
+        guard direct115 else { return }
+        media.addOption(":http-user-agent=\(Direct115Client.userAgent)")
+        media.addOption(":http-referrer=https://115.com/")
+        media.addOption(":http-forward-cookies=1")
+        if let cookieOptions = cookieOptions(cookie) {
+            media.addOption(":http-cookies=\(cookieOptions)")
+            storeCookies(cookie, on: media, for: url)
+        }
     }
 
     /// 播放器自己的静音开关；音量大小统一交给系统音量。
@@ -157,7 +193,9 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
         pendingSeek = nil
         pauseAfterSeek = false
         boosted = false
-        suspendedAudioTrack = nil
+        speedTask?.cancel()
+        speedTask = nil
+        downloadSpeed = 0
         player.stop()
         if detach { player.drawable = nil }
         playing = false; buffering = false; bufferProgress = 0; resumeTime = nil; shouldPauseAfterOpening = false

@@ -19,9 +19,7 @@ struct HomeTab: View {
     @State private var magnetLaunch: MagnetLaunch?
 
     private static let scrollSpace = "home.scroll"
-    private let heroHeight: CGFloat = 520
-    /// 内容区盖住横幅下沿的高度
-    private let sheetOverlap: CGFloat = 28
+    private let heroHeight: CGFloat = 540
 
     private var libraryFiles: [LibraryMedia] {
         HomeLibrary.media(local: localStore, cloud: mediaLibrary, appState: appState)
@@ -30,6 +28,7 @@ struct HomeTab: View {
     var body: some View {
         let library = HomeSnapshot(items: HomeLibrary.items(libraryFiles, metadata: metadataStore.metadataByMediaID))
         let continueItems = continueEntries(library)
+        let heroItem = currentHero(library)
 
         NavigationStack {
             GeometryReader { outer in
@@ -56,7 +55,13 @@ struct HomeTab: View {
                 .scrollIndicators(.hidden)
                 .ignoresSafeArea(edges: .top)
             }
-            .background(Theme.pageBackground.ignoresSafeArea())
+            // 整页底色取当前精选图的颜色：横幅往下渐渐透明，融进这层底色，下面的列表也压在它上面
+            .background {
+                AmbientBackdrop(
+                    urlString: heroItem.map { $0.backgroundURL.isEmpty ? $0.posterURL : $0.backgroundURL } ?? "",
+                    fallbackURLString: heroItem?.posterURL ?? ""
+                )
+            }
             .toolbar(.hidden, for: .navigationBar)
             .fileImporter(
                 isPresented: $showImporter,
@@ -125,6 +130,11 @@ struct HomeTab: View {
 
     // MARK: 精选横幅
 
+    private func currentHero(_ library: HomeSnapshot) -> HomeMediaItem? {
+        let featured = library.featured
+        return featured.indices.contains(heroSelection) ? featured[heroSelection] : featured.first
+    }
+
     /// 横幅铺到屏幕最上面；往下拉时从底边向上放大，松手跟着滚动视图的弹性一起回弹。
     private func hero(_ library: HomeSnapshot, topInset: CGFloat) -> some View {
         GeometryReader { proxy in
@@ -139,11 +149,11 @@ struct HomeTab: View {
 
     private func heroPager(_ library: HomeSnapshot, topInset: CGFloat) -> some View {
         let featured = library.featured
-        let current: HomeMediaItem? = featured.indices.contains(heroSelection) ? featured[heroSelection] : featured.first
+        let current = currentHero(library)
         return ZStack(alignment: .top) {
             TabView(selection: $heroSelection) {
                 ForEach(Array(featured.enumerated()), id: \.element.id) { index, item in
-                    HeroPage(item: item, bottomInset: sheetOverlap) {
+                    HeroPage(item: item, bottomInset: featured.count > 1 ? 34 : 8) {
                         playing = HomeLibrary.queue(for: item, in: library.items)
                     } onMatch: {
                         matching = MatchRequest(item: item)
@@ -155,14 +165,12 @@ struct HomeTab: View {
 
             heroTopBar(current, topInset: topInset)
         }
-        .overlay(alignment: .bottomTrailing) {
+        .overlay(alignment: .bottom) {
             if featured.count > 1 {
                 heroIndicator(count: featured.count)
-                    .padding(.trailing, 20)
-                    .padding(.bottom, sheetOverlap + 22 + 12)
+                    .padding(.bottom, 2)
             }
         }
-        .background(Color.black)
     }
 
     private func heroTopBar(_ current: HomeMediaItem?, topInset: CGFloat) -> some View {
@@ -260,11 +268,9 @@ struct HomeTab: View {
             }
         }
         .padding(.horizontal, 18)
-        .padding(.top, 26)
+        .padding(.top, 22)
         .padding(.bottom, 40)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.pageBackground, in: TopRoundedRectangle(radius: sheetOverlap))
-        .padding(.top, -sheetOverlap)
     }
 
     private func shelfTitle(_ title: String, detail: String) -> some View {
@@ -508,7 +514,7 @@ struct HomeTab: View {
                 }
             }
             .padding(.vertical, 6)
-            .surfaceCard(cornerRadius: 22)
+            .translucentCard(cornerRadius: 22)
         }
     }
 
@@ -627,10 +633,10 @@ struct HomeTab: View {
 
 // MARK: - 横幅单页
 
-/// 精选横幅的一页：背景图铺满，片名和按钮压在底部，按钮用 Liquid Glass。
+/// 精选横幅的一页：背景图铺满，越往下越透明，融进整页取自这张图的底色；片名和按钮压在底部。
 private struct HeroPage: View {
     let item: HomeMediaItem
-    /// 底部被内容区盖住的高度
+    /// 底部留给翻页圆点的高度
     let bottomInset: CGFloat
     let onPlay: () -> Void
     let onMatch: () -> Void
@@ -648,6 +654,18 @@ private struct HeroPage: View {
                 .scaledToFill()
                 .frame(width: geometry.size.width, height: geometry.size.height)
                 .clipped()
+                .mask {
+                    LinearGradient(
+                        stops: [
+                            .init(color: .black, location: 0),
+                            .init(color: .black, location: 0.42),
+                            .init(color: .black.opacity(0.55), location: 0.66),
+                            .init(color: .clear, location: 0.9),
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                }
 
                 // 顶部淡一层底色，状态栏文字在两种模式下都看得清
                 LinearGradient(
@@ -658,19 +676,9 @@ private struct HeroPage: View {
                 .frame(height: 170)
                 .frame(maxHeight: .infinity, alignment: .top)
 
-                LinearGradient(
-                    stops: [
-                        .init(color: .clear, location: 0.35),
-                        .init(color: .black.opacity(0.5), location: 0.62),
-                        .init(color: .black.opacity(0.9), location: 1),
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-
                 content
                     .padding(.horizontal, 20)
-                    .padding(.bottom, bottomInset + 22)
+                    .padding(.bottom, bottomInset + 6)
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
             .clipped()
@@ -691,6 +699,7 @@ private struct HeroPage: View {
                 Text(item.title)
                     .accessibilityIdentifier("home.heroTitle")
                     .font(.system(size: 34, weight: .heavy, design: .rounded))
+                    .foregroundStyle(.primary)
                     .lineLimit(2)
                     .minimumScaleFactor(0.8)
             }
@@ -704,9 +713,12 @@ private struct HeroPage: View {
                             .font(.system(size: 10, weight: .bold))
                         Text(item.rating)
                     }
-                    .foregroundStyle(Color(uiColor: UIColor(hex: 0xFFC94A)))
+                    .foregroundStyle(Color(uiColor: UIColor(hex: 0xF5A623)))
                 }
                 if let episode = item.episodeLabel { Text(episode) }
+                if let genres = item.metadata?.genres, !genres.isEmpty {
+                    Text(genres.prefix(2).joined(separator: " / "))
+                }
                 Text(matchText)
                     .font(.caption2.weight(.semibold))
                     .padding(.horizontal, 8)
@@ -714,14 +726,15 @@ private struct HeroPage: View {
                     .glassCapsule()
             }
             .font(.footnote.weight(.semibold))
-            .foregroundStyle(.white.opacity(0.9))
+            .foregroundStyle(Color.primary.opacity(0.85))
             .lineLimit(1)
 
-            if let metadata = item.metadata, !metadata.genres.isEmpty {
-                Text(metadata.genres.prefix(3).joined(separator: " / "))
-                    .font(.caption)
-                    .foregroundStyle(.white.opacity(0.72))
-                    .lineLimit(1)
+            if let overview = item.metadata?.overview, !overview.isEmpty {
+                Text(overview)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .frame(maxWidth: 420, alignment: .leading)
             }
 
             HStack(spacing: 10) {
@@ -739,7 +752,7 @@ private struct HeroPage: View {
                 Button(action: onMatch) {
                     Image(systemName: item.metadata == nil ? "photo.badge.plus" : "photo")
                         .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(.primary)
                         .frame(width: 48, height: 48)
                         .glassCircle()
                 }
@@ -751,8 +764,6 @@ private struct HeroPage: View {
             }
             .padding(.top, 6)
         }
-        .foregroundStyle(.white)
-        .environment(\.colorScheme, .dark)
     }
 
     private var matchText: String {
