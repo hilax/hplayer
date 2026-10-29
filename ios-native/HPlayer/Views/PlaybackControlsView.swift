@@ -7,59 +7,12 @@ struct PlaybackListItem: Identifiable, Hashable {
     var subtitle: String = ""
 }
 
-private struct PlaybackAdjustmentHUD: View {
-    let adjustment: PlaybackAdjustment
-
-    var body: some View {
-        VStack(spacing: 10) {
-            HStack(spacing: 10) {
-                Image(systemName: icon)
-                    .font(.title3.weight(.semibold))
-                    .frame(width: 28)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(adjustment.title)
-                        .font(.subheadline.weight(.semibold))
-                    Text(adjustment.valueText)
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.white.opacity(0.72))
-                }
-            }
-            ProgressView(value: min(max(adjustment.progress, 0), 1))
-                .progressViewStyle(.linear)
-                .tint(.white)
-                .frame(width: 210)
-        }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 14)
-        .background(.black.opacity(0.76), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(.white.opacity(0.12), lineWidth: 1)
-        }
-        .allowsHitTesting(false)
-        .accessibilityElement(children: .ignore)
-        .accessibilityIdentifier("playback.adjustmentHUD")
-        .accessibilityLabel("\(adjustment.title) \(adjustment.valueText)")
-    }
-
-    private var icon: String {
-        switch adjustment.kind {
-        case .seek:
-            return adjustment.valueText.hasPrefix("-") ? "gobackward" : "goforward"
-        case .brightness:
-            return "sun.max.fill"
-        case .volume:
-            return adjustment.progress == 0 ? "speaker.slash.fill" : "speaker.wave.3.fill"
-        }
-    }
-}
-
 struct PlaybackChoice: Identifiable, Hashable {
     let id: String
     let title: String
 }
 
-/// 横竖屏共享的播放器控制层，视频画面由 VLC 绘制。
+/// 手势调节时显示的提示内容
 private struct PlaybackAdjustment {
     enum Kind: Equatable {
         case seek
@@ -71,9 +24,11 @@ private struct PlaybackAdjustment {
     let title: String
     let valueText: String
     let progress: Double
-    let targetTime: Double?
+    var detail = ""
+    var targetTime: Double? = nil
 }
 
+/// 横竖屏共享的播放器控制层，视频画面由 VLC 绘制。
 struct PlaybackControlsView: View {
     @ObservedObject var playback: VLCPlaybackController
     let title: String
@@ -89,6 +44,7 @@ struct PlaybackControlsView: View {
     var onRetry: () -> Void = { }
     var onClose: () -> Void
 
+    @StateObject private var systemVolume = SystemVolumeController()
     @State private var controlsVisible = true
     @State private var locked = false
     @State private var showList = false
@@ -108,10 +64,14 @@ struct PlaybackControlsView: View {
     @State private var lastAdjustment = ""
     @State private var originalBrightness: CGFloat?
     @State private var brightnessLevel: Double = 0.5
+    @State private var brightnessAdjusted = false
+
+    private static let speedOptions: [Float] = [0.75, 1, 1.25, 1.5, 2]
 
     var body: some View {
         GeometryReader { geometry in
             let landscape = geometry.size.width > geometry.size.height
+            let insets = geometry.safeAreaInsets
             ZStack {
                 Color.black
                 VLCVideoSurface(playback: playback)
@@ -131,52 +91,75 @@ struct PlaybackControlsView: View {
                 if controlsVisible && !locked {
                     VStack(spacing: 0) {
                         topBar
-                        Spacer()
-                        if !error.isEmpty || !playback.error.isEmpty {
-                            errorBanner(!error.isEmpty ? error : playback.error)
-                        } else if loading || playback.buffering {
-                            bufferingStatus
-                        }
-                        Spacer()
+                        Spacer(minLength: 0)
                         bottomBar(landscape: landscape)
                     }
-                    .padding(.horizontal, landscape ? 36 : 18)
-                    .padding(.top, max(geometry.safeAreaInsets.top, 12))
-                    .padding(.bottom, max(geometry.safeAreaInsets.bottom, 14))
-                    .background(alignment: .top) { LinearGradient(colors: [.black.opacity(0.7), .clear], startPoint: .top, endPoint: .bottom).frame(height: 125).allowsHitTesting(false) }
-                    .background(alignment: .bottom) { LinearGradient(colors: [.clear, .black.opacity(0.8)], startPoint: .top, endPoint: .bottom).frame(height: landscape ? 190 : 210).allowsHitTesting(false) }
+                    .padding(.leading, max(insets.leading, landscape ? 28 : 16))
+                    .padding(.trailing, max(insets.trailing, landscape ? 28 : 16))
+                    .padding(.top, max(insets.top, 12))
+                    .padding(.bottom, max(insets.bottom, landscape ? 10 : 14))
+                    .background(alignment: .top) {
+                        LinearGradient(colors: [.black.opacity(0.65), .clear], startPoint: .top, endPoint: .bottom)
+                            .frame(height: insets.top + 110)
+                            .allowsHitTesting(false)
+                    }
+                    .background(alignment: .bottom) {
+                        LinearGradient(colors: [.clear, .black.opacity(0.75)], startPoint: .top, endPoint: .bottom)
+                            .frame(height: insets.bottom + (landscape ? 150 : 190))
+                            .allowsHitTesting(false)
+                    }
+                    .transition(.opacity)
                     .zIndex(2)
                 } else if controlsVisible && locked {
                     HStack {
-                        Button(action: unlock) { controlIcon("lock.fill", label: "解锁") }
-                            .accessibilityIdentifier("playback.unlock")
+                        Button(action: unlock) {
+                            roundIcon("lock.fill", diameter: 46)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("解锁")
+                        .accessibilityIdentifier("playback.unlock")
                         Spacer()
-                    }.padding(.horizontal, 28)
-                        .zIndex(3)
+                    }
+                    .padding(.leading, max(insets.leading, 24))
+                    .transition(.opacity)
+                    .zIndex(3)
                 }
 
+                centerStatus
+                    .zIndex(4)
+
                 if boosting {
-                    Label("3× 快进", systemImage: "forward.fill")
-                        .font(.subheadline.weight(.semibold)).padding(.horizontal, 16).padding(.vertical, 9)
-                        .background(.black.opacity(0.65), in: Capsule())
-                        .frame(maxHeight: .infinity, alignment: .top).padding(.top, max(geometry.safeAreaInsets.top, 20) + 12)
+                    boostPill
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        .padding(.top, insets.top + (controlsVisible && !locked ? 64 : 18))
+                        .transition(.opacity)
                         .allowsHitTesting(false)
+                        .zIndex(5)
                 }
-                if let adjustment {
-                    PlaybackAdjustmentHUD(adjustment: adjustment)
-                        .transition(.opacity.combined(with: .scale(scale: 0.96)))
-                        .zIndex(4)
+
+                hudLayer(insets: insets)
+                    .zIndex(6)
+
+                if showList && !locked {
+                    playlistPanel(landscape: landscape, insets: insets)
+                        .zIndex(7)
                 }
-                if showList && !locked { playlistPanel(landscape: landscape) }
             }
             .foregroundColor(.white)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .ignoresSafeArea()
+            .animation(.easeOut(duration: 0.18), value: boosting)
         }
+        .background(SystemVolumeHost(controller: systemVolume).frame(width: 1, height: 1).allowsHitTesting(false))
+        .background(DarkPresentationStyle().frame(width: 0, height: 0))
+        .environment(\.colorScheme, .dark)
+        .tint(.white)
         .statusBarHidden(true)
+        .persistentSystemOverlays(controlsVisible ? .automatic : .hidden)
         .onAppear {
             originalBrightness = UIScreen.main.brightness
             brightnessLevel = UIScreen.main.brightness
+            systemVolume.start()
             revealControls()
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 350_000_000)
@@ -187,164 +170,420 @@ struct PlaybackControlsView: View {
             hideTask?.cancel()
             adjustmentHideTask?.cancel()
             playback.setBoost(false)
+            systemVolume.stop()
             if let originalBrightness { UIScreen.main.brightness = originalBrightness }
             if requestedLandscape { OrientationSupport.restorePortrait() }
+        }
+        .onChange(of: systemVolume.externalChangeCount) { _ in
+            showSystemVolumeChange()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
+            // 离开 App 时把亮度还给系统，回来后再恢复播放页的亮度
+            if brightnessAdjusted, let originalBrightness { UIScreen.main.brightness = originalBrightness }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            if brightnessAdjusted { UIScreen.main.brightness = CGFloat(brightnessLevel) }
         }
         .alert("无法切换屏幕方向", isPresented: Binding(get: { !rotateError.isEmpty }, set: { if !$0 { rotateError = "" } })) {
             Button("好", role: .cancel) { rotateError = "" }
         } message: { Text(rotateError) }
     }
 
+    // MARK: 顶部
+
     private var topBar: some View {
-        HStack(spacing: 18) {
-            Button { onClose() } label: { Image(systemName: "xmark").font(.title3.weight(.semibold)).frame(width: 40, height: 40) }
+        HStack(spacing: 12) {
+            Button { onClose() } label: { roundIcon("xmark") }
+                .buttonStyle(.plain)
                 .accessibilityLabel("关闭播放")
-            Text(title).font(.headline).lineLimit(1)
-            Spacer(minLength: 4)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.headline)
+                    .lineLimit(1)
+                if !statusLine.isEmpty {
+                    Text(statusLine)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.white.opacity(0.65))
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer(minLength: 8)
+
             Menu {
                 if !qualities.isEmpty {
-                    Section("画质") { ForEach(qualities) { choice in Button(choice.title) { onQuality(choice.id); revealControls() } } }
+                    Section("画质") {
+                        ForEach(qualities) { choice in
+                            Button {
+                                onQuality(choice.id); revealControls()
+                            } label: {
+                                if choice.title == selectedQuality {
+                                    Label(choice.title, systemImage: "checkmark")
+                                } else {
+                                    Text(choice.title)
+                                }
+                            }
+                        }
+                    }
                 }
-                Section("播放速度") { ForEach([Float(0.75), 1, 1.25, 1.5, 2], id: \.self) { value in Button("\(String(format: "%g", value))×") { playback.setRate(value); revealControls() } } }
-            } label: { Image(systemName: "ellipsis.circle").frame(width: 40, height: 40) }
-            Button { playback.toggleMute(); revealControls() } label: { Image(systemName: playback.muted ? "speaker.slash.fill" : "speaker.wave.2.fill").frame(width: 40, height: 40) }
-                .accessibilityLabel(playback.muted ? "取消静音" : "静音")
+                Section("播放速度") { speedButtons }
+            } label: {
+                roundIcon("ellipsis")
+            }
+            .accessibilityLabel("更多选项")
+
+            Button { toggleMute() } label: {
+                roundIcon(isSilent ? "speaker.slash.fill" : "speaker.wave.2.fill")
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(isSilent ? "取消静音" : "静音")
         }
     }
 
+    private var statusLine: String {
+        var parts: [String] = []
+        if !selectedQuality.isEmpty { parts.append(selectedQuality) }
+        if abs(playback.rate - 1) > 0.01 { parts.append("\(String(format: "%g", playback.rate))× 倍速") }
+        return parts.joined(separator: "  ")
+    }
+
+    // MARK: 底部
+
     private func bottomBar(landscape: Bool) -> some View {
-        VStack(spacing: landscape ? 10 : 16) {
-            if playback.buffering {
-                HStack(spacing: 8) {
-                    if playback.bufferProgress > 0 {
-                        ProgressView(value: playback.bufferProgress)
-                            .progressViewStyle(.linear)
-                            .tint(.white)
-                            .frame(width: landscape ? 150 : 110)
-                    } else {
-                        ProgressView().controlSize(.mini).tint(.white)
-                    }
-                    Text(cacheText)
-                    Spacer()
-                }
-                .font(.caption2)
-                .foregroundColor(.white.opacity(0.78))
-                .accessibilityIdentifier("playback.cacheStatus")
-            }
+        VStack(spacing: landscape ? 4 : 12) {
             HStack(spacing: 12) {
-                Text(timeText(dragging ? dragTime : playback.currentTime)).monospacedDigit().font(.caption).accessibilityIdentifier("playback.elapsed")
-                Slider(value: Binding(get: { dragging ? dragTime : min(playback.currentTime, max(playback.duration, 1)) }, set: { dragTime = $0 }), in: 0...max(playback.duration, 1), onEditingChanged: { editing in
-                    dragging = editing
-                    if !editing { playback.seek(to: dragTime); revealControls() }
-                })
-                .tint(.white).disabled(!playback.seekable || playback.duration <= 0)
-                Text(timeText(playback.duration)).monospacedDigit().font(.caption)
+                Text(timeText(dragging ? dragTime : playback.currentTime))
+                    .font(.caption.weight(.medium).monospacedDigit())
+                    .frame(minWidth: 42, alignment: .leading)
+                    .accessibilityIdentifier("playback.elapsed")
+
+                PlayerScrubber(
+                    value: dragging ? dragTime : min(playback.currentTime, max(playback.duration, 1)),
+                    upperBound: max(playback.duration, 1),
+                    enabled: playback.seekable && playback.duration > 0,
+                    onScrub: { dragTime = $0 },
+                    onEditingChanged: { editing in
+                        if editing {
+                            dragging = true
+                            hideTask?.cancel()
+                        } else if dragging {
+                            dragging = false
+                            playback.seek(to: dragTime)
+                            revealControls()
+                        }
+                    },
+                    onCommit: { value in
+                        playback.seek(to: value)
+                        revealControls()
+                    }
+                )
+                .frame(height: 32)
+
+                Text(timeText(playback.duration))
+                    .font(.caption.weight(.medium).monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.75))
+                    .frame(minWidth: 42, alignment: .trailing)
             }
+
             HStack(spacing: 0) {
-                Button(action: lock) { controlIcon("lock", label: "锁定") }
+                Button(action: lock) { controlIcon("lock.open", label: "锁定") }
                     .accessibilityIdentifier("playback.lock")
                 Spacer(minLength: 4)
-                if landscape { Button { move(-1) } label: { controlIcon("backward.end.fill", label: "上一个") }.disabled(previousID == nil) }
+                if landscape {
+                    Button { move(-1) } label: { controlIcon("backward.end.fill", label: "上一个", size: 17) }
+                        .disabled(previousID == nil)
+                        .opacity(previousID == nil ? 0.35 : 1)
+                }
                 Button { playback.skip(-10); revealControls() } label: { controlIcon("gobackward.10", label: "后退 10 秒") }
-                Button { playback.toggle(); revealControls() } label: { controlIcon(playback.playing ? "pause.fill" : "play.fill", label: playback.playing ? "暂停" : "播放", size: 27) }
-                    .accessibilityIdentifier("playback.playPause")
-                    .accessibilityValue(playback.playing ? "playing" : "paused")
+                Button { playback.toggle(); revealControls() } label: {
+                    controlIcon(playback.playing ? "pause.fill" : "play.fill", label: playback.playing ? "暂停" : "播放", size: 30, frame: 58)
+                }
+                .accessibilityIdentifier("playback.playPause")
+                .accessibilityValue(playback.playing ? "playing" : "paused")
                 Button { playback.skip(10); revealControls() } label: { controlIcon("goforward.10", label: "前进 10 秒") }
-                if landscape { Button { move(1) } label: { controlIcon("forward.end.fill", label: "下一个") }.disabled(nextID == nil) }
+                if landscape {
+                    Button { move(1) } label: { controlIcon("forward.end.fill", label: "下一个", size: 17) }
+                        .disabled(nextID == nil)
+                        .opacity(nextID == nil ? 0.35 : 1)
+                }
                 Spacer(minLength: 4)
-                if landscape { Menu {
-                    ForEach([Float(0.75), 1, 1.25, 1.5, 2], id: \.self) { rate in
-                        Button("\(String(format: "%g", rate))×") { playback.setRate(rate); revealControls() }
+                if landscape {
+                    Menu { speedButtons } label: {
+                        textChip("\(String(format: "%g", playback.rate))×")
                     }
-                } label: { Text("\(String(format: "%g", playback.rate))×").font(.subheadline.weight(.semibold)).frame(width: 45, height: 44) } }
+                    .accessibilityLabel("播放速度")
+                }
                 if landscape && !qualities.isEmpty {
                     Menu {
                         ForEach(qualities) { choice in
                             Button(choice.title) { onQuality(choice.id); revealControls() }
                         }
-                    } label: { Text(selectedQuality.isEmpty ? "画质" : selectedQuality).font(.caption.weight(.semibold)).lineLimit(1).frame(minWidth: 42, minHeight: 44) }
+                    } label: {
+                        textChip(selectedQuality.isEmpty ? "画质" : selectedQuality)
+                    }
+                    .accessibilityLabel("画质")
                 }
-                Button { toggleOrientation(landscape: landscape) } label: { controlIcon(landscape ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right", label: landscape ? "竖屏" : "横屏") }
-                    .accessibilityIdentifier("playback.orientation")
-                Button { showList = true; hideTask?.cancel() } label: { controlIcon("list.bullet", label: "播放列表") }
+                Button { toggleOrientation(landscape: landscape) } label: {
+                    controlIcon(landscape ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right", label: landscape ? "竖屏" : "横屏", size: 18)
+                }
+                .accessibilityIdentifier("playback.orientation")
+                Button { openList() } label: { controlIcon("list.bullet", label: "播放列表") }
                     .accessibilityIdentifier("playback.playlist")
             }
             .buttonStyle(.plain)
         }
     }
 
-    private func playlistPanel(landscape: Bool) -> some View {
-        HStack(spacing: 0) {
-            Color.black.opacity(0.3).onTapGesture { showList = false; revealControls() }
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    Text("播放列表").font(.headline)
-                    Spacer()
-                    Button { showList = false; revealControls() } label: { Image(systemName: "xmark").padding(8) }
+    @ViewBuilder
+    private var speedButtons: some View {
+        ForEach(Self.speedOptions, id: \.self) { value in
+            Button {
+                playback.setRate(value); revealControls()
+            } label: {
+                if abs(playback.rate - value) < 0.01 {
+                    Label("\(String(format: "%g", value))×", systemImage: "checkmark")
+                } else {
+                    Text("\(String(format: "%g", value))×")
                 }
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(items) { item in
-                            Button {
-                                showList = false; onSelect(item.id); revealControls()
-                            } label: {
-                                HStack(alignment: .top, spacing: 10) {
-                                    Image(systemName: item.id == selectedID ? "speaker.wave.2.fill" : "play.fill")
-                                        .foregroundColor(item.id == selectedID ? Theme.accent : .secondary).frame(width: 20)
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(item.title).lineLimit(2).foregroundColor(item.id == selectedID ? Theme.accent : .white)
-                                        if !item.subtitle.isEmpty { Text(item.subtitle).font(.caption).foregroundColor(.secondary) }
-                                    }
-                                    Spacer()
-                                }.padding(.vertical, 12)
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityIdentifier("playback.item.\(item.id)")
-                        }
-                    }
-                }
-            }
-            .padding(20).frame(width: landscape ? 340 : 280).frame(maxHeight: .infinity)
-            .background(Color(white: 0.10).opacity(0.97))
-        }.transition(.move(edge: .trailing))
-    }
-
-    private func errorBanner(_ text: String) -> some View {
-        VStack(spacing: 10) {
-            Text(text).multilineTextAlignment(.center)
-            Button("重试") { onRetry(); revealControls() }.font(.subheadline.weight(.semibold))
-        }.padding(16).background(.black.opacity(0.75), in: RoundedRectangle(cornerRadius: 14))
-    }
-    private var bufferingStatus: some View {
-        VStack(spacing: 8) {
-            HStack(spacing: 8) {
-                ProgressView().tint(.white)
-                Text(playback.buffering ? cacheText : loadingText)
-            }
-            if playback.buffering && playback.bufferProgress > 0 {
-                ProgressView(value: playback.bufferProgress)
-                    .progressViewStyle(.linear)
-                    .tint(.white)
-                    .frame(width: 180)
             }
         }
-        .font(.subheadline)
-        .padding(12)
-        .background(.black.opacity(0.6), in: Capsule())
-        .allowsHitTesting(false)
     }
+
+    // MARK: 播放列表
+
+    private func playlistPanel(landscape: Bool, insets: EdgeInsets) -> some View {
+        HStack(spacing: 0) {
+            Color.black.opacity(0.35)
+                .contentShape(Rectangle())
+                .onTapGesture { closeList() }
+
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 8) {
+                    Text("播放列表")
+                        .font(.headline)
+                    Text("\(items.count)")
+                        .font(.subheadline.monospacedDigit())
+                        .foregroundStyle(.white.opacity(0.5))
+                    Spacer()
+                    Button { closeList() } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 12, weight: .bold))
+                            .frame(width: 30, height: 30)
+                            .background(.white.opacity(0.12), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("关闭播放列表")
+                }
+                .padding(.horizontal, 18)
+                .padding(.top, 18)
+                .padding(.bottom, 10)
+
+                ScrollView {
+                    LazyVStack(spacing: 2) {
+                        ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                            playlistRow(item, index: index)
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 18)
+                }
+            }
+            .padding(.top, insets.top)
+            .padding(.trailing, insets.trailing)
+            .padding(.bottom, insets.bottom)
+            .frame(width: (landscape ? 340 : 290) + insets.trailing)
+            .frame(maxHeight: .infinity)
+            .background(.ultraThinMaterial)
+            .background(Color.black.opacity(0.45))
+        }
+        .transition(.move(edge: .trailing).combined(with: .opacity))
+    }
+
+    private func playlistRow(_ item: PlaybackListItem, index: Int) -> some View {
+        let current = item.id == selectedID
+        return Button {
+            closeList()
+            onSelect(item.id)
+            revealControls()
+        } label: {
+            HStack(spacing: 12) {
+                Group {
+                    if current {
+                        Image(systemName: "waveform")
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(Theme.accent)
+                    } else {
+                        Text("\(index + 1)")
+                            .font(.caption.weight(.semibold).monospacedDigit())
+                            .foregroundStyle(.white.opacity(0.45))
+                    }
+                }
+                .frame(width: 26)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(item.title)
+                        .font(.subheadline.weight(current ? .semibold : .regular))
+                        .foregroundStyle(current ? Theme.accent : Color.white)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                    if !item.subtitle.isEmpty {
+                        Text(item.subtitle)
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.5))
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 11)
+            .background(current ? Color.white.opacity(0.08) : Color.clear, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("playback.item.\(item.id)")
+    }
+
+    // MARK: 状态与提示
+
+    /// 加载、缓冲和出错提示放在画面中间，控制栏隐藏时也能看到。
+    @ViewBuilder
+    private var centerStatus: some View {
+        let message = !error.isEmpty ? error : playback.error
+        if !message.isEmpty {
+            errorCard(message)
+                .transition(.opacity)
+        } else if (loading || playback.buffering) && adjustment == nil {
+            bufferingPill
+                .transition(.opacity)
+        }
+    }
+
+    private func errorCard(_ text: String) -> some View {
+        VStack(spacing: 12) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(Color(uiColor: .systemYellow))
+            Text(text)
+                .font(.subheadline)
+                .multilineTextAlignment(.center)
+            Button {
+                onRetry(); revealControls()
+            } label: {
+                Text("重试")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 8)
+                    .background(.white, in: Capsule())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 22)
+        .padding(.vertical, 18)
+        .frame(maxWidth: 320)
+        .background(.black.opacity(0.72), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(.white.opacity(0.1), lineWidth: 0.5)
+        }
+    }
+
+    private var bufferingPill: some View {
+        HStack(spacing: 9) {
+            ProgressView()
+                .controlSize(.small)
+                .tint(.white)
+            Text(playback.buffering ? cacheText : loadingText)
+                .font(.footnote.weight(.medium))
+                .lineLimit(2)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .frame(maxWidth: 300)
+        .background(.black.opacity(0.55), in: Capsule())
+        .allowsHitTesting(false)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("playback.cacheStatus")
+    }
+
+    private var boostPill: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "forward.fill")
+                .font(.system(size: 11, weight: .bold))
+            Text("\(String(format: "%g", VLCPlaybackController.boostRate))× 快进中")
+                .font(.footnote.weight(.semibold))
+        }
+        .padding(.horizontal, 13)
+        .padding(.vertical, 7)
+        .background(.black.opacity(0.55), in: Capsule())
+        .overlay { Capsule().strokeBorder(.white.opacity(0.12), lineWidth: 0.5) }
+        .accessibilityElement(children: .combine)
+    }
+
+    /// 亮度、音量提示在画面上方，拖动进度提示在正中间；都只有一个小胶囊或小卡片大小。
+    @ViewBuilder
+    private func hudLayer(insets: EdgeInsets) -> some View {
+        ZStack {
+            if let adjustment {
+                switch adjustment.kind {
+                case .seek:
+                    SeekHUD(adjustment: adjustment)
+                        .transition(.opacity)
+                case .brightness, .volume:
+                    LevelHUD(adjustment: adjustment)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        .padding(.top, insets.top + (controlsVisible && !locked ? 64 : 18))
+                        .transition(.opacity)
+                }
+            }
+        }
+        .allowsHitTesting(false)
+        .animation(.easeOut(duration: 0.16), value: adjustment?.kind)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("playback.adjustmentHUD")
+    }
+
     private var cacheText: String {
         playback.bufferProgress > 0
-            ? "缓存 \(Int((playback.bufferProgress * 100).rounded()))%"
-            : "正在缓存"
+            ? "缓冲 \(Int((playback.bufferProgress * 100).rounded()))%"
+            : "正在缓冲"
     }
-    private func controlIcon(_ name: String, label: String, size: CGFloat = 20) -> some View {
+
+    // MARK: 小部件
+
+    private func roundIcon(_ name: String, diameter: CGFloat = 38) -> some View {
+        Image(systemName: name)
+            .font(.system(size: diameter * 0.38, weight: .semibold))
+            .frame(width: diameter, height: diameter)
+            .background(.ultraThinMaterial, in: Circle())
+            .overlay { Circle().strokeBorder(.white.opacity(0.1), lineWidth: 0.5) }
+            .frame(width: max(diameter, 44), height: max(diameter, 44))
+            .contentShape(Circle())
+    }
+
+    private func controlIcon(_ name: String, label: String, size: CGFloat = 20, frame: CGFloat = 44) -> some View {
         Image(systemName: name)
             .font(.system(size: size, weight: .semibold))
-            .frame(width: 44, height: 44)
+            .frame(width: frame, height: 44)
             .contentShape(Rectangle())
             .accessibilityLabel(label)
     }
+
+    private func textChip(_ text: String) -> some View {
+        Text(text)
+            .font(.caption.weight(.bold))
+            .lineLimit(1)
+            .padding(.horizontal, 9)
+            .frame(minWidth: 40, minHeight: 26)
+            .background(.white.opacity(0.14), in: Capsule())
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+    }
+
+    // MARK: 状态
+
+    private var isSilent: Bool { playback.muted || systemVolume.level <= 0.001 }
     private var previousID: String? { adjacent(-1) }
     private var nextID: String? { adjacent(1) }
     private func adjacent(_ offset: Int) -> String? {
@@ -361,13 +600,37 @@ struct PlaybackControlsView: View {
         locked = false
         revealControls()
     }
+    private func openList() {
+        hideTask?.cancel()
+        withAnimation(.easeOut(duration: 0.25)) { showList = true }
+    }
+    private func closeList() {
+        withAnimation(.easeOut(duration: 0.22)) { showList = false }
+        revealControls()
+    }
+    private func toggleMute() {
+        if isSilent {
+            playback.setMuted(false)
+            if systemVolume.level <= 0.001 { applyVolume(0.3) }
+        } else {
+            playback.setMuted(true)
+        }
+        revealControls()
+    }
+    private func applyVolume(_ value: Double) {
+        systemVolume.set(value)
+        if !systemVolume.controlsSystemVolume { playback.setSoftwareVolume(value) }
+        if value > 0 && playback.muted { playback.setMuted(false) }
+    }
     private func timeText(_ value: Double) -> String {
         guard value.isFinite && value >= 0 else { return "00:00" }
         let seconds = Int(value)
         return seconds >= 3600 ? String(format: "%d:%02d:%02d", seconds / 3600, (seconds / 60) % 60, seconds % 60) : String(format: "%02d:%02d", seconds / 60, seconds % 60)
     }
     private func revealControls() {
-        controlsVisible = true
+        if !controlsVisible {
+            withAnimation(.easeOut(duration: 0.2)) { controlsVisible = true }
+        }
         hideTask?.cancel()
 #if DEBUG
         if ProcessInfo.processInfo.environment["HPLAYER_UI_TEST_KEEP_CONTROLS_VISIBLE"] == "1" {
@@ -377,32 +640,39 @@ struct PlaybackControlsView: View {
         hideTask = Task {
             try? await Task.sleep(nanoseconds: 5_000_000_000)
             if !Task.isCancelled && !showList && !dragging && !boosting && adjustment == nil && !playback.buffering {
-                controlsVisible = false
+                withAnimation(.easeOut(duration: 0.25)) { controlsVisible = false }
             }
         }
     }
     private var gestureStatus: String {
-        "\(lastAdjustment); brightness=\(String(format: "%.3f", brightnessLevel)); volume=\(String(format: "%.3f", playback.volume)); time=\(Double(playback.player.time.intValue) / 1000); rate=\(String(format: "%g", boosting ? 3 : playback.rate))"
+        "\(lastAdjustment); brightness=\(String(format: "%.3f", brightnessLevel)); volume=\(String(format: "%.3f", systemVolume.level)); time=\(Double(playback.player.time.intValue) / 1000); rate=\(String(format: "%g", boosting ? VLCPlaybackController.boostRate : playback.rate))"
     }
 
     private func toggleControls() {
-        if controlsVisible { controlsVisible = false; hideTask?.cancel() }
-        else { revealControls() }
+        if controlsVisible {
+            hideTask?.cancel()
+            withAnimation(.easeOut(duration: 0.2)) { controlsVisible = false }
+        } else {
+            revealControls()
+        }
     }
 
     private func setBoost(_ enabled: Bool) {
         if enabled {
             guard !locked, !showList, panKind == nil, playback.playing else { return }
             boosting = true
-            lastAdjustment = "长按 3×"
+            lastAdjustment = "长按 \(String(format: "%g", VLCPlaybackController.boostRate))×"
             playback.setBoost(true)
             hideTask?.cancel()
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
         } else if boosting {
             boosting = false
             playback.setBoost(false)
             revealControls()
         }
     }
+
+    // MARK: 手势
 
     private func handlePan(_ state: UIGestureRecognizer.State, origin: CGPoint, translation: CGPoint, size: CGSize) {
         if state == .cancelled || state == .failed {
@@ -418,7 +688,7 @@ struct PlaybackControlsView: View {
             hideTask?.cancel()
             adjustmentStartTime = playback.currentTime
             adjustmentStartBrightness = brightnessLevel
-            adjustmentStartVolume = playback.volume
+            adjustmentStartVolume = systemVolume.level
             if abs(translation.x) > abs(translation.y) {
                 guard playback.seekable, playback.duration > 0 else { panKind = nil; return }
                 panKind = .seek
@@ -434,19 +704,23 @@ struct PlaybackControlsView: View {
             let target = min(max(adjustmentStartTime + Double(translation.x / size.width) * range, 0), max(0, playback.duration - 0.25))
             let delta = Int((target - adjustmentStartTime).rounded())
             adjustment = PlaybackAdjustment(
-                kind: .seek, title: delta >= 0 ? "快进" : "快退",
-                valueText: "\(delta >= 0 ? "+" : "")\(delta) 秒 · \(timeText(target))",
-                progress: target / playback.duration, targetTime: target
+                kind: .seek,
+                title: delta >= 0 ? "快进" : "快退",
+                valueText: "\(delta >= 0 ? "+" : "")\(delta) 秒",
+                progress: target / playback.duration,
+                detail: "\(timeText(target)) / \(timeText(playback.duration))",
+                targetTime: target
             )
         case .brightness:
-            let value = min(max(adjustmentStartBrightness - Double(translation.y / size.height) * 1.2, 0.05), 1)
-            UIScreen.main.brightness = value
+            let value = min(max(adjustmentStartBrightness - Double(translation.y / size.height) * 1.2, 0.02), 1)
+            UIScreen.main.brightness = CGFloat(value)
             brightnessLevel = value
-            adjustment = PlaybackAdjustment(kind: .brightness, title: "亮度", valueText: "\(Int((value * 100).rounded()))%", progress: value, targetTime: nil)
+            brightnessAdjusted = true
+            adjustment = PlaybackAdjustment(kind: .brightness, title: "亮度", valueText: "\(Int((value * 100).rounded()))%", progress: value)
         case .volume:
             let value = min(max(adjustmentStartVolume - Double(translation.y / size.height) * 1.2, 0), 1)
-            playback.setVolume(value)
-            adjustment = PlaybackAdjustment(kind: .volume, title: "音量", valueText: "\(Int((value * 100).rounded()))%", progress: value, targetTime: nil)
+            applyVolume(value)
+            adjustment = PlaybackAdjustment(kind: .volume, title: "音量", valueText: "\(Int((value * 100).rounded()))%", progress: value)
         }
         if let adjustment { lastAdjustment = "\(adjustment.title) \(adjustment.valueText)" }
         if state == .ended {
@@ -455,13 +729,25 @@ struct PlaybackControlsView: View {
             hideAdjustmentSoon()
         }
     }
-    private func hideAdjustmentSoon() {
+
+    /// 按音量键或在控制中心调节时，同样用小胶囊提示当前音量。
+    private func showSystemVolumeChange() {
+        guard panKind == nil else { return }
+        let value = systemVolume.level
+        if value > 0 && playback.muted { playback.setMuted(false) }
+        adjustmentHideTask?.cancel()
+        adjustment = PlaybackAdjustment(kind: .volume, title: "音量", valueText: "\(Int((value * 100).rounded()))%", progress: value)
+        lastAdjustment = "音量 \(Int((value * 100).rounded()))%"
+        hideAdjustmentSoon(revealing: false)
+    }
+
+    private func hideAdjustmentSoon(revealing: Bool = true) {
         adjustmentHideTask?.cancel()
         adjustmentHideTask = Task {
-            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            try? await Task.sleep(nanoseconds: 900_000_000)
             guard !Task.isCancelled else { return }
             adjustment = nil
-            revealControls()
+            if revealing { revealControls() }
         }
     }
     private func toggleOrientation(landscape: Bool) {
@@ -481,6 +767,203 @@ struct PlaybackControlsView: View {
             DispatchQueue.main.async {
                 rotateError = "当前页面暂时无法切换横竖屏，请退出播放器后重试。"
             }
+        }
+    }
+}
+
+// MARK: - 提示视图
+
+/// 亮度、音量：一条细进度加百分比的小胶囊
+private struct LevelHUD: View {
+    let adjustment: PlaybackAdjustment
+
+    private var value: Double { min(max(adjustment.progress, 0), 1) }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 13, weight: .semibold))
+                .frame(width: 18)
+            LevelBar(value: value)
+                .frame(width: 92, height: 4)
+            Text("\(Int((value * 100).rounded()))")
+                .font(.caption.weight(.semibold).monospacedDigit())
+                .frame(width: 26, alignment: .trailing)
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 14)
+        .frame(height: 34)
+        .background(.black.opacity(0.6), in: Capsule())
+        .overlay { Capsule().strokeBorder(.white.opacity(0.12), lineWidth: 0.5) }
+    }
+
+    private var icon: String {
+        switch adjustment.kind {
+        case .brightness:
+            return value < 0.35 ? "sun.min.fill" : "sun.max.fill"
+        case .volume:
+            if value <= 0.001 { return "speaker.slash.fill" }
+            if value < 0.34 { return "speaker.wave.1.fill" }
+            if value < 0.67 { return "speaker.wave.2.fill" }
+            return "speaker.wave.3.fill"
+        case .seek:
+            return "goforward"
+        }
+    }
+}
+
+/// 左右拖动进度：画面中央的小卡片，显示跳转秒数和目标时间
+private struct SeekHUD: View {
+    let adjustment: PlaybackAdjustment
+
+    var body: some View {
+        VStack(spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: adjustment.title == "快退" ? "backward.fill" : "forward.fill")
+                    .font(.system(size: 12, weight: .bold))
+                Text(adjustment.valueText)
+                    .font(.system(size: 19, weight: .bold).monospacedDigit())
+            }
+            Text(adjustment.detail)
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.white.opacity(0.72))
+            LevelBar(value: adjustment.progress)
+                .frame(width: 124, height: 3)
+                .padding(.top, 2)
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 12)
+        .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(.white.opacity(0.12), lineWidth: 0.5)
+        }
+    }
+}
+
+private struct LevelBar: View {
+    let value: Double
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack(alignment: .leading) {
+                Capsule().fill(.white.opacity(0.25))
+                Capsule()
+                    .fill(.white)
+                    .frame(width: proxy.size.width * min(max(value, 0), 1))
+            }
+        }
+    }
+}
+
+// MARK: - 进度条
+
+/// 细轨道、小圆点的进度条；按住时圆点放大，方便拖动。
+private struct PlayerScrubber: UIViewRepresentable {
+    var value: Double
+    var upperBound: Double
+    var enabled: Bool
+    var onScrub: (Double) -> Void
+    var onEditingChanged: (Bool) -> Void
+    var onCommit: (Double) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeUIView(context: Context) -> ScrubberSlider {
+        let slider = ScrubberSlider()
+        slider.minimumValue = 0
+        slider.maximumValue = Float(max(upperBound, 1))
+        slider.value = Float(value)
+        slider.isContinuous = true
+        slider.minimumTrackTintColor = Theme.accentUIColor.resolvedColor(with: UITraitCollection(userInterfaceStyle: .dark))
+        slider.maximumTrackTintColor = UIColor.white.withAlphaComponent(0.28)
+        slider.setThumbImage(Self.thumbImage(diameter: 13), for: .normal)
+        slider.setThumbImage(Self.thumbImage(diameter: 20), for: .highlighted)
+        slider.accessibilityLabel = "播放进度"
+        slider.accessibilityIdentifier = "playback.scrubber"
+        slider.addTarget(context.coordinator, action: #selector(Coordinator.touchDown(_:)), for: .touchDown)
+        slider.addTarget(context.coordinator, action: #selector(Coordinator.valueChanged(_:)), for: .valueChanged)
+        slider.addTarget(context.coordinator, action: #selector(Coordinator.touchUp(_:)), for: [.touchUpInside, .touchUpOutside, .touchCancel])
+        return slider
+    }
+
+    func updateUIView(_ slider: ScrubberSlider, context: Context) {
+        context.coordinator.parent = self
+        let maximum = Float(max(upperBound, 1))
+        if slider.maximumValue != maximum { slider.maximumValue = maximum }
+        if !context.coordinator.touching { slider.value = Float(min(max(value, 0), Double(maximum))) }
+        if slider.isEnabled != enabled { slider.isEnabled = enabled }
+    }
+
+    private static func thumbImage(diameter: CGFloat) -> UIImage {
+        let canvas: CGFloat = 30
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: canvas, height: canvas))
+        return renderer.image { context in
+            let rect = CGRect(x: (canvas - diameter) / 2, y: (canvas - diameter) / 2, width: diameter, height: diameter)
+            context.cgContext.setShadow(offset: CGSize(width: 0, height: 1), blur: 3, color: UIColor.black.withAlphaComponent(0.4).cgColor)
+            UIColor.white.setFill()
+            UIBezierPath(ovalIn: rect).fill()
+        }
+    }
+
+    final class Coordinator: NSObject {
+        var parent: PlayerScrubber
+        var touching = false
+
+        init(_ parent: PlayerScrubber) { self.parent = parent }
+
+        @objc func touchDown(_ slider: UISlider) {
+            touching = true
+            parent.onScrub(Double(slider.value))
+            parent.onEditingChanged(true)
+        }
+
+        @objc func valueChanged(_ slider: UISlider) {
+            if touching {
+                parent.onScrub(Double(slider.value))
+            } else {
+                // VoiceOver 上下滑动调节时没有触摸过程，直接跳转
+                parent.onCommit(Double(slider.value))
+            }
+        }
+
+        @objc func touchUp(_ slider: UISlider) {
+            guard touching else { return }
+            touching = false
+            parent.onScrub(Double(slider.value))
+            parent.onEditingChanged(false)
+        }
+    }
+}
+
+private final class ScrubberSlider: UISlider {
+    override func trackRect(forBounds bounds: CGRect) -> CGRect {
+        let base = super.trackRect(forBounds: bounds)
+        return CGRect(x: base.minX, y: bounds.midY - 1.5, width: base.width, height: 3)
+    }
+}
+
+// MARK: - 深色弹出层
+
+/// 播放页固定使用深色：把所在的全屏弹出层设为深色，菜单也跟着变深，不影响 App 其他页面。
+private struct DarkPresentationStyle: UIViewRepresentable {
+    func makeUIView(context: Context) -> DarkStyleAnchorView { DarkStyleAnchorView() }
+    func updateUIView(_ view: DarkStyleAnchorView, context: Context) {}
+}
+
+private final class DarkStyleAnchorView: UIView {
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        isUserInteractionEnabled = false
+        guard window != nil else { return }
+        var responder: UIResponder? = next
+        while let current = responder {
+            if let controller = current as? UIViewController, controller.presentingViewController != nil {
+                controller.overrideUserInterfaceStyle = .dark
+                return
+            }
+            responder = current.next
         }
     }
 }

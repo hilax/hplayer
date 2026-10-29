@@ -4,6 +4,7 @@ import SwiftUI
 struct HPlayerApp: App {
     @UIApplicationDelegateAdaptor(HPlayerAppDelegate.self) private var appDelegate
     @StateObject private var appState = AppState()
+    @AppStorage(AppearanceMode.storageKey) private var appearance: AppearanceMode = .system
 
     var body: some Scene {
         WindowGroup {
@@ -23,7 +24,8 @@ struct HPlayerApp: App {
                 #endif
             }
             .environmentObject(appState)
-            .preferredColorScheme(.dark)
+            .onAppear { AppearanceController.apply(appearance) }
+            .onChange(of: appearance) { mode in AppearanceController.apply(mode) }
         }
     }
 }

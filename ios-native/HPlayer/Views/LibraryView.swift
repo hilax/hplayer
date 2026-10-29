@@ -24,20 +24,19 @@ struct DirectoryView: View {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if !error.isEmpty {
-                VStack(spacing: 12) {
-                    Text(error)
-                        .foregroundColor(.red)
-                        .multilineTextAlignment(.center)
-                    Button("重试") {
-                        Task { await load() }
-                    }
-                }
-                .padding()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                EmptyStateView(
+                    icon: "exclamationmark.triangle",
+                    title: "目录加载失败",
+                    message: error,
+                    actionTitle: "重试",
+                    action: { Task { await load() } }
+                )
             } else if files.isEmpty {
-                Text("这个目录是空的")
-                    .foregroundColor(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                EmptyStateView(
+                    icon: "folder",
+                    title: "这个文件夹是空的",
+                    message: "这里没有视频或子文件夹。"
+                )
             } else {
                 List(files) { file in
                     Button {
@@ -47,13 +46,18 @@ struct DirectoryView: View {
                             onPlay(file, files.filter { !$0.isDir && $0.isVideo && !$0.pickCode.isEmpty })
                         }
                     } label: {
-                        row(for: file)
+                        FileRow(file: file)
                     }
                     .buttonStyle(.plain)
+                    .listRowBackground(Color.clear)
+                    .listRowSeparatorTint(Theme.hairline)
+                    .listRowInsets(EdgeInsets(top: 8, leading: 18, bottom: 8, trailing: 18))
                 }
                 .listStyle(.plain)
+                .scrollContentBackground(.hidden)
             }
         }
+        .background(Theme.pageBackground.ignoresSafeArea())
         .task(id: cid) {
             await load()
         }
@@ -73,33 +77,6 @@ struct DirectoryView: View {
         } message: {
             Text("首页会自动匹配这些视频的海报，点击海报即可在线播放。")
         }
-    }
-
-    private func row(for file: P115File) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: file.isDir ? "folder.fill" : "play.rectangle.fill")
-                .font(.title3)
-                .foregroundColor(file.isDir ? .blue : .green)
-                .frame(width: 28)
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(file.name)
-                    .lineLimit(1)
-                    .foregroundColor(.primary)
-                if !file.isDir {
-                    Text(formatSize(file.size))
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-            }
-
-            Spacer()
-
-            Image(systemName: "chevron.right")
-                .font(.caption)
-                .foregroundColor(.secondary)
-        }
-        .padding(.vertical, 4)
     }
 
     private func load() async {
@@ -128,5 +105,75 @@ struct DirectoryView: View {
             error = err.localizedDescription
         }
         loading = false
+    }
+}
+
+/// 115 文件行：文件夹显示图标，视频优先显示网盘缩略图。
+struct FileRow: View {
+    let file: P115File
+    var showsChevron = true
+
+    var body: some View {
+        HStack(spacing: 13) {
+            thumbnail
+                .frame(width: file.isDir ? 42 : 64, height: 42)
+                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(file.name)
+                    .font(.subheadline.weight(.medium))
+                    .lineLimit(2)
+                    .foregroundStyle(.primary)
+                if !file.isDir, !formatSize(file.size).isEmpty {
+                    Text(formatSize(file.size))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Spacer(minLength: 6)
+
+            if showsChevron {
+                Image(systemName: file.isDir ? "chevron.right" : "play.fill")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(file.isDir ? AnyShapeStyle(HierarchicalShapeStyle.tertiary) : AnyShapeStyle(Theme.accent))
+            }
+        }
+        .contentShape(Rectangle())
+    }
+
+    @ViewBuilder
+    private var thumbnail: some View {
+        if file.isDir {
+            Image(systemName: "folder.fill")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(Theme.accent)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Theme.tileTint)
+        } else if let url = URL(string: file.thumbUrl), !file.thumbUrl.isEmpty {
+            AsyncImage(url: url) { phase in
+                if let image = phase.image {
+                    image.resizable().scaledToFill()
+                } else {
+                    videoPlaceholder
+                }
+            }
+        } else {
+            videoPlaceholder
+        }
+    }
+
+    private var videoPlaceholder: some View {
+        Image(systemName: "film")
+            .font(.system(size: 16, weight: .semibold))
+            .foregroundStyle(.white.opacity(0.9))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(
+                LinearGradient(
+                    colors: [Theme.brandBlue.opacity(0.85), Theme.brandViolet.opacity(0.85)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
     }
 }

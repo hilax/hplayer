@@ -32,6 +32,7 @@ targets:
       - sdk: QuartzCore.framework
       - sdk: CoreText.framework
       - sdk: AVFoundation.framework
+      - sdk: MediaPlayer.framework
       - sdk: CFNetwork.framework
       - sdk: AudioToolbox.framework
       - sdk: OpenGLES.framework

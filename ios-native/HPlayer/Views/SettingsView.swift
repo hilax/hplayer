@@ -19,10 +19,20 @@ struct SettingsView: View {
     @State private var serverURL = ""
     @State private var password = ""
     @State private var loggingIn = false
+    @AppStorage(AppearanceMode.storageKey) private var appearance: AppearanceMode = .system
 
     var body: some View {
         NavigationStack {
             Form {
+                Section {
+                    AppearancePicker(selection: $appearance)
+                        .listRowInsets(EdgeInsets(top: 14, leading: 14, bottom: 14, trailing: 14))
+                } header: {
+                    Text("外观")
+                } footer: {
+                    Text("播放页始终使用深色，避免画面周围的亮光分散注意力。")
+                }
+
                 Section {
                     Picker("连接方式", selection: Binding(get: { appState.mode }, set: { mode in
                         appState.setMode(mode)
@@ -140,6 +150,24 @@ struct SettingsView: View {
                         Text(message).foregroundColor(.green)
                     }
                 }
+
+                Section {
+                    HStack(spacing: 14) {
+                        BrandLogo(size: 52)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("HPlayer")
+                                .font(.headline)
+                            Text("版本 \(appVersion)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                } header: {
+                    Text("关于")
+                } footer: {
+                    Text("播放内核使用 VideoLAN VLCKit（LGPL-2.1），磁力播放使用 Nuvio Engine（GPL-3.0）。")
+                }
             }
             .scrollDismissesKeyboard(.interactively)
             .toolbar {
@@ -156,6 +184,13 @@ struct SettingsView: View {
                 serverURL = appState.serverURLString
             }
         }
+    }
+
+    private var appVersion: String {
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String ?? "1.0"
+        let build = info?["CFBundleVersion"] as? String ?? ""
+        return build.isEmpty ? version : "\(version)（\(build)）"
     }
 
     @ViewBuilder
@@ -245,4 +280,88 @@ struct SettingsView: View {
 
 private struct SourceResponse: Decodable {
     let ok: Bool
+}
+
+/// 外观选择：三张小预览图，选中的那张描边高亮。
+private struct AppearancePicker: View {
+    @Binding var selection: AppearanceMode
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ForEach(AppearanceMode.allCases) { mode in
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { selection = mode }
+                } label: {
+                    VStack(spacing: 9) {
+                        AppearancePreview(mode: mode)
+                            .frame(height: 76)
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .strokeBorder(selection == mode ? Theme.accent : Theme.hairline, lineWidth: selection == mode ? 2 : 1)
+                            }
+                        HStack(spacing: 5) {
+                            Image(systemName: selection == mode ? "checkmark.circle.fill" : "circle")
+                                .foregroundStyle(selection == mode ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(HierarchicalShapeStyle.tertiary))
+                            Text(mode.title)
+                                .foregroundStyle(.primary)
+                        }
+                        .font(.caption.weight(.semibold))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(mode.title)
+                .accessibilityAddTraits(selection == mode ? .isSelected : [])
+                .accessibilityIdentifier("settings.appearance.\(mode.rawValue)")
+            }
+        }
+    }
+}
+
+private struct AppearancePreview: View {
+    let mode: AppearanceMode
+
+    var body: some View {
+        if mode == .system {
+            miniScreen(dark: false)
+                .overlay {
+                    miniScreen(dark: true)
+                        .mask {
+                            HStack(spacing: 0) {
+                                Color.clear
+                                Color.black
+                            }
+                        }
+                }
+        } else {
+            miniScreen(dark: mode == .dark)
+        }
+    }
+
+    private func miniScreen(dark: Bool) -> some View {
+        let background = dark ? Color.black : Color(uiColor: UIColor(hex: 0xF2F2F7))
+        let card = dark ? Color(uiColor: UIColor(hex: 0x2C2C2E)) : Color.white
+        let line = dark ? Color.white.opacity(0.3) : Color.black.opacity(0.14)
+        return ZStack(alignment: .topLeading) {
+            background
+            VStack(alignment: .leading, spacing: 5) {
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(Theme.accentGradient)
+                    .frame(height: 24)
+                HStack(spacing: 4) {
+                    ForEach(0..<3, id: \.self) { _ in
+                        RoundedRectangle(cornerRadius: 2, style: .continuous)
+                            .fill(card)
+                            .frame(width: 15, height: 20)
+                    }
+                }
+                Capsule()
+                    .fill(line)
+                    .frame(width: 36, height: 3)
+            }
+            .padding(8)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
 }

@@ -15,9 +15,10 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
     @Published private(set) var seekable = false
     @Published private(set) var bufferProgress: Double = 0
     @Published private(set) var muted = false
-    @Published private(set) var volume: Double = 1
     @Published private(set) var error = ""
     @Published var rate: Float = 1
+    /// 长按快进的倍速
+    static let boostRate: Float = 3
     private var resumeTime: Int32?
     private var shouldPauseAfterOpening = false
     private var boosted = false
@@ -39,6 +40,7 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
         openTimeoutTask?.cancel()
         pendingSeek = nil
         pauseAfterSeek = false
+        boosted = false
         let oldTime = preservingPosition ? currentTime : 0
         let oldPlaying = preservingPosition ? playing : true
         player.stop()
@@ -46,8 +48,11 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
         resumeTime = oldTime > 0 ? Int32(clamping: Int(oldTime * 1000)) : nil
         shouldPauseAfterOpening = !oldPlaying
         let media = VLCMedia(url: url)
-        media.addOption(":network-caching=3000")
-        media.addOption(":file-caching=2000")
+        // VLC 会把音频提前解码进输出缓冲，提前量约等于这里的缓存时长（最多 2 秒）。
+        // 缓存越长，变速（长按 3×）时排队的旧声音越多，松手后重新定位也要多缓冲一会儿。
+        // 1.5 秒对 115 CDN 和本机磁力流都够用，起播和拖动进度也更快。
+        media.addOption(":network-caching=1500")
+        media.addOption(":file-caching=800")
         if direct115 {
             media.addOption(":http-user-agent=\(Direct115Client.userAgent)")
             media.addOption(":http-referrer=https://115.com/")
@@ -86,31 +91,47 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
     }
     func skip(_ seconds: Double) { seek(to: max(0, currentTime + seconds)) }
     func setRate(_ value: Float) { rate = value; if !boosted { player.rate = value } }
-    func setBoost(_ enabled: Bool) { boosted = enabled; player.rate = enabled ? 3 : rate }
-    func toggleMute() {
-        guard let audio = player.audio else { return }
-        audio.isMuted.toggle()
-        muted = audio.isMuted
-        if !audio.isMuted && audio.volume == 0 {
-            audio.volume = 100
-            volume = 1
-        }
+
+    /// 长按快进。松手时原地重新定位一次，让声音立刻和画面对齐。
+    func setBoost(_ enabled: Bool) {
+        guard boosted != enabled else { return }
+        boosted = enabled
+        player.rate = enabled ? Self.boostRate : rate
+        if !enabled { resynchronizeAudio() }
     }
-    func setVolume(_ normalized: Double) {
-        let value = min(max(normalized, 0), 1)
+
+    /// VLC 在变速前已经把后面一两秒的声音按旧速度解码进了音频缓冲。
+    /// 从 3× 回到 1× 时，这段声音会先错位播放，接着补一段静音才追上画面，听起来就是「声音慢了一两秒」。
+    /// 在当前位置精确定位一次会清空解码器和音频缓冲，从画面所在的位置重新出声。
+    private func resynchronizeAudio() {
+        guard player.isSeekable, player.numberOfAudioTracks > 0 else { return }
+        let position = Double(player.time.intValue) / 1000
+        guard position > 0.5 else { return }
+        seek(to: position)
+    }
+
+    /// 播放器自己的静音开关；音量大小统一交给系统音量。
+    func toggleMute() { setMuted(!muted) }
+
+    func setMuted(_ value: Bool) {
         guard let audio = player.audio else {
-            volume = value
+            muted = value
             return
         }
-        audio.volume = Int32((value * 100).rounded())
-        if value > 0 { audio.isMuted = false }
-        volume = value
+        audio.isMuted = value
         muted = audio.isMuted
+    }
+
+    /// 拿不到系统音量控制时（例如模拟器）才使用播放器自己的软件音量。
+    func setSoftwareVolume(_ normalized: Double) {
+        guard let audio = player.audio else { return }
+        audio.volume = Int32((min(max(normalized, 0), 1) * 100).rounded())
     }
     func stop(detach: Bool = true) {
         openTimeoutTask?.cancel()
         pendingSeek = nil
         pauseAfterSeek = false
+        boosted = false
         player.stop()
         if detach { player.drawable = nil }
         playing = false; buffering = false; bufferProgress = 0; resumeTime = nil; shouldPauseAfterOpening = false
@@ -144,15 +165,12 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
         } else { currentTime = decodedTime }
         let length = Double(player.media?.length.intValue ?? 0) / 1000
         duration = length.isFinite && length > 0 ? length : 0
-        if let audio = player.audio {
-            volume = min(max(Double(audio.volume) / 100, 0), 1)
-        }
         if let resumeTime, state == .playing, player.isSeekable {
             player.time = VLCTime(int: resumeTime)
             self.resumeTime = nil
         }
         if state == .playing {
-            let targetRate: Float = boosted ? 3 : rate
+            let targetRate: Float = boosted ? Self.boostRate : rate
             if abs(player.rate - targetRate) > 0.01 { player.rate = targetRate }
             if shouldPauseAfterOpening { shouldPauseAfterOpening = false; player.pause() }
         }

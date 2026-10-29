@@ -7,71 +7,71 @@ struct LibraryTab: View {
     @State private var quota: QuotaResponse?
     @State private var path: [Crumb] = []
     @State private var playing: PlaybackQueue?
-    @State private var showAddSource = false
     @State private var showSetup = false
     @State private var showOfficial = false
     @State private var showDirectLogin = false
     @State private var connecting = false
     @State private var connectionError = ""
 
-    private let columns = [
-        GridItem(.flexible(), spacing: 14),
-        GridItem(.flexible(), spacing: 14),
-    ]
-
     var body: some View {
         NavigationStack(path: $path) {
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    Text("资源库")
-                        .font(.system(size: 40, weight: .bold))
-                        .padding(.top, 8)
-
+                VStack(alignment: .leading, spacing: 24) {
                     searchEntry
 
-                    LazyVGrid(columns: columns, spacing: 14) {
-                        p115Card
-                        addCard
-                    }
-                    NavigationLink {
-                        MagnetPlayerView()
-                    } label: {
-                        HStack(spacing: 14) {
-                            Image(systemName: "play.circle.fill")
-                                .font(.title2).foregroundStyle(Theme.accent)
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("磁力在线播放").font(.headline)
-                                Text("粘贴磁力链接，边缓冲边播放")
-                                    .font(.caption).foregroundStyle(.secondary)
+                    accountCard
+
+                    VStack(spacing: 10) {
+                        GroupLabel(title: "播放与下载")
+                        VStack(spacing: 0) {
+                            NavigationLink {
+                                MagnetPlayerView()
+                            } label: {
+                                toolRow(
+                                    icon: "link",
+                                    colors: [Theme.brandCyan, Theme.brandBlue],
+                                    title: "磁力在线播放",
+                                    subtitle: "粘贴磁力链接，边缓冲边播放"
+                                )
                             }
-                            Spacer()
-                            Image(systemName: "chevron.right").foregroundStyle(.secondary)
-                        }
-                        .padding(18).glassCard(cornerRadius: 20)
-                    }
-                    .buttonStyle(.plain)
-                    NavigationLink {
-                        TorrentView()
-                    } label: {
-                        HStack(spacing: 14) {
-                            Image(systemName: "arrow.down.doc.fill")
-                                .font(.title2).foregroundStyle(Theme.accent)
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("BT 种子与云下载").font(.headline)
-                                Text("解析种子、选择文件并查看任务")
-                                    .font(.caption).foregroundStyle(.secondary)
+                            .buttonStyle(.plain)
+
+                            Divider().padding(.leading, 66)
+
+                            NavigationLink {
+                                TorrentView()
+                            } label: {
+                                toolRow(
+                                    icon: "arrow.down.circle",
+                                    colors: [Theme.brandBlue, Theme.brandViolet],
+                                    title: "BT 种子与云下载",
+                                    subtitle: "解析种子，选择文件后交给 115 下载"
+                                )
                             }
-                            Spacer()
-                            Image(systemName: "chevron.right").foregroundStyle(.secondary)
+                            .buttonStyle(.plain)
                         }
-                        .padding(18).glassCard(cornerRadius: 20)
+                        .surfaceCard(cornerRadius: 20)
                     }
-                    .buttonStyle(.plain)
+
+                    VStack(spacing: 10) {
+                        GroupLabel(title: "更多来源")
+                        VStack(spacing: 0) {
+                            upcomingRow(icon: "externaldrive.connected.to.line.below", title: "WebDAV")
+                            Divider().padding(.leading, 66)
+                            upcomingRow(icon: "desktopcomputer", title: "SMB 共享")
+                            Divider().padding(.leading, 66)
+                            upcomingRow(icon: "play.tv", title: "Emby / Jellyfin")
+                        }
+                        .surfaceCard(cornerRadius: 20)
+                    }
                 }
-                .padding(.horizontal, 20)
+                .padding(.horizontal, 18)
+                .padding(.top, 4)
                 .padding(.bottom, 40)
             }
+            .scrollIndicators(.hidden)
             .background(Theme.pageBackground.ignoresSafeArea())
+            .navigationTitle("资源库")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
@@ -87,6 +87,7 @@ struct LibraryTab: View {
                     } label: {
                         Image(systemName: "plus")
                     }
+                    .accessibilityLabel("添加资源")
                 }
             }
             .navigationDestination(for: Crumb.self) { crumb in
@@ -135,6 +136,8 @@ struct LibraryTab: View {
         .onChange(of: appState.mode) { _ in status = nil; quota = nil; path.removeAll(); Task { await load() } }
     }
 
+    // MARK: 搜索入口
+
     private var searchEntry: some View {
         NavigationLink {
             SearchView()
@@ -143,106 +146,166 @@ struct LibraryTab: View {
             HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
-                Text("搜索")
+                Text("搜索 115 网盘里的视频")
                     .foregroundStyle(.secondary)
                 Spacer()
             }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 13)
-            .glassCapsule()
+            .font(.subheadline)
+            .padding(.horizontal, 16)
+            .frame(height: 44)
+            .background(Theme.surface, in: Capsule())
+            .overlay { Capsule().strokeBorder(Theme.hairline, lineWidth: 0.5) }
         }
         .buttonStyle(.plain)
     }
 
-    private var p115Card: some View {
+    // MARK: 115 账号卡片
+
+    private var accountCard: some View {
         Button {
             Task { await open115() }
         } label: {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(alignment: .top) {
-                    Text(status?.userName ?? "115 网盘")
-                        .font(.headline)
-                        .lineLimit(1)
-                    Spacer()
-                    if connecting { ProgressView().frame(width: 34, height: 34) } else { Circle()
-                        .fill(Theme.accentGradient)
-                        .frame(width: 34, height: 34)
-                        .overlay(
-                            Text("5")
-                                .font(.headline)
-                                .foregroundStyle(.white)
-                        ) }
+            VStack(alignment: .leading, spacing: 18) {
+                HStack(spacing: 14) {
+                    Text("115")
+                        .font(.system(size: 16, weight: .heavy, design: .rounded))
+                        .foregroundStyle(.white)
+                        .frame(width: 50, height: 50)
+                        .background(Theme.accentGradient, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(status?.userName ?? "115 网盘")
+                            .font(.headline)
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                        Text(appState.isDirect ? "手机直连" : "服务器模式")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer(minLength: 8)
+
+                    if connecting {
+                        ProgressView()
+                    } else {
+                        statusPill
+                    }
                 }
 
-                Spacer(minLength: 8)
-
-                Text(quotaLine)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                if let quota {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text("已用 \(quota.usedText)")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.primary)
+                            Spacer()
+                            Text("共 \(quota.totalText)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        QuotaBar(ratio: quotaRatio(quota))
+                    }
+                }
 
                 HStack {
-                    Text("115 网盘")
-                        .font(.caption)
+                    Text(primaryActionTitle)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Theme.accent)
                     Spacer()
-                    Text(syncText)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                    Image(systemName: "chevron.right")
+                        .font(.footnote.weight(.bold))
+                        .foregroundStyle(.tertiary)
                 }
             }
-            .padding(16)
-            .frame(height: 150)
-            .glassCard()
+            .padding(18)
+            .surfaceCard(cornerRadius: 24)
         }
         .buttonStyle(.plain)
         .disabled(connecting)
     }
 
-    private var addCard: some View {
-        Button {
-            showAddSource = true
-        } label: {
-            VStack(spacing: 10) {
-                Image(systemName: "plus")
-                    .font(.title2)
-                    .foregroundStyle(.secondary)
-                Text("添加资源")
+    private var statusPill: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(statusColor)
+                .frame(width: 7, height: 7)
+            Text(syncText)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Theme.surfaceRaised, in: Capsule())
+    }
+
+    // MARK: 行
+
+    private func toolRow(icon: String, colors: [Color], title: String, subtitle: String) -> some View {
+        HStack(spacing: 14) {
+            IconTile(systemImage: icon, colors: colors)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Text(subtitle)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            .frame(maxWidth: .infinity)
-            .frame(height: 150)
-            .glassCard()
+            Spacer(minLength: 8)
+            Image(systemName: "chevron.right")
+                .font(.footnote.weight(.bold))
+                .foregroundStyle(.tertiary)
         }
-        .buttonStyle(.plain)
-        .confirmationDialog("添加资源", isPresented: $showAddSource, titleVisibility: .visible) {
-            Button("115 网盘") {
-                Task { await open115() }
-            }
-            Button("WebDAV") { }
-                .disabled(true)
-            Button("SMB") { }
-                .disabled(true)
-            Button("Emby / Jellyfin") { }
-                .disabled(true)
-            Button("取消", role: .cancel) { }
-        } message: {
-            Text("WebDAV、SMB、Emby 正在开发中")
-        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 13)
+        .contentShape(Rectangle())
     }
 
-    private var quotaLine: String {
-        guard let quota else {
-            return appState.isAuthenticated ? "点击查看" : "未连接"
+    private func upcomingRow(icon: String, title: String) -> some View {
+        HStack(spacing: 14) {
+            IconTile(systemImage: icon, colors: [Color(uiColor: .systemGray2), Color(uiColor: .systemGray)])
+            Text(title)
+                .font(.body)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            Text("开发中")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Theme.surfaceRaised, in: Capsule())
         }
-        return "\(quota.usedText) / \(quota.totalText)"
+        .padding(.horizontal, 16)
+        .padding(.vertical, 11)
+        .accessibilityElement(children: .combine)
+    }
+
+    // MARK: 状态文字
+
+    private var primaryActionTitle: String {
+        if !appState.isAuthenticated { return appState.isDirect ? "登录 115" : "连接服务器" }
+        if let status, !status.configured { return "完成 115 授权" }
+        return "浏览全部文件"
     }
 
     private var syncText: String {
         guard appState.isAuthenticated else { return "未连接" }
-        guard let status else { return "待检查" }
+        guard let status else { return "检查中" }
         return status.configured && status.error == nil ? "已连接" : "待授权"
     }
+
+    private var statusColor: Color {
+        guard appState.isAuthenticated else { return Color(uiColor: .systemGray3) }
+        guard let status else { return Color(uiColor: .systemGray3) }
+        return status.configured && status.error == nil ? Theme.success : Theme.warning
+    }
+
+    private func quotaRatio(_ quota: QuotaResponse) -> Double {
+        guard quota.totalBytes > 0 else { return 0 }
+        return min(max(Double(quota.usedBytes) / Double(quota.totalBytes), 0), 1)
+    }
+
+    // MARK: 加载
 
     private func load() async {
         guard appState.isAuthenticated else {
@@ -303,5 +366,24 @@ struct LibraryTab: View {
         } catch {
             connectionError = error.localizedDescription
         }
+    }
+}
+
+/// 网盘容量条
+private struct QuotaBar: View {
+    let ratio: Double
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Theme.track)
+                Capsule()
+                    .fill(Theme.accentGradient)
+                    .frame(width: max(6, proxy.size.width * ratio))
+            }
+        }
+        .frame(height: 6)
+        .accessibilityElement()
+        .accessibilityLabel("网盘已用 \(Int((ratio * 100).rounded()))%")
     }
 }

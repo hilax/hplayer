@@ -59,6 +59,8 @@ final class PlaybackUITests: XCTestCase {
         center.press(forDuration: 1.2)
         XCTAssertTrue(wait { (surface.value as? String)?.contains("长按 3×") == true })
         XCTAssertEqual(metric("rate", surface: surface), 1, accuracy: 0.01, "Releasing long press restores normal speed")
+        // 松手后会原地重新定位一次让声音对齐，等它恢复播放再继续
+        XCTAssertTrue(wait { (pause.value as? String) == "playing" })
         center.doubleTap()
         XCTAssertTrue(wait { (pause.value as? String) == "paused" }, "Double tap should pause")
 

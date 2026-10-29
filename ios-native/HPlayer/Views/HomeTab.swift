@@ -5,6 +5,7 @@ struct HomeTab: View {
     @EnvironmentObject private var recents: RecentStore
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var mediaLibrary: MediaLibraryStore
+    @Environment(\.colorScheme) private var colorScheme
     @StateObject private var localStore = LocalMediaStore()
     @StateObject private var metadataStore = MediaMetadataStore()
 
@@ -28,6 +29,12 @@ struct HomeTab: View {
         return Array((matched.isEmpty ? items : matched).prefix(6))
     }
 
+    private var currentFeatured: HomeMediaItem? {
+        let list = featured
+        guard !list.isEmpty else { return nil }
+        return list.indices.contains(heroSelection) ? list[heroSelection] : list[0]
+    }
+
     private var movies: [HomeMediaItem] {
         items.filter { $0.metadata?.isSeries == false }
     }
@@ -40,51 +47,50 @@ struct HomeTab: View {
         items.filter { $0.metadata == nil }
     }
 
+    private var librarySummary: String {
+        let all = items
+        guard !all.isEmpty else { return "你的私人影院" }
+        var parts: [String] = []
+        let movieCount = movies.count
+        let seriesCount = Set(series.compactMap { $0.metadata?.imdbID }).count
+        if movieCount > 0 { parts.append("\(movieCount) 部电影") }
+        if seriesCount > 0 { parts.append("\(seriesCount) 部剧集") }
+        if parts.isEmpty { parts.append("\(all.count) 个视频") }
+        return parts.joined(separator: "，")
+    }
+
     var body: some View {
         NavigationStack {
-            ZStack {
-                Theme.pageBackground.ignoresSafeArea()
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 26) {
-                        header
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 30) {
+                    header
 
-                        if items.isEmpty {
-                            emptyState
-                        } else {
-                            if !featured.isEmpty {
-                                heroCarousel
-                            }
-                            if !movies.isEmpty {
-                                mediaShelf(
-                                    title: "电影",
-                                    subtitle: "\(movies.count) 部",
-                                    items: movies
-                                )
-                            }
-                            if !series.isEmpty {
-                                mediaShelf(
-                                    title: "剧集",
-                                    subtitle: "\(series.count) 部",
-                                    items: series
-                                )
-                            }
-                            if !unmatched.isEmpty {
-                                mediaShelf(
-                                    title: "待匹配封面",
-                                    subtitle: "\(unmatched.count) 个文件",
-                                    items: unmatched
-                                )
-                            }
-                            if !recents.items.isEmpty {
-                                recentShelf
-                            }
+                    if items.isEmpty {
+                        emptyState
+                    } else {
+                        if !featured.isEmpty {
+                            heroSection
+                        }
+                        if !recents.items.isEmpty {
+                            recentShelf
+                        }
+                        if !movies.isEmpty {
+                            mediaShelf(title: "电影", subtitle: "\(movies.count) 部", items: movies)
+                        }
+                        if !series.isEmpty {
+                            mediaShelf(title: "剧集", subtitle: "\(series.count) 集", items: series)
+                        }
+                        if !unmatched.isEmpty {
+                            mediaShelf(title: "待匹配封面", subtitle: "\(unmatched.count) 个文件", items: unmatched)
                         }
                     }
-                    .padding(.horizontal, 18)
-                    .padding(.bottom, 38)
                 }
-                .scrollIndicators(.hidden)
+                .padding(.horizontal, 18)
+                .padding(.bottom, 40)
+                .background(alignment: .top) { ambientBackdrop }
             }
+            .scrollIndicators(.hidden)
+            .background(Theme.pageBackground.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
             .fileImporter(
                 isPresented: $showImporter,
@@ -124,25 +130,36 @@ struct HomeTab: View {
         }
     }
 
+    // MARK: 顶部
+
     private var header: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
+        HStack(alignment: .center, spacing: 12) {
+            BrandLogo(size: 40)
+
+            VStack(alignment: .leading, spacing: 1) {
                 Text("HPlayer")
-                    .font(.system(size: 34, weight: .black, design: .rounded))
-                Text("你的私人媒体库")
+                    .font(.system(size: 26, weight: .heavy, design: .rounded))
+                Text(librarySummary)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
 
-            Spacer()
+            Spacer(minLength: 8)
 
             Menu {
                 Button("导入本地视频", systemImage: "folder.badge.plus") { showImporter = true }
-                Button("添加 115 文件夹", systemImage: "cloud") { showCloudBrowser = true }
+                Button("添加 115 文件夹", systemImage: "icloud") { showCloudBrowser = true }
             } label: {
-                Label("文件源", systemImage: "folder")
-                    .font(.subheadline.weight(.semibold))
-                    .padding(.horizontal, 14).padding(.vertical, 10).glassCapsule()
+                HStack(spacing: 5) {
+                    Image(systemName: "plus")
+                    Text("添加")
+                }
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.primary)
+                .padding(.horizontal, 14)
+                .frame(height: 38)
+                .glassCapsule()
             }
             .accessibilityIdentifier("home.sources")
 
@@ -157,43 +174,110 @@ struct HomeTab: View {
                 }
             } label: {
                 Image(systemName: "ellipsis")
-                    .font(.headline)
-                    .frame(width: 42, height: 42)
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 38, height: 38)
                     .glassCapsule()
             }
+            .accessibilityLabel("更多")
             .buttonStyle(.plain)
         }
-        .padding(.top, 10)
+        .padding(.top, 8)
     }
 
-    private var heroCarousel: some View {
-        TabView(selection: $heroSelection) {
-            ForEach(Array(featured.enumerated()), id: \.element.id) { index, item in
-                HeroMediaCard(item: item) {
-                    play(item)
+    /// 当前精选影片的模糊背景，像放映厅里银幕映到墙上的光。
+    @ViewBuilder
+    private var ambientBackdrop: some View {
+        if let item = currentFeatured,
+           let url = URL(string: item.backgroundURL.isEmpty ? item.posterURL : item.backgroundURL) {
+            AsyncImage(url: url, transaction: Transaction(animation: .easeInOut(duration: 0.6))) { phase in
+                if let image = phase.image {
+                    image.resizable().scaledToFill()
+                } else {
+                    Color.clear
                 }
-                .tag(index)
-                .contextMenu { Button("匹配封面", systemImage: "photo") { matchingItem = item } }
+            }
+            .frame(height: 620)
+            .frame(maxWidth: .infinity)
+            .clipped()
+            .blur(radius: 70)
+            .opacity(colorScheme == .dark ? 0.55 : 0.30)
+            .mask {
+                LinearGradient(
+                    stops: [
+                        .init(color: .black, location: 0),
+                        .init(color: .black.opacity(0.7), location: 0.45),
+                        .init(color: .clear, location: 1),
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            }
+            .padding(.horizontal, -18)
+            .offset(y: -160)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
+    }
+
+    // MARK: 精选
+
+    private var heroSection: some View {
+        VStack(spacing: 14) {
+            TabView(selection: $heroSelection) {
+                ForEach(Array(featured.enumerated()), id: \.element.id) { index, item in
+                    HeroMediaCard(item: item) {
+                        play(item)
+                    } onMatch: {
+                        matchingItem = item
+                    }
+                    .tag(index)
+                    .contextMenu { Button("匹配封面", systemImage: "photo") { matchingItem = item } }
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            .frame(height: 430)
+            .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 28, style: .continuous)
+                    .strokeBorder(.white.opacity(colorScheme == .dark ? 0.08 : 0.25), lineWidth: 0.5)
+            }
+            .shadow(color: Theme.shadow, radius: 26, x: 0, y: 14)
+
+            if featured.count > 1 {
+                heroIndicator
             }
         }
-        .tabViewStyle(.page(indexDisplayMode: featured.count > 1 ? .always : .never))
-        .frame(height: 380)
-        .clipShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 30, style: .continuous)
-                .stroke(.white.opacity(0.08), lineWidth: 1)
-        }
     }
 
+    private var heroIndicator: some View {
+        HStack(spacing: 6) {
+            ForEach(0..<featured.count, id: \.self) { index in
+                Capsule()
+                    .fill(index == heroSelection ? AnyShapeStyle(Theme.accentGradient) : AnyShapeStyle(Theme.track))
+                    .frame(width: index == heroSelection ? 22 : 6, height: 6)
+                    .contentShape(Rectangle().inset(by: -6))
+                    .onTapGesture {
+                        withAnimation(.easeInOut(duration: 0.3)) { heroSelection = index }
+                    }
+            }
+        }
+        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: heroSelection)
+        .frame(maxWidth: .infinity)
+        .accessibilityHidden(true)
+    }
+
+    // MARK: 片架
+
     private func mediaShelf(title: String, subtitle: String, items: [HomeMediaItem]) -> some View {
-        VStack(alignment: .leading, spacing: 13) {
-            HStack(alignment: .firstTextBaseline) {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(title)
-                    .font(.title2.bold())
-                Spacer()
+                    .font(.title3.weight(.bold))
                 Text(subtitle)
-                    .font(.caption)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
+                Spacer()
             }
 
             ScrollView(.horizontal) {
@@ -209,99 +293,100 @@ struct HomeTab: View {
                         }
                     }
                 }
-                .padding(.horizontal, 1)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 4)
             }
+            .padding(.horizontal, -18)
             .scrollIndicators(.hidden)
         }
     }
 
     private var recentShelf: some View {
-        VStack(alignment: .leading, spacing: 13) {
+        VStack(alignment: .leading, spacing: 14) {
             Text("最近播放")
-                .font(.title2.bold())
+                .font(.title3.weight(.bold))
 
-            VStack(spacing: 10) {
-                ForEach(recents.items.prefix(5)) { item in
+            VStack(spacing: 0) {
+                let recent = Array(recents.items.prefix(5))
+                ForEach(recent) { item in
                     Button {
                         guard let url = URL(string: item.url) else { return }
                         let source = PlaybackSource.direct(title: item.title, url: url)
                         playing = PlaybackQueue(source: source, items: [source])
                     } label: {
                         HStack(spacing: 13) {
-                            Image(systemName: "clock.arrow.circlepath")
+                            Image(systemName: "play.fill")
+                                .font(.system(size: 13, weight: .bold))
                                 .foregroundStyle(Theme.accent)
                                 .frame(width: 34, height: 34)
-                                .background(Theme.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+                                .background(Theme.tileTint, in: Circle())
 
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(item.title)
                                     .foregroundStyle(.primary)
                                     .lineLimit(1)
                                 Text(item.playedAt, style: .relative)
-                                    .font(.caption2)
+                                    .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
 
-                            Spacer()
-                            Image(systemName: "play.fill")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                            Spacer(minLength: 0)
                         }
-                        .padding(13)
-                        .glassCard(cornerRadius: 18)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 11)
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+
+                    if item.id != recent.last?.id {
+                        Divider().padding(.leading, 61)
+                    }
                 }
             }
+            .surfaceCard(cornerRadius: 20)
         }
     }
+
+    // MARK: 空状态
 
     private var emptyState: some View {
         VStack(spacing: 18) {
             ZStack {
-                RoundedRectangle(cornerRadius: 32, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Theme.accent.opacity(0.34),
-                                Theme.accentAlt.opacity(0.12),
-                                Color.black,
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-
-                VStack(spacing: 16) {
-                    Image(systemName: "play.rectangle.on.rectangle.fill")
-                        .font(.system(size: 62, weight: .light))
-                        .foregroundStyle(Theme.accentGradient)
-
-                    Text("把片库变成海报墙")
-                        .font(.title3.bold())
-                        .multilineTextAlignment(.center)
-
-                    Text("导入本地视频或添加 115 文件夹，自动整理电影与剧集。相同文件再次加入或改名后，可用 SHA-1 识别已匹配的封面。")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 18)
-
-                    GlassCapsuleButton(
-                        title: "从文件 App 导入",
-                        systemImage: "folder.badge.plus",
-                        prominent: true
-                    ) {
-                        showImporter = true
-                    }
-                    Button("添加 115 文件夹") { showCloudBrowser = true }
-                        .font(.subheadline.weight(.semibold))
-                }
-                .padding(28)
+                Circle()
+                    .fill(Theme.accentGradient)
+                    .frame(width: 150, height: 150)
+                    .blur(radius: 45)
+                    .opacity(colorScheme == .dark ? 0.55 : 0.35)
+                BrandLogo(size: 92)
+                    .shadow(color: Theme.brandBlue.opacity(0.35), radius: 18, x: 0, y: 10)
             }
-            .frame(height: 430)
+            .padding(.top, 12)
+
+            VStack(spacing: 8) {
+                Text("把片库变成海报墙")
+                    .font(.title2.weight(.bold))
+                Text("导入手机里的视频，或者添加 115 文件夹。HPlayer 会自动配上海报、年份和评分，按电影和剧集整理好。")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 320)
+            }
+
+            VStack(spacing: 12) {
+                GlassCapsuleButton(title: "从文件 App 导入", systemImage: "folder.badge.plus", prominent: true) {
+                    showImporter = true
+                }
+                GlassCapsuleButton(title: "添加 115 文件夹", systemImage: "icloud") {
+                    showCloudBrowser = true
+                }
+            }
+            .padding(.top, 4)
         }
-        .padding(.top, 18)
+        .padding(.vertical, 34)
+        .padding(.horizontal, 20)
+        .frame(maxWidth: .infinity)
+        .surfaceCard(cornerRadius: 30)
+        .padding(.top, 10)
     }
 
     private func play(_ item: HomeMediaItem) {
@@ -321,114 +406,141 @@ private struct HomeMediaItem: Identifiable {
     var id: String { media.id }
     var title: String { metadata?.title ?? MediaNameParser.parse(media.name).title }
     var year: String { metadata?.year ?? "" }
+    var rating: String { metadata?.rating ?? "" }
     var posterURL: String { metadata?.posterURL ?? media.thumbnail }
     var backgroundURL: String { metadata?.backgroundURL ?? "" }
+    var isCloud: Bool { media.localURL == nil }
     var countryLabel: String {
         guard let country = metadata?.country.components(separatedBy: ",").first else { return "" }
         return ["China": "中国", "Japan": "日本", "United States": "美国", "Canada": "加拿大", "South Korea": "韩国"][country] ?? country
     }
-    var subtitle: String {
+    var episodeLabel: String? {
         let parsed = MediaNameParser.parse(media.name)
-        guard let season = parsed.season, let episode = parsed.episode else { return formatSize(media.size) }
-        return "S\(String(format: "%02d", season))E\(String(format: "%02d", episode)) · \(formatSize(media.size))"
+        guard let season = parsed.season, let episode = parsed.episode else { return nil }
+        return "S\(String(format: "%02d", season))E\(String(format: "%02d", episode))"
+    }
+    var subtitle: String {
+        if let episodeLabel { return "\(episodeLabel)  \(formatSize(media.size))" }
+        return formatSize(media.size)
     }
 }
 
 private struct HeroMediaCard: View {
     let item: HomeMediaItem
     let onPlay: () -> Void
+    let onMatch: () -> Void
 
     var body: some View {
         GeometryReader { geometry in
-          ZStack(alignment: .bottomLeading) {
-            ArtworkView(
-                urlString: item.backgroundURL.isEmpty ? item.posterURL : item.backgroundURL,
-                fallbackURLString: item.posterURL,
-                title: item.title
-            )
-            .scaledToFill()
-            .frame(width: geometry.size.width, height: geometry.size.height)
-            .clipped()
+            ZStack(alignment: .bottomLeading) {
+                ArtworkView(
+                    urlString: item.backgroundURL.isEmpty ? item.posterURL : item.backgroundURL,
+                    fallbackURLString: item.posterURL,
+                    title: item.title
+                )
+                .scaledToFill()
+                .frame(width: geometry.size.width, height: geometry.size.height)
+                .clipped()
 
-            LinearGradient(
-                stops: [
-                    .init(color: .clear, location: 0.18),
-                    .init(color: .black.opacity(0.42), location: 0.52),
-                    .init(color: .black.opacity(0.96), location: 1),
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
+                LinearGradient(
+                    stops: [
+                        .init(color: .clear, location: 0.25),
+                        .init(color: .black.opacity(0.45), location: 0.55),
+                        .init(color: .black.opacity(0.92), location: 1),
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
 
-            VStack(alignment: .leading, spacing: 10) {
-                if let logoURL = item.metadata?.logoURL, !logoURL.isEmpty {
-                    ArtworkView(urlString: logoURL, title: item.title)
-                        .scaledToFit()
-                        .frame(maxWidth: 250, maxHeight: 70, alignment: .leading)
-                } else {
-                    Text(item.title)
-                        .accessibilityIdentifier("home.heroTitle")
-                        .font(.system(size: 31, weight: .black, design: .rounded))
-                        .lineLimit(2)
-                }
-
-                HStack(spacing: 8) {
-                    if !item.year.isEmpty { Text(item.year) }
-                    if !item.countryLabel.isEmpty { Text(item.countryLabel) }
-                    if let rating = item.metadata?.rating, !rating.isEmpty {
-                        Label(rating, systemImage: "star.fill")
-                            .foregroundStyle(.yellow)
+                VStack(alignment: .leading, spacing: 10) {
+                    if let logoURL = item.metadata?.logoURL, !logoURL.isEmpty {
+                        ArtworkView(urlString: logoURL, title: item.title)
+                            .scaledToFit()
+                            .frame(maxWidth: 240, maxHeight: 72, alignment: .leading)
+                    } else {
+                        Text(item.title)
+                            .accessibilityIdentifier("home.heroTitle")
+                            .font(.system(size: 30, weight: .heavy, design: .rounded))
+                            .lineLimit(2)
+                            .minimumScaleFactor(0.8)
                     }
-                }
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.white.opacity(0.82))
 
-                if let metadata = item.metadata {
-                    Text(metadata.genres.prefix(3).joined(separator: " · "))
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.62))
-                        .lineLimit(1)
-                }
-
-                HStack(spacing: 10) {
-                    Button(action: onPlay) {
-                        Label("立即播放", systemImage: "play.fill")
-                            .font(.subheadline.bold())
-                            .padding(.horizontal, 18)
-                            .padding(.vertical, 11)
-                            .foregroundStyle(.black)
-                            .background(.white, in: Capsule())
+                    HStack(spacing: 10) {
+                        if !item.year.isEmpty { Text(item.year) }
+                        if !item.countryLabel.isEmpty { Text(item.countryLabel) }
+                        if !item.rating.isEmpty {
+                            Label(item.rating, systemImage: "star.fill")
+                                .labelStyle(CompactLabelStyle())
+                                .foregroundStyle(Color(uiColor: UIColor(hex: 0xFFC94A)))
+                        }
+                        if let episode = item.episodeLabel { Text(episode) }
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("home.heroPlay")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.85))
 
-                    Text(item.metadata == nil ? "等待匹配" : (item.metadata?.matchedByHash == true ? "SHA-1 识别" : "已匹配"))
-                        .font(.caption2.weight(.semibold))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 7)
-                        .background(.white.opacity(0.12), in: Capsule())
+                    if let metadata = item.metadata, !metadata.genres.isEmpty {
+                        Text(metadata.genres.prefix(3).joined(separator: " / "))
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.6))
+                            .lineLimit(1)
+                    }
+
+                    HStack(spacing: 10) {
+                        Button(action: onPlay) {
+                            Label("播放", systemImage: "play.fill")
+                                .font(.subheadline.weight(.bold))
+                                .padding(.horizontal, 22)
+                                .padding(.vertical, 11)
+                                .foregroundStyle(.black)
+                                .background(.white, in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("home.heroPlay")
+
+                        Button(action: onMatch) {
+                            Image(systemName: item.metadata == nil ? "photo.badge.plus" : "photo")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 40, height: 40)
+                                .background(.white.opacity(0.18), in: Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("更换封面")
+                        .accessibilityIdentifier("home.heroMatch")
+
+                        Spacer(minLength: 0)
+
+                        Text(matchText)
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.8))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(.white.opacity(0.14), in: Capsule())
+                    }
+                    .padding(.top, 4)
                 }
-
-                Text(item.media.name)
-                    .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.45))
-                    .lineLimit(1)
+                .foregroundStyle(.white)
+                .padding(22)
             }
-            .padding(22)
-            .padding(.bottom, 20)
-          }
-        .frame(width: geometry.size.width, height: geometry.size.height)
-        .overlay(alignment: .topLeading) {
-            Text(item.metadata?.isSeries == true ? "剧集精选" : "电影精选")
-                .font(.caption.bold())
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(.black.opacity(0.42), in: Capsule())
-                .padding(18)
+            .frame(width: geometry.size.width, height: geometry.size.height)
+            .overlay(alignment: .topLeading) {
+                Text(item.metadata?.isSeries == true ? "剧集精选" : "电影精选")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .background(.black.opacity(0.35), in: Capsule())
+                    .overlay { Capsule().strokeBorder(.white.opacity(0.18), lineWidth: 0.5) }
+                    .padding(18)
+            }
+            .contentShape(Rectangle())
+            .clipped()
         }
-        .contentShape(Rectangle())
-        .clipped()
-        }
+    }
+
+    private var matchText: String {
+        guard let metadata = item.metadata else { return "等待匹配" }
+        return metadata.matchedByHash ? "SHA-1 识别" : "已匹配"
     }
 }
 
@@ -438,17 +550,20 @@ private struct PosterCard: View {
     let onDelete: () -> Void
     let onMatch: () -> Void
 
+    private let width: CGFloat = 138
+    private let height: CGFloat = 206
+
     var body: some View {
         Button(action: onPlay) {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 9) {
                 ZStack(alignment: .bottomLeading) {
                     ArtworkView(urlString: item.posterURL, title: item.title)
                         .scaledToFill()
-                        .frame(width: 146, height: 216)
+                        .frame(width: width, height: height)
                         .clipped()
 
                     LinearGradient(
-                        colors: [.clear, .black.opacity(0.72)],
+                        colors: [.clear, .black.opacity(0.7)],
                         startPoint: .center,
                         endPoint: .bottom
                     )
@@ -459,31 +574,83 @@ private struct PosterCard: View {
                         .lineLimit(1)
                         .padding(10)
                 }
-                .frame(width: 146, height: 216)
-                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .stroke(.white.opacity(0.08), lineWidth: 1)
+                .frame(width: width, height: height)
+                .overlay(alignment: .topTrailing) {
+                    if !item.rating.isEmpty {
+                        HStack(spacing: 3) {
+                            Image(systemName: "star.fill")
+                                .font(.system(size: 8, weight: .bold))
+                                .foregroundStyle(Color(uiColor: UIColor(hex: 0xFFC94A)))
+                            Text(item.rating)
+                                .font(.caption2.weight(.bold).monospacedDigit())
+                                .foregroundStyle(.white)
+                        }
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 4)
+                        .background(.black.opacity(0.55), in: Capsule())
+                        .padding(8)
+                    }
                 }
+                .overlay(alignment: .topLeading) {
+                    Image(systemName: item.isCloud ? "icloud.fill" : "iphone")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 22, height: 22)
+                        .background(.black.opacity(0.45), in: Circle())
+                        .padding(8)
+                        .accessibilityHidden(true)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .strokeBorder(Theme.hairline, lineWidth: 0.5)
+                }
+                .shadow(color: Theme.shadow, radius: 10, x: 0, y: 6)
 
-                Text(item.title)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .frame(width: 146, alignment: .leading)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(item.title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
 
-                Text([item.year, item.media.localURL == nil ? "115 网盘" : "本地视频"].filter { !$0.isEmpty }.joined(separator: " · "))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 146, alignment: .leading)
+                    Text(detailText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                .frame(width: width, alignment: .leading)
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PosterButtonStyle())
         .accessibilityIdentifier("home.poster.\(item.metadata?.imdbID ?? item.id)")
         .contextMenu {
             Button("播放", systemImage: "play.fill", action: onPlay)
             Button("匹配封面", systemImage: "photo", action: onMatch)
-            Button(item.media.localURL == nil ? "从媒体库移除" : "删除本地文件", systemImage: "trash", role: .destructive, action: onDelete)
+            Button(item.isCloud ? "从媒体库移除" : "删除本地文件", systemImage: "trash", role: .destructive, action: onDelete)
+        }
+    }
+
+    private var detailText: String {
+        let source = item.isCloud ? "115 网盘" : "本地视频"
+        return item.year.isEmpty ? source : "\(item.year)  \(source)"
+    }
+}
+
+/// 按下海报时轻微缩小，松手回弹。
+private struct PosterButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .animation(.easeOut(duration: 0.18), value: configuration.isPressed)
+    }
+}
+
+/// 图标和文字挨得更紧的 Label，用在评分这类小信息上。
+private struct CompactLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 3) {
+            configuration.icon.font(.system(size: 10, weight: .bold))
+            configuration.title
         }
     }
 }
@@ -524,20 +691,21 @@ private struct ArtworkView: View {
         } else { fallback }
     }
 
+    /// 没有海报时用品牌色画一张「空白海报」
     private var fallback: some View {
         ZStack {
             LinearGradient(
                 colors: [
-                    Theme.accent.opacity(0.42),
-                    Theme.accentAlt.opacity(0.2),
-                    Color(white: 0.08),
+                    Theme.brandBlue.opacity(0.85),
+                    Theme.brandViolet.opacity(0.75),
+                    Theme.brandNavy,
                 ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
             Text(String(title.prefix(1)).uppercased())
-                .font(.system(size: 54, weight: .black, design: .rounded))
-                .foregroundStyle(.white.opacity(0.72))
+                .font(.system(size: 52, weight: .heavy, design: .rounded))
+                .foregroundStyle(.white.opacity(0.85))
         }
     }
 }
