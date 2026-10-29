@@ -26,8 +26,13 @@ struct MagnetFile: Identifiable, Hashable, Sendable {
     let title: String
     /// 识别到的集数，例如「S01E03」「第 3 集」
     let episodeLabel: String?
+    /// 来自 115 离线下载时的提取码；BT 边下边播的文件为空
+    let pickCode: String?
 
     var id: UInt32 { index }
+    var isCloud: Bool { pickCode != nil }
+    /// 记在播放记录里的序号；115 的文件加上偏移，避免和 BT 文件的序号混在一起
+    var historyIndex: UInt32 { isCloud ? 1_000_000 + index : index }
     var isPlayable: Bool { kind == .video }
     var sizeText: String { formatSize(Int(clamping: size)) }
 
@@ -41,11 +46,22 @@ struct MagnetFile: Identifiable, Hashable, Sendable {
     private static let documentExtensions: Set<String> = ["txt", "nfo", "url", "html", "htm", "pdf", "mht", "chm", "doc", "docx", "lnk"]
 
     init(_ file: NuvioTorrentFile, rootFolder: String?) {
-        index = file.index
-        path = file.path
-        size = file.size
-        var components = file.path.split(separator: "/").map { String($0) }
-        name = components.popLast() ?? file.path
+        self.init(index: file.index, path: file.path, size: file.size, rootFolder: rootFolder, pickCode: nil)
+    }
+
+    /// 115 离线下载结果里的视频，index 是在结果里的序号
+    init(cloud file: P115File, folder: String, index: UInt32) {
+        let path = folder.isEmpty ? file.name : "\(folder)/\(file.name)"
+        self.init(index: index, path: path, size: UInt64(max(file.size, 0)), rootFolder: nil, pickCode: file.pickCode)
+    }
+
+    private init(index: UInt32, path: String, size: UInt64, rootFolder: String?, pickCode: String?) {
+        self.index = index
+        self.path = path
+        self.size = size
+        self.pickCode = pickCode
+        var components = path.split(separator: "/").map { String($0) }
+        name = components.popLast() ?? path
         if let rootFolder, components.first == rootFolder { components.removeFirst() }
         folder = components.joined(separator: " / ")
         ext = (name as NSString).pathExtension.lowercased()
@@ -140,10 +156,20 @@ struct MagnetCatalog: Sendable {
     let others: [MagnetFile]
     /// 正片分布在多个文件夹里（例如按季分）
     let hasFolders: Bool
+    /// 文件列表来自哪里
+    let source: Source
+
+    enum Source: Sendable {
+        /// 手机上的 BT 引擎边下边播
+        case bt
+        /// 115 离线下载完成，用 115 在线播放
+        case cloud
+    }
 
     var allVideos: [MagnetFile] { main + extras }
     var hasArchivesOnly: Bool { main.isEmpty && extras.isEmpty && others.contains { $0.kind == .archive } }
 
+    /// BT 解析出来的种子文件
     init(files: [NuvioTorrentFile], fallbackName: String) {
         // 所有文件都在同一个根文件夹下时，根文件夹名就是种子名，列表里不再重复显示
         let firstComponents = files.map { file -> String in
@@ -157,8 +183,34 @@ struct MagnetCatalog: Sendable {
         } else {
             sharedRoot = nil
         }
-
         let items = files.map { MagnetFile($0, rootFolder: sharedRoot) }
+        let name: String
+        if let sharedRoot {
+            name = sharedRoot
+        } else if files.count == 1, let only = items.first {
+            name = only.title
+        } else {
+            name = fallbackName
+        }
+        self.init(
+            items: items,
+            name: name,
+            totalSize: files.reduce(0) { $0 &+ $1.size },
+            fileCount: files.count,
+            source: .bt
+        )
+    }
+
+    /// 115 离线下载完成后找到的视频
+    init(cloudVideos: [Direct115CloudVideo], name: String, totalSize: UInt64) {
+        let items = cloudVideos.enumerated().map { offset, video in
+            MagnetFile(cloud: video.file, folder: video.folder, index: UInt32(offset))
+        }
+        let sum = items.reduce(UInt64(0)) { $0 &+ $1.size }
+        self.init(items: items, name: name, totalSize: totalSize > 0 ? totalSize : sum, fileCount: items.count, source: .cloud)
+    }
+
+    private init(items: [MagnetFile], name: String, totalSize: UInt64, fileCount: Int, source: Source) {
         let videos = items.filter(\.isPlayable)
         let largest = videos.map(\.size).max() ?? 0
         let mainThreshold: UInt64 = 150 * 1024 * 1024
@@ -173,15 +225,9 @@ struct MagnetCatalog: Sendable {
         extras = videos.filter { !mainIndexes.contains($0.index) }.sorted { $0.size > $1.size }
         others = items.filter { !$0.isPlayable }.sorted(by: byPath)
         hasFolders = Set(self.main.map(\.folder)).count > 1
-
-        if let sharedRoot {
-            name = sharedRoot
-        } else if files.count == 1, let only = items.first {
-            name = only.title
-        } else {
-            name = fallbackName
-        }
-        totalSize = files.reduce(0) { $0 &+ $1.size }
-        fileCount = files.count
+        self.name = name
+        self.totalSize = totalSize
+        self.fileCount = fileCount
+        self.source = source
     }
 }

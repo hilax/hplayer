@@ -15,6 +15,7 @@ struct RootView: View {
             }
             .sheet(item: $incomingMagnet) { magnet in
                 NavigationStack { MagnetPlayerView(initialMagnet: magnet.value) }
+                    .environmentObject(appState)
             }
     }
 }

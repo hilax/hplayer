@@ -155,6 +155,21 @@ final class MagnetController: ObservableObject {
     @Published private(set) var playError = ""
     @Published private(set) var fileProgress: Double = 0
 
+    /// 115 离线中转的进度
+    enum CloudState: Equatable {
+        case off
+        case submitting
+        case downloading(Double)
+        case ready
+        case failed(String)
+    }
+
+    @Published private(set) var cloud: CloudState = .off
+    /// 115 离线完成的结果。正在用 BT 播放时先放在这里，页面上提示可以改用 115
+    @Published private(set) var cloudCatalog: MagnetCatalog?
+    /// 交给 115 播放器的播放队列
+    @Published var cloudQueue: PlaybackQueue?
+
     private let host = MagnetEngineHost.shared
     private let history = MagnetHistoryStore.shared
     private var torrentID: String?
@@ -170,6 +185,10 @@ final class MagnetController: ObservableObject {
     private var lastKnownTime: Double = 0
     private var lastKnownDuration: Double = 0
     private var cancellables = Set<AnyCancellable>()
+    private var cloudClient: Direct115Client?
+    private var cloudEnabled = false
+    private var cloudUserID = 0
+    private var cloudTask: Task<Void, Never>?
 
     init() {
         playback.$ended
@@ -210,6 +229,10 @@ final class MagnetController: ObservableObject {
         playTask = nil
         monitorTask?.cancel()
         monitorTask = nil
+        cloudTask?.cancel()
+        cloudTask = nil
+        if case .submitting = cloud { cloud = .off }
+        if case .downloading = cloud { cloud = .off }
         playback.stop()
         playerVisible = false
         let oldStream = stream
@@ -251,11 +274,15 @@ final class MagnetController: ObservableObject {
         resolveTask = Task { [weak self] in
             await self?.resolve(newLink, uri: uri)
         }
+        // 同一个资源的 115 离线已经在进行或已经完成时，不再重复提交
+        let cloudBusyOrDone = sameTorrent && (cloudTask != nil || cloud == .ready)
+        if !cloudBusyOrDone { startCloud(newLink) }
     }
 
     /// 解析失败后再试一次。引擎里的任务一直在找节点，重试会接着等，不会从头开始。
     func retry() {
         guard let link else { return }
+        if case .failed = cloud { cloud = .off; cloudTask = nil }
         phase = .idle
         open(link)
     }
@@ -264,6 +291,11 @@ final class MagnetController: ObservableObject {
     func reset() {
         resolveTask?.cancel()
         resolveTask = nil
+        cloudTask?.cancel()
+        cloudTask = nil
+        cloud = .off
+        cloudCatalog = nil
+        cloudQueue = nil
         closePlayer()
         link = nil
         catalog = nil
@@ -286,8 +318,10 @@ final class MagnetController: ObservableObject {
             guard !Task.isCancelled else { return }
             let files = try await engine.files(for: id)
             guard !Task.isCancelled else { return }
-            let catalog = MagnetCatalog(files: files, fallbackName: link.displayName ?? link.shortHash)
             torrentID = id
+            // 115 离线已经先完成并接管了列表，BT 的结果就不用了
+            guard self.catalog?.source != .cloud else { return }
+            let catalog = MagnetCatalog(files: files, fallbackName: link.displayName ?? link.shortHash)
             self.catalog = catalog
             step = .done
             phase = .ready
@@ -321,16 +355,21 @@ final class MagnetController: ObservableObject {
     /// 上次看到的那一集
     var lastPlayed: MagnetFile? {
         guard let link, let index = history.item(for: link.infoHash)?.lastFileIndex else { return nil }
-        return catalog?.allVideos.first { $0.index == index }
+        return catalog?.allVideos.first { $0.historyIndex == index }
     }
 
     func savedPosition(for file: MagnetFile) -> Double? {
-        guard let link else { return nil }
+        guard let link, !file.isCloud else { return nil }
         return history.position(infoHash: link.infoHash, fileIndex: file.index)
     }
 
     func play(_ file: MagnetFile) {
-        guard let link, let torrentID, file.isPlayable else { return }
+        guard let link, file.isPlayable else { return }
+        if let pickCode = file.pickCode {
+            playCloud(file, pickCode: pickCode, link: link)
+            return
+        }
+        guard let torrentID else { return }
         playTask?.cancel()
         savePosition()
         playError = ""
@@ -508,6 +547,155 @@ final class MagnetController: ObservableObject {
             seconds: playback.currentTime,
             duration: playback.duration
         )
+    }
+
+    // MARK: 115 离线中转
+
+    /// 手机直连登录了 115 且开关打开时，解析的同时把磁力交给 115 离线下载
+    func configureCloud(client: Direct115Client?, enabled: Bool) {
+        if client?.cookie != cloudClient?.cookie { cloudUserID = 0 }
+        cloudClient = client
+        let nowEnabled = enabled && client != nil
+        let wasEnabled = cloudEnabled
+        cloudEnabled = nowEnabled
+        if !nowEnabled {
+            cloudTask?.cancel()
+            cloudTask = nil
+            if cloud != .ready { cloud = .off }
+        } else if !wasEnabled, let link, phase == .resolving || phase == .failed {
+            startCloud(link)
+        }
+    }
+
+    /// 改用 115 离线的结果播放
+    func useCloudCatalog() {
+        guard let result = cloudCatalog, let link else { return }
+        if playerVisible { closePlayer() }
+        resolveTask?.cancel()
+        resolveTask = nil
+        catalog = result
+        phase = .ready
+        step = .done
+        error = ""
+        resolveStarted = nil
+        history.recordResolved(link: link, catalog: result)
+        if result.main.count == 1 { play(result.main[0]) }
+    }
+
+    /// 页面上显示的 115 离线状态
+    var cloudStatusText: String {
+        switch cloud {
+        case .off:
+            return ""
+        case .submitting:
+            return "正在提交到 115…"
+        case .downloading(let percent):
+            if percent >= 100 { return "115 已下载完成，正在找视频…" }
+            return percent > 0 ? "115 正在离线下载 \(Int(percent))%" : "115 已接收，等待开始下载"
+        case .ready:
+            return "115 离线完成，可以直接播放"
+        case .failed(let message):
+            return message
+        }
+    }
+
+    private func startCloud(_ link: MagnetLink) {
+        cloudTask?.cancel()
+        cloudTask = nil
+        cloudCatalog = nil
+        guard cloudEnabled, let client = cloudClient else {
+            cloud = .off
+            return
+        }
+        cloud = .submitting
+        cloudTask = Task { [weak self] in
+            await self?.runCloud(link, client: client)
+        }
+    }
+
+    private func runCloud(_ link: MagnetLink, client: Direct115Client) async {
+        do {
+            if cloudUserID == 0 { cloudUserID = try await client.user().userId ?? 0 }
+            guard !Task.isCancelled else { return }
+            try await client.addOfflineTask(link.uri, userID: cloudUserID)
+            guard !Task.isCancelled else { return }
+            cloud = .downloading(0)
+            let started = Date()
+            var interval: UInt64 = 1_000_000_000
+            var failures = 0
+            while !Task.isCancelled {
+                var found: Direct115OfflineTask?
+                do {
+                    found = try await client.offlineTask(infoHash: link.infoHash)
+                    failures = 0
+                } catch {
+                    failures += 1
+                    if failures >= 4 { throw error }
+                }
+                guard !Task.isCancelled else { return }
+                if let task = found {
+                    switch task.status {
+                    case .done:
+                        cloud = .downloading(100)
+                        let videos = try await client.offlineVideos(for: task)
+                        guard !Task.isCancelled else { return }
+                        cloudFinished(videos, task: task, link: link)
+                        return
+                    case .failed:
+                        cloud = .failed("115 也没能下载这个资源，可能已经没有来源了。")
+                        return
+                    case .waiting, .downloading:
+                        cloud = .downloading(task.percent)
+                    }
+                }
+                if Date().timeIntervalSince(started) > 30 * 60 {
+                    cloud = .failed("115 离线超过 30 分钟还没完成，可以稍后到 115 的云下载里查看。")
+                    return
+                }
+                try await Task.sleep(nanoseconds: interval)
+                interval = min(interval + 1_000_000_000, 6_000_000_000)
+            }
+        } catch is CancellationError {
+            return
+        } catch {
+            guard !Task.isCancelled else { return }
+            cloud = .failed(Self.describeCloud(error))
+        }
+    }
+
+    private func cloudFinished(_ videos: [Direct115CloudVideo], task: Direct115OfflineTask, link: MagnetLink) {
+        guard self.link?.infoHash == link.infoHash else { return }
+        guard !videos.isEmpty else {
+            cloud = .failed("115 离线完成了，但里面没有找到能播放的视频。")
+            return
+        }
+        let name = task.name.isEmpty ? (catalog?.name ?? link.displayName ?? link.shortHash) : task.name
+        cloudCatalog = MagnetCatalog(cloudVideos: videos, name: name, totalSize: UInt64(max(task.size, 0)))
+        cloud = .ready
+        // 正在用 BT 看的时候不打断，页面上会提示可以改用 115
+        if playerVisible { return }
+        useCloudCatalog()
+    }
+
+    private func playCloud(_ file: MagnetFile, pickCode: String, link: MagnetLink) {
+        if playerVisible { closePlayer() }
+        history.recordPlayed(infoHash: link.infoHash, file: file)
+        let list = (catalog?.main.contains(file) ?? false) ? (catalog?.main ?? []) : (catalog?.allVideos ?? [])
+        let items = list.compactMap { item in item.pickCode.map { PlaybackSource.p115(title: item.title, pickCode: $0) } }
+        let source = PlaybackSource.p115(title: file.title, pickCode: pickCode)
+        cloudQueue = PlaybackQueue(source: source, items: items.isEmpty ? [source] : items)
+    }
+
+    private static func describeCloud(_ error: Error) -> String {
+        if let offline = error as? Direct115OfflineError {
+            switch offline {
+            case .quotaExhausted: return "115 离线额度用完了，这次只能用 BT。"
+            case .invalidLink: return "115 认为这个链接无效。"
+            case .server(let message): return "115 离线：\(message)"
+            }
+        }
+        if let value = error as? APIError { return "115 离线：\(value.localizedDescription)" }
+        return "115 离线没有成功：\(error.localizedDescription)"
     }
 
     // MARK: 工具

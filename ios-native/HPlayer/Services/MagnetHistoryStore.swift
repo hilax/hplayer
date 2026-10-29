@@ -60,7 +60,7 @@ final class MagnetHistoryStore: ObservableObject {
 
     func recordPlayed(infoHash: String, file: MagnetFile) {
         guard var entry = self.item(for: infoHash) else { return }
-        entry.lastFileIndex = file.index
+        entry.lastFileIndex = file.historyIndex
         entry.lastFileTitle = file.title
         entry.updatedAt = Date()
         upsert(entry)

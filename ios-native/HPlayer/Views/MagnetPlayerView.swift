@@ -4,8 +4,10 @@ import UIKit
 struct MagnetPlayerView: View {
     var initialMagnet = ""
 
+    @EnvironmentObject private var appState: AppState
     @StateObject private var controller = MagnetController()
     @ObservedObject private var history = MagnetHistoryStore.shared
+    @AppStorage("hplayer.magnet.cloudRelay") private var cloudRelay = true
     @State private var input = ""
     @State private var inputHint = ""
     @State private var showExtras = false
@@ -43,6 +45,10 @@ struct MagnetPlayerView: View {
             .padding(.top, 8)
             .padding(.bottom, 40)
             .animation(.easeOut(duration: 0.2), value: controller.phase)
+            .fullScreenCover(item: $controller.cloudQueue) { queue in
+                PlayerView(source: queue.source, playlist: queue.items)
+                    .environmentObject(appState)
+            }
         }
         .scrollDismissesKeyboard(.interactively)
         .background(Theme.pageBackground.ignoresSafeArea())
@@ -61,12 +67,15 @@ struct MagnetPlayerView: View {
         }
         .task {
             controller.activate()
+            configureCloud()
             guard input.isEmpty, !initialMagnet.isEmpty else { return }
             input = initialMagnet
             submit()
         }
+        .onChange(of: cloudRelay) { _ in configureCloud() }
+        .onChange(of: appState.isAuthenticated) { _ in configureCloud() }
         .onDisappear {
-            if !controller.playerVisible { controller.deactivate() }
+            if !controller.playerVisible && controller.cloudQueue == nil { controller.deactivate() }
         }
         .fullScreenCover(isPresented: $controller.playerVisible) {
             MagnetWatchView(controller: controller)
@@ -117,9 +126,31 @@ struct MagnetPlayerView: View {
                 .opacity(detected == nil ? 0.45 : 1)
                 .accessibilityIdentifier("magnet.resolve")
             }
+
+            if cloudAvailable {
+                Toggle(isOn: $cloudRelay) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("同时交给 115 离线下载")
+                            .font(.subheadline.weight(.medium))
+                        Text("热门资源 115 几秒就能离线完成，直接用 115 播放；会占用离线额度")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .tint(Theme.accent)
+            }
         }
         .padding(16)
         .surfaceCard(cornerRadius: 22)
+    }
+
+    private var cloudAvailable: Bool {
+        appState.isDirect && appState.isAuthenticated
+    }
+
+    private func configureCloud() {
+        controller.configureCloud(client: appState.directClient(), enabled: cloudRelay)
     }
 
     @ViewBuilder
@@ -188,6 +219,10 @@ struct MagnetPlayerView: View {
                 stepRow(.metadata, title: "获取文件列表", detail: "从 \(controller.swarm.connected) 个节点获取")
             }
 
+            if controller.cloud != .off {
+                cloudRow
+            }
+
             if controller.elapsed >= 25 {
                 Text("冷门资源找节点会久一些，可以继续等待；超过两分半会提示你。")
                     .font(.caption)
@@ -249,6 +284,78 @@ struct MagnetPlayerView: View {
         }
     }
 
+    // MARK: 115 离线
+
+    private var cloudRow: some View {
+        HStack(spacing: 10) {
+            Image(systemName: cloudIcon)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(cloudTint)
+                .frame(width: 22, height: 22)
+            VStack(alignment: .leading, spacing: 5) {
+                Text(controller.cloudStatusText)
+                    .font(.subheadline)
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if case .downloading(let percent) = controller.cloud, percent > 0, percent < 100 {
+                    ProgressView(value: percent, total: 100)
+                        .tint(Theme.accent)
+                }
+            }
+            Spacer(minLength: 0)
+            if controller.cloud == .submitting {
+                ProgressView()
+                    .controlSize(.small)
+            }
+        }
+    }
+
+    private var cloudIcon: String {
+        switch controller.cloud {
+        case .ready: return "checkmark.icloud.fill"
+        case .failed: return "exclamationmark.icloud"
+        default: return "icloud.and.arrow.down"
+        }
+    }
+
+    private var cloudTint: Color {
+        switch controller.cloud {
+        case .ready: return Theme.success
+        case .failed: return Theme.warning
+        default: return Theme.accent
+        }
+    }
+
+    /// 正在用 BT 播放时 115 离线完成了，提示可以切过去
+    private var cloudSwitchBanner: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "checkmark.icloud.fill")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(Theme.success)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("115 离线已完成")
+                    .font(.subheadline.weight(.semibold))
+                Text("改用 115 播放，不用等节点，拖动也更流畅")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            Button {
+                controller.useCloudCatalog()
+            } label: {
+                Text("改用 115")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(Theme.accentGradient, in: Capsule())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(14)
+        .surfaceCard(cornerRadius: 18)
+    }
+
     // MARK: 解析失败
 
     private var failureCard: some View {
@@ -265,6 +372,9 @@ struct MagnetPlayerView: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+            }
+            if controller.cloud != .off {
+                cloudRow
             }
             HStack(spacing: 10) {
                 Button {
@@ -291,6 +401,14 @@ struct MagnetPlayerView: View {
     @ViewBuilder
     private func catalogSection(_ catalog: MagnetCatalog) -> some View {
         torrentHeader(catalog)
+
+        if catalog.source == .bt, controller.cloudCatalog != nil {
+            cloudSwitchBanner
+        } else if catalog.source == .bt, controller.cloud != .off, controller.cloud != .ready {
+            cloudRow
+                .padding(14)
+                .surfaceCard(cornerRadius: 18)
+        }
 
         if catalog.main.isEmpty {
             VStack(spacing: 10) {
@@ -399,10 +517,10 @@ struct MagnetPlayerView: View {
     }
 
     private func headerDetail(_ catalog: MagnetCatalog) -> String {
-        var parts: [String] = []
+        var parts: [String] = [catalog.source == .cloud ? "115 离线" : "BT 边下边播"]
         let size = formatSize(Int(clamping: catalog.totalSize))
         if !size.isEmpty { parts.append(size) }
-        parts.append("\(catalog.fileCount) 个文件")
+        if catalog.source == .bt { parts.append("\(catalog.fileCount) 个文件") }
         if catalog.main.count > 1 { parts.append("\(catalog.main.count) 个正片") }
         return parts.joined(separator: " · ")
     }
@@ -664,6 +782,9 @@ struct MagnetPlayerView: View {
         VStack(alignment: .leading, spacing: 8) {
             Label("边下边播，会使用手机流量和存储空间；缓存最多 1–2 GB，会自动清理。", systemImage: "info.circle")
             Label("解析过的资源会记在本机，再次打开不用重新解析，并从上次看到的位置继续。", systemImage: "bolt.horizontal.circle")
+            if cloudAvailable {
+                Label("115 离线的文件保存在你 115 网盘的「云下载」文件夹，看完可以自己删除。", systemImage: "icloud")
+            }
         }
         .font(.caption)
         .foregroundStyle(.secondary)

@@ -90,6 +90,11 @@ struct Direct115Client {
     }
 
     private func request(_ url: URL) async throws -> (Data, HTTPURLResponse) {
+        try await send(url)
+    }
+
+    /// 发送带登录 Cookie 的请求；传入 form 时用 POST 表单提交
+    func send(_ url: URL, form: [String: String]? = nil, userAgent: String? = nil) async throws -> (Data, HTTPURLResponse) {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpShouldSetCookies = false
         let session = URLSession(configuration: configuration, delegate: RedirectGuard(), delegateQueue: nil)
@@ -97,11 +102,28 @@ struct Direct115Client {
         var request = URLRequest(url: url)
         request.timeoutInterval = 20
         request.setValue(cookie, forHTTPHeaderField: "Cookie")
-        request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(userAgent ?? Self.userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("https://115.com/", forHTTPHeaderField: "Referer")
+        if let form {
+            request.httpMethod = "POST"
+            request.setValue("application/x-www-form-urlencoded; charset=UTF-8", forHTTPHeaderField: "Content-Type")
+            request.httpBody = Self.formBody(form).data(using: .utf8)
+        }
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw APIError.server("115 响应无效") }
         return (data, http)
+    }
+
+    private static let formAllowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+
+    private static func formBody(_ form: [String: String]) -> String {
+        form.sorted { $0.key < $1.key }
+            .map { key, value in
+                let name = key.addingPercentEncoding(withAllowedCharacters: formAllowed) ?? key
+                let encoded = value.addingPercentEncoding(withAllowedCharacters: formAllowed) ?? value
+                return "\(name)=\(encoded)"
+            }
+            .joined(separator: "&")
     }
 
     private static func file(_ raw: [String: Any], parent: String) -> P115File {

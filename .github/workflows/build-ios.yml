@@ -70,6 +70,7 @@ jobs:
             -I "$engine/Headers" \
             ios-native/Vendor/NuvioEngine/Sources/*.swift \
             ios-native/HPlayer/Services/MagnetLink.swift \
+            ios-native/HPlayer/Services/M115Cipher.swift \
             ios-native/scripts/MagnetEngineSmoke.swift \
             "$engine/libCNuvioEngine.a" -Xlinker -lc++ \
             -framework Security -framework SystemConfiguration -framework CoreFoundation -framework AVFoundation \

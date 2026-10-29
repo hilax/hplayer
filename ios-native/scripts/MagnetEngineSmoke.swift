@@ -5,6 +5,7 @@ import AVFoundation
 struct MagnetEngineSmoke {
     static func main() async throws {
         verifyMagnetParsing()
+        verifyM115Cipher()
 
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("hplayer-magnet-smoke-\(UUID().uuidString)")
         let data = root.appendingPathComponent("data"), cache = root.appendingPathComponent("cache")
@@ -87,6 +88,27 @@ struct MagnetEngineSmoke {
             group.cancelAll()
             return value
         }
+    }
+
+    /// 115 离线下载接口的请求加密要和开源项目 115driver 的结果一模一样（数据由它的 Go 代码生成，填充固定）
+    static func verifyM115Cipher() {
+        func expect(_ condition: Bool, _ name: String) {
+            if !condition { fatalError("m115 cipher failed: \(name)") }
+        }
+        func hex(_ bytes: [UInt8]) -> String { bytes.map { String(format: "%02x", $0) }.joined() }
+        let key = Array("0123456789abcdef".utf8)
+        let padding: (Int) -> [UInt8] = { size in (0..<size).map { UInt8(($0 * 7 + 1) % 255) + 1 } }
+        let short = Array(#"{"pickcode":"abc123"}"#.utf8)
+        let long = Array(#"{"ac":"add_task_urls","app_ver":"27.0.5.7","uid":"123456","url[0]":"magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=%E6%B5%8B%E8%AF%95&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce"}"#.utf8)
+        expect(hex(M115Cipher.deriveKey(key, size: 4)) == "5deaf340", "derive 4")
+        expect(hex(M115Cipher.deriveKey(key, size: 12)) == "7c51776bb51382084c681d4e", "derive 12")
+        expect(M115Cipher.encode(short, key: key, padding: padding) == "MiG3x9TZ100SKCqPXdqKzJBmmAJmFcUyX34149R6x/6m23JBirNu4GaFvaytHUOvCOQzeta8prJLtdtcgd6T0A5RlXd22nRDwsWce5+gebmhNql7dxmnZJaCPxJiIrODeYgXT8guXySVYH686GAmcyu8gJBQhZBIIecbCkk6RGw=", "encode one block")
+        expect(M115Cipher.encode(long, key: key, padding: padding) == "Sp/t7eZNBapsTtS3iLlgGsq6pw0GSF7XsZs4f3T+ILd5Ntxe9DxEy6ouw7p2u1Z8XDgdqyXFdHdAfZOtXVs5yP5RL8VllECVbDP7C2AmytYfpXrHjYY9sljnM4feB6IDRgY8LrIWKMrz9+Sz3JdrNtpFtT2qw+NFsqpViH0ImqcW3HSOEvWCXIDzKtkSctE6W2WJynzytUJWT8+LfFC8PGdS7tf4T2W/70FDbcjCk4ow9K5Dm2rPkJffLkV5m9wj5PWB65FEfmDwOWBAc1B9l1RIgLvMXrTxaoa85/mJSo0M2kXnIq8uVhZo8+OOfyOgC/IaWLLMTybRYBKZNCBoNw==", "encode two blocks")
+        let decoded = try? M115Cipher.decode("LJgMsY4Y0UqOtrIwSUArgiGltcQZuTdPw/UuG5sFfJcydO6EGnPVFsThF1Jugit8VoCg4rN1mxYUghRywjG2rEsm5JUl3SNpobPehDA3+QRKGeymzCLJmc7W3Q/LjdgNmPDtxWJvsXXDMyWJjy4Z+K5LZPw8YtUZleJayDKHEIhW76XxVEl2iuui3EZcAm3XNn1iqr+mCmxeojo1ES6jF0XHS7mQNOpRufZud/5WxBTcCcbc2ezPgYYgZOr1HpS/9s6YLg+hUNcGDodDrJtedvSOog3k0kOymqXl8xRIsDEUJql2ZJ876e2G7FitOI4p7dhF1+IvnT0c+6pxgMMtrg==", key: key)
+        expect(decoded.map(hex) == "b3e230724e7801b1f3ce5f5b1e37447f03ac2a45292841459523b608f879f2c17bbc1747ddd0e69fdf2ead275e29a0d7a88625c81d6a68ae663216f902ccff7dd516bb69651cd011da805e342f0d19ff724014a0cfc98016d7e1e8b8ef820ea182e0ebc965f1710d140b58dc6c55a89ea241086c60b0ffda22c4d4af07d3f66024d440a6bae67e66915da6fc2d00cce22833af681d71b18c9da788b3e29cc6f0b89908a9d2146bb6c514fb48632e182747e71e46042f925e0c822c5a733d720089d80913bccf22099ebf53", "decode")
+        let started = Date()
+        for _ in 0..<5 { _ = M115Cipher.encode(long, key: M115Cipher.randomKey()) }
+        print("m115 cipher passed (5 encodes in \(String(format: "%.3f", Date().timeIntervalSince(started))) s)")
     }
 
     /// 各种粘贴进来的写法都要能识别

@@ -54,7 +54,9 @@ struct PlayerView: View {
 
     private var qualityChoices: [PlaybackChoice] {
         if appState.isDirect {
-            return directQualities.enumerated().map { PlaybackChoice(id: "direct-\($0.offset)", title: $0.element.title) }
+            // 原画直接播放原文件，不依赖 115 的转码
+            return [PlaybackChoice(id: "direct-original", title: "原画")]
+                + directQualities.enumerated().map { PlaybackChoice(id: "direct-\($0.offset)", title: $0.element.title) }
         }
         var result: [PlaybackChoice] = originalURL == nil ? [] : [PlaybackChoice(id: "original", title: "原画")]
         result += qualities.enumerated().map { PlaybackChoice(id: "open-\($0.offset)", title: $0.element.label) }
@@ -79,10 +81,24 @@ struct PlayerView: View {
             case .p115(_, let pickCode):
                 if appState.isDirect {
                     guard let client = appState.directClient() else { throw APIError.server("请先登录 115") }
-                    let streams = try await client.streams(pickCode: pickCode)
-                    guard visible && !Task.isCancelled && current == source, let first = streams.first else { return }
-                    directQualities = streams; selectedQuality = first.title
-                    playback.open(first.url, direct115: true, directCookie: client.cookie)
+                    var streams: [Direct115Stream] = []
+                    var streamError: Error?
+                    do { streams = try await client.streams(pickCode: pickCode) } catch { streamError = error }
+                    guard visible && !Task.isCancelled && current == source else { return }
+                    if let first = streams.first {
+                        directQualities = streams; selectedQuality = first.title
+                        playback.open(first.url, direct115: true, directCookie: client.cookie)
+                    } else {
+                        // 刚离线下载的视频可能还没转码，或者账号没有在线播放权益：直接播放原文件
+                        do {
+                            let original = try await client.originalURL(pickCode: pickCode)
+                            guard visible && !Task.isCancelled && current == source else { return }
+                            selectedQuality = "原画"
+                            playback.open(original, direct115: true, directCookie: client.cookie)
+                        } catch {
+                            throw streamError ?? error
+                        }
+                    }
                 } else {
                     guard let url = appState.mediaURL("/api/play/\(pickCode)") else { throw APIError.server("未连接服务器") }
                     originalURL = url; selectedQuality = "原画"
@@ -109,7 +125,12 @@ struct PlayerView: View {
         loading = true; error = ""
         defer { loading = false }
         do {
-            if id.hasPrefix("direct-"), let index = Int(id.dropFirst(7)), directQualities.indices.contains(index), let client = appState.directClient() {
+            if id == "direct-original", let client = appState.directClient() {
+                let original = try await client.originalURL(pickCode: pickCode)
+                guard visible && !Task.isCancelled && current == source else { return }
+                selectedQuality = "原画"
+                playback.open(original, direct115: true, directCookie: client.cookie, preservingPosition: true)
+            } else if id.hasPrefix("direct-"), let index = Int(id.dropFirst(7)), directQualities.indices.contains(index), let client = appState.directClient() {
                 let old = directQualities[index]
                 let refreshed = try await client.streams(pickCode: pickCode)
                 guard visible && !Task.isCancelled && current == source else { return }
