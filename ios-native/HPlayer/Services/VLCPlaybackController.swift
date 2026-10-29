@@ -24,6 +24,8 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
     private var resumeTime: Int32?
     private var shouldPauseAfterOpening = false
     private var boosted = false
+    /// 长按快进时暂时关掉的音轨，松手后还原
+    private var suspendedAudioTrack: Int32?
     private var openTimeoutTask: Task<Void, Never>?
     private var pendingSeek: Double?
     private var pendingSeekStarted = Date.distantPast
@@ -46,6 +48,7 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
         pendingSeek = nil
         pauseAfterSeek = false
         boosted = false
+        suspendedAudioTrack = nil
         ended = false
         let oldTime = preservingPosition ? currentTime : max(0, startTime ?? 0)
         let oldPlaying = preservingPosition ? playing : true
@@ -99,22 +102,37 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
     func skip(_ seconds: Double) { seek(to: max(0, currentTime + seconds)) }
     func setRate(_ value: Float) { rate = value; if !boosted { player.rate = value } }
 
-    /// 长按快进。松手时原地重新定位一次，让声音立刻和画面对齐。
+    /// 长按快进：快进期间关掉音轨，只让画面按 3× 走，松手再打开音轨。
+    ///
+    /// VLC 变速前已经把后面一两秒的声音按旧速度解码进了音频缓冲：
+    /// 按下时这段声音要跟着变速、和时钟重新对齐，画面容易顿一下；
+    /// 松手时原来靠「原地重新定位」清掉错位的声音，可网络视频定位要重新缓冲，又卡一秒左右。
+    /// 关掉音轨就没有要变速的声音；松手重新打开音轨时，新的音频解码器直接从当前位置出声，
+    /// 不用定位，画面也不用重新缓冲。
     func setBoost(_ enabled: Bool) {
         guard boosted != enabled else { return }
         boosted = enabled
-        player.rate = enabled ? Self.boostRate : rate
-        if !enabled { resynchronizeAudio() }
+        if enabled {
+            suspendAudio()
+            player.rate = Self.boostRate
+        } else {
+            player.rate = rate
+            resumeAudio()
+        }
     }
 
-    /// VLC 在变速前已经把后面一两秒的声音按旧速度解码进了音频缓冲。
-    /// 从 3× 回到 1× 时，这段声音会先错位播放，接着补一段静音才追上画面，听起来就是「声音慢了一两秒」。
-    /// 在当前位置精确定位一次会清空解码器和音频缓冲，从画面所在的位置重新出声。
-    private func resynchronizeAudio() {
-        guard player.isSeekable, player.numberOfAudioTracks > 0 else { return }
-        let position = Double(player.time.intValue) / 1000
-        guard position > 0.5 else { return }
-        seek(to: position)
+    private func suspendAudio() {
+        guard suspendedAudioTrack == nil, player.numberOfAudioTracks > 0 else { return }
+        let track = player.currentAudioTrackIndex
+        guard track >= 0 else { return }
+        suspendedAudioTrack = track
+        player.currentAudioTrackIndex = -1
+    }
+
+    private func resumeAudio() {
+        guard let track = suspendedAudioTrack else { return }
+        suspendedAudioTrack = nil
+        player.currentAudioTrackIndex = track
     }
 
     /// 播放器自己的静音开关；音量大小统一交给系统音量。
@@ -139,6 +157,7 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
         pendingSeek = nil
         pauseAfterSeek = false
         boosted = false
+        suspendedAudioTrack = nil
         player.stop()
         if detach { player.drawable = nil }
         playing = false; buffering = false; bufferProgress = 0; resumeTime = nil; shouldPauseAfterOpening = false

@@ -164,6 +164,39 @@ extension View {
         }
     }
 
+    /// 浮在画面上的玻璃圆钮。iOS 26 用可交互的 Liquid Glass，低版本降级成毛玻璃。
+    @ViewBuilder
+    func glassCircle() -> some View {
+        if #available(iOS 26.0, *) {
+            self.glassEffect(.regular.interactive(), in: Circle())
+        } else {
+            self.background(.ultraThinMaterial, in: Circle())
+                .overlay { Circle().strokeBorder(Color.white.opacity(0.22), lineWidth: 0.5) }
+        }
+    }
+
+    /// 带品牌色的玻璃胶囊，用在播放这类主操作上。
+    @ViewBuilder
+    func glassProminentCapsule(tint: Color = Theme.accent) -> some View {
+        if #available(iOS 26.0, *) {
+            self.glassEffect(.regular.tint(tint).interactive(), in: Capsule())
+        } else {
+            self.background(tint, in: Capsule())
+                .overlay { Capsule().strokeBorder(Color.white.opacity(0.25), lineWidth: 0.5) }
+        }
+    }
+
+    /// 带品牌色的玻璃圆钮
+    @ViewBuilder
+    func glassProminentCircle(tint: Color = Theme.accent) -> some View {
+        if #available(iOS 26.0, *) {
+            self.glassEffect(.regular.tint(tint).interactive(), in: Circle())
+        } else {
+            self.background(tint, in: Circle())
+                .overlay { Circle().strokeBorder(Color.white.opacity(0.25), lineWidth: 0.5) }
+        }
+    }
+
     /// 内容卡片：浅色模式是白底加柔和投影，深色模式是抬高一层的灰底。
     func surfaceCard(cornerRadius: CGFloat = 22) -> some View {
         self
@@ -251,5 +284,50 @@ struct IconTile: View {
                 LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing),
                 in: RoundedRectangle(cornerRadius: size * 0.28, style: .continuous)
             )
+    }
+}
+
+/// 玻璃进度条：玻璃槽里一条发光的白色进度，用在海报和缩略图上。
+struct GlassProgressBar: View {
+    /// 0...1
+    let value: Double
+
+    var body: some View {
+        GeometryReader { proxy in
+            Capsule()
+                .fill(Color.white)
+                .frame(width: max(5, (proxy.size.width - 4) * min(max(value, 0), 1)), height: 5)
+                .shadow(color: .white.opacity(0.7), radius: 4)
+                .padding(2)
+        }
+        .frame(height: 9)
+        .modifier(GlassTrack())
+        .accessibilityElement()
+        .accessibilityLabel("已看 \(Int((min(max(value, 0), 1) * 100).rounded()))%")
+    }
+}
+
+private struct GlassTrack: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.glassEffect(.regular, in: Capsule())
+        } else {
+            content
+                .background(.ultraThinMaterial, in: Capsule())
+                .overlay { Capsule().strokeBorder(Color.white.opacity(0.3), lineWidth: 0.5) }
+        }
+    }
+}
+
+/// 只有上面两个角是圆角的矩形，首页内容区用它盖住横幅下沿。
+struct TopRoundedRectangle: Shape {
+    var radius: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        Path(UIBezierPath(
+            roundedRect: rect,
+            byRoundingCorners: [.topLeft, .topRight],
+            cornerRadii: CGSize(width: radius, height: radius)
+        ).cgPath)
     }
 }

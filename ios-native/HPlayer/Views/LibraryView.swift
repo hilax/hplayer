@@ -24,6 +24,10 @@ enum FileSortKey: String, CaseIterable, Identifiable {
 
 struct DirectoryView: View {
     let cid: String
+    /// 从网盘根目录到当前目录的路径，用来画面包屑；为空时不显示
+    var trail: [Crumb] = []
+    /// 点面包屑里的上级目录，参数是它在 trail 里的位置
+    var onJump: ((Int) -> Void)? = nil
     let onOpenDir: (Crumb) -> Void
     let onPlay: (P115File, [P115File]) -> Void
     var onImported: (() -> Void)? = nil
@@ -91,20 +95,130 @@ struct DirectoryView: View {
     // MARK: 列表
 
     private var fileList: some View {
-        List(items) { file in
-            Button {
-                tap(file)
-            } label: {
-                FileRow(file: file, selecting: selecting, selected: selection.contains(file.id))
+        List {
+            listHeader
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 6, trailing: 16))
+
+            ForEach(items) { file in
+                Button {
+                    tap(file)
+                } label: {
+                    FileRow(file: file, selecting: selecting, selected: selection.contains(file.id))
+                }
+                .buttonStyle(.plain)
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets(top: 7, leading: 16, bottom: 7, trailing: 16))
+                .accessibilityAddTraits(selection.contains(file.id) ? AccessibilityTraits.isSelected : AccessibilityTraits())
             }
-            .buttonStyle(.plain)
-            .listRowBackground(Color.clear)
-            .listRowSeparator(.hidden)
-            .listRowInsets(EdgeInsets(top: 7, leading: 16, bottom: 7, trailing: 16))
-            .accessibilityAddTraits(selection.contains(file.id) ? AccessibilityTraits.isSelected : AccessibilityTraits())
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
+    }
+
+    // MARK: 面包屑与排序
+
+    private var listHeader: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if trail.count > 1 {
+                breadcrumb
+            }
+            sortBar
+        }
+    }
+
+    private var breadcrumb: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 4) {
+                ForEach(Array(trail.enumerated()), id: \.offset) { index, crumb in
+                    if index > 0 {
+                        Image(systemName: "chevron.right")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.tertiary)
+                    }
+                    if index == trail.count - 1 {
+                        Text(crumb.name)
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(Theme.accent)
+                            .lineLimit(1)
+                            .padding(.horizontal, 10)
+                            .frame(maxWidth: 180)
+                            .frame(height: 28)
+                            .background(Theme.tileTint, in: Capsule())
+                    } else {
+                        Button {
+                            onJump?(index)
+                        } label: {
+                            Text(crumb.name)
+                                .font(.footnote)
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                                .padding(.horizontal, 10)
+                                .frame(maxWidth: 160)
+                                .frame(height: 28)
+                                .background(Theme.surface, in: Capsule())
+                                .overlay { Capsule().strokeBorder(Theme.hairline, lineWidth: 0.5) }
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(onJump == nil)
+                    }
+                }
+            }
+        }
+        .scrollIndicators(.hidden)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("路径")
+    }
+
+    /// 排序方式常驻在列表顶部，点当前的那项再点一次就反向
+    private var sortBar: some View {
+        HStack(spacing: 8) {
+            ForEach(FileSortKey.allCases) { key in
+                let active = key == sortKey
+                Button {
+                    chooseSort(key)
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(key.title)
+                        if active {
+                            Image(systemName: ascending ? "arrow.up" : "arrow.down")
+                                .font(.caption2.weight(.bold))
+                        }
+                    }
+                    .font(.footnote.weight(active ? .semibold : .regular))
+                    .foregroundStyle(active ? Color.primary : Color.secondary)
+                    .padding(.horizontal, 11)
+                    .frame(height: 30)
+                    .background(Theme.surface, in: Capsule())
+                    .overlay { Capsule().strokeBorder(Theme.hairline, lineWidth: 0.5) }
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(active ? AccessibilityTraits.isSelected : AccessibilityTraits())
+            }
+
+            Button {
+                foldersFirst.toggle()
+            } label: {
+                HStack(spacing: 4) {
+                    if foldersFirst {
+                        Image(systemName: "checkmark")
+                            .font(.caption2.weight(.bold))
+                    }
+                    Text("文件夹置顶")
+                }
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(foldersFirst ? Theme.accent : Color.secondary)
+                .padding(.horizontal, 11)
+                .frame(height: 30)
+                .background(foldersFirst ? AnyShapeStyle(Theme.tileTint) : AnyShapeStyle(Theme.surface), in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .accessibilityAddTraits(foldersFirst ? AccessibilityTraits.isSelected : AccessibilityTraits())
+
+            Spacer(minLength: 0)
+        }
     }
 
     private func tap(_ file: P115File) {
@@ -148,24 +262,7 @@ struct DirectoryView: View {
         }
         .disabled(items.isEmpty)
 
-        Section("排序") {
-            ForEach(FileSortKey.allCases) { key in
-                Button {
-                    chooseSort(key)
-                } label: {
-                    if key == sortKey {
-                        Label(key.title, systemImage: ascending ? "arrow.up" : "arrow.down")
-                    } else {
-                        Text(key.title)
-                    }
-                }
-            }
-        }
-
         Section {
-            Toggle(isOn: $foldersFirst) {
-                Label("文件夹置顶", systemImage: "folder")
-            }
             Button {
                 addAllToHome()
             } label: {
@@ -350,7 +447,7 @@ struct FileRow: View {
     var selecting = false
     var selected = false
 
-    private static let tileSize = CGSize(width: 104, height: 60)
+    private static let tileSize = CGSize(width: 96, height: 54)
 
     var body: some View {
         HStack(spacing: 14) {
@@ -363,9 +460,9 @@ struct FileRow: View {
 
             thumbnail
                 .frame(width: Self.tileSize.width, height: Self.tileSize.height)
-                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .overlay {
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
                         .strokeBorder(Theme.hairline, lineWidth: 0.5)
                 }
 
@@ -407,7 +504,7 @@ struct FileRow: View {
     private var thumbnail: some View {
         if file.isDir {
             FolderGlyph()
-                .frame(width: 54, height: 42)
+                .frame(width: 44, height: 34)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Theme.folderTile)
         } else if let url = URL(string: file.thumbUrl), !file.thumbUrl.isEmpty {

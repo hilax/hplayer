@@ -12,6 +12,7 @@ struct MagnetPlayerView: View {
     @State private var inputHint = ""
     @State private var showExtras = false
     @State private var showOthers = false
+    @State private var showTips = false
     @FocusState private var inputFocused: Bool
     @Environment(\.dismiss) private var dismiss
 
@@ -20,7 +21,11 @@ struct MagnetPlayerView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                inputCard
+                if controller.phase == .ready && controller.catalog != nil {
+                    linkBar
+                } else {
+                    inputCard
+                }
 
                 switch controller.phase {
                 case .idle:
@@ -143,6 +148,39 @@ struct MagnetPlayerView: View {
         }
         .padding(16)
         .surfaceCard(cornerRadius: 22)
+    }
+
+    /// 解析完成后输入框收成一行，点「更换」回到输入状态
+    private var linkBar: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "link")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.secondary)
+            Text(controller.link.map { "btih:\($0.shortHash)" } ?? input)
+                .font(.footnote.monospaced())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Spacer(minLength: 8)
+            Button {
+                controller.reset()
+                input = ""
+                inputHint = ""
+                inputFocused = true
+            } label: {
+                Text("更换")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(Theme.accent)
+                    .padding(.horizontal, 12)
+                    .frame(height: 30)
+                    .background(Theme.surfaceRaised, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("更换磁力链接")
+        }
+        .padding(.leading, 16)
+        .padding(.trailing, 8)
+        .frame(height: 46)
+        .surfaceCard(cornerRadius: 23)
     }
 
     private var cloudAvailable: Bool {
@@ -348,7 +386,7 @@ struct MagnetPlayerView: View {
                     .foregroundStyle(.white)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
-                    .background(Theme.accentGradient, in: Capsule())
+                    .glassProminentCapsule()
             }
             .buttonStyle(.plain)
         }
@@ -400,8 +438,7 @@ struct MagnetPlayerView: View {
 
     @ViewBuilder
     private func catalogSection(_ catalog: MagnetCatalog) -> some View {
-        torrentHeader(catalog)
-
+        // 115 离线完成的提示放在最上面，一眼就能看到可以改用 115
         if catalog.source == .bt, controller.cloudCatalog != nil {
             cloudSwitchBanner
         } else if catalog.source == .bt, controller.cloud != .off, controller.cloud != .ready {
@@ -409,6 +446,8 @@ struct MagnetPlayerView: View {
                 .padding(14)
                 .surfaceCard(cornerRadius: 18)
         }
+
+        torrentHeader(catalog)
 
         if catalog.main.isEmpty {
             VStack(spacing: 10) {
@@ -506,8 +545,8 @@ struct MagnetPlayerView: View {
                         .lineLimit(1)
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .background(Theme.accentGradient, in: Capsule())
+                        .padding(.vertical, 13)
+                        .glassProminentCapsule()
                 }
                 .buttonStyle(.plain)
             }
@@ -778,28 +817,61 @@ struct MagnetPlayerView: View {
 
     // MARK: 说明
 
+    /// 说明默认收起，点开再看
     private var tips: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label("边下边播，会使用手机流量和存储空间；缓存最多 1–2 GB，会自动清理。", systemImage: "info.circle")
-            Label("解析过的资源会记在本机，再次打开不用重新解析，并从上次看到的位置继续。", systemImage: "bolt.horizontal.circle")
-            if cloudAvailable {
-                Label("115 离线的文件保存在你 115 网盘的「云下载」文件夹，看完可以自己删除。", systemImage: "icloud")
+        VStack(alignment: .leading, spacing: 12) {
+            Button {
+                withAnimation(.easeOut(duration: 0.2)) { showTips.toggle() }
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "info.circle")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                    Text(cloudAvailable ? "使用说明：流量、缓存和 115 离线" : "使用说明：流量和缓存")
+                        .font(.subheadline)
+                        .foregroundStyle(.primary)
+                    Spacer(minLength: 8)
+                    Image(systemName: "chevron.down")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(showTips ? 180 : 0))
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityAddTraits(showTips ? AccessibilityTraits.isSelected : AccessibilityTraits())
+
+            if showTips {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("边下边播，会使用手机流量和存储空间；缓存最多 1–2 GB，会自动清理。", systemImage: "antenna.radiowaves.left.and.right")
+                    Label("解析过的资源会记在本机，再次打开不用重新解析，并从上次看到的位置继续。", systemImage: "bolt.horizontal.circle")
+                    if cloudAvailable {
+                        Label("115 离线的文件保存在你 115 网盘的「云下载」文件夹，看完可以自己删除。", systemImage: "icloud")
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 6)
+        .padding(16)
+        .surfaceCard(cornerRadius: 18)
     }
 
     // MARK: 小部件
 
+    @ViewBuilder
     private func capsuleLabel(_ title: String, systemImage: String, prominent: Bool) -> some View {
-        Label(title, systemImage: systemImage)
+        let label = Label(title, systemImage: systemImage)
             .font(.subheadline.weight(.semibold))
             .foregroundStyle(prominent ? Color.white : Color.primary)
             .padding(.horizontal, 18)
             .padding(.vertical, 10)
-            .background(prominent ? AnyShapeStyle(Theme.accentGradient) : AnyShapeStyle(Theme.surfaceRaised), in: Capsule())
+        if prominent {
+            label.glassProminentCapsule()
+        } else {
+            label.background(Theme.surfaceRaised, in: Capsule())
+        }
     }
 
     private func timeText(_ value: Double) -> String {

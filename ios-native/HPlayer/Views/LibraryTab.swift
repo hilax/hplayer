@@ -2,6 +2,7 @@ import SwiftUI
 
 struct LibraryTab: View {
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var localStore: LocalMediaStore
 
     @State private var status: P115Status?
     @State private var quota: QuotaResponse?
@@ -16,49 +17,55 @@ struct LibraryTab: View {
     var body: some View {
         NavigationStack(path: $path) {
             ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-                    searchEntry
-
+                VStack(alignment: .leading, spacing: 26) {
                     accountCard
 
                     VStack(spacing: 10) {
                         GroupLabel(title: "播放与下载")
-                        VStack(spacing: 0) {
+                        LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
                             NavigationLink {
                                 MagnetPlayerView()
                             } label: {
-                                toolRow(
+                                toolCard(
                                     icon: "link",
                                     colors: [Theme.brandCyan, Theme.brandBlue],
-                                    title: "磁力在线播放",
+                                    title: "磁力播放",
                                     subtitle: "粘贴磁力链接，边缓冲边播放"
                                 )
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(PosterButtonStyle())
 
                             NavigationLink {
                                 TorrentView()
                             } label: {
-                                toolRow(
+                                toolCard(
                                     icon: "arrow.down.circle",
                                     colors: [Theme.brandBlue, Theme.brandViolet],
-                                    title: "BT 种子与云下载",
-                                    subtitle: "解析种子，选择文件后交给 115 下载"
+                                    title: "BT 云下载",
+                                    subtitle: "解析种子，交给 115 下载"
                                 )
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(PosterButtonStyle())
                         }
-                        .surfaceCard(cornerRadius: 20)
                     }
 
                     VStack(spacing: 10) {
-                        GroupLabel(title: "更多来源")
-                        VStack(spacing: 0) {
-                            upcomingRow(icon: "externaldrive.connected.to.line.below", title: "WebDAV")
-                            upcomingRow(icon: "desktopcomputer", title: "SMB 共享")
-                            upcomingRow(icon: "play.tv", title: "Emby / Jellyfin")
+                        GroupLabel(title: "本机")
+                        NavigationLink {
+                            LocalVideosView()
+                        } label: {
+                            localRow
                         }
-                        .surfaceCard(cornerRadius: 20)
+                        .buttonStyle(.plain)
+                    }
+
+                    VStack(spacing: 10) {
+                        GroupLabel(title: "更多来源 · 开发中")
+                        HStack(spacing: 10) {
+                            upcomingTile(icon: "externaldrive.connected.to.line.below", title: "WebDAV")
+                            upcomingTile(icon: "desktopcomputer", title: "SMB 共享")
+                            upcomingTile(icon: "play.tv", title: "Emby")
+                        }
                     }
                 }
                 .padding(.horizontal, 18)
@@ -89,6 +96,8 @@ struct LibraryTab: View {
             .navigationDestination(for: Crumb.self) { crumb in
                 DirectoryView(
                     cid: crumb.cid,
+                    trail: trail(to: crumb),
+                    onJump: { index in jump(to: index) },
                     onOpenDir: { path.append($0) },
                     onPlay: { file, files in
                         let source = PlaybackSource.p115(title: file.name, pickCode: file.pickCode)
@@ -132,29 +141,6 @@ struct LibraryTab: View {
         .onChange(of: appState.mode) { _ in status = nil; quota = nil; path.removeAll(); Task { await load() } }
     }
 
-    // MARK: 搜索入口
-
-    private var searchEntry: some View {
-        NavigationLink {
-            SearchView()
-                .environmentObject(appState)
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
-                Text("搜索 115 网盘里的视频")
-                    .foregroundStyle(.secondary)
-                Spacer()
-            }
-            .font(.subheadline)
-            .padding(.horizontal, 16)
-            .frame(height: 44)
-            .background(Theme.surface, in: Capsule())
-            .overlay { Capsule().strokeBorder(Theme.hairline, lineWidth: 0.5) }
-        }
-        .buttonStyle(.plain)
-    }
-
     // MARK: 115 账号卡片
 
     private var accountCard: some View {
@@ -170,13 +156,14 @@ struct LibraryTab: View {
                         .background(Theme.accentGradient, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
 
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(status?.userName ?? "115 网盘")
+                        Text("115 网盘")
                             .font(.headline)
                             .foregroundStyle(.primary)
                             .lineLimit(1)
-                        Text(appState.isDirect ? "手机直连" : "服务器模式")
+                        Text([appState.isDirect ? "手机直连" : "服务器模式", status?.userName ?? ""].filter { !$0.isEmpty }.joined(separator: " · "))
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                            .lineLimit(1)
                     }
 
                     Spacer(minLength: 8)
@@ -205,13 +192,16 @@ struct LibraryTab: View {
 
                 HStack {
                     Text(primaryActionTitle)
-                        .font(.subheadline.weight(.semibold))
+                        .font(.subheadline.weight(.bold))
                         .foregroundStyle(Theme.accent)
                     Spacer()
                     Image(systemName: "chevron.right")
                         .font(.footnote.weight(.bold))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(Theme.accent)
                 }
+                .padding(.horizontal, 14)
+                .frame(height: 44)
+                .background(Theme.tileTint, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
             .padding(18)
             .surfaceCard(cornerRadius: 24)
@@ -236,14 +226,35 @@ struct LibraryTab: View {
 
     // MARK: 行
 
-    private func toolRow(icon: String, colors: [Color], title: String, subtitle: String) -> some View {
-        HStack(spacing: 14) {
-            IconTile(systemImage: icon, colors: colors)
+    private func toolCard(icon: String, colors: [Color], title: String, subtitle: String) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            IconTile(systemImage: icon, colors: colors, size: 40)
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(.body.weight(.semibold))
+                    .font(.body.weight(.bold))
                     .foregroundStyle(.primary)
                 Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, minHeight: 132, alignment: .topLeading)
+        .surfaceCard(cornerRadius: 20)
+        .contentShape(Rectangle())
+    }
+
+    private var localRow: some View {
+        HStack(spacing: 14) {
+            IconTile(systemImage: "iphone", colors: [Color(uiColor: UIColor(hex: 0x3EC6A8)), Color(uiColor: UIColor(hex: 0x1E8F7A))], size: 40)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("本机视频")
+                    .font(.body.weight(.bold))
+                    .foregroundStyle(.primary)
+                Text(localStore.files.isEmpty ? "从「文件」App 导入视频" : "\(localStore.files.count) 个视频 · 从「文件」App 导入")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -253,27 +264,37 @@ struct LibraryTab: View {
                 .foregroundStyle(.tertiary)
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 13)
+        .padding(.vertical, 14)
+        .surfaceCard(cornerRadius: 20)
         .contentShape(Rectangle())
     }
 
-    private func upcomingRow(icon: String, title: String) -> some View {
-        HStack(spacing: 14) {
-            IconTile(systemImage: icon, colors: [Color(uiColor: .systemGray2), Color(uiColor: .systemGray)])
+    private func upcomingTile(icon: String, title: String) -> some View {
+        VStack(spacing: 8) {
+            IconTile(systemImage: icon, colors: [Color(uiColor: .systemGray2), Color(uiColor: .systemGray)], size: 36)
             Text(title)
-                .font(.body)
+                .font(.footnote.weight(.semibold))
                 .foregroundStyle(.secondary)
-            Spacer(minLength: 8)
-            Text("开发中")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Theme.surfaceRaised, in: Capsule())
+                .lineLimit(1)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 11)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 14)
+        .surfaceCard(cornerRadius: 18)
         .accessibilityElement(children: .combine)
+        .accessibilityHint("开发中")
+    }
+
+    // MARK: 路径
+
+    /// 从网盘根目录到这一层的路径，用来画面包屑
+    private func trail(to crumb: Crumb) -> [Crumb] {
+        guard let index = path.firstIndex(of: crumb) else { return [crumb] }
+        return Array(path.prefix(through: index))
+    }
+
+    private func jump(to index: Int) {
+        guard index >= 0, index < path.count - 1 else { return }
+        path.removeLast(path.count - 1 - index)
     }
 
     // MARK: 状态文字

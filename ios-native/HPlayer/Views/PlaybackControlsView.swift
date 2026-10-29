@@ -239,12 +239,6 @@ struct PlaybackControlsView: View {
                 roundIcon("ellipsis")
             }
             .accessibilityLabel("更多选项")
-
-            Button { toggleMute() } label: {
-                roundIcon(isSilent ? "speaker.slash.fill" : "speaker.wave.2.fill")
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(isSilent ? "取消静音" : "静音")
         }
     }
 
@@ -298,23 +292,18 @@ struct PlaybackControlsView: View {
                 Button(action: lock) { controlIcon("lock.open", label: "锁定") }
                     .accessibilityIdentifier("playback.lock")
                 Spacer(minLength: 4)
-                if landscape {
-                    Button { move(-1) } label: { controlIcon("backward.end.fill", label: "上一个", size: 17) }
-                        .disabled(previousID == nil)
-                        .opacity(previousID == nil ? 0.35 : 1)
-                }
-                Button { playback.skip(-10); revealControls() } label: { controlIcon("gobackward.10", label: "后退 10 秒") }
+                // 快进快退靠左右拖动画面，这里只留上一集、暂停、下一集
+                Button { move(-1) } label: { controlIcon("backward.end.fill", label: "上一个", size: 18) }
+                    .disabled(previousID == nil)
+                    .opacity(previousID == nil ? 0.35 : 1)
                 Button { playback.toggle(); revealControls() } label: {
-                    controlIcon(playback.playing ? "pause.fill" : "play.fill", label: playback.playing ? "暂停" : "播放", size: 30, frame: 58)
+                    controlIcon(playback.playing ? "pause.fill" : "play.fill", label: playback.playing ? "暂停" : "播放", size: 30, frame: 64)
                 }
                 .accessibilityIdentifier("playback.playPause")
                 .accessibilityValue(playback.playing ? "playing" : "paused")
-                Button { playback.skip(10); revealControls() } label: { controlIcon("goforward.10", label: "前进 10 秒") }
-                if landscape {
-                    Button { move(1) } label: { controlIcon("forward.end.fill", label: "下一个", size: 17) }
-                        .disabled(nextID == nil)
-                        .opacity(nextID == nil ? 0.35 : 1)
-                }
+                Button { move(1) } label: { controlIcon("forward.end.fill", label: "下一个", size: 18) }
+                    .disabled(nextID == nil)
+                    .opacity(nextID == nil ? 0.35 : 1)
                 Spacer(minLength: 4)
                 if landscape {
                     Menu { speedButtons } label: {
@@ -589,20 +578,18 @@ struct PlaybackControlsView: View {
             .accessibilityLabel(label)
     }
 
+    /// 倍速、画质：纯文字，不加底色
     private func textChip(_ text: String) -> some View {
         Text(text)
-            .font(.caption.weight(.bold))
+            .font(.subheadline.weight(.bold))
             .lineLimit(1)
-            .padding(.horizontal, 9)
-            .frame(minWidth: 40, minHeight: 26)
-            .background(.white.opacity(0.14), in: Capsule())
-            .frame(minHeight: 44)
+            .padding(.horizontal, 8)
+            .frame(minWidth: 40, minHeight: 44)
             .contentShape(Rectangle())
     }
 
     // MARK: 状态
 
-    private var isSilent: Bool { playback.muted || systemVolume.level <= 0.001 }
     private var previousID: String? { adjacent(-1) }
     private var nextID: String? { adjacent(1) }
     private func adjacent(_ offset: Int) -> String? {
@@ -625,15 +612,6 @@ struct PlaybackControlsView: View {
     }
     private func closeList() {
         withAnimation(.easeOut(duration: 0.22)) { showList = false }
-        revealControls()
-    }
-    private func toggleMute() {
-        if isSilent {
-            playback.setMuted(false)
-            if systemVolume.level <= 0.001 { applyVolume(0.3) }
-        } else {
-            playback.setMuted(true)
-        }
         revealControls()
     }
     private func applyVolume(_ value: Double) {

@@ -13,8 +13,17 @@ struct MagnetHistoryItem: Codable, Identifiable, Equatable {
     /// 每个文件上次看到的位置（秒），键是文件序号
     var positions: [String: Double]
     var updatedAt: Date
+    /// 每个文件的总时长（秒），和 positions 一起用来画进度条；旧记录没有这一项
+    var durations: [String: Double]? = nil
 
     var id: String { infoHash }
+
+    /// 上次播放那一集看到的位置和比例，首页「继续观看」用
+    var lastProgress: (seconds: Double, fraction: Double?)? {
+        guard let index = lastFileIndex, let seconds = positions[String(index)] else { return nil }
+        guard let duration = durations?[String(index)], duration > 0 else { return (seconds, nil) }
+        return (seconds, min(max(seconds / duration, 0), 1))
+    }
 }
 
 /// 最近播放的磁力资源和每一集的观看进度，保存在本机。
@@ -77,8 +86,12 @@ final class MagnetHistoryStore: ObservableObject {
         if seconds < 10 || seconds > duration - 30 || seconds / duration > 0.95 {
             guard entry.positions[key] != nil else { return }
             entry.positions[key] = nil
+            entry.durations?[key] = nil
         } else {
             entry.positions[key] = seconds
+            var durations = entry.durations ?? [:]
+            durations[key] = duration
+            entry.durations = durations
         }
         if let index = items.firstIndex(where: { $0.infoHash == infoHash }) {
             items[index] = entry
@@ -89,6 +102,7 @@ final class MagnetHistoryStore: ObservableObject {
     func clearPosition(infoHash: String, fileIndex: UInt32) {
         guard let index = items.firstIndex(where: { $0.infoHash == infoHash }) else { return }
         items[index].positions[String(fileIndex)] = nil
+        items[index].durations?[String(fileIndex)] = nil
         persist()
     }
 

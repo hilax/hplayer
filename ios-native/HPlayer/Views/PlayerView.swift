@@ -23,6 +23,7 @@ struct PlayerView: View {
     @State private var directQualities: [Direct115Stream] = []
     @State private var selectedQuality = ""
     @State private var visible = true
+    @State private var lastSavedAt = Date.distantPast
 
     init(source: PlaybackSource, playlist: [PlaybackSource] = []) {
         _current = State(initialValue: source)
@@ -41,6 +42,7 @@ struct PlayerView: View {
             selectedQuality: selectedQuality,
             onSelect: { id in
                 guard let selected = playlist.first(where: { $0.id == id }), selected != current else { return }
+                saveProgress(force: true)
                 if playback.playing { playback.toggle() }
                 current = selected
             },
@@ -49,7 +51,25 @@ struct PlayerView: View {
             onClose: { dismiss() }
         )
         .task(id: current.id) { await load(current) }
-        .onDisappear { visible = false; playback.stop() }
+        .onChange(of: playback.currentTime) { _ in saveProgress(force: false) }
+        .onDisappear { saveProgress(force: true); visible = false; playback.stop() }
+    }
+
+    /// UI 测试不写播放记录，免得下次启动从中间开始
+    private var tracksHistory: Bool {
+        #if DEBUG
+        return ProcessInfo.processInfo.environment["HPLAYER_UI_TEST_URL"] == nil
+        #else
+        return true
+        #endif
+    }
+
+    /// 每 10 秒记一次看到的位置；切集和退出时立即记
+    private func saveProgress(force: Bool) {
+        guard tracksHistory, playback.duration > 0, playback.currentTime > 0 else { return }
+        guard force || Date().timeIntervalSince(lastSavedAt) >= 10 else { return }
+        lastSavedAt = Date()
+        RecentStore.shared.savePosition(for: current, seconds: playback.currentTime, duration: playback.duration)
     }
 
     private var qualityChoices: [PlaybackChoice] {
@@ -65,6 +85,9 @@ struct PlayerView: View {
 
     private func load(_ source: PlaybackSource) async {
         loading = true; error = ""; originalURL = nil; qualities = []; directQualities = []; selectedQuality = ""
+        let resume = tracksHistory ? RecentStore.shared.position(for: source) : nil
+        if tracksHistory { RecentStore.shared.record(source) }
+        lastSavedAt = Date()
         do {
             switch source {
             case .direct(_, let url):
@@ -77,7 +100,7 @@ struct PlayerView: View {
                 let use115Headers = false
                 let testCookie = ""
                 #endif
-                playback.open(url, direct115: use115Headers, directCookie: testCookie)
+                playback.open(url, direct115: use115Headers, directCookie: testCookie, startTime: resume)
             case .p115(_, let pickCode):
                 if appState.isDirect {
                     guard let client = appState.directClient() else { throw APIError.server("请先登录 115") }
@@ -87,14 +110,14 @@ struct PlayerView: View {
                     guard visible && !Task.isCancelled && current == source else { return }
                     if let first = streams.first {
                         directQualities = streams; selectedQuality = first.title
-                        playback.open(first.url, direct115: true, directCookie: client.cookie)
+                        playback.open(first.url, direct115: true, directCookie: client.cookie, startTime: resume)
                     } else {
                         // 刚离线下载的视频可能还没转码，或者账号没有在线播放权益：直接播放原文件
                         do {
                             let original = try await client.originalURL(pickCode: pickCode)
                             guard visible && !Task.isCancelled && current == source else { return }
                             selectedQuality = "原画"
-                            playback.open(original, direct115: true, directCookie: client.cookie)
+                            playback.open(original, direct115: true, directCookie: client.cookie, startTime: resume)
                         } catch {
                             throw streamError ?? error
                         }
@@ -103,7 +126,7 @@ struct PlayerView: View {
                     guard let url = appState.mediaURL("/api/play/\(pickCode)") else { throw APIError.server("未连接服务器") }
                     originalURL = url; selectedQuality = "原画"
                     guard visible && !Task.isCancelled && current == source else { return }
-                    playback.open(url)
+                    playback.open(url, startTime: resume)
                     loading = false
                     if let fetched = try? await fetchQualities(pickCode), visible && !Task.isCancelled && current == source { qualities = fetched }
                 }

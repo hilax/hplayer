@@ -8,30 +8,16 @@ struct SettingsTab: View {
 
 struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
-    private enum Field: Hashable { case server, password, cookie }
-    @FocusState private var focusedField: Field?
 
     @State private var status: P115Status?
-    @State private var cookie = ""
-    @State private var message = ""
+    @State private var loadingStatus = false
     @State private var error = ""
-    @State private var saving = false
-    @State private var serverURL = ""
-    @State private var password = ""
-    @State private var loggingIn = false
     @AppStorage(AppearanceMode.storageKey) private var appearance: AppearanceMode = .system
 
     var body: some View {
         NavigationStack {
             Form {
-                Section {
-                    AppearancePicker(selection: $appearance)
-                        .listRowInsets(EdgeInsets(top: 14, leading: 14, bottom: 14, trailing: 14))
-                } header: {
-                    Text("外观")
-                } footer: {
-                    Text("播放页始终使用深色，避免画面周围的亮光分散注意力。")
-                }
+                accountSection
 
                 Section {
                     Picker("连接方式", selection: Binding(get: { appState.mode }, set: { mode in
@@ -44,110 +30,40 @@ struct SettingsView: View {
                         Text("服务器").tag(AppState.ConnectionMode.server)
                     }
                     .pickerStyle(.segmented)
-                } footer: {
-                    Text(appState.isDirect ? "115 登录、浏览和在线播放直接在手机进行，无需电脑开机。" : "连接自己的后端，可使用服务器转封装与原有开放平台功能。")
-                }
 
-                if appState.isDirect {
-                    Section("115 账号") {
-                        statusRow
+                    if !appState.isDirect {
                         NavigationLink {
-                            CookieWebLoginView(onConnected: { Task { await loadStatus() } })
+                            ServerSettingsView(onChanged: { Task { await loadStatus() } })
                         } label: {
-                            Label(appState.isAuthenticated ? "重新登录 115" : "登录 115", systemImage: "person.badge.key.fill")
-                        }
-                        if appState.isAuthenticated {
-                            Button("退出 115", role: .destructive) { appState.logout(); status = nil }
-                        }
-                    }
-                    Section {
-                        Text("手机直连播放使用 115 在线画质，具体可播格式和清晰度取决于 115 账号及片源。")
-                            .font(.footnote).foregroundColor(.secondary)
-                    }
-                } else {
-                Section {
-                    TextField("https://hplayer.example.com", text: $serverURL)
-                        .focused($focusedField, equals: .server)
-                        .keyboardType(.URL)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .submitLabel(.done)
-                        .onSubmit { focusedField = nil }
-
-                    Button("保存地址") {
-                        appState.setServer(serverURL)
-                        Task { await appState.checkAuth() }
-                    }
-                } header: {
-                    Text("服务器")
-                } footer: {
-                    Text("HPlayer 后端地址，需要以 http:// 或 https:// 开头")
-                }
-
-                Section("登录") {
-                    if appState.isAuthenticated {
-                        HStack {
-                            Text("已登录")
-                            Spacer()
-                            Button("退出", role: .destructive) {
-                                appState.logout()
-                                status = nil
+                            HStack(spacing: 12) {
+                                IconTile(systemImage: "server.rack", colors: [Theme.brandBlue, Theme.brandViolet], size: 34)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("服务器设置")
+                                    Text("地址 · 访问密码 · Cookie · 开放平台授权")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
                             }
                         }
-                    } else {
-                        SecureField("访问密码", text: $password)
-                            .focused($focusedField, equals: .password)
-                            .textContentType(.password)
-                            .submitLabel(.done)
-                            .onSubmit { focusedField = nil }
-                        Button(loggingIn ? "登录中…" : "登录") {
-                            Task { await login() }
-                        }
-                        .disabled(password.isEmpty || loggingIn || !appState.hasServer)
                     }
+                } header: {
+                    Text("连接方式")
+                } footer: {
+                    Text(appState.isDirect ? "115 登录、浏览和在线播放直接在手机进行，无需电脑开机。" : "连接自己的后端，可使用服务器转封装与开放平台功能。")
                 }
 
-                Section("当前 115 账号") {
-                    statusRow
-                }
-
-                Section("115 开放平台") {
-                    NavigationLink {
-                        Official115SettingsView(onSourceChanged: {
-                            Task { await loadStatus() }
-                        })
-                    } label: {
-                        Label("115 开放平台授权", systemImage: "key.horizontal")
-                    }
-                    .disabled(!appState.isAuthenticated)
-                }
-
-                Section("更新 Cookie") {
-                    TextEditor(text: $cookie)
-                        .focused($focusedField, equals: .cookie)
-                        .frame(minHeight: 100)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
-                    Button(saving ? "验证中…" : "保存并验证") {
-                        Task { await saveCookie() }
-                    }
-                    .disabled(cookie.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || saving)
-                    Button("使用已保存的 Cookie") {
-                        Task { await useSavedCookie() }
-                    }
-                    .disabled(!appState.isAuthenticated || saving)
-                }
+                Section {
+                    AppearancePicker(selection: $appearance)
+                        .listRowInsets(EdgeInsets(top: 14, leading: 14, bottom: 14, trailing: 14))
+                } header: {
+                    Text("外观")
+                } footer: {
+                    Text("播放页始终使用深色，避免画面周围的亮光分散注意力。")
                 }
 
                 if !error.isEmpty {
                     Section {
                         Text(error).foregroundColor(.red)
-                    }
-                }
-
-                if !message.isEmpty {
-                    Section {
-                        Text(message).foregroundColor(.green)
                     }
                 }
 
@@ -163,6 +79,12 @@ struct SettingsView: View {
                         }
                     }
                     .padding(.vertical, 4)
+
+                    NavigationLink {
+                        LicensesView()
+                    } label: {
+                        Text("开源许可")
+                    }
                 } header: {
                     Text("关于")
                 } footer: {
@@ -170,21 +92,85 @@ struct SettingsView: View {
                 }
             }
             .listRowSeparator(.hidden)
-            .scrollDismissesKeyboard(.interactively)
-            .toolbar {
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button("完成") { focusedField = nil }
-                }
-            }
             .navigationTitle("设置")
             .task {
                 await loadStatus()
             }
-            .onAppear {
-                serverURL = appState.serverURLString
+            .onChange(of: appState.isAuthenticated) { _ in
+                Task { await loadStatus() }
             }
         }
+    }
+
+    // MARK: 115 账号
+
+    @ViewBuilder
+    private var accountSection: some View {
+        Section {
+            HStack(spacing: 14) {
+                Text("115")
+                    .font(.system(size: 16, weight: .heavy, design: .rounded))
+                    .foregroundStyle(.white)
+                    .frame(width: 52, height: 52)
+                    .background(Theme.accentGradient, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(status?.userName ?? "115 网盘")
+                        .font(.headline)
+                        .lineLimit(1)
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(accountState.color)
+                            .frame(width: 7, height: 7)
+                        Text(accountState.text)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                }
+
+                Spacer(minLength: 0)
+
+                if loadingStatus {
+                    ProgressView()
+                }
+            }
+            .padding(.vertical, 6)
+
+            if appState.isDirect {
+                NavigationLink {
+                    CookieWebLoginView(onConnected: { Task { await loadStatus() } })
+                } label: {
+                    Text(appState.isAuthenticated ? "重新登录 115" : "登录 115")
+                }
+                if appState.isAuthenticated {
+                    Button("退出 115", role: .destructive) {
+                        appState.logout()
+                        status = nil
+                    }
+                }
+            }
+        } footer: {
+            if appState.isDirect {
+                Text("手机直连播放使用 115 在线画质，具体可播格式和清晰度取决于 115 账号及片源。")
+            }
+        }
+    }
+
+    private var accountState: (text: String, color: Color) {
+        let mode = appState.isDirect ? "手机直连" : "服务器模式"
+        let idle = Color(uiColor: .systemGray3)
+        guard appState.isAuthenticated else {
+            return (appState.isDirect ? "尚未登录 115" : "\(mode) · 未登录服务器", idle)
+        }
+        guard let status else { return (loadingStatus ? "\(mode) · 检查中" : mode, idle) }
+        if !status.configured {
+            return ("\(mode) · \(status.message ?? "等待授权")", Theme.warning)
+        }
+        if status.error != nil {
+            return ("\(mode) · \(status.message ?? "Cookie 可能已失效")", Theme.warning)
+        }
+        return ("已连接 · \(mode)", Theme.success)
     }
 
     private var appVersion: String {
@@ -194,10 +180,153 @@ struct SettingsView: View {
         return build.isEmpty ? version : "\(version)（\(build)）"
     }
 
+    private func loadStatus() async {
+        guard appState.isAuthenticated else {
+            status = nil
+            return
+        }
+        loadingStatus = true
+        defer { loadingStatus = false }
+        do {
+            if appState.isDirect, let direct = appState.directClient() {
+                status = try await direct.user()
+            } else if let client = appState.client() {
+                status = try await client.get("/api/115/status")
+            }
+            error = ""
+        } catch let err {
+            error = err.localizedDescription
+        }
+    }
+}
+
+/// 服务器模式的二级页：后端地址、访问密码、当前 115 账号、开放平台授权和 Cookie。
+struct ServerSettingsView: View {
+    var onChanged: () -> Void = { }
+
+    @EnvironmentObject private var appState: AppState
+    private enum Field: Hashable { case server, password, cookie }
+    @FocusState private var focusedField: Field?
+
+    @State private var status: P115Status?
+    @State private var cookie = ""
+    @State private var message = ""
+    @State private var error = ""
+    @State private var saving = false
+    @State private var serverURL = ""
+    @State private var password = ""
+    @State private var loggingIn = false
+
+    var body: some View {
+        Form {
+            Section {
+                TextField("https://hplayer.example.com", text: $serverURL)
+                    .focused($focusedField, equals: .server)
+                    .keyboardType(.URL)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .submitLabel(.done)
+                    .onSubmit { focusedField = nil }
+
+                Button("保存地址") {
+                    appState.setServer(serverURL)
+                    Task { await appState.checkAuth(); onChanged() }
+                }
+            } header: {
+                Text("服务器")
+            } footer: {
+                Text("HPlayer 后端地址，需要以 http:// 或 https:// 开头")
+            }
+
+            Section("登录") {
+                if appState.isAuthenticated {
+                    HStack {
+                        Text("已登录")
+                        Spacer()
+                        Button("退出", role: .destructive) {
+                            appState.logout()
+                            status = nil
+                            onChanged()
+                        }
+                    }
+                } else {
+                    SecureField("访问密码", text: $password)
+                        .focused($focusedField, equals: .password)
+                        .textContentType(.password)
+                        .submitLabel(.done)
+                        .onSubmit { focusedField = nil }
+                    Button(loggingIn ? "登录中…" : "登录") {
+                        Task { await login() }
+                    }
+                    .disabled(password.isEmpty || loggingIn || !appState.hasServer)
+                }
+            }
+
+            Section("当前 115 账号") {
+                statusRow
+            }
+
+            Section("115 开放平台") {
+                NavigationLink {
+                    Official115SettingsView(onSourceChanged: {
+                        Task { await loadStatus() }
+                    })
+                } label: {
+                    Label("115 开放平台授权", systemImage: "key.horizontal")
+                }
+                .disabled(!appState.isAuthenticated)
+            }
+
+            Section("更新 Cookie") {
+                TextEditor(text: $cookie)
+                    .focused($focusedField, equals: .cookie)
+                    .frame(minHeight: 100)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                Button(saving ? "验证中…" : "保存并验证") {
+                    Task { await saveCookie() }
+                }
+                .disabled(cookie.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || saving)
+                Button("使用已保存的 Cookie") {
+                    Task { await useSavedCookie() }
+                }
+                .disabled(!appState.isAuthenticated || saving)
+            }
+
+            if !error.isEmpty {
+                Section {
+                    Text(error).foregroundColor(.red)
+                }
+            }
+
+            if !message.isEmpty {
+                Section {
+                    Text(message).foregroundColor(.green)
+                }
+            }
+        }
+        .listRowSeparator(.hidden)
+        .scrollDismissesKeyboard(.interactively)
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("完成") { focusedField = nil }
+            }
+        }
+        .navigationTitle("服务器设置")
+        .navigationBarTitleDisplayMode(.inline)
+        .task {
+            await loadStatus()
+        }
+        .onAppear {
+            serverURL = appState.serverURLString
+        }
+    }
+
     @ViewBuilder
     private var statusRow: some View {
         if !appState.isAuthenticated {
-            Text(appState.isDirect ? "尚未登录 115" : "登录后可查看").foregroundColor(.secondary)
+            Text("登录后可查看").foregroundColor(.secondary)
         } else if let status {
             if !status.configured {
                 Text(status.message ?? "未配置 Cookie")
@@ -225,6 +354,7 @@ struct SettingsView: View {
             try await appState.login(password: password)
             password = ""
             await loadStatus()
+            onChanged()
         } catch let err {
             error = err.localizedDescription
         }
@@ -234,9 +364,7 @@ struct SettingsView: View {
     private func loadStatus() async {
         guard appState.isAuthenticated else { return }
         do {
-            if appState.isDirect, let direct = appState.directClient() {
-                status = try await direct.user()
-            } else if let client = appState.client() {
+            if let client = appState.client() {
                 status = try await client.get("/api/115/status")
             }
         } catch let err {
@@ -257,6 +385,7 @@ struct SettingsView: View {
             message = "已连接：\(result.userName)"
             cookie = ""
             await loadStatus()
+            onChanged()
         } catch let err {
             error = err.localizedDescription
         }
@@ -273,8 +402,76 @@ struct SettingsView: View {
             let _: SourceResponse = try await client.post("/api/115/open/source", body: ["source": "cookie"])
             message = "已切换到 Cookie"
             await loadStatus()
+            onChanged()
         } catch {
             self.error = error.localizedDescription
+        }
+    }
+}
+
+/// 打包在 App 里的开源许可文本
+struct LicensesView: View {
+    private struct Entry: Identifiable {
+        let id: String
+        let title: String
+        let url: URL
+    }
+
+    private var entries: [Entry] {
+        let files: [(name: String, ext: String, title: String)] = [
+            ("VLCKit-COPYING", "txt", "VideoLAN VLCKit"),
+            ("NUVIO-ENGINE-LICENSE", "txt", "Nuvio Engine"),
+            ("THIRD_PARTY_NOTICES", "md", "Nuvio 第三方声明"),
+            ("LIBTORRENT-LICENSE", "txt", "libtorrent"),
+            ("LIBTORRENT-COPYING", "txt", "libtorrent COPYING"),
+            ("BOOST-LICENSE_1_0", "txt", "Boost"),
+            ("OPENSSL-LICENSE", "txt", "OpenSSL"),
+            ("TRY_SIGNAL-LICENSE", "txt", "try_signal"),
+        ]
+        return files.compactMap { file in
+            let url = Bundle.main.url(forResource: file.name, withExtension: file.ext)
+                ?? Bundle.main.url(forResource: file.name, withExtension: file.ext, subdirectory: "NuvioLicenses")
+                ?? Bundle.main.url(forResource: file.name, withExtension: file.ext, subdirectory: "VLCLicenses")
+            return url.map { Entry(id: file.name, title: file.title, url: $0) }
+        }
+    }
+
+    var body: some View {
+        List {
+            if entries.isEmpty {
+                Text("这个版本没有打包许可文件。")
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(entries) { entry in
+                NavigationLink {
+                    LicenseTextView(title: entry.title, url: entry.url)
+                } label: {
+                    Text(entry.title)
+                }
+            }
+        }
+        .navigationTitle("开源许可")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+private struct LicenseTextView: View {
+    let title: String
+    let url: URL
+    @State private var text = ""
+
+    var body: some View {
+        ScrollView {
+            Text(text)
+                .font(.system(.caption, design: .monospaced))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(16)
+        }
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
+        .task {
+            text = (try? String(contentsOf: url, encoding: .utf8)) ?? "无法读取许可文件。"
         }
     }
 }
