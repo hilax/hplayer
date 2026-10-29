@@ -69,7 +69,7 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
     @Published private(set) var downloadSpeed: Double = 0
     private var speedTask: Task<Void, Never>?
     private var lastReadBytes = 0
-    /// 当前打开的地址和 115 请求头，拖动预览要另开一路取画面时照着用
+    /// 当前打开的地址和 115 请求头，切换解码或预缓冲时照着重新打开
     private var currentURL: URL?
     private var currentDirect115 = false
     private var currentCookie = ""
@@ -269,19 +269,6 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
         let state = player.state
         let value = stalled || (!player.isPlaying && (state == .opening || state == .buffering))
         if value != buffering { buffering = value }
-    }
-
-    /// 给拖动预览用的同一个视频：不要声音，缓存短一点，带上同样的 115 请求头
-    func makePreviewMedia() -> VLCMedia? {
-        guard let url = currentURL else { return nil }
-        let media = VLCMedia(url: url)
-        media.addOption(":no-audio")
-        media.addOption(":network-caching=500")
-        // 预览用软解，不和正片抢硬件解码器
-        media.addOption(":codec=avcodec,all")
-        media.addOption(":avcodec-hw=none")
-        Self.applyRequestOptions(to: media, url: url, direct115: currentDirect115, cookie: currentCookie)
-        return media
     }
 
     private static func applyRequestOptions(to media: VLCMedia, url: URL, direct115: Bool, cookie: String) {

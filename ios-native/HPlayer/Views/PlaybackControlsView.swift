@@ -42,15 +42,12 @@ struct PlaybackControlsView: View {
     var selectedQuality = ""
     /// 边下边播时的网络状态，例如「12 个节点 · 1.2 MB/s」
     var networkStatus = ""
-    /// 拖动进度时取目标位置的画面做预览（需要能另开一路读取视频，磁力边下边播不开）
-    var seekPreview = false
     var onSelect: (String) -> Void = { _ in }
     var onQuality: (String) -> Void = { _ in }
     var onRetry: () -> Void = { }
     var onClose: () -> Void
 
     @StateObject private var systemVolume = SystemVolumeController()
-    @StateObject private var preview = SeekPreviewLoader()
     @State private var controlsVisible = true
     @State private var locked = false
     @State private var showList = false
@@ -312,11 +309,9 @@ struct PlaybackControlsView: View {
                             scrubStart = playback.currentTime
                             hideTask?.cancel()
                             adjustmentHideTask?.cancel()
-                            preview.reset()
                             scrubbed(dragTime)
                         } else if dragging {
                             dragging = false
-                            preview.reset()
                             playback.seek(to: dragTime)
                             hideAdjustmentSoon()
                         }
@@ -367,7 +362,6 @@ struct PlaybackControlsView: View {
         dragTime = value
         guard dragging, playback.duration > 0 else { return }
         adjustment = seekAdjustment(target: value, from: scrubStart)
-        requestPreview(value)
     }
 
     @ViewBuilder
@@ -568,13 +562,8 @@ struct PlaybackControlsView: View {
             if let adjustment {
                 switch adjustment.kind {
                 case .seek:
-                    SeekHUD(
-                        adjustment: adjustment,
-                        showsPreview: seekPreview,
-                        image: preview.image,
-                        loading: preview.loading
-                    )
-                    .transition(.opacity)
+                    SeekHUD(adjustment: adjustment)
+                        .transition(.opacity)
                 case .brightness, .volume:
                     LevelHUD(adjustment: adjustment)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -732,7 +721,6 @@ struct PlaybackControlsView: View {
             panActive = false
             panKind = nil
             adjustment = nil
-            preview.reset()
             revealControls()
             return
         }
@@ -748,7 +736,6 @@ struct PlaybackControlsView: View {
             panKind = nil
             panBase = .zero
             panActive = true
-            preview.reset()
         }
         guard panActive else { return }
 
@@ -787,7 +774,6 @@ struct PlaybackControlsView: View {
             let range = min(180, max(30, playback.duration / 5))
             let target = min(max(adjustmentStartTime + Double(moveX / size.width) * range, 0), max(0, playback.duration - 0.25))
             adjustment = seekAdjustment(target: target, from: adjustmentStartTime)
-            requestPreview(target)
         case .brightness:
             let value = min(max(adjustmentStartBrightness - Double(moveY / size.height) * 1.2, 0.02), 1)
             ScreenBrightness.screen.brightness = CGFloat(value)
@@ -803,7 +789,6 @@ struct PlaybackControlsView: View {
         if state == .ended {
             if let target = adjustment?.targetTime {
                 // 先停掉预览，再跳转：别让预览的连接和正片抢网速
-                preview.reset()
                 playback.seek(to: target)
             }
             self.panKind = nil
@@ -822,11 +807,6 @@ struct PlaybackControlsView: View {
             detail: "\(timeText(target)) / \(timeText(playback.duration))",
             targetTime: target
         )
-    }
-
-    private func requestPreview(_ target: Double) {
-        guard seekPreview, playback.duration > 0 else { return }
-        preview.request(fraction: target / playback.duration, from: playback)
     }
 
     /// 横滑用不了时给一句提示，不要什么反应都没有。
@@ -854,7 +834,6 @@ struct PlaybackControlsView: View {
             try? await Task.sleep(nanoseconds: 900_000_000)
             guard !Task.isCancelled else { return }
             adjustment = nil
-            preview.reset()
             if revealing { revealControls() }
         }
     }
@@ -951,9 +930,6 @@ private struct NoticeHUD: View {
 /// 拖动进度：目标时间 / 总时长、一条小进度、跳转了多少，下面是目标位置的画面
 private struct SeekHUD: View {
     let adjustment: PlaybackAdjustment
-    var showsPreview = false
-    var image: UIImage?
-    var loading = false
 
     var body: some View {
         VStack(spacing: 8) {
@@ -964,34 +940,9 @@ private struct SeekHUD: View {
             Text(adjustment.valueText)
                 .font(.subheadline.weight(.semibold).monospacedDigit())
                 .foregroundStyle(.white.opacity(0.85))
-            if showsPreview {
-                previewBox
-                    .padding(.top, 6)
-            }
         }
         .foregroundStyle(.white)
         .shadow(color: .black.opacity(0.55), radius: 6, y: 1)
-    }
-
-    private var previewBox: some View {
-        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
-        return ZStack {
-            Color.black.opacity(0.55)
-            if let image {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFill()
-            }
-            if image == nil || loading {
-                ProgressView()
-                    .tint(.white)
-                    .opacity(image == nil ? 1 : 0.8)
-            }
-        }
-        .frame(width: 224, height: 126)
-        .clipShape(shape)
-        .overlay { shape.strokeBorder(.white.opacity(0.9), lineWidth: 1.5) }
-        .animation(.easeOut(duration: 0.12), value: image)
     }
 }
 

@@ -270,14 +270,28 @@ final class MagnetController: ObservableObject {
         elapsed = 0
         phase = .resolving
         step = engineReady ? .peers : .engine
-        let uri = newLink.engineURI(publicTrackers: PublicTrackers.current)
-        resolveTask = Task { [weak self] in
-            await self?.resolve(newLink, uri: uri)
+        if cloudEnabled {
+            // 选了「使用 115 解析」：只交给 115 离线，软件自带的 BT 解析不参与
+            resolveTask = nil
+            if sameTorrent, cloud == .ready, cloudCatalog != nil {
+                useCloudCatalog()
+            } else if !(sameTorrent && cloudTask != nil) {
+                startCloud(newLink)
+            }
+        } else {
+            // 没选 115：只用软件自带的磁力解析
+            cloudTask?.cancel()
+            cloudTask = nil
+            cloud = .off
+            let uri = newLink.engineURI(publicTrackers: PublicTrackers.current)
+            resolveTask = Task { [weak self] in
+                await self?.resolve(newLink, uri: uri)
+            }
         }
-        // 同一个资源的 115 离线已经在进行或已经完成时，不再重复提交
-        let cloudBusyOrDone = sameTorrent && (cloudTask != nil || cloud == .ready)
-        if !cloudBusyOrDone { startCloud(newLink) }
     }
+
+    /// 当前用 115 离线解析（否则用软件自带的 BT 解析）
+    var usesCloud: Bool { cloudEnabled }
 
     /// 解析失败后再试一次。引擎里的任务一直在找节点，重试会接着等，不会从头开始。
     func retry() {
@@ -562,8 +576,14 @@ final class MagnetController: ObservableObject {
             cloudTask?.cancel()
             cloudTask = nil
             if cloud != .ready { cloud = .off }
-        } else if !wasEnabled, let link, phase == .resolving || phase == .failed {
-            startCloud(link)
+        }
+        // 解析中途切换了方式：按新的方式重新解析这个链接
+        if nowEnabled != wasEnabled, let link, phase == .resolving || phase == .failed {
+            resolveTask?.cancel()
+            resolveTask = nil
+            if case .failed = cloud { cloud = .off }
+            phase = .idle
+            open(link)
         }
     }
 
@@ -642,14 +662,14 @@ final class MagnetController: ObservableObject {
                         cloudFinished(videos, task: task, link: link)
                         return
                     case .failed:
-                        cloud = .failed("115 也没能下载这个资源，可能已经没有来源了。")
+                        cloudFailed("115 也没能下载这个资源，可能已经没有来源了。")
                         return
                     case .waiting, .downloading:
                         cloud = .downloading(task.percent)
                     }
                 }
                 if Date().timeIntervalSince(started) > 30 * 60 {
-                    cloud = .failed("115 离线超过 30 分钟还没完成，可以稍后到 115 的云下载里查看。")
+                    cloudFailed("115 离线超过 30 分钟还没完成，可以稍后到 115 的云下载里查看。")
                     return
                 }
                 try await Task.sleep(nanoseconds: interval)
@@ -659,14 +679,23 @@ final class MagnetController: ObservableObject {
             return
         } catch {
             guard !Task.isCancelled else { return }
-            cloud = .failed(Self.describeCloud(error))
+            cloudFailed(Self.describeCloud(error))
         }
+    }
+
+    /// 115 离线没成功。只用 115 解析时，整个解析就算失败，页面显示原因和重试
+    private func cloudFailed(_ message: String) {
+        cloud = .failed(message)
+        guard cloudEnabled, catalog == nil, resolveTask == nil else { return }
+        error = message
+        phase = .failed
+        resolveStarted = nil
     }
 
     private func cloudFinished(_ videos: [Direct115CloudVideo], task: Direct115OfflineTask, link: MagnetLink) {
         guard self.link?.infoHash == link.infoHash else { return }
         guard !videos.isEmpty else {
-            cloud = .failed("115 离线完成了，但里面没有找到能播放的视频。")
+            cloudFailed("115 离线完成了，但里面没有找到能播放的视频。")
             return
         }
         let name = task.name.isEmpty ? (catalog?.name ?? link.displayName ?? link.shortHash) : task.name
@@ -689,7 +718,7 @@ final class MagnetController: ObservableObject {
     private static func describeCloud(_ error: Error) -> String {
         if let offline = error as? Direct115OfflineError {
             switch offline {
-            case .quotaExhausted: return "115 离线额度用完了，这次只能用 BT。"
+            case .quotaExhausted: return "115 离线额度用完了。可以关掉「使用 115 解析」，改用软件自带的解析。"
             case .invalidLink: return "115 认为这个链接无效。"
             case .server(let message): return "115 离线：\(message)"
             }

@@ -135,9 +135,11 @@ struct MagnetPlayerView: View {
             if cloudAvailable {
                 Toggle(isOn: $cloudRelay) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("同时交给 115 离线下载")
+                        Text("使用 115 解析")
                             .font(.subheadline.weight(.medium))
-                        Text("热门资源 115 几秒就能离线完成，直接用 115 播放；会占用离线额度")
+                        Text(cloudRelay
+                             ? "交给 115 离线下载后直接用 115 播放，软件自带的解析不参与；会占用离线额度"
+                             : "已关闭：用软件自带的磁力解析，边下边播")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -251,17 +253,18 @@ struct MagnetPlayerView: View {
                 Spacer(minLength: 0)
             }
 
-            VStack(alignment: .leading, spacing: 12) {
-                stepRow(.engine, title: "启动 BT 引擎", detail: nil)
-                stepRow(.peers, title: "寻找节点", detail: peersDetail)
-                stepRow(.metadata, title: "获取文件列表", detail: "从 \(controller.swarm.connected) 个节点获取")
-            }
-
-            if controller.cloud != .off {
+            if controller.usesCloud {
+                // 115 解析：只显示 115 离线的进度
                 cloudRow
+            } else {
+                VStack(alignment: .leading, spacing: 12) {
+                    stepRow(.engine, title: "启动 BT 引擎", detail: nil)
+                    stepRow(.peers, title: "寻找节点", detail: peersDetail)
+                    stepRow(.metadata, title: "获取文件列表", detail: "从 \(controller.swarm.connected) 个节点获取")
+                }
             }
 
-            if controller.elapsed >= 25 {
+            if !controller.usesCloud && controller.elapsed >= 25 {
                 Text("冷门资源找节点会久一些，可以继续等待；超过两分半会提示你。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -411,7 +414,7 @@ struct MagnetPlayerView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            if controller.cloud != .off {
+            if controller.cloud != .off && !controller.usesCloud {
                 cloudRow
             }
             HStack(spacing: 10) {
