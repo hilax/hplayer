@@ -58,6 +58,9 @@ struct PlaybackControlsView: View {
     @State private var scrubStart = 0.0
     @State private var hideTask: Task<Void, Never>?
     @State private var requestedLandscape = false
+    /// 播放页还在屏幕上；退出后不再去请求横屏
+    @State private var onScreen = false
+    @State private var lastSeekTick = 0
     @State private var initialLandscapeRequested = false
     @State private var rotateError = ""
     @State private var adjustment: PlaybackAdjustment?
@@ -169,6 +172,7 @@ struct PlaybackControlsView: View {
             originalBrightness = ScreenBrightness.screen.brightness
             brightnessLevel = Double(ScreenBrightness.screen.brightness)
             systemVolume.start()
+            onScreen = true
             revealControls()
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 350_000_000)
@@ -181,7 +185,9 @@ struct PlaybackControlsView: View {
             playback.setBoost(false)
             systemVolume.stop()
             if brightnessAdjusted, let originalBrightness { ScreenBrightness.screen.brightness = originalBrightness }
-            if requestedLandscape { OrientationSupport.restorePortrait() }
+            // 播放器之外的页面都只用竖屏：不管在播放页里转成了什么方向，退出时一律转回竖屏
+            onScreen = false
+            OrientationSupport.restorePortrait()
         }
         .onChange(of: systemVolume.externalChangeCount) { _ in
             showSystemVolumeChange()
@@ -202,7 +208,12 @@ struct PlaybackControlsView: View {
 
     private func topBar(landscape: Bool) -> some View {
         HStack(spacing: 12) {
-            Button { onClose() } label: { roundIcon("xmark") }
+            Button {
+                // 先把方向限制改回竖屏再关闭，列表页回来时就是竖的
+                onScreen = false
+                OrientationSupport.restorePortrait()
+                onClose()
+            } label: { roundIcon("xmark") }
                 .buttonStyle(.plain)
                 .accessibilityLabel("关闭播放")
 
@@ -759,6 +770,9 @@ struct PlaybackControlsView: View {
                     return
                 }
                 panKind = .seek
+                lastSeekTick = Int(adjustmentStartTime / Self.seekTickSeconds)
+                Self.seekTicker.prepare()
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
             } else {
                 panKind = origin.x < size.width / 2 ? .brightness : .volume
             }
@@ -771,8 +785,10 @@ struct PlaybackControlsView: View {
         case .notice:
             break
         case .seek:
-            let range = min(180, max(30, playback.duration / 5))
+            // 滑满一屏宽能跳的时长：比原来快三倍，最多 9 分钟
+            let range = min(540, max(90, playback.duration * 0.6))
             let target = min(max(adjustmentStartTime + Double(moveX / size.width) * range, 0), max(0, playback.duration - 0.25))
+            seekHaptic(target: target)
             adjustment = seekAdjustment(target: target, from: adjustmentStartTime)
         case .brightness:
             let value = min(max(adjustmentStartBrightness - Double(moveY / size.height) * 1.2, 0.02), 1)
@@ -809,6 +825,22 @@ struct PlaybackControlsView: View {
         )
     }
 
+    /// 拖动快进快退时，每跨过 10 秒轻震一下；到头时重一点
+    private static let seekTickSeconds = 10.0
+    private static let seekTicker = UISelectionFeedbackGenerator()
+
+    private func seekHaptic(target: Double) {
+        let tick = Int(target / Self.seekTickSeconds)
+        guard tick != lastSeekTick else { return }
+        lastSeekTick = tick
+        if target <= 0 || target >= playback.duration - 0.5 {
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        } else {
+            Self.seekTicker.selectionChanged()
+            Self.seekTicker.prepare()
+        }
+    }
+
     /// 横滑用不了时给一句提示，不要什么反应都没有。
     private func showNotice(_ text: String) {
         adjustmentHideTask?.cancel()
@@ -843,7 +875,7 @@ struct PlaybackControlsView: View {
         revealControls()
     }
     private func enterLandscapeByDefault() {
-        guard !initialLandscapeRequested else { return }
+        guard onScreen, !initialLandscapeRequested else { return }
         initialLandscapeRequested = true
         requestedLandscape = true
         requestOrientation(.landscape)

@@ -29,8 +29,17 @@ enum OrientationSupport {
         }
     }
 
-    static func restorePortrait() {
-        request(.portrait)
+    /// 退出播放器时转回竖屏。关闭动画进行中 iOS 可能不理第一次请求，没转过来就隔一会儿再请求，最多三次；
+    /// 期间如果又打开了播放器（方向限制已经不是竖屏），就不再坚持。
+    static func restorePortrait(attempts: Int = 3) {
+        request(.portrait) { _ in
+            guard attempts > 1, supportedOrientations == .portrait else { return }
+            if let scene = activeScene, matches(scene.effectiveGeometry.interfaceOrientation, .portrait) { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                guard supportedOrientations == .portrait else { return }
+                restorePortrait(attempts: attempts - 1)
+            }
+        }
     }
 
     private static var activeScene: UIWindowScene? {
