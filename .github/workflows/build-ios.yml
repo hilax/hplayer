@@ -63,10 +63,13 @@ jobs:
             ios-native/Vendor/MobileVLCKit/MobileVLCKit.xcframework
           key: hplayer-nuvio-0.1.6-vlc-3.6.0-v1
 
+      # 引擎检查失败时继续编译 App，这样一次构建就能看到所有问题；最后一步再让整个任务失败
       - name: Verify torrent engine lifecycle
+        id: engine-smoke
+        continue-on-error: true
         run: |
           engine=ios-native/Vendor/NuvioEngine/NuvioEngine.xcframework/macos-arm64_x86_64
-          xcrun swiftc -parse-as-library \
+          if ! xcrun swiftc -parse-as-library \
             -I "$engine/Headers" \
             ios-native/Vendor/NuvioEngine/Sources/*.swift \
             ios-native/HPlayer/Services/MagnetLink.swift \
@@ -74,10 +77,23 @@ jobs:
             ios-native/scripts/MagnetEngineSmoke.swift \
             "$engine/libCNuvioEngine.a" -Xlinker -lc++ \
             -framework Security -framework SystemConfiguration -framework CoreFoundation -framework AVFoundation \
-            -o "$RUNNER_TEMP/magnet-engine-smoke"
-          "$RUNNER_TEMP/magnet-engine-smoke"
+            -o "$RUNNER_TEMP/magnet-engine-smoke" > "$RUNNER_TEMP/engine-build.log" 2>&1; then
+            cat "$RUNNER_TEMP/engine-build.log"
+            grep -E "error:" "$RUNNER_TEMP/engine-build.log" | sort -u | head -20 | sed 's/%/%25/g' | while IFS= read -r line; do echo "::error title=Engine check build::$line"; done
+            exit 1
+          fi
+          if ! "$RUNNER_TEMP/magnet-engine-smoke" > "$RUNNER_TEMP/engine-run.log" 2>&1; then
+            cat "$RUNNER_TEMP/engine-run.log"
+            tail -n 5 "$RUNNER_TEMP/engine-run.log" | sed 's/%/%25/g' | while IFS= read -r line; do echo "::error title=Engine check::$line"; done
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/engine-run.log"
+          sed 's/%/%25/g' "$RUNNER_TEMP/engine-run.log" | while IFS= read -r line; do echo "::notice title=Engine check::$line"; done
 
       - name: Verify magnet transfer from a local peer
+        id: magnet-peer
+        if: steps.engine-smoke.outcome == 'success'
+        continue-on-error: true
         run: |
           npm install --prefix "$RUNNER_TEMP/hplayer-peer" webtorrent@3.0.21 bittorrent-tracker@11.2.3 --omit=optional --no-package-lock --no-audit --no-fund
           cp ios-native/scripts/seed-fixture.mjs "$RUNNER_TEMP/hplayer-peer/seed-fixture.mjs"
@@ -91,10 +107,16 @@ jobs:
           test -s "$RUNNER_TEMP/magnet-fixture.json"
           passed=0
           for attempt in 1 2; do
-            if "$RUNNER_TEMP/magnet-engine-smoke" "$RUNNER_TEMP/magnet-fixture.json"; then passed=1; break; fi
+            if "$RUNNER_TEMP/magnet-engine-smoke" "$RUNNER_TEMP/magnet-fixture.json" > "$RUNNER_TEMP/peer-run.log" 2>&1; then passed=1; break; fi
+            cat "$RUNNER_TEMP/peer-run.log"
             echo "Magnet fixture retry $attempt"
           done
-          test "$passed" -eq 1
+          if [[ "$passed" -ne 1 ]]; then
+            tail -n 5 "$RUNNER_TEMP/peer-run.log" | sed 's/%/%25/g' | while IFS= read -r line; do echo "::error title=Magnet peer check::$line"; done
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/peer-run.log"
+          grep -E "Restored|passed" "$RUNNER_TEMP/peer-run.log" | sed 's/%/%25/g' | while IFS= read -r line; do echo "::notice title=Magnet peer check::$line"; done
 
       - name: Generate Xcode project
         working-directory: ios-native
@@ -103,7 +125,7 @@ jobs:
       - name: Build unsigned .app
         working-directory: ios-native
         run: |
-          xcodebuild \
+          if ! xcodebuild \
             -project HPlayer.xcodeproj \
             -scheme HPlayer \
             -configuration Release \
@@ -112,7 +134,12 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
-            -quiet
+            -quiet > "$RUNNER_TEMP/xcodebuild.log" 2>&1; then
+            tail -n 300 "$RUNNER_TEMP/xcodebuild.log"
+            grep -E "error:" "$RUNNER_TEMP/xcodebuild.log" | sort -u | head -20 | sed 's/%/%25/g' | while IFS= read -r line; do echo "::error title=Build::$line"; done
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/xcodebuild.log"
 
       - name: Package into IPA
         run: |
@@ -174,3 +201,8 @@ jobs:
           path: ${{ runner.temp }}/player-http.log
           if-no-files-found: ignore
 
+      - name: Fail when engine checks failed
+        if: always() && (steps.engine-smoke.outcome == 'failure' || steps.magnet-peer.outcome == 'failure')
+        run: |
+          echo "::error::Torrent engine checks failed; see the annotations above."
+          exit 1
