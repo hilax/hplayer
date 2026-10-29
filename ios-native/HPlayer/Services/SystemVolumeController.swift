@@ -48,8 +48,17 @@ final class SystemVolumeController: ObservableObject {
     var controlsSystemVolume: Bool { slider != nil }
 
     func attach(_ slider: UISlider) {
+        guard self.slider !== slider else { return }
         self.slider = slider
         if let pendingValue { apply(pendingValue) }
+    }
+
+    /// 开始一次滑动时的音量：刚由滑动设过就用设的值（系统回报有延迟），否则读系统当前音量
+    func currentLevel() -> Double {
+        if Date().timeIntervalSince(lastProgrammaticChange) < 1 { return level }
+        let value = min(max(Double(AVAudioSession.sharedInstance().outputVolume), 0), 1)
+        level = value
+        return value
     }
 
     func set(_ value: Double) {
@@ -72,9 +81,11 @@ final class SystemVolumeController: ObservableObject {
     }
 
     private func systemVolumeDidChange(_ value: Double) {
-        let programmatic = Date().timeIntervalSince(lastProgrammaticChange) < 0.5
-        if programmatic { return }
-        level = min(max(value, 0), 1)
+        let clamped = min(max(value, 0), 1)
+        // 自己滑动设的音量，系统稍后会回报一次；时间接近或数值几乎一样的都当成回声，不再弹提示
+        let programmatic = Date().timeIntervalSince(lastProgrammaticChange) < 0.8
+        if programmatic || abs(clamped - level) < 0.01 { return }
+        level = clamped
         externalChangeCount += 1
     }
 }
@@ -83,19 +94,41 @@ final class SystemVolumeController: ObservableObject {
 struct SystemVolumeHost: UIViewRepresentable {
     let controller: SystemVolumeController
 
-    func makeUIView(context: Context) -> MPVolumeView {
-        let view = MPVolumeView(frame: CGRect(x: 0, y: 0, width: 100, height: 30))
+    func makeUIView(context: Context) -> VolumeHostView {
+        let view = VolumeHostView(frame: CGRect(x: 0, y: 0, width: 100, height: 30))
+        view.controller = controller
         view.alpha = 0.01
         view.isUserInteractionEnabled = false
         view.isAccessibilityElement = false
         view.accessibilityElementsHidden = true
-        DispatchQueue.main.async {
-            if let slider = Self.findSlider(in: view) { controller.attach(slider) }
-        }
         return view
     }
 
-    func updateUIView(_ view: MPVolumeView, context: Context) {}
+    func updateUIView(_ view: VolumeHostView, context: Context) {
+        view.controller = controller
+        view.attachSlider()
+    }
+}
+
+/// 系统音量滑块不一定在创建时就有，可能等放进窗口、排好版之后才生成；
+/// 每次进窗口和排版时都找一遍，找到就交给音量控制器，不会因为找早了而一直退回软件音量。
+final class VolumeHostView: MPVolumeView {
+    weak var controller: SystemVolumeController?
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        attachSlider()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        attachSlider()
+    }
+
+    func attachSlider() {
+        guard let controller, let slider = Self.findSlider(in: self) else { return }
+        controller.attach(slider)
+    }
 
     private static func findSlider(in view: UIView) -> UISlider? {
         for subview in view.subviews {

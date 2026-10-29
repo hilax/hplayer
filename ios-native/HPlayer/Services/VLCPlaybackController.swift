@@ -4,6 +4,23 @@ import MobileVLCKit
 import SwiftUI
 import UIKit
 
+/// 视频解码方式：硬解码交给 iPhone 的 VideoToolbox 硬件，软解码用 CPU（FFmpeg）。
+enum VideoDecoding: String, CaseIterable, Identifiable {
+    case hardware
+    case software
+
+    var id: String { rawValue }
+    var title: String { self == .hardware ? "硬解码" : "软解码" }
+
+    private static let key = "player.videoDecoding"
+
+    /// 用户上次选的解码方式，默认硬解码
+    static var saved: VideoDecoding {
+        get { VideoDecoding(rawValue: UserDefaults.standard.string(forKey: key) ?? "") ?? .hardware }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: key) }
+    }
+}
+
 /// 统一使用 VideoLAN 的 VLC 播放内核；视频控制界面由 HPlayer 自己绘制。
 @MainActor
 final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDelegate {
@@ -32,6 +49,11 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
     private var currentURL: URL?
     private var currentDirect115 = false
     private var currentCookie = ""
+    /// 当前解码方式，切换后从当前位置重新打开视频
+    @Published private(set) var decoding = VideoDecoding.saved
+    /// 播放中途网速跟不上、画面停住的状态（VLC 这时仍报告「正在播放」）
+    private var stalled = false
+    private var lastSampledTime: Int32 = -1
     private var openTimeoutTask: Task<Void, Never>?
     private var pendingSeek: Double?
     private var pendingSeekStarted = Date.distantPast
@@ -55,6 +77,8 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
         pauseAfterSeek = false
         boosted = false
         ended = false
+        stalled = false
+        lastSampledTime = -1
         currentURL = url
         currentDirect115 = direct115
         currentCookie = directCookie
@@ -65,11 +89,11 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
         resumeTime = oldTime > 0 ? Int32(clamping: Int(oldTime * 1000)) : nil
         shouldPauseAfterOpening = !oldPlaying
         let media = VLCMedia(url: url)
-        // VLC 会把音频提前解码进输出缓冲，提前量约等于这里的缓存时长（最多 2 秒）。
-        // 缓存越长，变速（长按 3×）时排队的旧声音越多，松手后重新定位也要多缓冲一会儿。
-        // 1.5 秒对 115 CDN 和本机磁力流都够用，起播和拖动进度也更快。
-        media.addOption(":network-caching=1500")
+        // 网络视频先攒 3 秒再播：原画码率高，网速有起伏时有这 3 秒垫着就不会一卡一卡。
+        // 长按 3× 松手时会重开音轨清掉错位的声音，缓存长一点也不会让声音对不上。
+        media.addOption(":network-caching=3000")
         media.addOption(":file-caching=800")
+        Self.applyDecoding(decoding, to: media)
         Self.applyRequestOptions(to: media, url: url, direct115: direct115, cookie: directCookie)
         player.media = media
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
@@ -123,6 +147,30 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
         player.currentAudioTrackIndex = track
     }
 
+    // MARK: 解码方式
+
+    /// 切换硬解码 / 软解码：记住选择，从当前位置重新打开当前视频
+    func setDecoding(_ value: VideoDecoding) {
+        guard value != decoding else { return }
+        decoding = value
+        VideoDecoding.saved = value
+        guard let url = currentURL else { return }
+        open(url, direct115: currentDirect115, directCookie: currentCookie, preservingPosition: true)
+    }
+
+    private static func applyDecoding(_ decoding: VideoDecoding, to media: VLCMedia) {
+        switch decoding {
+        case .hardware:
+            // 先用 VideoToolbox 硬件解码，遇到硬件不支持的格式再退回软解
+            media.addOption(":codec=videotoolbox,avcodec,all")
+        case .software:
+            media.addOption(":codec=avcodec,all")
+            media.addOption(":avcodec-hw=none")
+            // 和 VLC 官方 App 的默认一样：非参考帧跳过去块滤波，软解 1080P 以上更跟得上
+            media.addOption(":avcodec-skiploopfilter=1")
+        }
+    }
+
     // MARK: 网速与预览
 
     /// 每秒看一次读了多少字节，换算成下载速度
@@ -144,10 +192,27 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
             downloadSpeed = 0
             return
         }
-        let bytes = Int(media.numberOfReadBytesOnInput)
+        let bytes = Int(media.statistics.readBytes)
         let delta = bytes - lastReadBytes
         lastReadBytes = bytes
-        downloadSpeed = delta > 0 ? Double(delta) : 0
+        let speed = delta > 0 ? Double(delta) : 0
+        if speed != downloadSpeed { downloadSpeed = speed }
+
+        // VLC 播放中途缓存见底时，状态仍是「正在播放」，只是时间不走了。
+        // 正在播放、时间却一秒没动，就算卡住了，画面中间转圈并显示网速。
+        let time = player.time.intValue
+        let stuck = player.isPlaying && pendingSeek == nil && time == lastSampledTime && time > 0
+        lastSampledTime = time
+        if stuck != stalled {
+            stalled = stuck
+            updateBuffering()
+        }
+    }
+
+    private func updateBuffering() {
+        let state = player.state
+        let value = stalled || (!player.isPlaying && (state == .opening || state == .buffering))
+        if value != buffering { buffering = value }
     }
 
     /// 给拖动预览用的同一个视频：不要声音，缓存短一点，带上同样的 115 请求头
@@ -193,6 +258,7 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
         pendingSeek = nil
         pauseAfterSeek = false
         boosted = false
+        stalled = false
         speedTask?.cancel()
         speedTask = nil
         downloadSpeed = 0
@@ -217,7 +283,9 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
         let state = player.state
         playing = player.isPlaying
         if playing { openTimeoutTask?.cancel() }
-        buffering = !player.isPlaying && (state == .opening || state == .buffering)
+        // 时间又走起来了，就不算卡住
+        if stalled, player.time.intValue != lastSampledTime || !playing { stalled = false }
+        updateBuffering()
         seekable = player.isSeekable
         let decodedTime = max(0, Double(player.time.intValue) / 1000)
         if let pendingSeek {

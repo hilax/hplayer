@@ -105,23 +105,28 @@ struct PlayerView: View {
             case .p115(_, let pickCode):
                 if appState.isDirect {
                     guard let client = appState.directClient() else { throw APIError.server("请先登录 115") }
+                    // 默认播原画：直接读原文件，不经过 115 转码，画质和音轨都是原样
+                    var originalError: Error?
+                    do {
+                        let original = try await client.originalURL(pickCode: pickCode)
+                        guard visible && !Task.isCancelled && current == source else { return }
+                        selectedQuality = "原画"
+                        playback.open(original, direct115: true, directCookie: client.cookie, startTime: resume)
+                        loading = false
+                    } catch {
+                        originalError = error
+                    }
+                    // 转码画质放进画质菜单备选；原文件拿不到时（例如文件被限制下载）才用转码播放
                     var streams: [Direct115Stream] = []
-                    var streamError: Error?
-                    do { streams = try await client.streams(pickCode: pickCode) } catch { streamError = error }
+                    do { streams = try await client.streams(pickCode: pickCode) } catch {
+                        if let originalError { throw originalError }
+                    }
                     guard visible && !Task.isCancelled && current == source else { return }
-                    if let first = streams.first {
-                        directQualities = streams; selectedQuality = first.title
+                    directQualities = streams
+                    if let originalError {
+                        guard let first = streams.first else { throw originalError }
+                        selectedQuality = first.title
                         playback.open(first.url, direct115: true, directCookie: client.cookie, startTime: resume)
-                    } else {
-                        // 刚离线下载的视频可能还没转码，或者账号没有在线播放权益：直接播放原文件
-                        do {
-                            let original = try await client.originalURL(pickCode: pickCode)
-                            guard visible && !Task.isCancelled && current == source else { return }
-                            selectedQuality = "原画"
-                            playback.open(original, direct115: true, directCookie: client.cookie, startTime: resume)
-                        } catch {
-                            throw streamError ?? error
-                        }
                     }
                 } else {
                     guard let url = appState.mediaURL("/api/play/\(pickCode)") else { throw APIError.server("未连接服务器") }

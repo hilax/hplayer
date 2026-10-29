@@ -147,23 +147,32 @@ struct HomeTab: View {
         .frame(height: heroHeight)
     }
 
+    /// 翻页时只有图片和片名跟着滑，播放和换封面两个按钮固定在原处，作用于当前这一页
     private func heroPager(_ library: HomeSnapshot, topInset: CGFloat) -> some View {
         let featured = library.featured
         let current = currentHero(library)
+        let bottomInset: CGFloat = featured.count > 1 ? 34 : 8
         return ZStack(alignment: .top) {
             TabView(selection: $heroSelection) {
                 ForEach(Array(featured.enumerated()), id: \.element.id) { index, item in
-                    HeroPage(item: item, bottomInset: featured.count > 1 ? 34 : 8) {
-                        playing = HomeLibrary.queue(for: item, in: library.items)
-                    } onMatch: {
-                        matching = MatchRequest(item: item)
-                    }
-                    .tag(index)
+                    HeroPage(item: item, bottomInset: bottomInset + HeroActions.height + 16)
+                        .tag(index)
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
 
             heroTopBar(current, topInset: topInset)
+        }
+        .overlay(alignment: .bottomLeading) {
+            if let current {
+                HeroActions(hasMetadata: current.metadata != nil) {
+                    playing = HomeLibrary.queue(for: current, in: library.items)
+                } onMatch: {
+                    matching = MatchRequest(item: current)
+                }
+                .padding(.leading, 20)
+                .padding(.bottom, bottomInset + 6)
+            }
         }
         .overlay(alignment: .bottom) {
             if featured.count > 1 {
@@ -636,10 +645,8 @@ struct HomeTab: View {
 /// 精选横幅的一页：背景图铺满，越往下越透明，融进整页取自这张图的底色；片名和按钮压在底部。
 private struct HeroPage: View {
     let item: HomeMediaItem
-    /// 底部留给翻页圆点的高度
+    /// 底部留给固定按钮和翻页圆点的高度
     let bottomInset: CGFloat
-    let onPlay: () -> Void
-    let onMatch: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
 
@@ -719,11 +726,6 @@ private struct HeroPage: View {
                 if let genres = item.metadata?.genres, !genres.isEmpty {
                     Text(genres.prefix(2).joined(separator: " / "))
                 }
-                Text(matchText)
-                    .font(.caption2.weight(.semibold))
-                    .padding(.horizontal, 8)
-                    .frame(height: 20)
-                    .glassCapsule()
             }
             .font(.footnote.weight(.semibold))
             .foregroundStyle(Color.primary.opacity(0.85))
@@ -736,38 +738,41 @@ private struct HeroPage: View {
                     .lineLimit(2)
                     .frame(maxWidth: 420, alignment: .leading)
             }
-
-            HStack(spacing: 10) {
-                Button(action: onPlay) {
-                    Label("播放", systemImage: "play.fill")
-                        .font(.subheadline.weight(.bold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 26)
-                        .frame(height: 48)
-                        .glassProminentCapsule()
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("home.heroPlay")
-
-                Button(action: onMatch) {
-                    Image(systemName: item.metadata == nil ? "photo.badge.plus" : "photo")
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .frame(width: 48, height: 48)
-                        .glassCircle()
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("更换封面")
-                .accessibilityIdentifier("home.heroMatch")
-
-                Spacer(minLength: 0)
-            }
-            .padding(.top, 6)
         }
     }
+}
 
-    private var matchText: String {
-        guard let metadata = item.metadata else { return "等待匹配" }
-        return metadata.matchedByHash ? "SHA-1 识别" : "已匹配"
+/// 横幅底部固定的两个按钮：播放、换封面；翻页时不动
+private struct HeroActions: View {
+    static let height: CGFloat = 48
+
+    let hasMetadata: Bool
+    let onPlay: () -> Void
+    let onMatch: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Button(action: onPlay) {
+                Label("播放", systemImage: "play.fill")
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 26)
+                    .frame(height: Self.height)
+                    .glassProminentCapsule()
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("home.heroPlay")
+
+            Button(action: onMatch) {
+                Image(systemName: hasMetadata ? "photo" : "photo.badge.plus")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .frame(width: Self.height, height: Self.height)
+                    .glassCircle()
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("更换封面")
+            .accessibilityIdentifier("home.heroMatch")
+        }
     }
 }

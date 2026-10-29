@@ -169,8 +169,8 @@ struct PlaybackControlsView: View {
         .statusBarHidden(true)
         .persistentSystemOverlays(controlsVisible ? .automatic : .hidden)
         .onAppear {
-            originalBrightness = UIScreen.main.brightness
-            brightnessLevel = UIScreen.main.brightness
+            originalBrightness = ScreenBrightness.screen.brightness
+            brightnessLevel = Double(ScreenBrightness.screen.brightness)
             systemVolume.start()
             revealControls()
             Task { @MainActor in
@@ -183,7 +183,7 @@ struct PlaybackControlsView: View {
             adjustmentHideTask?.cancel()
             playback.setBoost(false)
             systemVolume.stop()
-            if let originalBrightness { UIScreen.main.brightness = originalBrightness }
+            if brightnessAdjusted, let originalBrightness { ScreenBrightness.screen.brightness = originalBrightness }
             if requestedLandscape { OrientationSupport.restorePortrait() }
         }
         .onChange(of: systemVolume.externalChangeCount) { _ in
@@ -191,10 +191,10 @@ struct PlaybackControlsView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
             // 离开 App 时把亮度还给系统，回来后再恢复播放页的亮度
-            if brightnessAdjusted, let originalBrightness { UIScreen.main.brightness = originalBrightness }
+            if brightnessAdjusted, let originalBrightness { ScreenBrightness.screen.brightness = originalBrightness }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
-            if brightnessAdjusted { UIScreen.main.brightness = CGFloat(brightnessLevel) }
+            if brightnessAdjusted { ScreenBrightness.screen.brightness = CGFloat(brightnessLevel) }
         }
         .alert("无法切换屏幕方向", isPresented: Binding(get: { !rotateError.isEmpty }, set: { if !$0 { rotateError = "" } })) {
             Button("好", role: .cancel) { rotateError = "" }
@@ -247,6 +247,19 @@ struct PlaybackControlsView: View {
                     }
                 }
                 Section("播放速度") { speedButtons }
+                Section("解码方式") {
+                    ForEach(VideoDecoding.allCases) { option in
+                        Button {
+                            playback.setDecoding(option); revealControls()
+                        } label: {
+                            if playback.decoding == option {
+                                Label(option.title, systemImage: "checkmark")
+                            } else {
+                                Text(option.title)
+                            }
+                        }
+                    }
+                }
             } label: {
                 roundIcon("ellipsis")
             }
@@ -258,6 +271,7 @@ struct PlaybackControlsView: View {
         var parts: [String] = []
         if !selectedQuality.isEmpty { parts.append(selectedQuality) }
         if abs(playback.rate - 1) > 0.01 { parts.append("\(String(format: "%g", playback.rate))× 倍速") }
+        parts.append(playback.decoding.title)
         if !networkStatus.isEmpty { parts.append(networkStatus) }
         return parts.joined(separator: "  ")
     }
@@ -696,7 +710,7 @@ struct PlaybackControlsView: View {
     /// 手指走出这么远（点）才锁定是横滑还是竖滑。
     /// 手势刚识别出来时只走了十个点左右，真人拇指横滑起手常带一点斜向，
     /// 此时就定方向很容易把横滑误判成竖滑，变成调亮度或音量而不是快进快退。
-    private static let panLockDistance: CGFloat = 18
+    private static let panLockDistance: CGFloat = 14
 
     private func handlePan(_ state: UIGestureRecognizer.State, origin: CGPoint, translation: CGPoint, size: CGSize) {
         if state == .cancelled || state == .failed {
@@ -713,8 +727,9 @@ struct PlaybackControlsView: View {
             adjustmentHideTask?.cancel()
             hideTask?.cancel()
             adjustmentStartTime = playback.currentTime
-            adjustmentStartBrightness = brightnessLevel
-            adjustmentStartVolume = systemVolume.level
+            // 每次从屏幕和系统的真实值开始调：自动亮度、音量键、控制中心都可能在两次滑动之间改过它们
+            adjustmentStartBrightness = Double(ScreenBrightness.screen.brightness)
+            adjustmentStartVolume = systemVolume.currentLevel()
             panKind = nil
             panBase = .zero
             panActive = true
@@ -734,8 +749,8 @@ struct PlaybackControlsView: View {
                 return
             }
             panBase = translation
-            // 横向略占优势就算横滑：竖滑要调亮度和音量，起手更不容易带横向分量
-            if dx > dy * 0.8 {
+            // 以 45° 为界：更偏横就快进快退，更偏竖就调亮度（左半边）或音量（右半边）
+            if dx > dy {
                 guard playback.seekable, playback.duration > 0 else {
                     panActive = false
                     showNotice(playback.duration > 0 ? "视频还在加载，暂时不能拖动进度" : "这个视频不支持拖动进度")
@@ -760,7 +775,7 @@ struct PlaybackControlsView: View {
             requestPreview(target)
         case .brightness:
             let value = min(max(adjustmentStartBrightness - Double(moveY / size.height) * 1.2, 0.02), 1)
-            UIScreen.main.brightness = CGFloat(value)
+            ScreenBrightness.screen.brightness = CGFloat(value)
             brightnessLevel = value
             brightnessAdjusted = true
             adjustment = PlaybackAdjustment(kind: .brightness, title: "亮度", valueText: "\(Int((value * 100).rounded()))%", progress: value)
@@ -842,6 +857,19 @@ struct PlaybackControlsView: View {
                 rotateError = "当前页面暂时无法切换横竖屏，请退出播放器后重试。"
             }
         }
+    }
+}
+
+// MARK: - 屏幕亮度
+
+/// 播放页所在屏幕：iOS 26 起不再推荐 UIScreen.main，优先用前台窗口场景的屏幕
+@MainActor
+private enum ScreenBrightness {
+    static var screen: UIScreen {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        if let active = scenes.first(where: { $0.activationState == .foregroundActive }) { return active.screen }
+        if let scene = scenes.first { return scene.screen }
+        return UIScreen.main
     }
 }
 
