@@ -50,6 +50,7 @@ struct MetadataMatchView: View {
                 if searched && !searching && results.isEmpty { Text("没有找到结果，请尝试其他片名或英文名。") }
                 Section("源文件") { Text(file.name).font(.caption).foregroundStyle(.secondary) }
             }
+            .listRowSeparator(.hidden)
             .navigationTitle("匹配封面")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("完成") { dismiss() } } }

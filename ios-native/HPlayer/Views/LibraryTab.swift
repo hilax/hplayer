@@ -36,8 +36,6 @@ struct LibraryTab: View {
                             }
                             .buttonStyle(.plain)
 
-                            Divider().padding(.leading, 66)
-
                             NavigationLink {
                                 TorrentView()
                             } label: {
@@ -57,9 +55,7 @@ struct LibraryTab: View {
                         GroupLabel(title: "更多来源")
                         VStack(spacing: 0) {
                             upcomingRow(icon: "externaldrive.connected.to.line.below", title: "WebDAV")
-                            Divider().padding(.leading, 66)
                             upcomingRow(icon: "desktopcomputer", title: "SMB 共享")
-                            Divider().padding(.leading, 66)
                             upcomingRow(icon: "play.tv", title: "Emby / Jellyfin")
                         }
                         .surfaceCard(cornerRadius: 20)

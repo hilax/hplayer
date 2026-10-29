@@ -169,6 +169,7 @@ struct SettingsView: View {
                     Text("播放内核使用 VideoLAN VLCKit（LGPL-2.1），磁力播放使用 Nuvio Engine（GPL-3.0）。")
                 }
             }
+            .listRowSeparator(.hidden)
             .scrollDismissesKeyboard(.interactively)
             .toolbar {
                 ToolbarItemGroup(placement: .keyboard) {

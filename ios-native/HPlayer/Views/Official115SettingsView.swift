@@ -217,6 +217,7 @@ struct Official115SettingsView: View {
                 Section { Label(error, systemImage: "exclamationmark.circle").foregroundColor(.red) }
             }
         }
+        .listRowSeparator(.hidden)
         .scrollDismissesKeyboard(.interactively)
         .toolbar {
             ToolbarItemGroup(placement: .keyboard) {

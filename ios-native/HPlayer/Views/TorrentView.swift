@@ -181,6 +181,7 @@ struct TorrentView: View {
                     .disabled(!appState.isAuthenticated)
             } header: { Text("115 云下载任务") }
         }
+        .listRowSeparator(.hidden)
         .scrollDismissesKeyboard(.interactively)
         .toolbar {
             ToolbarItemGroup(placement: .keyboard) {
@@ -311,6 +312,7 @@ private struct TorrentFolder: View {
             if hasMore { Button("加载更多") { Task { await load() } }.disabled(loading) }
             if !loading && files.isEmpty && error.isEmpty && !hasMore { Text("此目录没有种子或文件夹").foregroundStyle(.secondary) }
         }
+        .listRowSeparator(.hidden)
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .task { await load() }

@@ -337,10 +337,6 @@ struct HomeTab: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-
-                    if item.id != recent.last?.id {
-                        Divider().padding(.leading, 61)
-                    }
                 }
             }
             .surfaceCard(cornerRadius: 20)

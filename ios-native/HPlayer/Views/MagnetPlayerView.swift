@@ -62,6 +62,7 @@ struct MagnetPlayerView: View {
                 Section { Button("结束当前磁力任务", role: .destructive) { controller.close() } }
             }
         }
+        .listRowSeparator(.hidden)
         .navigationTitle("磁力在线播放")
         .navigationBarTitleDisplayMode(.inline)
         .scrollDismissesKeyboard(.interactively)
