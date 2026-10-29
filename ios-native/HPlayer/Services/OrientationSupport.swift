@@ -29,7 +29,43 @@ enum OrientationSupport {
         }
     }
 
-    /// 退出播放器时转回竖屏。关闭动画进行中 iOS 可能不理第一次请求，没转过来就隔一会儿再请求，最多三次；
+    /// 关闭播放器之前调用：先让播放器自己转回竖屏，等旋转动画走完再执行 completion（真正关闭）。
+    ///
+    /// 整个 App 共用一个窗口，播放器横屏时下面的列表也跟着是横的。
+    /// 如果先关播放器再转方向，列表会带着黑边在用户眼前整个翻转一次；
+    /// 先在播放器里转好再关，回到列表时它已经是竖屏。
+    static func rotateToPortrait(then completion: @escaping () -> Void) {
+        supportedOrientations = .portrait
+        guard let scene = activeScene, let window = keyWindow(in: scene), let root = window.rootViewController else {
+            completion()
+            return
+        }
+        refreshSupportedOrientations(viewControllers(startingAt: root))
+        if matches(scene.effectiveGeometry.interfaceOrientation, .portrait) {
+            completion()
+            return
+        }
+        scene.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait)) { _ in }
+        waitForPortrait(scene: scene, remainingChecks: 30, completion: completion)
+    }
+
+    private static func waitForPortrait(scene: UIWindowScene, remainingChecks: Int, completion: @escaping () -> Void) {
+        if matches(scene.effectiveGeometry.interfaceOrientation, .portrait) {
+            // 方向已经切过去了，再等旋转动画走完
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { completion() }
+            return
+        }
+        guard remainingChecks > 0 else {
+            // 1.5 秒还没转过来（例如系统拒绝），不再等，直接关闭
+            completion()
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            waitForPortrait(scene: scene, remainingChecks: remainingChecks - 1, completion: completion)
+        }
+    }
+
+    /// 退出播放器时转回竖屏（兜底：播放器不是从关闭按钮退出时）。关闭动画进行中 iOS 可能不理第一次请求，没转过来就隔一会儿再请求，最多三次；
     /// 期间如果又打开了播放器（方向限制已经不是竖屏），就不再坚持。
     static func restorePortrait(attempts: Int = 3) {
         request(.portrait) { _ in

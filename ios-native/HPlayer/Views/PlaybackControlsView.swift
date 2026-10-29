@@ -61,6 +61,8 @@ struct PlaybackControlsView: View {
     /// 播放页还在屏幕上；退出后不再去请求横屏
     @State private var onScreen = false
     @State private var lastSeekTick = 0
+    /// 正在转回竖屏准备关闭，期间不再响应关闭和手势
+    @State private var closing = false
     @State private var initialLandscapeRequested = false
     @State private var rotateError = ""
     @State private var adjustment: PlaybackAdjustment?
@@ -185,9 +187,10 @@ struct PlaybackControlsView: View {
             playback.setBoost(false)
             systemVolume.stop()
             if brightnessAdjusted, let originalBrightness { ScreenBrightness.screen.brightness = originalBrightness }
-            // 播放器之外的页面都只用竖屏：不管在播放页里转成了什么方向，退出时一律转回竖屏
+            // 播放器之外的页面都只用竖屏。正常从关闭按钮退出时已经先转好了；
+            // 万一是别的方式退出的，这里兜底转回竖屏
             onScreen = false
-            OrientationSupport.restorePortrait()
+            if !closing { OrientationSupport.restorePortrait() }
         }
         .onChange(of: systemVolume.externalChangeCount) { _ in
             showSystemVolumeChange()
@@ -208,12 +211,7 @@ struct PlaybackControlsView: View {
 
     private func topBar(landscape: Bool) -> some View {
         HStack(spacing: 12) {
-            Button {
-                // 先把方向限制改回竖屏再关闭，列表页回来时就是竖的
-                onScreen = false
-                OrientationSupport.restorePortrait()
-                onClose()
-            } label: { roundIcon("xmark") }
+            Button(action: closePlayer) { roundIcon("xmark") }
                 .buttonStyle(.plain)
                 .accessibilityLabel("关闭播放")
 
@@ -735,7 +733,7 @@ struct PlaybackControlsView: View {
             revealControls()
             return
         }
-        guard !locked, !showList, size.width > 0, size.height > 0 else { return }
+        guard !locked, !showList, !closing, size.width > 0, size.height > 0 else { return }
         if state == .began {
             setBoost(false)
             adjustmentHideTask?.cancel()
@@ -869,6 +867,19 @@ struct PlaybackControlsView: View {
             if revealing { revealControls() }
         }
     }
+    /// 关闭播放器：横屏时先在播放器里转回竖屏，转完再关，列表页回来时不会再整个翻转一次
+    private func closePlayer() {
+        guard !closing else { return }
+        closing = true
+        onScreen = false
+        hideTask?.cancel()
+        playback.setBoost(false)
+        showList = false
+        OrientationSupport.rotateToPortrait {
+            onClose()
+        }
+    }
+
     private func toggleOrientation(landscape: Bool) {
         requestedLandscape = !landscape
         requestOrientation(landscape ? .portrait : .landscape)
