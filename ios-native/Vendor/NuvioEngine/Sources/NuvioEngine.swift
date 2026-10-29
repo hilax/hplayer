@@ -526,7 +526,12 @@ public actor NuvioEngine {
             diskCacheProtectedBytes: stats.disk_cache_protected_bytes,
             diskCacheEvictions: stats.disk_cache_evictions,
             diskCacheReclaimedBytes: stats.disk_cache_reclaimed_bytes,
-            diskCacheIsOverBudget: stats.disk_cache_over_budget != 0
+            diskCacheIsOverBudget: stats.disk_cache_over_budget != 0,
+            connectingPeers: stats.connecting_peers,
+            trackerReplyEvents: stats.tracker_reply_events,
+            dhtReplyEvents: stats.dht_reply_events,
+            trackerPeersReturned: stats.tracker_peers_returned,
+            dhtPeersReturned: stats.dht_peers_returned
         )
     }
 

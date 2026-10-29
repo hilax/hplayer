@@ -84,6 +84,12 @@ public struct NuvioEngineStats: Sendable, Equatable {
     public let diskCacheEvictions: UInt64
     public let diskCacheReclaimedBytes: UInt64
     public let diskCacheIsOverBudget: Bool
+    /// HPlayer 补充：正在连接的节点、Tracker 和 DHT 返回的节点数，用来显示解析进度
+    public let connectingPeers: UInt32
+    public let trackerReplyEvents: UInt32
+    public let dhtReplyEvents: UInt32
+    public let trackerPeersReturned: UInt64
+    public let dhtPeersReturned: UInt64
 
     public init(
         activeTorrents: UInt32 = 0,
@@ -118,7 +124,12 @@ public struct NuvioEngineStats: Sendable, Equatable {
         diskCacheProtectedBytes: UInt64 = 0,
         diskCacheEvictions: UInt64 = 0,
         diskCacheReclaimedBytes: UInt64 = 0,
-        diskCacheIsOverBudget: Bool = false
+        diskCacheIsOverBudget: Bool = false,
+        connectingPeers: UInt32 = 0,
+        trackerReplyEvents: UInt32 = 0,
+        dhtReplyEvents: UInt32 = 0,
+        trackerPeersReturned: UInt64 = 0,
+        dhtPeersReturned: UInt64 = 0
     ) {
         self.activeTorrents = activeTorrents
         self.activeStreams = activeStreams
@@ -153,6 +164,11 @@ public struct NuvioEngineStats: Sendable, Equatable {
         self.diskCacheEvictions = diskCacheEvictions
         self.diskCacheReclaimedBytes = diskCacheReclaimedBytes
         self.diskCacheIsOverBudget = diskCacheIsOverBudget
+        self.connectingPeers = connectingPeers
+        self.trackerReplyEvents = trackerReplyEvents
+        self.dhtReplyEvents = dhtReplyEvents
+        self.trackerPeersReturned = trackerPeersReturned
+        self.dhtPeersReturned = dhtPeersReturned
     }
 }
 

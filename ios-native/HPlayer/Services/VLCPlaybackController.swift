@@ -16,6 +16,8 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
     @Published private(set) var bufferProgress: Double = 0
     @Published private(set) var muted = false
     @Published private(set) var error = ""
+    /// 播放到了结尾（用于自动播放下一集）
+    @Published private(set) var ended = false
     @Published var rate: Float = 1
     /// 长按快进的倍速
     static let boostRate: Float = 3
@@ -36,13 +38,16 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
         _ url: URL,
         direct115: Bool = false,
         directCookie: String = "",
-        preservingPosition: Bool = false
+        preservingPosition: Bool = false,
+        startTime: Double? = nil,
+        openTimeoutSeconds: UInt64 = 20
     ) {
         openTimeoutTask?.cancel()
         pendingSeek = nil
         pauseAfterSeek = false
         boosted = false
-        let oldTime = preservingPosition ? currentTime : 0
+        ended = false
+        let oldTime = preservingPosition ? currentTime : max(0, startTime ?? 0)
         let oldPlaying = preservingPosition ? playing : true
         player.stop()
         error = ""; currentTime = 0; duration = 0; buffering = true; seekable = false; bufferProgress = 0
@@ -68,7 +73,7 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
         try? AVAudioSession.sharedInstance().setActive(true)
         player.play()
         openTimeoutTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 20_000_000_000)
+            try? await Task.sleep(nanoseconds: openTimeoutSeconds * 1_000_000_000)
             guard let self, !Task.isCancelled, !self.playing, self.currentTime < 0.1, self.error.isEmpty else { return }
             self.buffering = false
             self.player.stop()
@@ -137,6 +142,7 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
         player.stop()
         if detach { player.drawable = nil }
         playing = false; buffering = false; bufferProgress = 0; resumeTime = nil; shouldPauseAfterOpening = false
+        ended = false
     }
 
     nonisolated func mediaPlayerStateChanged(_ aNotification: Notification) {
@@ -174,6 +180,11 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
         if let resumeTime, state == .playing, player.isSeekable {
             player.time = VLCTime(int: resumeTime)
             self.resumeTime = nil
+        }
+        if state == .ended {
+            ended = true
+        } else if state == .playing || state == .opening {
+            ended = false
         }
         if state == .playing {
             let targetRate: Float = boosted ? Self.boostRate : rate

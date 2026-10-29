@@ -40,6 +40,8 @@ struct PlaybackControlsView: View {
     var selectedID = ""
     var qualities: [PlaybackChoice] = []
     var selectedQuality = ""
+    /// 边下边播时的网络状态，例如「12 个节点 · 1.2 MB/s」
+    var networkStatus = ""
     var onSelect: (String) -> Void = { _ in }
     var onQuality: (String) -> Void = { _ in }
     var onRetry: () -> Void = { }
@@ -250,6 +252,7 @@ struct PlaybackControlsView: View {
         var parts: [String] = []
         if !selectedQuality.isEmpty { parts.append(selectedQuality) }
         if abs(playback.rate - 1) > 0.01 { parts.append("\(String(format: "%g", playback.rate))× 倍速") }
+        if !networkStatus.isEmpty { parts.append(networkStatus) }
         return parts.joined(separator: "  ")
     }
 
@@ -499,7 +502,7 @@ struct PlaybackControlsView: View {
             ProgressView()
                 .controlSize(.small)
                 .tint(.white)
-            Text(playback.buffering ? cacheText : loadingText)
+            Text(bufferingText)
                 .font(.footnote.weight(.medium))
                 .lineLimit(2)
         }
@@ -552,6 +555,12 @@ struct PlaybackControlsView: View {
         .animation(.easeOut(duration: 0.16), value: adjustment?.kind)
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("playback.adjustmentHUD")
+    }
+
+    private var bufferingText: String {
+        let base = playback.buffering ? cacheText : loadingText
+        guard playback.buffering, !networkStatus.isEmpty else { return base }
+        return "\(base) · \(networkStatus)"
     }
 
     private var cacheText: String {
