@@ -75,9 +75,13 @@ enum M115Cipher {
     // MARK: 异或
 
     static func deriveKey(_ seed: [UInt8], size: Int) -> [UInt8] {
-        (0..<size).map { index in
-            (seed[index] &+ keySeed[size * index]) ^ keySeed[size * (size - index - 1)]
+        var key = [UInt8](repeating: 0, count: size)
+        for index in 0..<size {
+            let mixed: UInt8 = seed[index] &+ keySeed[size * index]
+            let mask: UInt8 = keySeed[size * (size - index - 1)]
+            key[index] = mixed ^ mask
         }
+        return key
     }
 
     static func xorTransform(_ data: inout [UInt8], key: [UInt8]) {
