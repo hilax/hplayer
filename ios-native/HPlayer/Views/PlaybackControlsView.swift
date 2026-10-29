@@ -247,6 +247,19 @@ struct PlaybackControlsView: View {
                     }
                 }
                 Section("播放速度") { speedButtons }
+                Section("预缓冲（网速有起伏时调长一些）") {
+                    ForEach(PrebufferLevel.allCases) { option in
+                        Button {
+                            playback.setPrebuffer(option); revealControls()
+                        } label: {
+                            if playback.prebuffer == option {
+                                Label(option.title, systemImage: "checkmark")
+                            } else {
+                                Text(option.title)
+                            }
+                        }
+                    }
+                }
                 Section("解码方式") {
                     ForEach(VideoDecoding.allCases) { option in
                         Button {
@@ -288,7 +301,8 @@ struct PlaybackControlsView: View {
                     .accessibilityIdentifier("playback.elapsed")
 
                 PlayerScrubber(
-                    value: dragging ? dragTime : min(playback.currentTime, max(playback.duration, 1)),
+                    // 还不知道总时长时圆点停在最左边，不按当前时间乱放
+                    value: dragging ? dragTime : (playback.duration > 0 ? min(playback.currentTime, playback.duration) : 0),
                     upperBound: max(playback.duration, 1),
                     enabled: playback.seekable && playback.duration > 0,
                     onScrub: scrubbed,
@@ -302,6 +316,7 @@ struct PlaybackControlsView: View {
                             scrubbed(dragTime)
                         } else if dragging {
                             dragging = false
+                            preview.reset()
                             playback.seek(to: dragTime)
                             hideAdjustmentSoon()
                         }
@@ -786,7 +801,11 @@ struct PlaybackControlsView: View {
         }
         if let adjustment { lastAdjustment = "\(adjustment.title) \(adjustment.valueText)" }
         if state == .ended {
-            if let target = adjustment?.targetTime { playback.seek(to: target) }
+            if let target = adjustment?.targetTime {
+                // 先停掉预览，再跳转：别让预览的连接和正片抢网速
+                preview.reset()
+                playback.seek(to: target)
+            }
             self.panKind = nil
             panActive = false
             hideAdjustmentSoon()
@@ -1089,6 +1108,16 @@ private final class ScrubberSlider: UISlider {
     override func trackRect(forBounds bounds: CGRect) -> CGRect {
         let base = super.trackRect(forBounds: bounds)
         return CGRect(x: base.minX, y: bounds.midY - trackHeight / 2, width: base.width, height: trackHeight)
+    }
+
+    /// 圆点图片四周留了透明边，系统默认让图片边缘贴着轨道两头，圆点中心就离开了起点，
+    /// 0 秒时左边会多出一截白色。这里让圆点中心正好落在轨道的起点和终点之间。
+    override func thumbRect(forBounds bounds: CGRect, trackRect rect: CGRect, value: Float) -> CGRect {
+        let base = super.thumbRect(forBounds: bounds, trackRect: rect, value: value)
+        let range = maximumValue - minimumValue
+        let fraction = range > 0 ? CGFloat((value - minimumValue) / range) : 0
+        let centerX = rect.minX + rect.width * min(max(fraction, 0), 1)
+        return CGRect(x: centerX - base.width / 2, y: base.minY, width: base.width, height: base.height)
     }
 
     func setExpanded(_ expanded: Bool) {

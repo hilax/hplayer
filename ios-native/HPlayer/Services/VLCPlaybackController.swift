@@ -21,6 +21,30 @@ enum VideoDecoding: String, CaseIterable, Identifiable {
     }
 }
 
+/// 播放前和播放中提前缓存多长时间的视频。越长越不怕网速起伏，但起播和拖动进度后要多等一会儿。
+enum PrebufferLevel: Int, CaseIterable, Identifiable {
+    case standard = 3
+    case long = 8
+    case maximum = 20
+
+    var id: Int { rawValue }
+    var milliseconds: Int { rawValue * 1000 }
+    var title: String {
+        switch self {
+        case .standard: return "标准 · 3 秒"
+        case .long: return "较长 · 8 秒"
+        case .maximum: return "最长 · 20 秒"
+        }
+    }
+
+    private static let key = "player.prebufferSeconds"
+
+    static var saved: PrebufferLevel {
+        get { PrebufferLevel(rawValue: UserDefaults.standard.integer(forKey: key)) ?? .standard }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: key) }
+    }
+}
+
 /// 统一使用 VideoLAN 的 VLC 播放内核；视频控制界面由 HPlayer 自己绘制。
 @MainActor
 final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDelegate {
@@ -51,6 +75,11 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
     private var currentCookie = ""
     /// 当前解码方式，切换后从当前位置重新打开视频
     @Published private(set) var decoding = VideoDecoding.saved
+    /// 提前缓存的时长，切换后从当前位置重新打开视频
+    @Published private(set) var prebuffer = PrebufferLevel.saved
+    /// 用户自己按了暂停。VLC 网络缓冲时也会报告「没在播放」，
+    /// 不能拿它当成用户暂停，否则拖动进度后会被误停住。
+    private var userPaused = false
     /// 播放中途网速跟不上、画面停住的状态（VLC 这时仍报告「正在播放」）
     private var stalled = false
     private var lastSampledTime: Int32 = -1
@@ -88,11 +117,14 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
         error = ""; currentTime = 0; duration = 0; buffering = true; seekable = false; bufferProgress = 0
         resumeTime = oldTime > 0 ? Int32(clamping: Int(oldTime * 1000)) : nil
         shouldPauseAfterOpening = !oldPlaying
+        userPaused = !oldPlaying
         let media = VLCMedia(url: url)
         // 网络视频先攒 3 秒再播：原画码率高，网速有起伏时有这 3 秒垫着就不会一卡一卡。
         // 长按 3× 松手时会重开音轨清掉错位的声音，缓存长一点也不会让声音对不上。
-        media.addOption(":network-caching=3000")
+        media.addOption(":network-caching=\(prebuffer.milliseconds)")
         media.addOption(":file-caching=800")
+        // 拖动进度时落到最近的关键帧就开始播，不必从关键帧一路解码到目标那一帧，4K 大跨度跳转快很多
+        media.addOption(":input-fast-seek")
         Self.applyDecoding(decoding, to: media)
         Self.applyRequestOptions(to: media, url: url, direct115: direct115, cookie: directCookie)
         player.media = media
@@ -102,7 +134,7 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
         startSpeedSampling()
         openTimeoutTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: openTimeoutSeconds * 1_000_000_000)
-            guard let self, !Task.isCancelled, !self.playing, self.currentTime < 0.1, self.error.isEmpty else { return }
+            guard let self, !Task.isCancelled, !self.player.isPlaying, self.currentTime < 0.1, self.error.isEmpty else { return }
             self.buffering = false
             self.player.stop()
             self.error = "视频加载超时，请重新打开或切换画质。"
@@ -111,14 +143,27 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
 
     func toggle() {
         pauseAfterSeek = false
-        if player.isPlaying { player.pause() } else { player.play() }
+        if player.state == .ended {
+            // 播完了再按播放：从头开始
+            userPaused = false
+            player.stop()
+            player.play()
+        } else if userPaused {
+            userPaused = false
+            player.play()
+        } else {
+            userPaused = true
+            player.pause()
+        }
+        refresh()
     }
     func seek(to seconds: Double) {
         guard seconds.isFinite, seconds >= 0, player.isSeekable else { return }
         let target = duration > 0 ? min(seconds, duration) : seconds
         pendingSeek = target
         pendingSeekStarted = Date()
-        pauseAfterSeek = !player.isPlaying
+        // 只有用户自己暂停时，跳转后才停在新位置；正在缓冲不算暂停
+        pauseAfterSeek = userPaused
         player.time = VLCTime(int: Int32(clamping: Int(target * 1000)))
         currentTime = target
         // HLS needs a decoded frame at the requested time before it can pause again.
@@ -154,6 +199,15 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
         guard value != decoding else { return }
         decoding = value
         VideoDecoding.saved = value
+        guard let url = currentURL else { return }
+        open(url, direct115: currentDirect115, directCookie: currentCookie, preservingPosition: true)
+    }
+
+    /// 切换提前缓存时长：记住选择，从当前位置重新打开当前视频
+    func setPrebuffer(_ value: PrebufferLevel) {
+        guard value != prebuffer else { return }
+        prebuffer = value
+        PrebufferLevel.saved = value
         guard let url = currentURL else { return }
         open(url, direct115: currentDirect115, directCookie: currentCookie, preservingPosition: true)
     }
@@ -201,7 +255,9 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
         // VLC 播放中途缓存见底时，状态仍是「正在播放」，只是时间不走了。
         // 正在播放、时间却一秒没动，就算卡住了，画面中间转圈并显示网速。
         let time = player.time.intValue
-        let stuck = player.isPlaying && pendingSeek == nil && time == lastSampledTime && time > 0
+        let state = player.state
+        let active = state != .paused && state != .ended && state != .stopped && state != .error
+        let stuck = !userPaused && active && pendingSeek == nil && time == lastSampledTime && time > 0
         lastSampledTime = time
         if stuck != stalled {
             stalled = stuck
@@ -220,7 +276,10 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
         guard let url = currentURL else { return nil }
         let media = VLCMedia(url: url)
         media.addOption(":no-audio")
-        media.addOption(":network-caching=800")
+        media.addOption(":network-caching=500")
+        // 预览用软解，不和正片抢硬件解码器
+        media.addOption(":codec=avcodec,all")
+        media.addOption(":avcodec-hw=none")
         Self.applyRequestOptions(to: media, url: url, direct115: currentDirect115, cookie: currentCookie)
         return media
     }
@@ -265,6 +324,7 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
         player.stop()
         if detach { player.drawable = nil }
         playing = false; buffering = false; bufferProgress = 0; resumeTime = nil; shouldPauseAfterOpening = false
+        userPaused = false
         ended = false
     }
 
@@ -281,10 +341,11 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
 
     private func refresh() {
         let state = player.state
-        playing = player.isPlaying
-        if playing { openTimeoutTask?.cancel() }
+        if player.isPlaying { openTimeoutTask?.cancel() }
+        // 「在播放」按用户意图算：没按暂停、没播完、没出错就是在播放，网络缓冲时按钮不会跳成播放键
+        playing = !userPaused && state != .ended && state != .error && state != .stopped && player.media != nil
         // 时间又走起来了，就不算卡住
-        if stalled, player.time.intValue != lastSampledTime || !playing { stalled = false }
+        if stalled, player.time.intValue != lastSampledTime || userPaused { stalled = false }
         updateBuffering()
         seekable = player.isSeekable
         let decodedTime = max(0, Double(player.time.intValue) / 1000)

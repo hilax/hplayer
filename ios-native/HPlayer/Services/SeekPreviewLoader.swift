@@ -18,6 +18,7 @@ final class SeekPreviewLoader: NSObject, ObservableObject, VLCMediaThumbnailerDe
     /// 每次重置加一，旧任务回来的画面就不要了
     private var generation = 0
     private var runningGeneration = 0
+    private var debounceTask: Task<Void, Never>?
 
     /// fraction：目标时间占总时长的比例
     func request(fraction: Double, from playback: VLCPlaybackController) {
@@ -25,10 +26,19 @@ final class SeekPreviewLoader: NSObject, ObservableObject, VLCMediaThumbnailerDe
         let value = Float(min(max(fraction, 0), 0.995))
         if let shownFraction, abs(shownFraction - value) < 0.003, pendingFraction == nil { return }
         pendingFraction = value
-        if thumbnailer == nil { startNext() }
+        // 手指停稳一下再取：拖动中途不一个个位置去连网取画面，免得占着网速
+        debounceTask?.cancel()
+        debounceTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 220_000_000)
+            guard let self, !Task.isCancelled, self.thumbnailer == nil else { return }
+            self.startNext()
+        }
+        loading = true
     }
 
     func reset() {
+        debounceTask?.cancel()
+        debounceTask = nil
         generation += 1
         pendingFraction = nil
         shownFraction = nil
