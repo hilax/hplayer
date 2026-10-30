@@ -84,9 +84,38 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
     private var stalled = false
     private var lastSampledTime: Int32 = -1
     private var openTimeoutTask: Task<Void, Never>?
+    private var openTimeoutSeconds: UInt64 = 20
     private var pendingSeek: Double?
     private var pendingSeekStarted = Date.distantPast
     private var pauseAfterSeek = false
+
+    // MARK: 卡住自动重连
+    //
+    // VLC 3 读网络数据没有超时：拖动进度后新开的连接如果迟迟不回数据（CDN 冷门位置、连接被限制），
+    // 它会一直等下去，画面就永远停在「正在缓冲」；连接中途断掉时又会被当成「播完了」，画面定住不动。
+    // 这里每秒检查一次：长时间一个字节都没读到、或者没到结尾却停了，就停掉卡住的连接，
+    // 换一个新地址（115 能拿到的话）从原来的位置重新打开，等于自动替用户「退出再进来」。
+
+    /// 拿新播放地址的办法；115 的地址会过期或被限制连接，重连时先换新地址
+    private var urlRefresher: (() async throws -> URL)?
+    /// 是否自动重连（磁力边下边播等的是种子数据，不适用）
+    private var watchdogEnabled = true
+    /// 恢复播放用的位置：最近一次确定的播放时间，或者正在跳往的目标
+    private var resumePoint: Double = 0
+    /// 连续几秒没有读到任何数据
+    private var noDataSeconds = 0
+    /// VLC 的统计里能看到读取的字节数（直接读文件时能，HLS 分片不算在里面）
+    private var bytesVisible = false
+    /// 处于结束、出错、停止状态已经几秒
+    private var badStateSeconds = 0
+    /// 这个地址是否已经正常开始播放过
+    private var hasPlayed = false
+    private var recoveryAttempts: [Date] = []
+    private var recoveryTask: Task<Void, Never>?
+    /// 每次打开新视频或关闭播放器加一，旧的重连任务回来时对不上就作废
+    private var session = 0
+    /// 自动重连时画面中间显示的说明
+    @Published private(set) var statusNote = ""
 
     override init() {
         super.init()
@@ -99,69 +128,129 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
         directCookie: String = "",
         preservingPosition: Bool = false,
         startTime: Double? = nil,
+        refreshURL: (() async throws -> URL)? = nil,
+        autoRecover: Bool = true,
         openTimeoutSeconds: UInt64 = 20
     ) {
+        session += 1
+        recoveryTask?.cancel()
+        recoveryTask = nil
+        recoveryAttempts = []
+        statusNote = ""
+        urlRefresher = refreshURL
+        watchdogEnabled = autoRecover
+        self.openTimeoutSeconds = openTimeoutSeconds
+        let position = preservingPosition ? resumePoint : max(0, startTime ?? 0)
+        let keepPlaying = preservingPosition ? !userPaused : true
+        start(url, direct115: direct115, cookie: directCookie, position: position, keepPlaying: keepPlaying, keepDuration: preservingPosition)
+    }
+
+    /// 真正打开地址：新视频、切换设置、自动重连都走这里
+    private func start(_ url: URL, direct115: Bool, cookie: String, position: Double, keepPlaying: Bool, keepDuration: Bool) {
         openTimeoutTask?.cancel()
         pendingSeek = nil
         pauseAfterSeek = false
         boosted = false
         ended = false
         stalled = false
+        hasPlayed = false
+        bytesVisible = false
+        noDataSeconds = 0
+        badStateSeconds = 0
         lastSampledTime = -1
         currentURL = url
         currentDirect115 = direct115
-        currentCookie = directCookie
-        let oldTime = preservingPosition ? currentTime : max(0, startTime ?? 0)
-        let oldPlaying = preservingPosition ? playing : true
+        currentCookie = cookie
         player.stop()
-        error = ""; currentTime = 0; duration = 0; buffering = true; seekable = false; bufferProgress = 0
-        resumeTime = oldTime > 0 ? Int32(clamping: Int(oldTime * 1000)) : nil
-        shouldPauseAfterOpening = !oldPlaying
-        userPaused = !oldPlaying
+        error = ""; buffering = true; seekable = false; bufferProgress = 0
+        if !keepDuration { duration = 0 }
+        resumePoint = position
+        if position > 0 {
+            // 进度先停在要恢复的位置，等真正跳过去再按实际时间走，不会先跳回 0
+            currentTime = position
+            pendingSeek = position
+            pendingSeekStarted = Date()
+        } else {
+            currentTime = 0
+        }
+        resumeTime = position > 0 ? Int32(clamping: Int(position * 1000)) : nil
+        shouldPauseAfterOpening = !keepPlaying
+        userPaused = !keepPlaying
+        playing = keepPlaying
         let media = VLCMedia(url: url)
-        // 网络视频先攒 3 秒再播：原画码率高，网速有起伏时有这 3 秒垫着就不会一卡一卡。
+        // 网络视频先攒几秒再播（预缓冲可在菜单里调）：原画码率高，网速有起伏时有这几秒垫着就不会一卡一卡。
         // 长按 3× 松手时会重开音轨清掉错位的声音，缓存长一点也不会让声音对不上。
         media.addOption(":network-caching=\(prebuffer.milliseconds)")
         media.addOption(":file-caching=800")
         // 拖动进度时落到最近的关键帧就开始播，不必从关键帧一路解码到目标那一帧，4K 大跨度跳转快很多
         media.addOption(":input-fast-seek")
         Self.applyDecoding(decoding, to: media)
-        Self.applyRequestOptions(to: media, url: url, direct115: direct115, cookie: directCookie)
+        Self.applyRequestOptions(to: media, url: url, direct115: direct115, cookie: cookie)
         player.media = media
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
         try? AVAudioSession.sharedInstance().setActive(true)
         player.play()
         startSpeedSampling()
+        let timeout = openTimeoutSeconds
+        let currentSession = session
         openTimeoutTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: openTimeoutSeconds * 1_000_000_000)
-            guard let self, !Task.isCancelled, !self.player.isPlaying, self.currentTime < 0.1, self.error.isEmpty else { return }
-            self.buffering = false
-            self.player.stop()
-            self.error = "视频加载超时，请重新打开或切换画质。"
+            try? await Task.sleep(nanoseconds: timeout * 1_000_000_000)
+            guard let self, !Task.isCancelled, self.session == currentSession, !self.hasPlayed, self.error.isEmpty else { return }
+            if self.watchdogEnabled {
+                self.recover(reason: "视频加载超时")
+            } else {
+                self.player.stop()
+                self.giveUp("视频加载超时")
+            }
         }
     }
 
     func toggle() {
         pauseAfterSeek = false
-        if player.state == .ended {
-            // 播完了再按播放：从头开始
-            userPaused = false
-            player.stop()
-            player.play()
-        } else if userPaused {
-            userPaused = false
-            player.play()
-        } else {
+        if playing {
             userPaused = true
             player.pause()
+        } else {
+            userPaused = false
+            noDataSeconds = 0
+            let state = player.state
+            if state == .ended || state == .stopped || state == .error {
+                if duration > 0, resumePoint < duration - 5, currentURL != nil {
+                    // 没到结尾却停了（多半是网络断了）：从停下的位置重新打开，而不是什么都不做
+                    recoveryAttempts = []
+                    recover(reason: "")
+                } else {
+                    // 真的播完了：从头开始
+                    resumePoint = 0
+                    player.stop()
+                    player.play()
+                }
+            } else {
+                player.play()
+            }
         }
         refresh()
     }
+
     func seek(to seconds: Double) {
-        guard seconds.isFinite, seconds >= 0, player.isSeekable else { return }
+        guard seconds.isFinite, seconds >= 0 else { return }
         let target = duration > 0 ? min(seconds, duration) : seconds
+        let state = player.state
+        if currentURL != nil, recoveryTask != nil || state == .ended || state == .stopped || state == .error {
+            // 连接已经断了或正在重连：直接从新的目标位置重新打开
+            resumePoint = target
+            currentTime = target
+            recoveryTask?.cancel()
+            recoveryTask = nil
+            recoveryAttempts = []
+            recover(reason: "")
+            return
+        }
+        guard player.isSeekable else { return }
         pendingSeek = target
         pendingSeekStarted = Date()
+        resumePoint = target
+        noDataSeconds = 0
         // 只有用户自己暂停时，跳转后才停在新位置；正在缓冲不算暂停
         pauseAfterSeek = userPaused
         player.time = VLCTime(int: Int32(clamping: Int(target * 1000)))
@@ -169,6 +258,99 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
         // HLS needs a decoded frame at the requested time before it can pause again.
         if pauseAfterSeek { player.play() }
     }
+
+    // MARK: 自动重连
+
+    /// 停掉卡住的连接，换（新）地址从原位置重新打开。90 秒内最多自动试 3 次，之后提示用户点重试。
+    private func recover(reason: String) {
+        guard let url = currentURL, recoveryTask == nil else { return }
+        let now = Date()
+        recoveryAttempts = recoveryAttempts.filter { now.timeIntervalSince($0) < 90 }
+        guard recoveryAttempts.count < 3 else {
+            player.stop()
+            giveUp(reason.isEmpty ? "网络连接中断" : reason)
+            return
+        }
+        recoveryAttempts.append(now)
+        let position = resumePoint
+        let refresher = urlRefresher
+        let direct115 = currentDirect115
+        let cookie = currentCookie
+        let currentSession = session
+        openTimeoutTask?.cancel()
+        statusNote = reason.isEmpty ? "正在重新连接…" : "\(reason)，正在重新连接…"
+        stalled = false
+        // 先停掉卡住的连接：VLC 读网络没有超时，不停掉它会一直等下去
+        player.stop()
+        recoveryTask = Task { @MainActor [weak self] in
+            var target = url
+            if let refresher, let fresh = try? await refresher() { target = fresh }
+            guard let self, !Task.isCancelled, self.session == currentSession else { return }
+            self.recoveryTask = nil
+            self.start(target, direct115: direct115, cookie: cookie, position: position, keepPlaying: !self.userPaused, keepDuration: true)
+        }
+        refresh()
+    }
+
+    private func giveUp(_ reason: String) {
+        openTimeoutTask?.cancel()
+        recoveryTask?.cancel()
+        recoveryTask = nil
+        stalled = false
+        buffering = false
+        statusNote = ""
+        let position = Self.clock(resumePoint)
+        error = resumePoint > 1
+            ? "\(reason)，自动重连几次都没成功。点「重试」会从 \(position) 接着播放。"
+            : "\(reason)，请点「重试」，或换一个画质。"
+    }
+
+    /// 出错提示里的「重试」：从原位置重新打开（会先换新地址）
+    var canRetryInPlace: Bool { currentURL != nil }
+
+    func retry() {
+        recoveryAttempts = []
+        error = ""
+        userPaused = false
+        recover(reason: "")
+    }
+
+    /// 每秒检查一次播放是不是卡死了。
+    ///
+    /// 直接读文件（115 原画、MP4/MKV）时，VLC 的统计能看到读了多少字节，几秒一个字节都没有就是连接卡死；
+    /// HLS 分片是另开连接下载的，统计里看不到，只能按「时间多久没走」判断，所以要等得久一些。
+    private func checkHealth(readBytes delta: Int, bytesVisible: Bool, timeAdvanced: Bool) {
+        let progressed = bytesVisible ? delta > 0 : (delta > 0 || timeAdvanced)
+        noDataSeconds = progressed ? 0 : noDataSeconds + 1
+        let seekLimit = bytesVisible ? 5 : 15
+        let stallLimit = bytesVisible ? 8 : 20
+        let state = player.state
+        badStateSeconds = (state == .ended || state == .error || state == .stopped) ? badStateSeconds + 1 : 0
+        guard watchdogEnabled, recoveryTask == nil, currentURL != nil, error.isEmpty, !userPaused else { return }
+        // 没到结尾却停了、或者出错了：连接断了
+        if badStateSeconds >= 2 {
+            let reachedEnd = state == .ended && duration > 0 && resumePoint >= duration - 5
+            if !reachedEnd { recover(reason: state == .error ? "播放出错" : "网络连接断了") }
+            return
+        }
+        // 跳转后迟迟没有数据进来
+        if pendingSeek != nil, Date().timeIntervalSince(pendingSeekStarted) >= Double(seekLimit + 2), noDataSeconds >= seekLimit {
+            recover(reason: "跳转后网络没有响应")
+            return
+        }
+        // 播放中卡住，而且一直没有数据进来
+        if hasPlayed, buffering, noDataSeconds >= stallLimit {
+            recover(reason: "网络卡住了")
+        }
+    }
+
+    private static func clock(_ seconds: Double) -> String {
+        let value = Int(max(0, seconds))
+        return value >= 3600
+            ? String(format: "%d:%02d:%02d", value / 3600, (value / 60) % 60, value % 60)
+            : String(format: "%02d:%02d", value / 60, value % 60)
+    }
+
     func skip(_ seconds: Double) { seek(to: max(0, currentTime + seconds)) }
     func setRate(_ value: Float) { rate = value; if !boosted { player.rate = value } }
 
@@ -200,7 +382,7 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
         decoding = value
         VideoDecoding.saved = value
         guard let url = currentURL else { return }
-        open(url, direct115: currentDirect115, directCookie: currentCookie, preservingPosition: true)
+        open(url, direct115: currentDirect115, directCookie: currentCookie, preservingPosition: true, refreshURL: urlRefresher, autoRecover: watchdogEnabled, openTimeoutSeconds: openTimeoutSeconds)
     }
 
     /// 切换提前缓存时长：记住选择，从当前位置重新打开当前视频
@@ -209,7 +391,7 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
         prebuffer = value
         PrebufferLevel.saved = value
         guard let url = currentURL else { return }
-        open(url, direct115: currentDirect115, directCookie: currentCookie, preservingPosition: true)
+        open(url, direct115: currentDirect115, directCookie: currentCookie, preservingPosition: true, refreshURL: urlRefresher, autoRecover: watchdogEnabled, openTimeoutSeconds: openTimeoutSeconds)
     }
 
     private static func applyDecoding(_ decoding: VideoDecoding, to media: VLCMedia) {
@@ -251,13 +433,18 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
         lastReadBytes = bytes
         let speed = delta > 0 ? Double(delta) : 0
         if speed != downloadSpeed { downloadSpeed = speed }
+        // 统计是 32 位整数，读过 2GB 会绕回负数，所以一旦看到过有效的字节数就一直认为能看到
+        if bytes > 2_000_000 { bytesVisible = true }
+        let time = player.time.intValue
+        checkHealth(readBytes: delta, bytesVisible: bytesVisible, timeAdvanced: time != lastSampledTime)
+        guard recoveryTask == nil else { return }
 
         // VLC 播放中途缓存见底时，状态仍是「正在播放」，只是时间不走了。
         // 正在播放、时间却一秒没动，就算卡住了，画面中间转圈并显示网速。
-        let time = player.time.intValue
         let state = player.state
         let active = state != .paused && state != .ended && state != .stopped && state != .error
-        let stuck = !userPaused && active && pendingSeek == nil && time == lastSampledTime && time > 0
+        // 跳转后时间迟迟不动也算卡住，这样跳转等待时也会转圈并显示网速
+        let stuck = !userPaused && active && time == lastSampledTime && (time > 0 || pendingSeek != nil) && hasPlayed
         lastSampledTime = time
         if stuck != stalled {
             stalled = stuck
@@ -267,7 +454,7 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
 
     private func updateBuffering() {
         let state = player.state
-        let value = stalled || (!player.isPlaying && (state == .opening || state == .buffering))
+        let value = recoveryTask != nil || stalled || (!player.isPlaying && (state == .opening || state == .buffering))
         if value != buffering { buffering = value }
     }
 
@@ -300,6 +487,10 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
         audio.volume = Int32((min(max(normalized, 0), 1) * 100).rounded())
     }
     func stop(detach: Bool = true) {
+        session += 1
+        recoveryTask?.cancel()
+        recoveryTask = nil
+        statusNote = ""
         openTimeoutTask?.cancel()
         pendingSeek = nil
         pauseAfterSeek = false
@@ -329,8 +520,12 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
     private func refresh() {
         let state = player.state
         if player.isPlaying { openTimeoutTask?.cancel() }
-        // 「在播放」按用户意图算：没按暂停、没播完、没出错就是在播放，网络缓冲时按钮不会跳成播放键
-        playing = !userPaused && state != .ended && state != .error && state != .stopped && player.media != nil
+        // VLCKit 的 state 收到一次缓冲事件后会一直停在 .buffering（之后不再发 .playing），
+        // 所以「真的在播」以内核的 isPlaying 为准
+        if state == .playing || player.isPlaying { hasPlayed = true }
+        let halted = state == .ended || state == .error || state == .stopped
+        // 「在播放」按用户意图算：没按暂停、没卡在结束或出错上就是在播放；网络缓冲、自动重连时按钮不会跳成播放键
+        playing = !userPaused && (recoveryTask != nil || (!halted && player.media != nil))
         // 时间又走起来了，就不算卡住
         if stalled, player.time.intValue != lastSampledTime || userPaused { stalled = false }
         updateBuffering()
@@ -342,29 +537,42 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
             // 只等「落点到位」会让进度一直卡在目标时间上，所以不在缓冲时最多等 5 秒就以真实时间为准。
             let landed = abs(decodedTime - pendingSeek) < 1
             let gaveUp = !buffering && Date().timeIntervalSince(pendingSeekStarted) > 5
+            if !landed, gaveUp, watchdogEnabled, recoveryTask == nil, abs(decodedTime - pendingSeek) > 20 {
+                // 跳转根本没生效（例如服务器拒绝了跳转用的新连接，还在按原来的位置播）：从目标位置重新打开
+                self.pendingSeek = nil
+                recover(reason: "跳转没有成功")
+                return
+            }
             if landed || gaveUp {
                 self.pendingSeek = nil
                 currentTime = decodedTime
                 if pauseAfterSeek { pauseAfterSeek = false; player.pause() }
             }
-        } else { currentTime = decodedTime }
+        } else if !halted && recoveryTask == nil {
+            // 连接断掉、重连时 VLC 的时间会归零，这时保留最后的进度
+            currentTime = decodedTime
+        }
+        if pendingSeek == nil, player.isPlaying, !halted, decodedTime > 0 { resumePoint = decodedTime }
+        if player.isPlaying, pendingSeek == nil, !stalled, !statusNote.isEmpty { statusNote = "" }
         let length = Double(player.media?.length.intValue ?? 0) / 1000
-        duration = length.isFinite && length > 0 ? length : 0
-        if let resumeTime, state == .playing, player.isSeekable {
+        if length.isFinite && length > 0 { duration = length }
+        // 同样不能等 state == .playing：缓冲事件一来它就变了，续播的跳转可能永远等不到
+        if let resumeTime, player.isPlaying, player.isSeekable {
             player.time = VLCTime(int: resumeTime)
             self.resumeTime = nil
         }
-        if state == .ended {
+        if state == .ended, duration > 0, resumePoint >= duration - 5 {
             ended = true
-        } else if state == .playing || state == .opening {
+        } else if player.isPlaying || state == .opening {
             ended = false
         }
-        if state == .playing {
+        if player.isPlaying {
             let targetRate: Float = boosted ? Self.boostRate : rate
             if abs(player.rate - targetRate) > 0.01 { player.rate = targetRate }
             if shouldPauseAfterOpening { shouldPauseAfterOpening = false; player.pause() }
         }
-        if state == .error {
+        if state == .error, !watchdogEnabled, error.isEmpty, recoveryTask == nil {
+            // 不自动重连的来源（磁力边下边播）直接提示；其余的交给每秒的检查去重连
             openTimeoutTask?.cancel()
             buffering = false
             error = "播放失败，请尝试其他画质或检查网络。"

@@ -460,7 +460,8 @@ final class MagnetController: ObservableObject {
             guard !Task.isCancelled else { return }
             preparing = false
             // 开头已经下好，后面边播边下；节点少时缓冲会慢一些，给 VLC 足够的等待时间
-            playback.open(next.url, startTime: resume, openTimeoutSeconds: 120)
+            // 边下边播等的是种子数据，慢一点很正常，不做「卡住自动重连」
+            playback.open(next.url, startTime: resume, autoRecover: false, openTimeoutSeconds: 120)
         } catch is CancellationError {
             return
         } catch {

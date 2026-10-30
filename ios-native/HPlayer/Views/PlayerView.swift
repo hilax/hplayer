@@ -110,7 +110,8 @@ struct PlayerView: View {
                         let original = try await client.originalURL(pickCode: pickCode)
                         guard visible && !Task.isCancelled && current == source else { return }
                         selectedQuality = "原画"
-                        playback.open(original, direct115: true, directCookie: client.cookie, startTime: resume)
+                        playback.open(original, direct115: true, directCookie: client.cookie, startTime: resume,
+                                      refreshURL: Self.originalRefresher(client, pickCode: pickCode))
                         loading = false
                     } catch {
                         originalError = error
@@ -125,7 +126,8 @@ struct PlayerView: View {
                     if let originalError {
                         guard let first = streams.first else { throw originalError }
                         selectedQuality = first.title
-                        playback.open(first.url, direct115: true, directCookie: client.cookie, startTime: resume)
+                        playback.open(first.url, direct115: true, directCookie: client.cookie, startTime: resume,
+                                      refreshURL: Self.streamRefresher(client, pickCode: pickCode, title: first.title))
                     }
                 } else {
                     guard let url = appState.mediaURL("/api/play/\(pickCode)") else { throw APIError.server("未连接服务器") }
@@ -138,6 +140,22 @@ struct PlayerView: View {
             }
         } catch { if visible && !Task.isCancelled && current == source { self.error = error.localizedDescription } }
         if visible && !Task.isCancelled && current == source { loading = false }
+    }
+
+    /// 自动重连时换新的 115 原画地址：旧地址可能已过期，或者连接被 115 限制
+    private static func originalRefresher(_ client: Direct115Client, pickCode: String) -> () async throws -> URL {
+        { try await client.originalURL(pickCode: pickCode) }
+    }
+
+    /// 自动重连时换新的 115 转码地址，按画质名称找回同一档
+    private static func streamRefresher(_ client: Direct115Client, pickCode: String, title: String) -> () async throws -> URL {
+        {
+            let streams = try await client.streams(pickCode: pickCode)
+            guard let match = streams.first(where: { $0.title == title }) ?? streams.first else {
+                throw APIError.server("该画质暂不可用")
+            }
+            return match.url
+        }
     }
 
     private func fetchQualities(_ pickCode: String) async throws -> [Open115Quality] {
@@ -157,14 +175,16 @@ struct PlayerView: View {
                 let original = try await client.originalURL(pickCode: pickCode)
                 guard visible && !Task.isCancelled && current == source else { return }
                 selectedQuality = "原画"
-                playback.open(original, direct115: true, directCookie: client.cookie, preservingPosition: true)
+                playback.open(original, direct115: true, directCookie: client.cookie, preservingPosition: true,
+                              refreshURL: Self.originalRefresher(client, pickCode: pickCode))
             } else if id.hasPrefix("direct-"), let index = Int(id.dropFirst(7)), directQualities.indices.contains(index), let client = appState.directClient() {
                 let old = directQualities[index]
                 let refreshed = try await client.streams(pickCode: pickCode)
                 guard visible && !Task.isCancelled && current == source else { return }
                 guard let fresh = refreshed.first(where: { $0.title == old.title }) else { throw APIError.server("该画质暂不可用") }
                 directQualities = refreshed; selectedQuality = fresh.title
-                playback.open(fresh.url, direct115: true, directCookie: client.cookie, preservingPosition: true)
+                playback.open(fresh.url, direct115: true, directCookie: client.cookie, preservingPosition: true,
+                              refreshURL: Self.streamRefresher(client, pickCode: pickCode, title: fresh.title))
             } else if id.hasPrefix("open-"), let index = Int(id.dropFirst(5)), qualities.indices.contains(index) {
                 let old = qualities[index]
                 let refreshed = try await fetchQualities(pickCode)

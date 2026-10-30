@@ -506,7 +506,13 @@ struct PlaybackControlsView: View {
                 .font(.subheadline)
                 .multilineTextAlignment(.center)
             Button {
-                onRetry(); revealControls()
+                // 播放中途断掉的，从原位置重新连接；还没拿到地址的（例如 115 接口出错），重新加载
+                if error.isEmpty && playback.canRetryInPlace {
+                    playback.retry()
+                } else {
+                    onRetry()
+                }
+                revealControls()
             } label: {
                 Text("重试")
                     .font(.subheadline.weight(.semibold))
@@ -594,7 +600,10 @@ struct PlaybackControlsView: View {
 
     private var bufferingText: String {
         guard playback.buffering else { return loadingText }
-        return speedLabel.isEmpty ? cacheText : speedLabel
+        let detail = speedLabel.isEmpty ? cacheText : speedLabel
+        // 自动重连时说明在做什么，免得以为卡死了
+        guard !playback.statusNote.isEmpty else { return detail }
+        return speedLabel.isEmpty ? playback.statusNote : "\(playback.statusNote)\n\(speedLabel)"
     }
 
     /// 磁力边下边播用它自己的节点和速度，其他视频用 VLC 每秒读到的字节数
