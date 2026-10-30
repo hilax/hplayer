@@ -30,5 +30,15 @@ final class HomeUITests: XCTestCase {
         XCTAssertTrue(result.waitForExistence(timeout: 15), "Manual matching should show title search results")
         result.tap()
         XCTAssertTrue(app.buttons["home.sources"].waitForExistence(timeout: 5))
+
+        // 结束进程后禁用资料服务：下一次首页必须直接复用本机封面，而不是先闪空片库再联网匹配。
+        app.terminate()
+        app.launchEnvironment["HPLAYER_METADATA_TEST_ENDPOINT"] = "http://127.0.0.1:1"
+        app.launch()
+        XCTAssertTrue(app.buttons["home.poster.tt1160419"].firstMatch.waitForExistence(timeout: 5), "Cold launch should restore cached posters without metadata network access")
+        XCTAssertFalse(app.otherElements["home.emptyLibrary"].exists, "A saved library must not render the empty onboarding state")
+        app.buttons["home.more"].tap()
+        XCTAssertTrue(app.buttons["扫描 115 全盘并匹配封面"].waitForExistence(timeout: 3))
+        app.tap()
     }
 }

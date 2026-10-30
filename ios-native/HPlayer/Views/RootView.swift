@@ -5,7 +5,7 @@ struct RootView: View {
     @State private var incomingMagnet: IncomingMagnet?
 
     var body: some View {
-        HomeView()
+        HomeView(appState: appState)
             .task {
                 await appState.checkAuth()
             }

@@ -28,47 +28,160 @@ struct MediaMetadata: Codable, Identifiable, Hashable {
     var sourceKind: MetadataSource { source.flatMap(MetadataSource.init(rawValue:)) ?? .cinemeta }
     /// 评分前面带上来源：IMDb 8.0、Bangumi 7.4、TMDB 7.9
     var ratingLabel: String { rating.isEmpty ? "" : "\(sourceKind.ratingPrefix) \(rating)" }
+    /// 只把可远程加载的封面放进海报墙；无封面的手动选择仍会保留在匹配缓存里。
+    var hasUsablePoster: Bool {
+        guard let url = URL(string: posterURL.trimmingCharacters(in: .whitespacesAndNewlines)),
+              let host = url.host, !host.isEmpty,
+              ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return false }
+        return true
+    }
 }
 
 @MainActor
 final class MediaMetadataStore: ObservableObject {
     @Published private(set) var metadataByMediaID: [String: MediaMetadata] = [:]
     @Published private(set) var resolvingIDs: Set<String> = []
+    @Published private(set) var isMatching = false
+    @Published private(set) var completedScanCount = 0
+    @Published private(set) var lastCompletedAt: Date?
 
     private let storageKey = "hplayer.mediaMetadata.v3"
     private let legacyStorageKey = "hplayer.mediaMetadata.v2"
+    private let defaults: UserDefaults
+    private let lookup: (MediaNameParser.ParsedName) async -> MediaMetadata?
     private var hashCache: [String: MediaMetadata] = [:]
     private var titleCache: [String: MediaMetadata] = [:]
+    /// 本机文件未变化时直接复用完整 SHA1，不在每次启动时重新读取几 GB 的视频。
+    private var localFingerprints: [String: String] = [:]
     /// 用户点了「取消匹配」的片名和文件，不再自动识别
     private var ignored: Set<String> = []
     /// 自动识别没找到的片名和时间，半天内不重复去搜
     private var missed: [String: Date] = [:]
     private var pendingMedia: [LibraryMedia] = []
+    private var pendingIndex = 0
     private var syncTask: Task<Void, Never>?
+    private var scanGeneration = 0
     private var validMediaIDs: Set<String> = []
+    private var retryVersions: [String: Int] = [:]
+    private struct NameInfo {
+        let parsed: MediaNameParser.ParsedName
+        let key: String
+    }
+    private var nameCache: [String: NameInfo] = [:]
+    private var cacheDirty = false
+    private var saveTask: Task<Void, Never>?
 
-    init() {
+    init(
+        defaults: UserDefaults = .standard,
+        lookup: @escaping (MediaNameParser.ParsedName) async -> MediaMetadata? = { await MetadataSearch.shared.lookup($0) }
+    ) {
+        self.defaults = defaults
+        self.lookup = lookup
         load()
     }
 
-    func sync(files: [LibraryMedia]) {
+    /// 首帧同步恢复已有封面。这里只查已保存的片名、115 SHA1 和本机文件签名，不访问网络或读取视频内容。
+    func hydrate(files: [LibraryMedia]) {
         let validIDs = Set(files.map(\.id))
         validMediaIDs = validIDs
-        metadataByMediaID = metadataByMediaID.filter { validIDs.contains($0.key) }
-        pendingMedia = files.filter { metadataByMediaID[$0.id] == nil }
+        if nameCache.count > max(256, files.count * 2) {
+            let names = Set(files.map(\.name))
+            nameCache = nameCache.filter { names.contains($0.key) }
+        }
+        var restored: [String: MediaMetadata] = [:]
+        for file in files {
+            if let metadata = cachedMetadata(for: file) { restored[file.id] = metadata }
+        }
+        if metadataByMediaID != restored { metadataByMediaID = restored }
+    }
+
+    func sync(files: [LibraryMedia]) {
+        hydrate(files: files)
+        pendingMedia = files.filter { metadataByMediaID[$0.id] == nil && shouldResolve($0) }
+        pendingIndex = 0
         guard syncTask == nil else { return }
+        guard !pendingMedia.isEmpty else { finishScan(); return }
+        scanGeneration += 1
+        let generation = scanGeneration
+        isMatching = true
         syncTask = Task {
-            while !pendingMedia.isEmpty && !Task.isCancelled {
-                let file = pendingMedia.removeFirst()
+            while pendingIndex < pendingMedia.count && !Task.isCancelled {
+                let file = pendingMedia[pendingIndex]
+                pendingIndex += 1
                 guard metadataByMediaID[file.id] == nil else { continue }
                 resolvingIDs.insert(file.id)
-                if let metadata = await resolve(file), validMediaIDs.contains(file.id), metadataByMediaID[file.id] == nil {
+                let metadata = await resolve(file, generation: generation)
+                guard isCurrent(generation) else { return }
+                if let metadata, validMediaIDs.contains(file.id), metadataByMediaID[file.id] == nil {
                     metadataByMediaID[file.id] = metadata
                 }
                 resolvingIDs.remove(file.id)
             }
+            guard isCurrent(generation) else { return }
+            pendingMedia = []
+            pendingIndex = 0
             syncTask = nil
+            finishScan()
         }
+    }
+
+    /// 退到后台时立即停止自动查找。旧请求即使晚回来，也不能写入缓存或失败等待时间。
+    func pause() {
+        scanGeneration += 1
+        syncTask?.cancel()
+        syncTask = nil
+        pendingMedia = []
+        pendingIndex = 0
+        resolvingIDs = []
+        isMatching = false
+        flushSave()
+    }
+
+    private func isCurrent(_ generation: Int) -> Bool {
+        generation == scanGeneration && !Task.isCancelled
+    }
+
+    /// 用户主动重新扫描时，不沿用上一次失败的 12 小时等待；已手动取消匹配的文件仍然保持取消。
+    func retryFailed(files: [LibraryMedia]) {
+        for file in files {
+            let key = titleKey(file.name)
+            missed.removeValue(forKey: key)
+            retryVersions[key, default: 0] += 1
+        }
+        save()
+        sync(files: files)
+    }
+
+    private func finishScan() {
+        flushSave()
+        isMatching = false
+        lastCompletedAt = Date()
+        completedScanCount += 1
+    }
+
+    private func shouldResolve(_ file: LibraryMedia) -> Bool {
+        let key = titleKey(file.name)
+        if ignored.contains(key) || cachedFingerprint(file).map(ignored.contains) == true { return false }
+        if let last = missed[key], Date().timeIntervalSince(last) < 12 * 3600 { return false }
+        return true
+    }
+
+    private func cachedMetadata(for file: LibraryMedia) -> MediaMetadata? {
+        let key = titleKey(file.name)
+        guard !ignored.contains(key) else { return nil }
+        let parsed = nameInfo(file.name).parsed
+        if let hash = cachedFingerprint(file) {
+            guard !ignored.contains(hash) else { return nil }
+            if var cached = hashCache[hash], cached.hasUsablePoster || cached.manual == true {
+                cached.matchedByHash = true
+                return withEpisode(cached, parsed)
+            }
+        }
+        if var cached = titleCache[key], cached.hasUsablePoster || cached.manual == true {
+            cached.matchedByHash = false
+            return withEpisode(cached, parsed)
+        }
+        return nil
     }
 
     func match(_ metadata: MediaMetadata, to file: LibraryMedia) async {
@@ -77,7 +190,7 @@ final class MediaMetadataStore: ObservableObject {
         value.manual = true
         // 一部剧的每一集各记各的集数
         if value.isSeries {
-            let parsed = MediaNameParser.parse(file.name)
+            let parsed = nameInfo(file.name).parsed
             value.season = parsed.season ?? (parsed.episode == nil ? nil : 1)
             value.episode = parsed.episode
         }
@@ -86,11 +199,14 @@ final class MediaMetadataStore: ObservableObject {
         titleCache[key] = value
         ignored.remove(key)
         missed.removeValue(forKey: key)
+        // 封面先保存，补算本机文件 SHA1 时即使退出 App，下次仍能立即恢复手动匹配。
+        save(immediately: true)
         if let hash = await fingerprint(file) {
+            guard titleCache[key] == value, !ignored.contains(key) else { return }
             hashCache[hash] = value
             ignored.remove(hash)
         }
-        save()
+        save(immediately: true)
     }
 
     /// 取消匹配：去掉封面和资料，以后也不再自动识别这个片名，可以随时重新手动匹配
@@ -99,40 +215,80 @@ final class MediaMetadataStore: ObservableObject {
         metadataByMediaID.removeValue(forKey: file.id)
         titleCache.removeValue(forKey: key)
         ignored.insert(key)
+        save(immediately: true)
         if let hash = await fingerprint(file) {
+            guard ignored.contains(key) else { return }
             hashCache.removeValue(forKey: hash)
             ignored.insert(hash)
         }
-        save()
+        save(immediately: true)
     }
 
     private func titleKey(_ filename: String) -> String {
+        nameInfo(filename).key
+    }
+
+    private func nameInfo(_ filename: String) -> NameInfo {
+        if let cached = nameCache[filename] { return cached }
         let parsed = MediaNameParser.parse(filename)
-        return "\(MediaNameParser.cacheKey(parsed.title))|\(parsed.year ?? "")|\(parsed.season != nil || parsed.episode != nil ? "series" : "movie")"
+        let key = "\(MediaNameParser.cacheKey(parsed.title))|\(parsed.year ?? "")|\(parsed.season != nil || parsed.episode != nil ? "series" : "movie")"
+        let value = NameInfo(parsed: parsed, key: key)
+        nameCache[filename] = value
+        return value
     }
 
-    private func fingerprint(_ file: LibraryMedia) async -> String? {
+    private func cachedFingerprint(_ file: LibraryMedia) -> String? {
         if file.sha1.count == 40, file.sha1.allSatisfy(\.isHexDigit) { return "sha1:\(file.sha1.lowercased())" }
-        guard let localURL = file.localURL else { return nil }
-        return await MediaFingerprint.make(for: localURL).map { "sha1:\($0)" }
+        guard let signature = localSignature(file) else { return nil }
+        return localFingerprints[signature]
     }
 
-    private func resolve(_ file: LibraryMedia) async -> MediaMetadata? {
-        let hash = await fingerprint(file)
+    private func localSignature(_ file: LibraryMedia) -> String? {
+        guard let url = file.localURL,
+              let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]),
+              let size = values.fileSize, let modified = values.contentModificationDate else { return nil }
+        return "\(url.path)|\(size)|\(modified.timeIntervalSince1970)"
+    }
+
+    private func fingerprint(_ file: LibraryMedia, generation: Int? = nil) async -> String? {
+        if let cached = cachedFingerprint(file) { return cached }
+        guard let localURL = file.localURL, let signature = localSignature(file),
+              let hash = await MediaFingerprint.make(for: localURL), !Task.isCancelled,
+              generation.map({ $0 == scanGeneration }) ?? true,
+              localSignature(file) == signature else { return nil }
+        let value = "sha1:\(hash)"
+        localFingerprints[signature] = value
+        save()
+        return value
+    }
+
+    private func resolve(_ file: LibraryMedia, generation: Int) async -> MediaMetadata? {
+        if let cached = cachedMetadata(for: file) { return cached }
+        guard shouldResolve(file), isCurrent(generation) else { return nil }
+        let hash = await fingerprint(file, generation: generation)
+        guard isCurrent(generation) else { return nil }
         let key = titleKey(file.name)
         if ignored.contains(key) || hash.map(ignored.contains) == true { return nil }
-        let parsed = MediaNameParser.parse(file.name)
-        if let hash, var cached = hashCache[hash] {
+        let parsed = nameInfo(file.name).parsed
+        if let hash, var cached = hashCache[hash], cached.hasUsablePoster || cached.manual == true {
             cached.matchedByHash = true
             return withEpisode(cached, parsed)
         }
-        if var cached = titleCache[key] {
+        if var cached = titleCache[key], cached.hasUsablePoster || cached.manual == true {
             cached.matchedByHash = false
             if let hash { hashCache[hash] = cached; save() }
             return withEpisode(cached, parsed)
         }
         if let last = missed[key], Date().timeIntervalSince(last) < 12 * 3600 { return nil }
-        guard !parsed.title.isEmpty, let metadata = await MetadataSearch.shared.lookup(parsed) else {
+        let retryVersion = retryVersions[key, default: 0]
+        let metadata = parsed.title.isEmpty ? nil : await lookup(parsed)
+        guard isCurrent(generation) else { return nil }
+        // 网络查找期间可能已手动匹配或取消，不能让晚回来的自动结果覆盖用户选择。
+        if ignored.contains(key) || hash.map(ignored.contains) == true { return nil }
+        if let cached = cachedMetadata(for: file) { return cached }
+        guard let metadata, metadata.hasUsablePoster else {
+            // 用户在本次请求等待期间点了重扫：现有请求结束后再查一次，不并发请求同一个来源。
+            guard retryVersions[key, default: 0] == retryVersion else { return nil }
             missed[key] = Date()
             save()
             return nil
@@ -154,17 +310,19 @@ final class MediaMetadataStore: ObservableObject {
     }
 
     private func load() {
-        if let data = UserDefaults.standard.data(forKey: storageKey),
+        if let data = defaults.data(forKey: storageKey),
            let payload = try? JSONDecoder().decode(CachePayload.self, from: data) {
             hashCache = payload.hash
             titleCache = payload.title
             ignored = payload.ignored ?? []
             missed = payload.missed ?? [:]
+            localFingerprints = payload.localFingerprints ?? [:]
+            discardPosterlessAutomaticMatches()
             return
         }
         // 第一次用新版：旧版对中文片名会直接取第一个搜索结果，配错的不少。
         // 只留下片名对得上的旧结果，其余的换新的识别方式重新识别。
-        guard let data = UserDefaults.standard.data(forKey: legacyStorageKey),
+        guard let data = defaults.data(forKey: legacyStorageKey),
               let payload = try? JSONDecoder().decode(CachePayload.self, from: data) else {
             return
         }
@@ -174,13 +332,41 @@ final class MediaMetadataStore: ObservableObject {
         }
         let kept = Set(titleCache.values.map(\.imdbID))
         hashCache = payload.hash.filter { kept.contains($0.value.imdbID) }
-        save()
+        discardPosterlessAutomaticMatches()
+        save(immediately: true)
     }
 
-    private func save() {
-        let payload = CachePayload(hash: hashCache, title: titleCache, ignored: ignored, missed: missed)
+    private func discardPosterlessAutomaticMatches() {
+        let invalidKeys = titleCache.filter { !$0.value.hasUsablePoster && $0.value.manual != true }.map(\.key)
+        for key in invalidKeys {
+            titleCache.removeValue(forKey: key)
+            missed.removeValue(forKey: key)
+        }
+        let oldHashCount = hashCache.count
+        hashCache = hashCache.filter { $0.value.hasUsablePoster || $0.value.manual == true }
+        if !invalidKeys.isEmpty || oldHashCount != hashCache.count { save() }
+    }
+
+    /// 连续识别多个文件时最多每 0.75 秒写一份快照，避免每一集都编码整份资料缓存。
+    private func save(immediately: Bool = false) {
+        cacheDirty = true
+        if immediately { flushSave(); return }
+        guard saveTask == nil else { return }
+        saveTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 750_000_000)
+            guard !Task.isCancelled else { return }
+            self?.flushSave()
+        }
+    }
+
+    private func flushSave() {
+        saveTask?.cancel()
+        saveTask = nil
+        guard cacheDirty else { return }
+        let payload = CachePayload(hash: hashCache, title: titleCache, ignored: ignored, missed: missed, localFingerprints: localFingerprints)
         guard let data = try? JSONEncoder().encode(payload) else { return }
-        UserDefaults.standard.set(data, forKey: storageKey)
+        defaults.set(data, forKey: storageKey)
+        cacheDirty = false
     }
 
     private struct CachePayload: Codable {
@@ -188,12 +374,13 @@ final class MediaMetadataStore: ObservableObject {
         let title: [String: MediaMetadata]
         var ignored: Set<String>? = nil
         var missed: [String: Date]? = nil
+        var localFingerprints: [String: String]? = nil
     }
 }
 
 enum MediaFingerprint {
     static func make(for url: URL) async -> String? {
-        await Task.detached(priority: .utility) {
+        let task = Task.detached(priority: .utility) { () -> String? in
             guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
             defer { try? handle.close() }
             var hash = Insecure.SHA1()
@@ -206,7 +393,8 @@ enum MediaFingerprint {
                 }
             } catch { }
             return nil
-        }.value
+        }
+        return await withTaskCancellationHandler(operation: { await task.value }, onCancel: { task.cancel() })
     }
 }
 

@@ -32,11 +32,12 @@ struct HPlayerApp: App {
 
 #if DEBUG
 private struct HomeUITestHost: View {
+    @EnvironmentObject private var appState: AppState
     @State private var ready = false
 
     var body: some View {
         Group {
-            if ready { HomeView() }
+            if ready { HomeView(appState: appState) }
             else { ProgressView() }
         }.task {
             let store = LocalMediaStore()

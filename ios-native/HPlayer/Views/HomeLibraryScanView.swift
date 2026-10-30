@@ -1,0 +1,150 @@
+import SwiftUI
+
+/// 文件扫描和封面匹配各自展示状态；文件扫描完成不代表所有影片都能识别。
+struct HomeLibraryScanView: View {
+    @EnvironmentObject private var scanner: CloudLibraryScanner
+    @EnvironmentObject private var metadata: MediaMetadataStore
+    @EnvironmentObject private var library: MediaLibraryStore
+    @EnvironmentObject private var local: LocalMediaStore
+    @EnvironmentObject private var appState: AppState
+    @Environment(\.dismiss) private var dismiss
+
+    let onStart: (Bool) -> Void
+    let onRetryMatching: () -> Void
+
+    private var matchedVideos: Int {
+        library.files(for: appState).filter { file in
+            guard let match = metadata.metadataByMediaID[LibraryMedia(cloud: file).id] else { return false }
+            return match.hasUsablePoster
+        }.count
+    }
+
+    private var status: String {
+        switch scanner.phase {
+        case .idle: return "扫描你的 115 片库"
+        case .running: return "正在扫描全盘"
+        case .paused: return "扫描已暂停"
+        case .failed: return "扫描尚未完成"
+        case .completed: return "文件扫描完成"
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    HStack(spacing: 14) {
+                        Image(systemName: scanner.phase == .completed ? "checkmark.circle" : "sparkle.magnifyingglass")
+                            .font(.system(size: 28)).foregroundStyle(Theme.accent)
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(status).font(.headline)
+                            Text(metadata.isMatching ? "正在自动匹配封面" : "仅展示匹配到封面的影片")
+                                .font(.subheadline).foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 0)
+                        if scanner.phase == .running || metadata.isMatching { ProgressView() }
+                    }.padding(.vertical, 8)
+                    LabeledContent("已扫描文件夹", value: "\(scanner.progress.scannedFolders) / \(scanner.progress.discoveredFolders)")
+                    LabeledContent("本次发现视频", value: "\(scanner.progress.discoveredVideos)")
+                    LabeledContent("片库已匹配视频", value: "\(matchedVideos)")
+                    if scanner.phase == .running, !scanner.currentFolderName.isEmpty {
+                        LabeledContent("正在扫描", value: scanner.currentFolderName)
+                    }
+                } footer: {
+                    Text("电影和剧集会自动归类。同一部剧合并成一张海报，没有匹配到的文件仍可在资源库播放。")
+                }
+
+                if !scanner.lastError.isEmpty {
+                    Section {
+                        Label(scanner.lastError, systemImage: "exclamationmark.circle")
+                            .foregroundStyle(Theme.warning)
+                    } footer: {
+                        Text("已发现的影片和扫描进度都已保留，可稍后继续。")
+                    }
+                }
+
+                Section {
+                    if scanner.phase == .running {
+                        Button("暂停扫描", systemImage: "pause.circle") {
+                            scanner.pause()
+                            metadata.pause()
+                            library.flush()
+                        }.accessibilityIdentifier("scan.pause")
+                    } else if scanner.canResume {
+                        Button("继续全盘扫描", systemImage: "play.circle") { onStart(false) }
+                            .accessibilityIdentifier("scan.resume")
+                        Button("从头重新扫描", systemImage: "arrow.clockwise") { onStart(true) }
+                    } else {
+                        Button(scanner.phase == .completed ? "重新扫描全盘" : "开始全盘扫描", systemImage: "sparkle.magnifyingglass") {
+                            onStart(scanner.phase == .completed)
+                        }.accessibilityIdentifier("scan.start")
+                    }
+                    Button("重新匹配未识别封面", systemImage: "photo.badge.magnifyingglass", action: onRetryMatching)
+                        .disabled(library.files(for: appState).isEmpty && local.files.isEmpty)
+                    NavigationLink("管理未匹配影片") { HomeUnmatchedMediaView() }
+                } footer: {
+                    Text("扫描在前台进行，退出 App 后可从这里继续。只读取文件列表，不下载整部视频，也不删除网盘文件。")
+                }
+            }
+            .navigationTitle("115 全盘扫描")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } }
+            }
+        }
+        .tint(Theme.accent)
+    }
+}
+
+/// 未识别文件不占用首页，但仍可以从扫描页播放或手动校正封面。
+private struct HomeUnmatchedMediaView: View {
+    @EnvironmentObject private var library: MediaLibraryStore
+    @EnvironmentObject private var local: LocalMediaStore
+    @EnvironmentObject private var metadata: MediaMetadataStore
+    @EnvironmentObject private var appState: AppState
+    @State private var matching: MatchRequest?
+    @State private var playing: PlaybackQueue?
+
+    private var items: [HomeMediaItem] {
+        HomeLibrary.items(HomeLibrary.media(local: local, cloud: library, appState: appState), metadata: metadata.metadataByMediaID)
+            .filter { $0.metadata?.hasUsablePoster != true }
+    }
+
+    var body: some View {
+        List {
+            if items.isEmpty {
+                Text("当前没有待匹配影片").foregroundStyle(.secondary)
+            }
+            ForEach(items) { item in
+                Button {
+                    matching = MatchRequest(item: item)
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "film").foregroundStyle(Theme.accent)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(item.media.name).foregroundStyle(.primary).lineLimit(2)
+                            Text(item.sourceLabel).font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 6)
+                        Text("匹配").font(.subheadline).foregroundStyle(Theme.accent)
+                    }.padding(.vertical, 4)
+                }
+                .contextMenu {
+                    Button("播放", systemImage: "play.fill") {
+                        playing = PlaybackQueue(source: item.media.source, items: [item.media.source])
+                    }
+                }
+            }
+        }
+        .navigationTitle("未匹配影片")
+        .navigationBarTitleDisplayMode(.inline)
+        .sheet(item: $matching) { request in
+            MetadataMatchView(file: request.file, current: request.current, onMatch: { result in
+                await metadata.match(result, to: request.file)
+            }, onClear: nil)
+        }
+        .fullScreenCover(item: $playing) { queue in
+            PlayerView(source: queue.source, playlist: queue.items).environmentObject(appState)
+        }
+    }
+}

@@ -91,15 +91,17 @@ struct HomeSnapshot {
 
     init(items: [HomeMediaItem]) {
         self.items = items
-        movies = items.filter { $0.metadata?.isSeries == false }
-        unmatched = items.filter { $0.metadata == nil }
-        let groups = HomeLibrary.seriesGroups(items)
+        let matched = items.filter { $0.metadata?.hasUsablePoster == true }
+        movies = matched.filter { $0.metadata?.isSeries == false }
+        let matchedIDs = Set(matched.map(\.id))
+        unmatched = items.filter { !matchedIDs.contains($0.id) }
+        let groups = HomeLibrary.seriesGroups(matched)
         series = groups
 
         // 精选：每部影片只出现一次，剧集用第一集代表
         var seen = Set<String>()
         var picks: [HomeMediaItem] = []
-        for item in items {
+        for item in matched {
             guard let metadata = item.metadata, seen.insert(metadata.imdbID).inserted else { continue }
             if metadata.isSeries, let first = groups.first(where: { $0.id == metadata.imdbID })?.episodes.first {
                 picks.append(first)
@@ -108,8 +110,9 @@ struct HomeSnapshot {
             }
             if picks.count == 6 { break }
         }
-        featured = picks.isEmpty ? Array(items.prefix(6)) : picks
+        featured = picks
     }
+
 }
 
 @MainActor

@@ -2,10 +2,26 @@ import SwiftUI
 
 struct HomeView: View {
     @StateObject private var recents = RecentStore.shared
-    @StateObject private var mediaLibrary = MediaLibraryStore()
-    @StateObject private var localStore = LocalMediaStore()
-    @StateObject private var metadataStore = MediaMetadataStore()
+    @StateObject private var mediaLibrary: MediaLibraryStore
+    @StateObject private var localStore: LocalMediaStore
+    @StateObject private var metadataStore: MediaMetadataStore
+    @StateObject private var scanner: CloudLibraryScanner
     @State private var selection: HomeSection = .home
+
+    init(appState: AppState) {
+        let local = LocalMediaStore()
+        let library = MediaLibraryStore()
+        let metadata = MediaMetadataStore()
+        let scan = CloudLibraryScanner()
+        scan.selectAccount(appState.libraryAccountID)
+        // 扫描检查点先于首页恢复，避免上次退出时的最后一批文件遗漏。
+        library.add(scan.discoveredFiles, for: appState)
+        metadata.hydrate(files: HomeLibrary.media(local: local, cloud: library, appState: appState))
+        _localStore = StateObject(wrappedValue: local)
+        _mediaLibrary = StateObject(wrappedValue: library)
+        _metadataStore = StateObject(wrappedValue: metadata)
+        _scanner = StateObject(wrappedValue: scan)
+    }
 
     var body: some View {
         tabs
@@ -13,6 +29,7 @@ struct HomeView: View {
             .environmentObject(mediaLibrary)
             .environmentObject(localStore)
             .environmentObject(metadataStore)
+            .environmentObject(scanner)
             .tint(Theme.accent)
     }
 

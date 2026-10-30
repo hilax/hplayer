@@ -29,9 +29,13 @@ struct LibraryMedia: Identifiable, Hashable {
 final class MediaLibraryStore: ObservableObject {
     @Published private var cloudByAccount: [String: [P115File]]
     private let storageKey = "hplayer.posterLibrary.cloud.v1"
+    private let defaults: UserDefaults
+    private var saveTask: Task<Void, Never>?
+    private var needsSave = false
 
-    init() {
-        if let data = UserDefaults.standard.data(forKey: storageKey),
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        if let data = defaults.data(forKey: storageKey),
            let decoded = try? JSONDecoder().decode([String: [P115File]].self, from: data) {
             cloudByAccount = decoded
         } else {
@@ -40,40 +44,52 @@ final class MediaLibraryStore: ObservableObject {
     }
 
     func files(for appState: AppState) -> [P115File] {
-        guard appState.isAuthenticated, let scope = scope(appState) else { return [] }
+        guard appState.isAuthenticated, let scope = appState.libraryAccountID else { return [] }
         return cloudByAccount[scope] ?? []
     }
 
     func add(_ files: [P115File], for appState: AppState) {
-        guard let scope = scope(appState) else { return }
+        guard appState.isAuthenticated, let scope = appState.libraryAccountID else { return }
         var result = cloudByAccount[scope] ?? []
+        var indices = Dictionary(result.enumerated().map { ($0.element.pickCode, $0.offset) }, uniquingKeysWith: { first, _ in first })
+        var changed = false
         for file in files where file.isVideo && !file.isDir && !file.pickCode.isEmpty {
-            result.removeAll { $0.pickCode == file.pickCode }
-            result.append(file)
+            if let index = indices[file.pickCode] {
+                if result[index] != file { result[index] = file; changed = true }
+            } else {
+                indices[file.pickCode] = result.count
+                result.append(file)
+                changed = true
+            }
         }
+        guard changed else { return }
         cloudByAccount[scope] = result
         save()
     }
 
     func remove(pickCode: String, for appState: AppState) {
-        guard let scope = scope(appState) else { return }
+        guard let scope = appState.libraryAccountID else { return }
         cloudByAccount[scope]?.removeAll { $0.pickCode == pickCode }
         save()
     }
 
-    private func scope(_ appState: AppState) -> String? {
-        let cookie = appState.directCookie ?? ""
-        for part in cookie.split(separator: ";") {
-            let pair = part.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
-            if pair.count == 2, pair[0] == "UID", let userID = pair[1].split(separator: "_").first {
-                return "device:\(userID)"
-            }
+    private func save() {
+        needsSave = true
+        saveTask?.cancel()
+        saveTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 750_000_000)
+            guard !Task.isCancelled else { return }
+            self?.flush()
         }
-        return nil
     }
 
-    private func save() {
+    /// 扫描的多页更新合并落盘；退出前立即保存，避免每页重编码整份片库。
+    func flush() {
+        saveTask?.cancel()
+        saveTask = nil
+        guard needsSave else { return }
         guard let data = try? JSONEncoder().encode(cloudByAccount) else { return }
-        UserDefaults.standard.set(data, forKey: storageKey)
+        defaults.set(data, forKey: storageKey)
+        needsSave = false
     }
 }

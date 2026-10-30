@@ -6,6 +6,17 @@ struct Direct115Stream: Identifiable {
     let url: URL
 }
 
+/// A single directory page. A nil offset means the directory was fully enumerated.
+struct Direct115FilePage {
+    let files: [P115File]
+    let nextOffset: Int?
+}
+
+struct Direct115HTTPError: LocalizedError {
+    let statusCode: Int
+    var errorDescription: String? { "115 请求失败（\(statusCode)）" }
+}
+
 /// 115 网页会话直连，Cookie 仅保存在本机 Keychain。
 struct Direct115Client {
     let cookie: String
@@ -28,18 +39,66 @@ struct Direct115Client {
     }
 
     func files(cid: String) async throws -> [P115File] {
-        guard !cid.isEmpty, cid.allSatisfy(\.isNumber) else { throw APIError.server("目录编号无效") }
+        try await Self.collectFiles { offset in
+            try await filesPage(cid: cid, offset: offset, limit: 1000)
+        }
+    }
+
+    /// Shares the browser's pagination safety checks with deterministic, network-free tests.
+    static func collectFiles(
+        pageDelayNanoseconds: UInt64 = 350_000_000,
+        fetchPage: (Int) async throws -> Direct115FilePage
+    ) async throws -> [P115File] {
         var result: [P115File] = []
         var offset = 0
+        var previousSignature = ""
         repeat {
-            let json = try await jsonRequest("https://webapi.115.com/files", query: ["aid": "1", "cid": cid, "offset": String(offset), "limit": "1000", "show_dir": "1", "format": "json", "fc_mix": "0"])
-            guard let files = json["data"] as? [[String: Any]] else { throw APIError.server("115 未返回文件列表") }
-            result.append(contentsOf: files.map { Self.file($0, parent: cid) })
-            offset += files.count
-            let count = Self.integer(json["count"])
-            if files.isEmpty || (count > 0 && offset >= count) || (count == 0 && files.count < 1000) { break }
+            try Task.checkCancellation()
+            let page = try await fetchPage(offset)
+            try Task.checkCancellation()
+            let signature = page.files.map { "\($0.isDir ? "d" : "f"):\($0.id)" }.joined(separator: ",")
+            guard offset == 0 || page.files.isEmpty || signature != previousSignature else {
+                throw APIError.server("115 返回了重复的文件分页，请稍后重试")
+            }
+            result.append(contentsOf: page.files)
+            guard let next = page.nextOffset else { break }
+            guard next > offset, !page.files.isEmpty else { throw APIError.server("115 文件分页未前进，请稍后重试") }
+            offset = next
+            previousSignature = signature
+            if pageDelayNanoseconds > 0 { try await Task.sleep(nanoseconds: pageDelayNanoseconds) }
         } while true
         return result
+    }
+
+    /// Used by the whole-drive scanner so it can checkpoint and throttle every page.
+    func filesPage(cid: String, offset: Int, limit: Int = 500) async throws -> Direct115FilePage {
+        guard !cid.isEmpty, cid.allSatisfy(\.isNumber), offset >= 0, (1...1000).contains(limit) else {
+            throw APIError.server("目录分页参数无效")
+        }
+        try Task.checkCancellation()
+        let json = try await jsonRequest("https://webapi.115.com/files", query: ["aid": "1", "cid": cid, "offset": String(offset), "limit": String(limit), "show_dir": "1", "format": "json", "fc_mix": "0"])
+        return try Self.parseFilesPage(json, cid: cid, requestedOffset: offset, limit: limit)
+    }
+
+    static func parseFilesPage(_ json: [String: Any], cid: String, requestedOffset offset: Int, limit: Int) throws -> Direct115FilePage {
+        if let reported = json["offset"] {
+            guard let reportedOffset = Int(string(reported)), reportedOffset == offset else {
+                throw APIError.server("115 返回的文件分页位置不一致，请稍后重试")
+            }
+        }
+        guard let files = json["data"] as? [[String: Any]] else { throw APIError.server("115 未返回文件列表") }
+        guard offset >= 0, limit > 0, offset <= Int.max - files.count else { throw APIError.server("115 文件分页参数无效") }
+        let next = offset + files.count
+        let count: Int
+        if let rawCount = json["count"] {
+            guard let total = Int(string(rawCount)), total >= 0 else { throw APIError.server("115 返回的文件数量无效") }
+            count = total
+        } else {
+            count = 0
+        }
+        guard !files.isEmpty || count <= offset else { throw APIError.server("115 文件列表不完整，请稍后重试") }
+        let finished = files.isEmpty || (count > 0 && next >= count) || (count == 0 && files.count < limit)
+        return Direct115FilePage(files: files.map { Self.file($0, parent: cid) }, nextOffset: finished ? nil : next)
     }
 
     func search(_ keyword: String) async throws -> [P115File] {
@@ -78,7 +137,7 @@ struct Direct115Client {
         components.queryItems = query.map { URLQueryItem(name: $0.key, value: $0.value) }
         guard let url = components.url else { throw APIError.badURL }
         let (data, response) = try await request(url)
-        guard (200..<300).contains(response.statusCode) else { throw APIError.server("115 请求失败（\(response.statusCode)）") }
+        guard (200..<300).contains(response.statusCode) else { throw Direct115HTTPError(statusCode: response.statusCode) }
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw APIError.server("115 返回的数据无法识别") }
         let failedState = (json["state"] as? Bool) == false || (json["state"] as? Int) == 0
         let errorCode = Self.integer(json["errno"] ?? json["errNo"])

@@ -7,6 +7,8 @@ struct HomeTab: View {
     @EnvironmentObject private var mediaLibrary: MediaLibraryStore
     @EnvironmentObject private var localStore: LocalMediaStore
     @EnvironmentObject private var metadataStore: MediaMetadataStore
+    @EnvironmentObject private var scanner: CloudLibraryScanner
+    @Environment(\.scenePhase) private var scenePhase
     @ObservedObject private var magnetHistory = MagnetHistoryStore.shared
 
     @State private var showImporter = false
@@ -17,6 +19,7 @@ struct HomeTab: View {
     @State private var showCloudBrowser = false
     @State private var matching: MatchRequest?
     @State private var magnetLaunch: MagnetLaunch?
+    @State private var showScan = false
 
     private static let scrollSpace = "home.scroll"
     private let heroHeight: CGFloat = 540
@@ -35,10 +38,14 @@ struct HomeTab: View {
                 let topInset = outer.safeAreaInsets.top
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
-                        if library.items.isEmpty {
+                        if library.featured.isEmpty {
                             emptyHeader(topInset: topInset)
                             VStack(alignment: .leading, spacing: 28) {
-                                emptyState
+                                if libraryFiles.isEmpty && scanner.phase != .running {
+                                    emptyState
+                                } else {
+                                    matchingState
+                                }
                                 if !continueItems.isEmpty {
                                     continueShelf(continueItems)
                                 }
@@ -92,7 +99,25 @@ struct HomeTab: View {
                 Text(playError)
             }
             .task { localStore.refresh() }
-            .task(id: libraryFiles) { metadataStore.sync(files: libraryFiles) }
+            .task(id: libraryFiles) {
+                if scenePhase == .active { metadataStore.sync(files: libraryFiles) }
+            }
+            .task(id: appState.libraryAccountID) {
+                metadataStore.pause()
+                scanner.selectAccount(appState.libraryAccountID)
+                mediaLibrary.add(scanner.discoveredFiles, for: appState)
+                metadataStore.hydrate(files: libraryFiles)
+                if scenePhase == .active { metadataStore.sync(files: libraryFiles) }
+            }
+            .onChange(of: scenePhase) { phase in
+                if phase == .active {
+                    metadataStore.sync(files: libraryFiles)
+                } else if phase == .background {
+                    scanner.pause()
+                    metadataStore.pause()
+                    mediaLibrary.flush()
+                }
+            }
             .onChange(of: library.featured.count) { count in
                 if heroSelection >= count { heroSelection = 0 }
             }
@@ -105,6 +130,14 @@ struct HomeTab: View {
             HomeCloudBrowser()
                 .environmentObject(appState)
                 .environmentObject(mediaLibrary)
+        }
+        .sheet(isPresented: $showScan) {
+            HomeLibraryScanView(onStart: startScan, onRetryMatching: retryMatching)
+                .environmentObject(scanner)
+                .environmentObject(metadataStore)
+                .environmentObject(mediaLibrary)
+                .environmentObject(localStore)
+                .environmentObject(appState)
         }
         .sheet(item: $matching) { request in
             MetadataMatchView(file: request.file, current: request.current, onMatch: { metadata in
@@ -244,8 +277,22 @@ struct HomeTab: View {
 
     private var moreMenu: some View {
         Menu {
+            Button("扫描 115 全盘并匹配封面", systemImage: "sparkle.magnifyingglass") {
+                guard appState.isAuthenticated, appState.libraryAccountID != nil else {
+                    showCloudBrowser = true
+                    return
+                }
+                showScan = true
+                if scanner.phase == .idle { startScan(false) }
+            }
+            .accessibilityIdentifier("home.scan115")
+            Button("重新自动匹配封面", systemImage: "photo.badge.magnifyingglass") {
+                retryMatching()
+            }
+            .disabled(libraryFiles.isEmpty)
             Button("刷新媒体库", systemImage: "arrow.clockwise") {
                 localStore.refresh()
+                metadataStore.sync(files: libraryFiles)
             }
             if !recents.items.isEmpty || !magnetHistory.items.isEmpty {
                 Button("清空继续观看", systemImage: "clock.arrow.circlepath", role: .destructive) {
@@ -261,12 +308,32 @@ struct HomeTab: View {
                 .glassCircle()
         }
         .accessibilityLabel("更多")
+        .accessibilityIdentifier("home.more")
+    }
+
+    private func startScan(_ restart: Bool) {
+        guard let accountID = appState.libraryAccountID, appState.isAuthenticated,
+              let client = appState.directClient() else { return }
+        metadataStore.retryFailed(files: libraryFiles)
+        scanner.start(accountID: accountID, fetchPage: { cid, offset in
+            try await client.filesPage(cid: cid, offset: offset)
+        }, onBatch: { files in
+            guard appState.isAuthenticated, appState.libraryAccountID == accountID else { return }
+            mediaLibrary.add(files, for: appState)
+        }, restart: restart, replayInventory: false)
+    }
+
+    private func retryMatching() {
+        metadataStore.retryFailed(files: libraryFiles)
     }
 
     // MARK: 内容区
 
     private func sections(_ library: HomeSnapshot, continueItems: [ContinueEntry]) -> some View {
         VStack(alignment: .leading, spacing: 30) {
+            if scanner.phase == .running || scanner.canResume || metadataStore.isMatching {
+                scanStatus
+            }
             if !continueItems.isEmpty {
                 continueShelf(continueItems)
             }
@@ -275,9 +342,6 @@ struct HomeTab: View {
             }
             if !library.series.isEmpty {
                 seriesShelf(library)
-            }
-            if !library.unmatched.isEmpty {
-                pendingSection(library)
             }
         }
         .padding(.horizontal, 18)
@@ -590,6 +654,55 @@ struct HomeTab: View {
 
     // MARK: 空状态
 
+    private var scanStatus: some View {
+        Button { showScan = true } label: {
+            HStack(spacing: 12) {
+                if scanner.phase == .running || metadataStore.isMatching {
+                    ProgressView().tint(Theme.accent)
+                } else {
+                    Image(systemName: "pause.circle").foregroundStyle(Theme.accent)
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(scanner.phase == .running ? "正在扫描 115 全盘" : (metadataStore.isMatching ? "正在自动匹配封面" : "全盘扫描尚未完成"))
+                        .font(.subheadline.weight(.semibold))
+                    Text("已发现 \(scanner.progress.discoveredVideos) 个视频 · 已扫描 \(scanner.progress.scannedFolders) 个文件夹")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 4)
+                Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
+            }
+            .padding(16)
+            .translucentCard(cornerRadius: 18)
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("home.scanStatus")
+    }
+
+    private var matchingState: some View {
+        VStack(spacing: 18) {
+            if scanner.phase == .running || metadataStore.isMatching {
+                ProgressView().controlSize(.large).tint(Theme.accent)
+                Text(scanner.phase == .running ? "正在整理你的 115 片库" : "正在自动匹配封面")
+                    .font(.title3.weight(.semibold))
+            } else {
+                Image(systemName: "photo.on.rectangle.angled")
+                    .font(.system(size: 40)).foregroundStyle(Theme.accent)
+                Text("暂未匹配到封面").font(.title3.weight(.semibold))
+            }
+            Text("匹配成功的影片会自动显示在这里。没有匹配到的文件仍可在资源库中浏览和播放。")
+                .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            if scanner.phase == .running || scanner.canResume {
+                scanStatus
+            }
+            if !metadataStore.isMatching {
+                GlassCapsuleButton(title: "重新自动匹配", systemImage: "arrow.clockwise", prominent: true) { retryMatching() }
+            }
+        }
+        .padding(.horizontal, 22).padding(.vertical, 48)
+        .frame(maxWidth: .infinity)
+        .accessibilityIdentifier("home.matchingState")
+    }
+
     private func emptyHeader(topInset: CGFloat) -> some View {
         HStack(spacing: 10) {
             Spacer(minLength: 0)
@@ -641,6 +754,7 @@ struct HomeTab: View {
         .padding(.horizontal, 20)
         .frame(maxWidth: .infinity)
         .surfaceCard(cornerRadius: 30)
+        .accessibilityIdentifier("home.emptyLibrary")
     }
 }
 
