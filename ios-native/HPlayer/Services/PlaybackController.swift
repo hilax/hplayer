@@ -135,6 +135,8 @@ final class PlaybackController: ObservableObject {
 
     /// 用户自己按了暂停
     private var userPaused = false
+    /// Prevent late asynchronous opens from restarting audio while closing.
+    private var closingPlayback = false
     private var boosted = false
     private var loaded = false
     private var opening = false
@@ -291,6 +293,7 @@ final class PlaybackController: ObservableObject {
         autoRecover: Bool = true,
         openTimeoutSeconds: UInt64 = 45
     ) {
+        guard !closingPlayback else { return }
         session += 1
         playedThisSession = false
         recoveryTask?.cancel()
@@ -310,6 +313,7 @@ final class PlaybackController: ObservableObject {
     }
 
     private func start(_ url: URL, direct115: Bool, cookie: String, position: Double, keepPlaying: Bool, keepDuration: Bool) {
+        guard !closingPlayback else { return }
         logEvent("打开 \(url.host ?? url.lastPathComponent)，从 \(Self.clock(position))")
         currentURL = url
         currentDirect115 = direct115
@@ -414,6 +418,20 @@ final class PlaybackController: ObservableObject {
     }
 
     // MARK: 播放控制
+
+    /// Pause immediately when closing without discarding the current position.
+    /// This also covers loading/buffering: a pending recovery must not resume audio
+    /// while the portrait transition is in progress.
+    func pauseForClose() {
+        closingPlayback = true
+        userPaused = true
+        pendingOpen = nil
+        engine?.set("pause", true)
+        updateFlags()
+    }
+
+    /// Magnet playback can reuse its controller for the next presentation.
+    func prepareForPresentation() { closingPlayback = false }
 
     func toggle() {
         if playing {
@@ -636,7 +654,7 @@ final class PlaybackController: ObservableObject {
             }
         case ("pause", .flag(let paused)):
             // 内核在缓存不够时不会改 pause；这里的变化来自用户或打开时的设定
-            if paused != userPaused, loaded { userPaused = paused }
+            if !closingPlayback, paused != userPaused, loaded { userPaused = paused }
         case ("paused-for-cache", .flag(let value)):
             if value && !pausedForCache && !seeking { noDataSeconds = 0 }
             pausedForCache = value

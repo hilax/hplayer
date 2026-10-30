@@ -1,6 +1,34 @@
 import XCTest
 
 final class PlaybackUITests: XCTestCase {
+    func testCloseRestoresPortraitAndAllowsReopening() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["HPLAYER_UI_TEST_URL"] = "http://127.0.0.1:8765/hls-fixture/index.m3u8"
+        app.launchEnvironment["HPLAYER_UI_TEST_KEEP_CONTROLS_VISIBLE"] = "1"
+        app.launch()
+
+        let close = app.buttons["playback.close"]
+        let reopen = app.buttons["playbackTest.reopen"]
+        let orientation = app.buttons["playback.orientation"]
+        let surface = app.otherElements["playback.surface"]
+        XCTAssertTrue(wait { close.exists && surface.exists && app.windows.firstMatch.frame.width > app.windows.firstMatch.frame.height },
+                      "Player should open in landscape")
+        close.tap()
+        XCTAssertTrue(wait { !surface.exists && reopen.isHittable && app.windows.firstMatch.frame.height > app.windows.firstMatch.frame.width },
+                      "Closing must leave a usable portrait page without a blocking transition")
+
+        reopen.tap()
+        XCTAssertTrue(wait { close.exists && surface.exists && app.windows.firstMatch.frame.width > app.windows.firstMatch.frame.height },
+                      "The player should reopen and rotate to landscape")
+        orientation.tap()
+        XCTAssertTrue(wait { orientation.label == "横屏" && surface.frame.height > surface.frame.width },
+                      "Player should switch to portrait before the second close")
+        close.tap()
+        XCTAssertTrue(wait { !surface.exists && reopen.isHittable && app.windows.firstMatch.frame.height > app.windows.firstMatch.frame.width },
+                      "Closing a portrait player should also restore an interactive previous page")
+    }
+
     func testPlaybackControlsAndLandscape() throws {
         continueAfterFailure = false
         let app = XCUIApplication()

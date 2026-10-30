@@ -384,6 +384,7 @@ final class MagnetController: ObservableObject {
             return
         }
         guard let torrentID else { return }
+        playback.prepareForPresentation()
         playTask?.cancel()
         savePosition()
         playError = ""

@@ -78,6 +78,14 @@ enum OrientationSupport {
         }
     }
 
+    /// Normal dismissal already requested portrait. Retry only when it did not
+    /// take effect, and never override a newly opened landscape player.
+    static func restorePortraitIfNeeded() {
+        guard supportedOrientations == .portrait, let scene = activeScene,
+              !matches(scene.effectiveGeometry.interfaceOrientation, .portrait) else { return }
+        restorePortrait()
+    }
+
     private static var activeScene: UIWindowScene? {
         UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
@@ -100,6 +108,8 @@ enum OrientationSupport {
         completion: @escaping (Error?) -> Void,
         retryCount: Int
     ) {
+        // A later player may already have requested a different orientation.
+        guard supportedOrientations == orientations else { completion(nil); return }
         refreshSupportedOrientations(controllers)
         scene.requestGeometryUpdate(.iOS(interfaceOrientations: orientations)) { error in
             // Some iOS versions report an error for the first request while UIKit is
@@ -162,6 +172,83 @@ enum OrientationSupport {
         var errorDescription: String? {
             "播放页尚未连接到活动窗口"
         }
+    }
+}
+
+/// A non-key window keeps the rotation and the full-screen dismissal hidden until
+/// SwiftUI has actually removed the player. It never takes over keyboard focus.
+@MainActor
+enum PlayerDismissCover {
+    private static var window: UIWindow?
+    private static var currentID: UUID?
+
+    static func show(then covered: @escaping (UUID?) -> Void) {
+        guard let scene = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .first(where: { $0.activationState == .foregroundActive }) else {
+            covered(nil)
+            return
+        }
+        removeImmediately()
+        let id = UUID()
+        let cover = UIWindow(windowScene: scene)
+        let controller = UIViewController()
+        controller.view.backgroundColor = .black
+        controller.view.isAccessibilityElement = false
+        cover.rootViewController = controller
+        cover.backgroundColor = .black
+        cover.windowLevel = .normal + 1
+        cover.frame = scene.coordinateSpace.bounds
+        cover.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        cover.alpha = 0
+        cover.isHidden = false // Do not call makeKeyAndVisible().
+        currentID = id
+        window = cover
+        UIView.animate(withDuration: 0.15, delay: 0, options: [.beginFromCurrentState, .curveEaseOut]) {
+            cover.alpha = 1
+        } completion: { _ in
+            guard currentID == id else { return }
+            covered(id)
+        }
+    }
+
+    static func reveal(_ id: UUID?) {
+        guard let id, currentID == id, let cover = window else { return }
+        // SwiftUI can report onDisappear before the full-screen transition ends.
+        // Keep the cover until UIKit finishes dismissing; when no coordinator is
+        // exposed, leave enough time for the standard dismissal animation.
+        if let scene = cover.windowScene, let coordinator = transitionCoordinator(in: scene),
+           coordinator.animate(alongsideTransition: nil, completion: { _ in fadeOut(id) }) {
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { fadeOut(id) }
+    }
+
+    private static func fadeOut(_ id: UUID) {
+        guard currentID == id, let cover = window else { return }
+        UIView.animate(withDuration: 0.2, delay: 0, options: [.beginFromCurrentState, .curveEaseOut]) {
+            cover.alpha = 0
+        } completion: { _ in
+            guard currentID == id else { return }
+            removeImmediately()
+        }
+    }
+
+    private static func transitionCoordinator(in scene: UIWindowScene) -> UIViewControllerTransitionCoordinator? {
+        guard let root = scene.windows.first(where: \.isKeyWindow)?.rootViewController else { return nil }
+        var pending = [root]
+        while let controller = pending.popLast() {
+            if let coordinator = controller.transitionCoordinator { return coordinator }
+            if let presented = controller.presentedViewController { pending.append(presented) }
+            pending.append(contentsOf: controller.children)
+        }
+        return nil
+    }
+
+    static func removeImmediately() {
+        window?.isHidden = true
+        window = nil
+        currentID = nil
     }
 }
 

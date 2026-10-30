@@ -57,8 +57,11 @@ private struct PlayerUITestHost: View {
     @State private var presentingPlayer = false
 
     var body: some View {
-        Color.black
-            .ignoresSafeArea()
+        ZStack {
+            Color.black.ignoresSafeArea()
+            Button("重新播放测试视频") { presentingPlayer = true }
+                .accessibilityIdentifier("playbackTest.reopen")
+        }
             .task {
                 await Task.yield()
                 presentingPlayer = true
