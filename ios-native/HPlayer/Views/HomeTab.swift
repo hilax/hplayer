@@ -111,6 +111,18 @@ struct HomeTab: View {
                     )
                 }
             }
+            .navigationDestination(for: PerformerRoute.self) { route in
+                if let group = library.performers.first(where: { $0.id == route.id }) {
+                    PerformerCollectionView(group: group)
+                        .id(route.id)
+                } else {
+                    VStack(spacing: 10) {
+                        Image(systemName: "person.2")
+                        Text("演员合集已更新").font(.headline)
+                        Text("返回首页后重新进入演员合集。").foregroundStyle(.secondary)
+                    }
+                }
+            }
             .toolbar(.hidden, for: .navigationBar)
             .fileImporter(
                 isPresented: $showImporter,

@@ -1,24 +1,27 @@
 import SwiftUI
 
-/// A value-safe entry point for performer collections. Giving every destination
-/// its actor id prevents SwiftUI from reusing the previous actor's page.
+struct PerformerRoute: Hashable {
+    let id: String
+    let name: String
+}
+
+/// Value-based navigation keeps every lazy-list row tied to its own actor id.
+/// Destination-closure links can be recycled across cells in horizontal lazy
+/// stacks and open the previous actor's page.
 struct PerformerNavigationLink<Label: View>: View {
-    let group: PerformerGroup
+    let route: PerformerRoute
     let label: () -> Label
 
     init(group: PerformerGroup, @ViewBuilder label: @escaping () -> Label) {
-        self.group = group
+        route = PerformerRoute(id: group.id, name: group.name)
         self.label = label
     }
 
     var body: some View {
-        NavigationLink {
-            PerformerCollectionView(group: group)
-                .id(group.id)
-        } label: {
+        NavigationLink(value: route) {
             label()
         }
-        .id(group.id)
+        .id(route.id)
     }
 }
 

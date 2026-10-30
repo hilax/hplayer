@@ -41,13 +41,27 @@ private struct PerformerNavigationUITestHost: View {
 
     var body: some View {
         NavigationStack {
-            List(groups) { group in
-                PerformerNavigationLink(group: group) {
-                    Text(group.name)
+            ScrollView(.horizontal) {
+                LazyHStack(spacing: 20) {
+                    ForEach(groups) { group in
+                        PerformerNavigationLink(group: group) {
+                            Text(group.name)
+                                .font(.title2)
+                                .frame(width: 160, height: 220)
+                                .background(Theme.surface)
+                        }
+                        .accessibilityIdentifier("performerTest.\(group.id)")
+                    }
                 }
-                .accessibilityIdentifier("performerTest.\(group.id)")
+                .padding(20)
             }
             .navigationTitle("演员合集")
+            .navigationDestination(for: PerformerRoute.self) { route in
+                if let group = groups.first(where: { $0.id == route.id }) {
+                    PerformerCollectionView(group: group)
+                        .id(route.id)
+                }
+            }
         }
     }
 

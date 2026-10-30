@@ -78,6 +78,18 @@ struct SearchView: View {
         .background(Theme.pageBackground.ignoresSafeArea())
         .navigationTitle("搜索")
         .searchable(text: $keyword, prompt: "片名、演员或文件名")
+        .navigationDestination(for: PerformerRoute.self) { route in
+            if let group = library.performers.first(where: { $0.id == route.id }) {
+                PerformerCollectionView(group: group)
+                    .id(route.id)
+            } else {
+                VStack(spacing: 10) {
+                    Image(systemName: "person.2")
+                    Text("演员合集已更新").font(.headline)
+                    Text("返回搜索页后重新进入演员合集。").foregroundStyle(.secondary)
+                }
+            }
+        }
         .onSubmit(of: .search) {
             Task { await search() }
         }
