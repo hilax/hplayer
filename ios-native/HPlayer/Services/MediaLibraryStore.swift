@@ -49,7 +49,7 @@ final class MediaLibraryStore: ObservableObject {
     }
 
     private var mediaCache: (scope: String, revision: Int, items: [LibraryMedia])?
-    private var revision = 0
+    private(set) var revision = 0
 
     /// 首页每次刷新都要用到；片库很大时缓存转换结果，只在内容变化后重算。
     func media(for appState: AppState) -> [LibraryMedia] {

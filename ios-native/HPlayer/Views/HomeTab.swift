@@ -21,6 +21,29 @@ struct HomeTab: View {
     @State private var matching: MatchRequest?
     @State private var magnetLaunch: MagnetLaunch?
     @State private var showScan = false
+    /// 首页的分组结果。在后台线程算好再换上，匹配、扫描期间界面不会被整页重算拖住。
+    @State private var snapshot = HomeSnapshot(items: [])
+
+    private var snapshotKey: HomeSnapshotKey {
+        HomeSnapshotKey(local: localStore.files.count, cloudRevision: mediaLibrary.revision,
+                        metadataRevision: metadataStore.revision, account: appState.libraryAccountID)
+    }
+
+    private func rebuildSnapshot() async {
+        let files = libraryFiles
+        let matches = metadataStore.metadataByMediaID
+        if snapshot.items.isEmpty {
+            // 第一次同步算出，避免首页先闪一下空白。
+            snapshot = HomeSnapshot(items: files.map { HomeMediaItem(media: $0, metadata: matches[$0.id]) })
+            return
+        }
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        guard !Task.isCancelled else { return }
+        let result = await Task.detached(priority: .userInitiated) {
+            HomeSnapshot(items: files.map { HomeMediaItem(media: $0, metadata: matches[$0.id]) })
+        }.value
+        if !Task.isCancelled { snapshot = result }
+    }
 
     private static let scrollSpace = "home.scroll"
     private let heroHeight: CGFloat = 540
@@ -35,7 +58,7 @@ struct HomeTab: View {
     }
 
     var body: some View {
-        let library = HomeSnapshot(items: HomeLibrary.items(libraryFiles, metadata: metadataStore.metadataByMediaID))
+        let library = snapshot
         let continueItems = continueEntries(library)
         let heroItem = currentHero(library)
 
@@ -105,6 +128,7 @@ struct HomeTab: View {
                 Text(playError)
             }
             .task { localStore.refresh() }
+            .task(id: snapshotKey) { await rebuildSnapshot() }
             .task(id: HomeMatchingInput(count: matchingBucket, accountID: appState.libraryAccountID, background: scenePhase == .background, scanning: scanner.phase == .running)) {
                 if scanner.accountID != appState.libraryAccountID {
                     metadataStore.pause()
@@ -815,6 +839,13 @@ struct HomeTab: View {
 
 /// 只比较数量和状态，不比较整份片库。扫描中每新增 300 个视频才重新匹配一次，
 /// 否则每扫一页就把整个片库重新过一遍，界面会卡死。
+private struct HomeSnapshotKey: Equatable {
+    let local: Int
+    let cloudRevision: Int
+    let metadataRevision: Int
+    let account: String?
+}
+
 private struct HomeMatchingInput: Equatable {
     let count: Int
     let accountID: String?

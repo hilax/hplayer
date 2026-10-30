@@ -41,7 +41,9 @@ struct MediaMetadata: Codable, Identifiable, Hashable {
 
 @MainActor
 final class MediaMetadataStore: ObservableObject {
-    @Published private(set) var metadataByMediaID: [String: MediaMetadata] = [:]
+    @Published private(set) var metadataByMediaID: [String: MediaMetadata] = [:] { didSet { revision &+= 1 } }
+    /// 每次匹配结果变化加一，页面用它判断是否需要重算，不必比较整个字典。
+    private(set) var revision = 0
     private(set) var resolvingIDs: Set<String> = []
     private var bufferedResults: [String: MediaMetadata] = [:]
     private var lastPublishAt = Date()
@@ -522,7 +524,23 @@ enum MediaNameParser {
         text.range(of: #"\p{Han}"#, options: .regularExpression) != nil
     }
 
+    private static let cacheLock = NSLock()
+    nonisolated(unsafe) private static var parseCache: [String: ParsedName] = [:]
+
+    /// 解析要跑十几个正则，首页每次刷新都会对整个片库调用；结果按文件名缓存。
     static func parse(_ filename: String) -> ParsedName {
+        cacheLock.lock()
+        if let cached = parseCache[filename] { cacheLock.unlock(); return cached }
+        cacheLock.unlock()
+        let value = parseUncached(filename)
+        cacheLock.lock()
+        if parseCache.count > 30_000 { parseCache.removeAll(keepingCapacity: true) }
+        parseCache[filename] = value
+        cacheLock.unlock()
+        return value
+    }
+
+    static func parseUncached(_ filename: String) -> ParsedName {
         let extensions: Set<String> = ["mp4", "mkv", "mov", "m4v", "avi", "ts", "webm", "flv", "wmv", "m2ts", "mpg", "mpeg", "rmvb", "iso"]
         var value = extensions.contains((filename as NSString).pathExtension.lowercased()) ? (filename as NSString).deletingPathExtension : filename
         // 网址水印、字幕组和下载站的标记：【www.xxx.com】、[某某字幕组]、[电影天堂www.dytt.com]
