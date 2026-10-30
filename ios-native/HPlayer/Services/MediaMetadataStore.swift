@@ -22,8 +22,10 @@ struct MediaMetadata: Codable, Identifiable, Hashable {
     var source: String? = nil
     /// 用户手动匹配的结果，清理旧缓存时不会动它
     var manual: Bool? = nil
-    /// 演员名（目前来自 R18.dev），用来把同一演员的影片归成合集
+    /// 演员名（来自 R18.dev，填了 Key 时也可来自 FANZA 官方接口），用来把同一演员的影片归成合集
     var performers: [String]? = nil
+    /// 来源里的内容编号（R18.dev 的 content_id）。以后补查演员时直接用它取详情，省一次请求。
+    var contentID: String? = nil
 
     var id: String { imdbID }
     var isSeries: Bool { type == "series" }
@@ -82,14 +84,30 @@ final class MediaMetadataStore: ObservableObject {
 
     private let concurrency: Int
 
+    /// 补查演员用：传入番号和匹配时记下的 content_id，返回演员名。没传（测试里默认）就不补查。
+    typealias PerformerLookupHandler = (_ code: String, _ contentID: String?) async -> PerformerLookup
+    private let performerLookup: PerformerLookupHandler?
+    /// 正在给已有封面的影片补查演员
+    @Published private(set) var isEnrichingPerformers = false
+    private var enrichTask: Task<Void, Never>?
+    private var enrichGeneration = 0
+    /// 确认查不到演员的番号和时间，30 天内不再问；随缓存一起保存。
+    private var performerMissing: [String: Date] = [:]
+    /// 网络出错的番号，1 小时内不再问；只在本次运行里记。
+    private var performerFailed: [String: Date] = [:]
+    /// 已经查到、但还没发布给界面的演员名（按番号）。和匹配结果一样攒一批再更新，首页不会被反复重算。
+    private var bufferedPerformers: [String: [String]] = [:]
+
     init(
         defaults: UserDefaults = .standard,
         concurrency: Int = 1,
+        performerLookup: PerformerLookupHandler? = nil,
         lookup: @escaping (MediaNameParser.ParsedName) async -> MediaMetadata? = { await MetadataSearch.shared.lookup($0) }
     ) {
         self.defaults = defaults
         self.lookup = lookup
         self.concurrency = max(1, concurrency)
+        self.performerLookup = performerLookup
         load()
     }
 
@@ -144,6 +162,8 @@ final class MediaMetadataStore: ObservableObject {
         scanGeneration += 1
         let generation = scanGeneration
         isMatching = true
+        // 匹配封面优先：补查演员和它共用 r18.dev 的限速，等匹配结束再继续。
+        cancelEnrichment()
         syncTask = Task {
             await withTaskGroup(of: Void.self) { group in
                 for _ in 0..<concurrency {
@@ -210,6 +230,8 @@ final class MediaMetadataStore: ObservableObject {
         scanGeneration += 1
         syncTask?.cancel()
         syncTask = nil
+        cancelEnrichment()
+        publishPerformers()
         clearPending()
         inFlightKeys = []
         resolvingIDs = []
@@ -238,6 +260,131 @@ final class MediaMetadataStore: ObservableObject {
         isMatching = false
         lastCompletedAt = Date()
         completedScanCount += 1
+        startPerformerEnrichment()
+    }
+
+    // MARK: 演员资料补全
+
+    /// 给已经有封面、但还没有演员名的番号影片补查演员（旧版本匹配的、或者只拿到封面的）。
+    /// 匹配结束后自动在后台进行，一部一部查，不占用界面；用户点了停止、App 进入后台都会立即停下。
+    func startPerformerEnrichment(force: Bool = false) {
+        guard performerLookup != nil, enrichTask == nil, syncTask == nil, force || !stoppedByUser,
+              AdultMetadataSettings.isEnabled else { return }
+        if force {
+            performerMissing = [:]
+            performerFailed = [:]
+        }
+        let candidates = performerCandidates()
+        guard !candidates.isEmpty else { return }
+        enrichGeneration += 1
+        let generation = enrichGeneration
+        isEnrichingPerformers = true
+        enrichTask = Task { await self.enrichPerformers(candidates, generation: generation) }
+    }
+
+    private func cancelEnrichment() {
+        enrichGeneration += 1
+        enrichTask?.cancel()
+        enrichTask = nil
+        if isEnrichingPerformers { isEnrichingPerformers = false }
+    }
+
+    /// 当前片库里有番号、有封面、还没有演员名的影片，按番号去重，号码相同的取记着 content_id 的那条。
+    func performerCandidates(now: Date = Date()) -> [(code: String, contentID: String?)] {
+        var codes = Set<String>()
+        var contentIDs: [String: String] = [:]
+        for value in metadataByMediaID.values where value.performers == nil {
+            guard let code = value.catalogCode else { continue }
+            if let missing = performerMissing[code], now.timeIntervalSince(missing) < 30 * 86400 { continue }
+            if let failed = performerFailed[code], now.timeIntervalSince(failed) < 3600 { continue }
+            codes.insert(code)
+            if contentIDs[code] == nil, let id = value.contentID { contentIDs[code] = id }
+        }
+        return codes.sorted().map { (code: $0, contentID: contentIDs[$0]) }
+    }
+
+    /// 已经有演员名的番号影片数量，扫描页显示进度用。
+    func performerCoverage() -> (withPerformers: Int, total: Int) {
+        var total = 0
+        var have = 0
+        for value in metadataByMediaID.values where value.catalogCode != nil {
+            total += 1
+            if value.performers != nil { have += 1 }
+        }
+        return (have, total)
+    }
+
+    private func enrichPerformers(_ candidates: [(code: String, contentID: String?)], generation: Int) async {
+        defer {
+            if generation == enrichGeneration {
+                publishPerformers()
+                enrichTask = nil
+                isEnrichingPerformers = false
+                // 一轮结束写一次盘（逐部写会反复编码整份缓存）。
+                flushSave()
+            }
+        }
+        guard let performerLookup else { return }
+        var lastPublish = Date()
+        var failures = 0
+        for candidate in candidates {
+            guard !Task.isCancelled, generation == enrichGeneration else { return }
+            let result = await performerLookup(candidate.code, candidate.contentID)
+            // 暂停后才回来的结果不再写入。
+            guard !Task.isCancelled, generation == enrichGeneration else { return }
+            switch result {
+            case .found(let names):
+                failures = 0
+                record(performers: names, forCode: candidate.code)
+            case .none:
+                failures = 0
+                performerMissing[candidate.code] = Date()
+                save()
+            case .unavailable:
+                performerFailed[candidate.code] = Date()
+                failures += 1
+                // 连续几次都出错多半是网络问题，别把整个片库都白问一遍。
+                if failures >= 3 { return }
+            }
+            if Date().timeIntervalSince(lastPublish) >= 3 {
+                publishPerformers()
+                lastPublish = Date()
+            }
+            await Task.yield()
+        }
+    }
+
+    /// 缓存里同一番号的记录（按片名存的、按文件指纹存的）一起补上演员，界面稍后批量更新。
+    private func record(performers names: [String], forCode code: String) {
+        for (key, value) in titleCache where value.performers == nil && value.catalogCode == code {
+            var updated = value
+            updated.performers = names
+            titleCache[key] = updated
+        }
+        for (key, value) in hashCache where value.performers == nil && value.catalogCode == code {
+            var updated = value
+            updated.performers = names
+            hashCache[key] = updated
+        }
+        performerMissing.removeValue(forKey: code)
+        bufferedPerformers[code] = names
+        save()
+    }
+
+    private func publishPerformers() {
+        guard !bufferedPerformers.isEmpty else { return }
+        let updates = bufferedPerformers
+        bufferedPerformers = [:]
+        var merged = metadataByMediaID
+        var changed = false
+        for (id, value) in metadataByMediaID where value.performers == nil {
+            guard let code = value.catalogCode, let names = updates[code] else { continue }
+            var updated = value
+            updated.performers = names
+            merged[id] = updated
+            changed = true
+        }
+        if changed { metadataByMediaID = merged }
     }
 
     private func shouldResolve(_ file: LibraryMedia) -> Bool {
@@ -408,6 +555,7 @@ final class MediaMetadataStore: ObservableObject {
             titleCache = payload.title
             ignored = payload.ignored ?? []
             missed = payload.missed ?? [:]
+            performerMissing = payload.performerMissing ?? [:]
             localFingerprints = payload.localFingerprints ?? [:]
             discardPosterlessAutomaticMatches()
             return
@@ -459,7 +607,8 @@ final class MediaMetadataStore: ObservableObject {
         saveTask?.cancel()
         saveTask = nil
         guard cacheDirty else { return }
-        let payload = CachePayload(hash: hashCache, title: titleCache, ignored: ignored, missed: missed, localFingerprints: localFingerprints)
+        let payload = CachePayload(hash: hashCache, title: titleCache, ignored: ignored, missed: missed,
+                                   localFingerprints: localFingerprints, performerMissing: performerMissing)
         cacheDirty = false
         let defaults = defaults
         let key = storageKey
@@ -476,6 +625,7 @@ final class MediaMetadataStore: ObservableObject {
         var ignored: Set<String>? = nil
         var missed: [String: Date]? = nil
         var localFingerprints: [String: String]? = nil
+        var performerMissing: [String: Date]? = nil
     }
 }
 

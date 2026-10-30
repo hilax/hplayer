@@ -164,6 +164,17 @@ actor MetadataSearch {
         return nil
     }
 
+    /// 按番号查演员：先问 R18.dev，没有再问 FANZA 官方接口（填了 Key 才会问）。
+    /// contentID 是匹配时记下的 R18.dev content_id，有的话少一次请求。
+    func performers(for code: String, contentID: String? = nil) async -> PerformerLookup {
+        guard adultEnabled(), !Task.isCancelled else { return .unavailable }
+        let primary = await r18dev.performers(for: code, contentID: contentID)
+        if case .found = primary { return primary }
+        guard !Task.isCancelled else { return .unavailable }
+        if let names = await dmm.performers(for: code), !names.isEmpty { return .found(names) }
+        return primary
+    }
+
     /// 手动匹配：从一个来源搜。页面上几个来源同时搜，哪个先回来先显示哪个
     func candidates(from source: MetadataSource, query: String) async -> [MediaMetadata] {
         guard !Task.isCancelled else { return [] }

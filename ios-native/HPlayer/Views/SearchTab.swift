@@ -37,6 +37,7 @@ struct SearchView: View {
     @State private var error = ""
     @State private var playing: PlaybackQueue?
     @State private var openSeriesID: String?
+    @State private var openPerformer: PerformerGroup?
 
     private var query: String {
         keyword.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -101,6 +102,14 @@ struct SearchView: View {
                 SeriesDetailView(seriesID: openSeriesID)
             }
         }
+        .navigationDestination(isPresented: Binding(
+            get: { openPerformer != nil },
+            set: { if !$0 { openPerformer = nil } }
+        )) {
+            if let openPerformer {
+                PerformerCollectionView(group: openPerformer)
+            }
+        }
         .fullScreenCover(item: $playing) { queue in
             PlayerView(source: queue.source, playlist: queue.items)
                 .environmentObject(appState)
@@ -112,20 +121,24 @@ struct SearchView: View {
     private struct LibraryHits {
         let movies: [HomeMediaItem]
         let series: [SeriesGroup]
-        var count: Int { movies.count + series.count }
+        /// 名字匹配的演员合集（至少两部影片的演员）
+        let performers: [PerformerGroup]
+        var count: Int { movies.count + series.count + performers.count }
     }
 
     private func libraryMatches(_ library: HomeSnapshot) -> LibraryHits {
         let text = query
-        guard !text.isEmpty else { return LibraryHits(movies: [], series: []) }
+        guard !text.isEmpty else { return LibraryHits(movies: [], series: [], performers: []) }
         func hit(_ value: String) -> Bool { value.localizedCaseInsensitiveContains(text) }
         let series = library.series.filter { group in
             hit(group.title) || group.episodes.contains { hit($0.media.name) }
         }
+        // 演员名也能搜到影片：只有一部影片的演员不会有合集，但仍然能从这里找到她的片子。
         let movies = library.items.filter { item in
-            !item.isSeries && (hit(item.title) || hit(item.media.name))
+            !item.isSeries && (hit(item.title) || hit(item.media.name) || (item.metadata?.performers ?? []).contains(where: hit))
         }
-        return LibraryHits(movies: movies, series: series)
+        let performers = library.performers.filter { hit($0.name) }
+        return LibraryHits(movies: movies, series: series, performers: performers)
     }
 
     @ViewBuilder
@@ -138,6 +151,30 @@ struct SearchView: View {
                 .foregroundStyle(.secondary)
                 .searchRow(top: 2, bottom: 12)
         } else {
+            ForEach(hits.performers) { group in
+                Button {
+                    openPerformer = group
+                } label: {
+                    HStack(spacing: 14) {
+                        Image(systemName: "person.2.fill")
+                            .font(.system(size: 20))
+                            .foregroundStyle(Theme.accent)
+                            .frame(width: 56, height: 56)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(group.name).font(.headline).foregroundStyle(.primary).lineLimit(1)
+                            Text("演员合集 · \(group.items.count) 部").font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 8)
+                        Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+                    }
+                    .padding(12)
+                    .surfaceCard(cornerRadius: 20)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .searchRow()
+            }
+
             ForEach(hits.series) { group in
                 Button {
                     openSeriesID = group.id
@@ -162,7 +199,8 @@ struct SearchView: View {
                         posterURL: item.posterURL,
                         title: item.title,
                         meta: metaLine(year: item.year, country: item.countryLabel, rating: item.rating),
-                        detail: [item.metadata == nil ? "视频" : "电影", item.sourceLabel, formatSize(item.media.size)]
+                        detail: [item.metadata == nil ? "视频" : "电影", item.sourceLabel, formatSize(item.media.size),
+                                 (item.metadata?.performers ?? []).prefix(3).joined(separator: "、")]
                             .filter { !$0.isEmpty }
                             .joined(separator: " · "),
                         showsPlay: true

@@ -83,9 +83,11 @@ struct SeriesGroup: Identifiable {
 
 /// 同一演员的影片合集（至少两部）
 struct PerformerGroup: Identifiable {
+    /// 归一化后的名字：写法只差空格、全半角的算同一个人
+    let id: String
+    /// 显示用的名字
     let name: String
     let items: [HomeMediaItem]
-    var id: String { name }
     var posterURL: String { items.first?.posterURL ?? "" }
 }
 
@@ -102,14 +104,19 @@ struct HomeSnapshot {
         self.items = items
         let matched = items.filter { $0.metadata?.hasUsablePoster == true }
         movies = matched.filter { $0.metadata?.isSeries == false }
-        var byPerformer: [String: [HomeMediaItem]] = [:]
+        var byPerformer: [String: (name: String, items: [HomeMediaItem])] = [:]
         var seenWork = Set<String>()
         for item in movies {
             guard let metadata = item.metadata, seenWork.insert(metadata.imdbID).inserted else { continue }
-            for name in metadata.performers ?? [] { byPerformer[name, default: []].append(item) }
+            var seenInWork = Set<String>()
+            for raw in metadata.performers ?? [] {
+                let key = PerformerName.key(raw)
+                guard !key.isEmpty, seenInWork.insert(key).inserted else { continue }
+                byPerformer[key, default: (PerformerName.display(raw), [])].items.append(item)
+            }
         }
-        performers = byPerformer.filter { $0.value.count >= 2 }
-            .map { PerformerGroup(name: $0.key, items: $0.value) }
+        performers = byPerformer.filter { $0.value.items.count >= 2 }
+            .map { PerformerGroup(id: $0.key, name: $0.value.name, items: $0.value.items) }
             .sorted { $0.items.count != $1.items.count ? $0.items.count > $1.items.count : $0.name < $1.name }
         let matchedIDs = Set(matched.map(\.id))
         unmatched = items.filter { !matchedIDs.contains($0.id) }
@@ -536,55 +543,118 @@ struct PosterButtonStyle: ButtonStyle {
 }
 
 /// 网络图片；加载失败时先试备用地址，再用品牌色画一张「空白海报」。
-/// maxPixel 是按显示尺寸缩小后的最长边，海报 600、全屏横幅 1280，越小解码越快、内存越省。
+/// maxPixel 是按显示尺寸缩小后的最长边（见 ArtworkSize），越小解码越快、内存越省。
+/// 图还在下载时只留一块不显眼的底色，不画「空白海报」：否则每张图出现前都会闪一下蓝色字母图。
 struct ArtworkView: View {
+    enum Loading {
+        /// 一块不显眼的底色（海报、列表缩略图）
+        case neutral
+        /// 什么都不画，露出后面的内容（横幅、虚化背景本来就有底）
+        case clear
+    }
+
     let urlString: String
     var fallbackURLString = ""
     let title: String
     var letterSize: CGFloat = 52
-    var maxPixel = 600
+    var maxPixel = ArtworkSize.poster
+    var loading: Loading = .neutral
+    /// 加载失败、或根本没有图片地址时是否画「空白海报」。虚化背景不需要。
+    var drawsFallback = true
 
     var body: some View {
-        PipelineImage(url: Self.url(urlString), maxPixel: maxPixel) { image in
-            if let image {
-                Image(uiImage: image).resizable()
-                    .accessibilityLabel(title)
-                    .accessibilityIdentifier("home.artwork.\(title)")
-            } else {
-                secondaryArtwork
+        PipelineImage(url: Self.url(urlString), maxPixel: maxPixel) { phase in
+            switch phase {
+            case .loaded(let image): artwork(image)
+            case .loading: loadingView
+            case .failed: secondaryArtwork
             }
         }
+        // 换了地址就整个重建，第一帧直接从内存缓存取新图，不会先留着上一张。
+        .id(urlString)
     }
 
     private static func url(_ value: String) -> URL? {
         value.isEmpty ? nil : URL(string: value)
     }
 
+    private func artwork(_ image: UIImage) -> some View {
+        Image(uiImage: image).resizable()
+            .accessibilityLabel(title)
+            .accessibilityIdentifier("home.artwork.\(title)")
+    }
+
+    @ViewBuilder private var loadingView: some View {
+        switch loading {
+        case .neutral: Color(uiColor: .secondarySystemBackground)
+        case .clear: Color.clear
+        }
+    }
+
     @ViewBuilder private var secondaryArtwork: some View {
         if !fallbackURLString.isEmpty, fallbackURLString != urlString, let url = Self.url(fallbackURLString) {
-            PipelineImage(url: url, maxPixel: maxPixel) { image in
-                if let image {
-                    Image(uiImage: image).resizable().accessibilityLabel(title).accessibilityIdentifier("home.artwork.\(title)")
-                } else { fallback }
+            PipelineImage(url: url, maxPixel: maxPixel) { phase in
+                switch phase {
+                case .loaded(let image): artwork(image)
+                case .loading: loadingView
+                case .failed: fallback
+                }
             }
         } else { fallback }
     }
 
-    private var fallback: some View {
-        ZStack {
-            LinearGradient(
-                colors: [
-                    Theme.brandBlue.opacity(0.85),
-                    Theme.brandViolet.opacity(0.75),
-                    Theme.brandNavy,
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            Text(String(title.prefix(1)).uppercased())
-                .font(.system(size: letterSize, weight: .heavy, design: .rounded))
-                .foregroundStyle(.white.opacity(0.85))
+    @ViewBuilder private var fallback: some View {
+        if drawsFallback {
+            ZStack {
+                LinearGradient(
+                    colors: [
+                        Theme.brandBlue.opacity(0.85),
+                        Theme.brandViolet.opacity(0.75),
+                        Theme.brandNavy,
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                Text(String(title.prefix(1)).uppercased())
+                    .font(.system(size: letterSize, weight: .heavy, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.85))
+            }
+        } else {
+            Color.clear
         }
+    }
+}
+
+// MARK: - 首页图片预取
+
+enum HomeArtwork {
+    /// 横幅那一页用的图：没有横版背景图就用海报
+    static func heroURL(_ item: HomeMediaItem) -> String {
+        item.backgroundURL.isEmpty ? item.posterURL : item.backgroundURL
+    }
+
+    /// 首页马上会用到的图片，按用到的先后排好：
+    /// 横幅大图和背景小图（当前页最先，再往两边），然后是每个货架开头的海报。
+    /// 滑动横幅、横向翻货架时图片已经在内存里，第一帧就是封面。
+    static func prefetchRequests(_ library: HomeSnapshot, selection: Int = 0, shelfLimit: Int = 14) -> [ImageRequest] {
+        var requests: [ImageRequest] = []
+        var seen = Set<ImageRequest>()
+        func add(_ value: String, _ maxPixel: Int) {
+            guard !value.isEmpty, let url = URL(string: value) else { return }
+            let request = ImageRequest(url: url, maxPixel: maxPixel)
+            if seen.insert(request).inserted { requests.append(request) }
+        }
+        let featured = library.featured
+        let order = featured.indices.sorted { (abs($0 - selection), $0) < (abs($1 - selection), $1) }
+        for index in order {
+            let value = heroURL(featured[index])
+            add(value, ArtworkSize.hero)
+            add(value, ArtworkSize.backdrop)
+        }
+        for item in library.movies.prefix(shelfLimit) { add(item.posterURL, ArtworkSize.poster) }
+        for group in library.performers.prefix(shelfLimit) { add(group.posterURL, ArtworkSize.poster) }
+        for group in library.series.prefix(shelfLimit) { add(group.posterURL, ArtworkSize.poster) }
+        return requests
     }
 }
 
@@ -604,7 +674,9 @@ struct AmbientBackdrop: View {
                 Theme.pageBackground
                 if !urlString.isEmpty || !fallbackURLString.isEmpty {
                     // 全屏大半径模糊每帧都很贵：在 1/8 大小上模糊，再放大铺满，视觉几乎一样。
-                    ArtworkView(urlString: urlString, fallbackURLString: fallbackURLString, title: "", letterSize: 1, maxPixel: 160)
+                    // 图还没到、或者加载失败时什么都不画，只露出底色，不要闪一下蓝色的默认图。
+                    ArtworkView(urlString: urlString, fallbackURLString: fallbackURLString, title: "", letterSize: 1,
+                                maxPixel: ArtworkSize.backdrop, loading: .clear, drawsFallback: false)
                         .scaledToFill()
                         .frame(width: proxy.size.width / 8, height: proxy.size.height / 8)
                         .clipped()

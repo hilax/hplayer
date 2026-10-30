@@ -55,13 +55,44 @@ enum AdultMetadataSettings {
     static var isEnabled: Bool { UserDefaults.standard.bool(forKey: enabledKey) }
 }
 
+/// 按番号查演员的结果。
+enum PerformerLookup: Equatable {
+    /// 查到了演员名
+    case found([String])
+    /// 来源里有这部片，但没有演员（或来源没有这个番号）：一段时间内不再重复问
+    case none
+    /// 网络出错、被限流：不算问过，稍后再试
+    case unavailable
+}
+
+extension MediaMetadata {
+    /// 番号类来源（R18.dev、FANZA）匹配到的影片带着番号，其他来源没有。
+    /// 每次补查演员都要对整个片库调用，所以不用正则，只做简单的格式检查（真正发请求前还会再核对一次）。
+    var catalogCode: String? {
+        guard source == MetadataSource.r18dev.rawValue || source == MetadataSource.dmm.rawValue,
+              let colon = imdbID.firstIndex(of: ":") else { return nil }
+        let value = String(imdbID[imdbID.index(after: colon)...])
+        let parts = value.split(separator: "-", omittingEmptySubsequences: false)
+        guard parts.count == 2, (2...8).contains(parts[0].count), (3...5).contains(parts[1].count),
+              parts[0].unicodeScalars.allSatisfy({ $0.value >= 65 && $0.value <= 90 }),
+              parts[1].unicodeScalars.allSatisfy({ $0.value >= 48 && $0.value <= 57 }) else { return nil }
+        return value
+    }
+}
+
 /// R18.dev 的公开 JSON 接口，只提交番号。返回的 content_id 必须与请求一致。
+///
+/// 接口有两层：按番号查（`dvd_id=…`）一定会给出 content_id，可能带封面和片名；
+/// 演员、完整资料在按 content_id 查的详情（`combined=…`）里。需要演员、或者番号接口没给封面时，再取一次详情。
 actor R18DevClient {
     static let shared = R18DevClient()
     private let session: URLSession
     private var nextRequestAt = Date.distantPast
+    /// 两次请求之间至少隔多久。公共接口，默认每秒一次；测试里设为 0。
+    private let minimumInterval: TimeInterval
 
-    init(session: URLSession? = nil) {
+    init(session: URLSession? = nil, minimumInterval: TimeInterval = 1) {
+        self.minimumInterval = minimumInterval
         if let session {
             self.session = session
         } else {
@@ -76,25 +107,107 @@ actor R18DevClient {
     private var hyphenFirst = true
 
     func lookup(_ code: String) async -> MediaMetadata? {
-        for hyphenated in [hyphenFirst, !hyphenFirst] {
-            guard !Task.isCancelled else { return nil }
-            guard let request = Self.request(for: code, hyphenated: hyphenated) else { return nil }
-            switch await fetch(request) {
+        switch await fetchRecord(for: code, needsPerformers: false) {
+        case .record(let record):
+            if let metadata = record.metadata {
+                MatchDiagnostics.shared.record("r18.dev \(code) 已匹配（content_id \(record.contentID)，演员 \(record.performers.map { "\($0.count) 位" } ?? "未取")）")
+                return metadata
+            }
+            MatchDiagnostics.shared.record("r18.dev \(code) 返回了内容但不能用（没有 https 封面）")
+            return nil
+        case .notFound:
+            MatchDiagnostics.shared.record("r18.dev \(code) 两种写法都没有结果")
+            return nil
+        case .unavailable:
+            return nil
+        }
+    }
+
+    /// 查演员名。已经知道 content_id（匹配时记下的）就直接取详情，只要一次请求。
+    func performers(for code: String, contentID: String? = nil) async -> PerformerLookup {
+        if let contentID {
+            switch await detail(contentID: contentID) {
             case .data(let data):
-                if let metadata = Self.decode(data, requestedCode: code) {
-                    hyphenFirst = hyphenated
-                    MatchDiagnostics.shared.record("r18.dev \(code) 已匹配（\(hyphenated ? "带连字符" : "无连字符")写法）")
-                    return metadata
-                }
-                MatchDiagnostics.shared.record("r18.dev \(code) 返回了内容但不能用（编号不符或没有 https 封面）。\(MatchDiagnostics.keys(of: data))")
+                if let parsed = Self.parse(data, requestedCode: code) { return Self.outcome(parsed.performers) }
+                // 编号对不上：记下的 content_id 不对，回到按番号查。
             case .notFound:
-                continue
+                break
             case .failed:
-                return nil
+                return .unavailable
             }
         }
-        MatchDiagnostics.shared.record("r18.dev \(code) 两种写法都没有结果")
-        return nil
+        switch await fetchRecord(for: code, needsPerformers: true) {
+        case .record(let record):
+            if let names = record.performers { return Self.outcome(names) }
+            return record.detailed ? .none : .unavailable
+        case .notFound:
+            return .none
+        case .unavailable:
+            return .unavailable
+        }
+    }
+
+    nonisolated private static func outcome(_ names: [String]?) -> PerformerLookup {
+        guard let names, !names.isEmpty else { return .none }
+        return .found(names)
+    }
+
+    struct Record {
+        var contentID: String
+        /// 有可用封面时才有
+        var metadata: MediaMetadata?
+        /// nil 表示来源没给出演员这一项（不等于没有演员）
+        var performers: [String]?
+        /// 已经拿到完整详情
+        var detailed: Bool
+
+        mutating func apply(_ parsed: Parsed) {
+            if let found = parsed.metadata { metadata = found }
+            if let names = parsed.performers {
+                performers = names
+                metadata?.performers = names.isEmpty ? nil : names
+            }
+            detailed = true
+        }
+    }
+
+    private enum RecordResult { case record(Record), notFound, unavailable }
+
+    /// 按番号取记录。needsPerformers 为真、或番号接口没给封面时，再按 content_id 取一次详情。
+    private func fetchRecord(for code: String, needsPerformers: Bool) async -> RecordResult {
+        var sawNotFound = false
+        for hyphenated in [hyphenFirst, !hyphenFirst] {
+            guard !Task.isCancelled else { return .unavailable }
+            guard let request = Self.request(for: code, hyphenated: hyphenated) else { return .unavailable }
+            switch await fetch(request) {
+            case .data(let data):
+                guard let first = Self.parse(data, requestedCode: code) else {
+                    MatchDiagnostics.shared.record("r18.dev \(code) 返回了内容但编号对不上。\(MatchDiagnostics.keys(of: data))")
+                    continue
+                }
+                hyphenFirst = hyphenated
+                var record = Record(contentID: first.contentID, metadata: first.metadata, performers: first.performers,
+                                    detailed: first.metadata != nil && first.performers != nil)
+                guard (needsPerformers && first.performers == nil) || first.metadata == nil else { return .record(record) }
+                switch await detail(contentID: first.contentID) {
+                case .data(let detailData):
+                    if let parsed = Self.parse(detailData, requestedCode: code) { record.apply(parsed) }
+                case .notFound, .failed:
+                    break
+                }
+                return .record(record)
+            case .notFound:
+                sawNotFound = true
+            case .failed:
+                return .unavailable
+            }
+        }
+        return sawNotFound ? .notFound : .unavailable
+    }
+
+    private func detail(contentID: String) async -> FetchResult {
+        guard let request = Self.detailRequest(contentID: contentID) else { return .notFound }
+        return await fetch(request)
     }
 
     private enum FetchResult { case data(Data), notFound, failed }
@@ -104,7 +217,7 @@ actor R18DevClient {
         // 自动扫描可能涉及许多文件，串行限速，避免快速请求同一个公共接口。
         let now = Date()
         let scheduled = max(now, nextRequestAt)
-        nextRequestAt = scheduled.addingTimeInterval(1)
+        nextRequestAt = scheduled.addingTimeInterval(minimumInterval)
         let delay = scheduled.timeIntervalSince(now)
         if delay > 0 {
             do { try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
@@ -137,6 +250,17 @@ actor R18DevClient {
         guard let normalized = AVCatalogCode.extract(code), normalized == code.uppercased() else { return nil }
         let id = hyphenated ? normalized.lowercased() : normalized.replacingOccurrences(of: "-", with: "").lowercased()
         guard let url = URL(string: "https://r18.dev/videos/vod/movies/detail/-/dvd_id=\(id)/json") else { return nil }
+        return makeRequest(url)
+    }
+
+    /// 按 content_id 取完整详情（演员在这里）。content_id 只允许字母、数字、下划线，不能把别的东西拼进地址。
+    nonisolated static func detailRequest(contentID: String) -> URLRequest? {
+        guard contentID.range(of: #"^[A-Za-z0-9_]{3,40}$"#, options: .regularExpression) != nil,
+              let url = URL(string: "https://r18.dev/videos/vod/movies/detail/-/combined=\(contentID)/json") else { return nil }
+        return makeRequest(url)
+    }
+
+    nonisolated private static func makeRequest(_ url: URL) -> URLRequest {
         var request = URLRequest(url: url)
         request.httpShouldHandleCookies = false
         request.timeoutInterval = 15
@@ -145,18 +269,40 @@ actor R18DevClient {
         return request
     }
 
+    struct Parsed {
+        let contentID: String
+        /// 有 https 封面才有
+        let metadata: MediaMetadata?
+        /// nil = 这份 JSON 里没有演员这一项
+        let performers: [String]?
+    }
+
     nonisolated static func decode(_ data: Data, requestedCode: String) -> MediaMetadata? {
+        parse(data, requestedCode: requestedCode)?.metadata
+    }
+
+    /// 编号必须和请求的番号一致才接受；封面、演员各自可能缺。
+    nonisolated static func parse(_ data: Data, requestedCode: String) -> Parsed? {
         guard let expected = AVCatalogCode.extract(requestedCode), expected == requestedCode.uppercased(),
               let item = try? JSONDecoder().decode(Response.self, from: data),
               AVCatalogCode.contentID(item.contentID) == expected else { return nil }
         if let dvdID = item.dvdID, !dvdID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
            AVCatalogCode.extract(dvdID) != expected { return nil }
+        // 有汉字名用汉字名，没有再用罗马字；同一个人不重复。
+        let names: [String]? = item.actresses.map { actresses in
+            PerformerName.unique(actresses.map { actress in
+                let kanji = actress.kanji?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                return kanji.isEmpty ? (actress.romaji ?? "") : kanji
+            })
+        }
         // r18.dev 的详情有两种写法：新的 jacket_full_url，和沿用 DMM 的 images.jacket_image。
         let posters = [item.jacketFullURL, item.images?.jacketImage?.large, item.images?.jacketImage?.large2, item.jacketThumbURL]
         guard let poster = posters.compactMap({ $0?.trimmingCharacters(in: .whitespacesAndNewlines) }).first(where: { value in
             guard let url = URL(string: value), url.scheme?.lowercased() == "https", let host = url.host else { return false }
             return !host.isEmpty
-        }) else { return nil }
+        }) else {
+            return Parsed(contentID: item.contentID, metadata: nil, performers: names)
+        }
         let title = [item.titleEN, item.titleJA, item.title].compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }.first { !$0.isEmpty } ?? ""
         let year = String((item.releaseDate ?? "").prefix(4))
         var metadata = MediaMetadata(
@@ -167,15 +313,9 @@ actor R18DevClient {
             genres: [], country: "Japan", season: nil, episode: nil
         )
         metadata.source = MetadataSource.r18dev.rawValue
-        var seen = Set<String>()
-        let names = (item.actresses ?? []).compactMap { actress -> String? in
-            let kanji = actress.kanji?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let romaji = actress.romaji?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let name = kanji.isEmpty ? romaji : kanji
-            return name.isEmpty || !seen.insert(name).inserted ? nil : name
-        }
-        metadata.performers = names.isEmpty ? nil : names
-        return metadata
+        metadata.contentID = item.contentID
+        metadata.performers = (names ?? []).isEmpty ? nil : names
+        return Parsed(contentID: item.contentID, metadata: metadata, performers: names)
     }
 
     private struct Response: Decodable {
@@ -196,10 +336,31 @@ actor R18DevClient {
             case releaseDate = "release_date", images, actresses
         }
 
+        /// 只有 content_id 是必须的；其余字段格式不对时当作没有，不要因为演员列表写法变了连封面都丢掉。
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            contentID = try container.decode(String.self, forKey: .contentID)
+            dvdID = try? container.decodeIfPresent(String.self, forKey: .dvdID)
+            title = try? container.decodeIfPresent(String.self, forKey: .title)
+            titleEN = try? container.decodeIfPresent(String.self, forKey: .titleEN)
+            titleJA = try? container.decodeIfPresent(String.self, forKey: .titleJA)
+            jacketFullURL = try? container.decodeIfPresent(String.self, forKey: .jacketFullURL)
+            jacketThumbURL = try? container.decodeIfPresent(String.self, forKey: .jacketThumbURL)
+            releaseDate = try? container.decodeIfPresent(String.self, forKey: .releaseDate)
+            images = try? container.decodeIfPresent(Images.self, forKey: .images)
+            actresses = try? container.decodeIfPresent([Actress].self, forKey: .actresses)
+        }
+
         struct Actress: Decodable {
             let kanji: String?
             let romaji: String?
             enum CodingKeys: String, CodingKey { case kanji = "name_kanji", romaji = "name_romaji" }
+
+            init(from decoder: Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                kanji = try? container.decodeIfPresent(String.self, forKey: .kanji)
+                romaji = try? container.decodeIfPresent(String.self, forKey: .romaji)
+            }
         }
 
         struct Images: Decodable {

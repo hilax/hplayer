@@ -45,6 +45,12 @@ actor DMMClient {
         return await lookupCover(code)
     }
 
+    /// 查演员名。只有填了官方接口的 Key 才会发请求；没填就什么也不做。
+    func performers(for code: String) async -> [String]? {
+        guard let credentials = credentials(), let found = await lookupAPI(code, credentials: credentials) else { return nil }
+        return found.performers
+    }
+
     // MARK: 官方 Web API
 
     func lookupAPI(_ code: String, credentials: Credentials) async -> MediaMetadata? {
@@ -92,11 +98,7 @@ actor DMMClient {
             let title = item.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let year = String((item.date ?? "").prefix(4))
             var metadata = Self.metadata(code: expected, title: title, year: year, poster: poster)
-            var seen = Set<String>()
-            let names = (item.iteminfo?.actress ?? []).compactMap { actress -> String? in
-                let name = actress.name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                return name.isEmpty || !seen.insert(name).inserted ? nil : name
-            }
+            let names = PerformerName.unique((item.iteminfo?.actress ?? []).map { $0.name ?? "" })
             metadata.performers = names.isEmpty ? nil : names
             return metadata
         }

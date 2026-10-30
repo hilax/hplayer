@@ -123,6 +123,155 @@ final class AdultMetadataTests: XCTestCase {
     }
 }
 
+final class R18PerformerLookupTests: XCTestCase {
+    /// r18.dev 的两层接口：按番号查只给 content_id（可能带封面），演员在按 content_id 查的详情里。
+    private func route(codeBody: [String: Any]?, detailBody: [String: Any]?, detailStatus: Int = 404) -> (URLRequest) -> RoutedURLProtocol.Reply {
+        { request in
+            let path = request.url?.absoluteString ?? ""
+            if path.contains("dvd_id="), let codeBody { return RoutedURLProtocol.Reply.json(codeBody) }
+            if path.contains("combined=") {
+                if let detailBody { return RoutedURLProtocol.Reply.json(detailBody) }
+                return RoutedURLProtocol.Reply(status: detailStatus)
+            }
+            return RoutedURLProtocol.Reply(status: 404)
+        }
+    }
+
+    private let detail: [String: Any] = [
+        "content_id": "1abc00123", "dvd_id": "ABC-123", "title_en": "Detail title",
+        "jacket_full_url": "https://pics.dmm.co.jp/digital/video/1abc00123/1abc00123pl.jpg", "release_date": "2024-05-06",
+        "actresses": [["name_kanji": "演员甲", "name_romaji": "A"], ["name_kanji": "", "name_romaji": "Bee"], ["name_kanji": "演员甲 "]],
+    ]
+
+    func testMatchingFallsBackToTheDetailWhenTheCodeEndpointHasNoCover() async throws {
+        RoutedURLProtocol.install(route(codeBody: ["content_id": "1abc00123", "dvd_id": "ABC-123"], detailBody: detail))
+        let client = R18DevClient(session: RoutedURLProtocol.session(), minimumInterval: 0)
+        let found = await client.lookup("ABC-123")
+        let match = try XCTUnwrap(found)
+        XCTAssertEqual(match.posterURL, "https://pics.dmm.co.jp/digital/video/1abc00123/1abc00123pl.jpg")
+        XCTAssertEqual(match.performers, ["演员甲", "Bee"])
+        XCTAssertEqual(match.contentID, "1abc00123")
+        XCTAssertEqual(match.catalogCode, "ABC-123")
+        let urls = RoutedURLProtocol.requests().compactMap { $0.url?.absoluteString }
+        XCTAssertEqual(urls.count, 2)
+        XCTAssertTrue(urls[0].hasSuffix("dvd_id=abc-123/json"))
+        XCTAssertTrue(urls[1].hasSuffix("combined=1abc00123/json"))
+    }
+
+    func testMatchingNeedsOnlyOneRequestWhenTheCodeEndpointAlreadyHasACover() async throws {
+        var full = detail
+        full.removeValue(forKey: "actresses")
+        RoutedURLProtocol.install(route(codeBody: full, detailBody: detail))
+        let client = R18DevClient(session: RoutedURLProtocol.session(), minimumInterval: 0)
+        let found = await client.lookup("ABC-123")
+        let match = try XCTUnwrap(found)
+        XCTAssertNil(match.performers, "Performers are filled in later by the background pass")
+        XCTAssertEqual(match.contentID, "1abc00123")
+        XCTAssertEqual(RoutedURLProtocol.requests().count, 1)
+    }
+
+    func testPerformersComeFromTheDetailWhenTheCodeEndpointHasNone() async {
+        var full = detail
+        full.removeValue(forKey: "actresses")
+        RoutedURLProtocol.install(route(codeBody: full, detailBody: detail))
+        let client = R18DevClient(session: RoutedURLProtocol.session(), minimumInterval: 0)
+        let result = await client.performers(for: "ABC-123")
+        XCTAssertEqual(result, .found(["演员甲", "Bee"]))
+        XCTAssertEqual(RoutedURLProtocol.requests().count, 2)
+    }
+
+    func testKnownContentIDGoesStraightToTheDetailEndpoint() async {
+        RoutedURLProtocol.install(route(codeBody: nil, detailBody: detail))
+        let client = R18DevClient(session: RoutedURLProtocol.session(), minimumInterval: 0)
+        let result = await client.performers(for: "ABC-123", contentID: "1abc00123")
+        XCTAssertEqual(result, .found(["演员甲", "Bee"]))
+        let urls = RoutedURLProtocol.requests().compactMap { $0.url?.absoluteString }
+        XCTAssertEqual(urls.count, 1)
+        XCTAssertTrue(urls[0].hasSuffix("combined=1abc00123/json"))
+        XCTAssertNil(R18DevClient.detailRequest(contentID: "1abc00123/../../x"), "Only letters, digits and underscores may be put into the path")
+    }
+
+    func testStaleContentIDFallsBackToTheCodeEndpoint() async {
+        let wrong: [String: Any] = ["content_id": "1xyz99999", "dvd_id": "XYZ-999", "actresses": [["name_kanji": "别人"]]]
+        RoutedURLProtocol.install { request in
+            let path = request.url?.absoluteString ?? ""
+            if path.contains("combined=1stale00001") { return .json(wrong) }
+            if path.contains("dvd_id=") { return .json(["content_id": "1abc00123", "dvd_id": "ABC-123"]) }
+            if path.contains("combined=1abc00123") { return .json(self.detail) }
+            return .init(status: 404)
+        }
+        let client = R18DevClient(session: RoutedURLProtocol.session(), minimumInterval: 0)
+        let result = await client.performers(for: "ABC-123", contentID: "1stale00001")
+        XCTAssertEqual(result, .found(["演员甲", "Bee"]), "A wrong content_id must never attach another title's performers")
+    }
+
+    func testNoActressesMissingCodeAndNetworkErrorsAreDistinguished() async {
+        var empty = detail
+        empty["actresses"] = [Any]()
+        RoutedURLProtocol.install(route(codeBody: ["content_id": "1abc00123", "dvd_id": "ABC-123"], detailBody: empty))
+        let client = R18DevClient(session: RoutedURLProtocol.session(), minimumInterval: 0)
+        let noActresses = await client.performers(for: "ABC-123")
+        XCTAssertEqual(noActresses, .none)
+
+        RoutedURLProtocol.install { _ in .init(status: 404) }
+        let missing = await R18DevClient(session: RoutedURLProtocol.session(), minimumInterval: 0).performers(for: "ABC-123")
+        XCTAssertEqual(missing, .none)
+        XCTAssertEqual(RoutedURLProtocol.requests().count, 2, "Both dvd_id spellings are tried before giving up")
+
+        RoutedURLProtocol.install { _ in .init(status: 500) }
+        let failed = await R18DevClient(session: RoutedURLProtocol.session(), minimumInterval: 0).performers(for: "ABC-123")
+        XCTAssertEqual(failed, .unavailable)
+
+        RoutedURLProtocol.install(route(codeBody: ["content_id": "1abc00123", "dvd_id": "ABC-123"], detailBody: nil, detailStatus: 500))
+        let detailDown = await R18DevClient(session: RoutedURLProtocol.session(), minimumInterval: 0).performers(for: "ABC-123")
+        XCTAssertEqual(detailDown, .unavailable, "A failed detail request must not be recorded as 'has no performers'")
+    }
+
+    func testMalformedActressListKeepsTheCover() throws {
+        let body: [String: Any] = [
+            "content_id": "abc00123", "dvd_id": "ABC-123",
+            "jacket_full_url": "https://images.example/c.jpg", "actresses": "unexpected",
+        ]
+        let parsed = try XCTUnwrap(R18DevClient.parse(JSONSerialization.data(withJSONObject: body), requestedCode: "ABC-123"))
+        XCTAssertNotNil(parsed.metadata)
+        XCTAssertNil(parsed.performers)
+    }
+
+    func testSearchFallsBackToTheDMMAPIWhenR18HasNoPerformers() async {
+        RoutedURLProtocol.install { request in
+            let url = request.url?.absoluteString ?? ""
+            if url.contains("r18.dev") { return .init(status: 404) }
+            return .json(["result": ["status": 200, "items": [
+                ["content_id": "1abc00123", "product_id": "abc00123", "title": "T",
+                 "imageURL": ["large": "https://pics.dmm.co.jp/digital/video/1abc00123/1abc00123pl.jpg"],
+                 "iteminfo": ["actress": [["id": 1, "name": "演员乙"]]]],
+            ]]])
+        }
+        let session = RoutedURLProtocol.session()
+        let search = MetadataSearch(r18dev: R18DevClient(session: session, minimumInterval: 0),
+                                    dmm: DMMClient(session: session, credentials: { ("api", "aff") }), adultEnabled: { true })
+        let found = await search.performers(for: "ABC-123")
+        XCTAssertEqual(found, .found(["演员乙"]))
+        let disabled = MetadataSearch(r18dev: R18DevClient(session: session, minimumInterval: 0), adultEnabled: { false })
+        let off = await disabled.performers(for: "ABC-123")
+        XCTAssertEqual(off, .unavailable)
+    }
+}
+
+final class PerformerNameTests: XCTestCase {
+    func testKeyIgnoresSpacingWidthCaseAndMiddleDots() {
+        XCTAssertEqual(PerformerName.key("葵 つかさ"), PerformerName.key("葵つかさ"))
+        XCTAssertEqual(PerformerName.key("Ａｂｃ　Ｄ"), PerformerName.key("abc d"))
+        XCTAssertEqual(PerformerName.key("サラ・マリア"), PerformerName.key("サラ マリア"))
+        XCTAssertNotEqual(PerformerName.key("葵つかさ"), PerformerName.key("葵つぐみ"))
+        XCTAssertTrue(PerformerName.key(" ・ ").isEmpty)
+    }
+
+    func testUniqueKeepsOrderAndTidiesSpacing() {
+        XCTAssertEqual(PerformerName.unique(["Tsukasa  Aoi", " 葵 ", "tsukasa aoi", "", "葵"]), ["Tsukasa Aoi", "葵"])
+    }
+}
+
 final class MatchDiagnosticsTests: XCTestCase {
     func testKeepsOnlyTheLatestLinesAndListsTopLevelKeys() {
         let diagnostics = MatchDiagnostics()

@@ -19,10 +19,17 @@ struct HomeLibraryScanView: View {
     let onRetryMatching: () -> Void
 
     @State private var matchedVideos = 0
+    @State private var performerStats = (have: 0, total: 0)
 
     private func refreshMatched() {
         // 只在匹配结果变化时数一次，不在每次扫描进度刷新时重算。
         matchedVideos = library.media(for: appState).filter { metadata.metadataByMediaID[$0.id]?.hasUsablePoster == true }.count
+        let coverage = metadata.performerCoverage()
+        performerStats = (coverage.withPerformers, coverage.total)
+    }
+
+    private var performerSummary: String {
+        performerStats.total == 0 ? "还没有匹配到番号影片" : "\(performerStats.have) / \(performerStats.total) 部"
     }
 
     /// 排查「为什么没匹配上、为什么慢」：开关和 Key 的状态加上最近的查找记录，不含 Cookie 和 Key 本身。
@@ -32,6 +39,7 @@ struct HomeLibraryScanView: View {
             "HPlayer 匹配诊断",
             "番号匹配：\(adultMatching ? "开" : "关")；DMM 接口 Key：\(hasDMMKey ? "已填" : "未填")；TMDB Key：\(TMDBClient.storedKey.isEmpty ? "未填" : "已填")",
             "片库 \(media.count) 部，已有封面 \(matchedVideos) 部，自动匹配：\(metadata.isMatching ? "进行中" : "空闲")，扫描：\(status)",
+            "番号影片 \(performerStats.total) 部，已有演员信息 \(performerStats.have) 部，补全演员：\(metadata.isEnrichingPerformers ? "进行中" : "空闲")",
             "最近记录（新的在后）：",
         ]
         let recent = MatchDiagnostics.shared.snapshot
@@ -104,11 +112,27 @@ struct HomeLibraryScanView: View {
                             }
                         }
                         .buttonStyle(.plain)
+                        LabeledContent("演员信息") {
+                            HStack(spacing: 8) {
+                                if metadata.isEnrichingPerformers { ProgressView() }
+                                Text(performerSummary)
+                            }
+                        }
+                        Button(metadata.isEnrichingPerformers ? "停止补全演员" : "补全演员资料",
+                               systemImage: metadata.isEnrichingPerformers ? "stop.circle" : "person.2.badge.plus") {
+                            if metadata.isEnrichingPerformers {
+                                metadata.stopByUser()
+                            } else {
+                                metadata.startPerformerEnrichment(force: true)
+                            }
+                        }
+                        .disabled(!metadata.isEnrichingPerformers && performerStats.have >= performerStats.total)
+                        .accessibilityIdentifier("scan.enrichPerformers")
                     }
                 } header: {
                     Text("资料来源")
                 } footer: {
-                    Text("开启后，文件名带番号的影片会依次用 R18.dev、FANZA（DMM）匹配，都查不到才去番组计划和 IMDb。只发送番号，不发送 115 Cookie、路径或视频内容。封面由第三方图片服务提供；关闭后已匹配的封面仍会保留。")
+                    Text("开启后，文件名带番号的影片会依次用 R18.dev、FANZA（DMM）匹配，都查不到才去番组计划和 IMDb。只发送番号，不发送 115 Cookie、路径或视频内容。封面由第三方图片服务提供；关闭后已匹配的封面仍会保留。匹配后会在后台补查演员名，同一演员有两部以上影片时，首页会出现「演员合集」。")
                 }
 
                 Section {
@@ -146,7 +170,7 @@ struct HomeLibraryScanView: View {
                     Text("扫描在前台进行，退出 App 后可从这里继续。只读取文件列表，不下载整部视频，也不删除网盘文件。")
                 }
             }
-            .task(id: metadata.metadataByMediaID.count) { refreshMatched() }
+            .task(id: metadata.revision) { refreshMatched() }
             .navigationTitle("115 全盘扫描")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

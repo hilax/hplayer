@@ -4,7 +4,9 @@ struct HomeView: View {
     @StateObject private var recents = RecentStore.shared
     @StateObject private var mediaLibrary = MediaLibraryStore()
     @StateObject private var localStore = LocalMediaStore()
-    @StateObject private var metadataStore = MediaMetadataStore(concurrency: 3)
+    @StateObject private var metadataStore = MediaMetadataStore(concurrency: 3, performerLookup: { code, contentID in
+        await MetadataSearch.shared.performers(for: code, contentID: contentID)
+    })
     @StateObject private var scanner = CloudLibraryScanner()
     @State private var selection: HomeSection = .home
     @State private var restored = false

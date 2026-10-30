@@ -35,7 +35,9 @@ struct HomeTab: View {
         let matches = metadataStore.metadataByMediaID
         if snapshot.items.isEmpty {
             // 第一次同步算出，避免首页先闪一下空白。
-            snapshot = HomeSnapshot(items: files.map { HomeMediaItem(media: $0, metadata: matches[$0.id]) })
+            let first = HomeSnapshot(items: files.map { HomeMediaItem(media: $0, metadata: matches[$0.id]) })
+            snapshot = first
+            prefetchArtwork(first)
             return
         }
         try? await Task.sleep(nanoseconds: 300_000_000)
@@ -43,7 +45,15 @@ struct HomeTab: View {
         let result = await Task.detached(priority: .userInitiated) {
             HomeSnapshot(items: files.map { HomeMediaItem(media: $0, metadata: matches[$0.id]) })
         }.value
-        if !Task.isCancelled { snapshot = result }
+        if !Task.isCancelled {
+            snapshot = result
+            prefetchArtwork(result)
+        }
+    }
+
+    /// 横幅每一页的大图和货架开头的海报提前下载好，滑到时直接有图。
+    private func prefetchArtwork(_ library: HomeSnapshot) {
+        ImagePipeline.shared.prefetch(HomeArtwork.prefetchRequests(library, selection: heroState.selection))
     }
 
     private static let scrollSpace = "home.scroll"
@@ -96,7 +106,7 @@ struct HomeTab: View {
                 HeroObserver(state: heroState) { state in
                     let heroItem = currentHero(library, selection: state.selection)
                     AmbientBackdrop(
-                        urlString: heroItem.map { $0.backgroundURL.isEmpty ? $0.posterURL : $0.backgroundURL } ?? "",
+                        urlString: heroItem.map(HomeArtwork.heroURL) ?? "",
                         fallbackURLString: heroItem?.posterURL ?? ""
                     )
                 }
@@ -390,11 +400,11 @@ struct HomeTab: View {
             if !library.movies.isEmpty {
                 movieShelf(library)
             }
-            if !library.series.isEmpty {
-                seriesShelf(library)
-            }
             if !library.performers.isEmpty {
                 performerShelf(library)
+            }
+            if !library.series.isEmpty {
+                seriesShelf(library)
             }
         }
         .padding(.horizontal, 18)
@@ -618,7 +628,7 @@ struct HomeTab: View {
 
     private func performerLink(_ group: PerformerGroup, width: CGFloat) -> some View {
         NavigationLink {
-            PerformerCollectionView(name: group.name)
+            PerformerCollectionView(group: group)
         } label: {
             VStack(alignment: .leading, spacing: 9) {
                 PosterArtwork(urlString: group.posterURL, title: group.name, width: width, alignment: .trailing)
@@ -899,11 +909,13 @@ private struct HeroPage: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack(alignment: .bottomLeading) {
+                // 滑到这一页时图通常已经预取好；还没到就先露出后面的虚化底色，不画默认图。
                 ArtworkView(
-                    urlString: item.backgroundURL.isEmpty ? item.posterURL : item.backgroundURL,
+                    urlString: HomeArtwork.heroURL(item),
                     fallbackURLString: item.posterURL,
                     title: item.title,
-                    maxPixel: 1280
+                    maxPixel: ArtworkSize.hero,
+                    loading: .clear
                 )
                 .scaledToFill()
                 .frame(width: geometry.size.width, height: geometry.size.height)
