@@ -155,6 +155,9 @@ final class PlaybackController: ObservableObject {
     private var recoveryTask: Task<Void, Never>?
     private var recoveryAttempts: [Date] = []
     private var noDataSeconds = 0
+    /// 上一次看门狗检查之后有没有新数据进缓存。读卡死时内核的下载线程堵在网络读取里，
+    /// 不会再把下载速度更新成 0，所以不能只看 downloadSpeed，要看有没有新的数据事件
+    private var dataSinceTick = false
     private var session = 0
     private var lastPublishedTime = -1.0
     private var backgroundObservers: [NSObjectProtocol] = []
@@ -616,8 +619,10 @@ final class PlaybackController: ObservableObject {
             // 内核在缓存不够时不会改 pause；这里的变化来自用户或打开时的设定
             if paused != userPaused, loaded { userPaused = paused }
         case ("paused-for-cache", .flag(let value)):
+            if value && !pausedForCache && !seeking { noDataSeconds = 0 }
             pausedForCache = value
         case ("seeking", .flag(let value)):
+            if value && !seeking && !pausedForCache { noDataSeconds = 0 }
             seeking = value
         case ("eof-reached", .flag(let value)):
             eofReached = value
@@ -627,10 +632,11 @@ final class PlaybackController: ObservableObject {
         case ("demuxer-cache-time", .double(let value)):
             bufferedUntil = value
         case ("demuxer-cache-duration", .double(let value)):
+            if value > cachedSeconds + 0.01 { dataSinceTick = true }
             cachedSeconds = value
         case ("cache-speed", .int(let value)):
             downloadSpeed = Double(max(0, value))
-            if value > 0 { noDataSeconds = 0 }
+            if value > 0 { dataSinceTick = true }
         case ("track-list/count", .int):
             refreshTracks()
         case ("aid", .string(let value)):
@@ -759,7 +765,14 @@ final class PlaybackController: ObservableObject {
     }
 
     private func checkHealth() {
-        if downloadSpeed <= 0 { noDataSeconds += 1 }
+        if dataSinceTick {
+            noDataSeconds = 0
+        } else {
+            noDataSeconds += 1
+            // 一直没有新数据，界面上的网速也不要停在旧数字上
+            if noDataSeconds >= 2, downloadSpeed > 0 { downloadSpeed = 0 }
+        }
+        dataSinceTick = false
         guard watchdogEnabled, recoveryTask == nil, currentURL != nil, error.isEmpty, !userPaused, loaded else { return }
         if pendingSeek != nil, Date().timeIntervalSince(pendingSeekStarted) >= 7, noDataSeconds >= 5, seeking || pausedForCache {
             recover(reason: "跳转后网络没有响应")
