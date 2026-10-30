@@ -237,6 +237,27 @@ final class R18PerformerLookupTests: XCTestCase {
         XCTAssertNil(parsed.performers)
     }
 
+    func testMissingOrMalformedActressDataIsRetryable() async {
+        var incomplete = detail
+        incomplete.removeValue(forKey: "actresses")
+        RoutedURLProtocol.install(route(codeBody: nil, detailBody: incomplete))
+        let cachedID = await R18DevClient(session: RoutedURLProtocol.session(), minimumInterval: 0)
+            .performers(for: "ABC-123", contentID: "1abc00123")
+        XCTAssertEqual(cachedID, .unavailable, "An absent list must not be cached as no performers")
+
+        incomplete["actresses"] = "unexpected"
+        RoutedURLProtocol.install(route(codeBody: ["content_id": "1abc00123", "dvd_id": "ABC-123"], detailBody: incomplete))
+        let lookup = await R18DevClient(session: RoutedURLProtocol.session(), minimumInterval: 0)
+            .performers(for: "ABC-123")
+        XCTAssertEqual(lookup, .unavailable, "A malformed detail list must remain retryable")
+
+        incomplete["actresses"] = [["name_kanji": " ", "name_romaji": ""]]
+        RoutedURLProtocol.install(route(codeBody: nil, detailBody: incomplete))
+        let nameless = await R18DevClient(session: RoutedURLProtocol.session(), minimumInterval: 0)
+            .performers(for: "ABC-123", contentID: "1abc00123")
+        XCTAssertEqual(nameless, .unavailable, "Entries without names must not be treated as an empty list")
+    }
+
     func testSearchFallsBackToTheDMMAPIWhenR18HasNoPerformers() async {
         RoutedURLProtocol.install { request in
             let url = request.url?.absoluteString ?? ""

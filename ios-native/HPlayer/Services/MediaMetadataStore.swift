@@ -87,10 +87,19 @@ final class MediaMetadataStore: ObservableObject {
     /// 补查演员用：传入番号和匹配时记下的 content_id，返回演员名。没传（测试里默认）就不补查。
     typealias PerformerLookupHandler = (_ code: String, _ contentID: String?) async -> PerformerLookup
     private let performerLookup: PerformerLookupHandler?
+    enum PerformerEnrichmentState: Equatable { case idle, waiting, running, completed, stopped, failed }
+    @Published private(set) var performerEnrichmentState: PerformerEnrichmentState = .idle
+    /// Progress counts distinct catalog codes, not files: multiple files can share one code.
+    @Published private(set) var performerEnrichmentProcessed = 0
+    @Published private(set) var performerEnrichmentTotal = 0
+    @Published private(set) var performerEnrichmentFailures = 0
     /// 正在给已有封面的影片补查演员
     @Published private(set) var isEnrichingPerformers = false
     private var enrichTask: Task<Void, Never>?
     private var enrichGeneration = 0
+    private var performerEnrichmentRequested = false
+    private var performerForcePending = false
+    private var performerEnrichmentStoppedByUser = false
     /// 确认查不到演员的番号和时间，30 天内不再问；随缓存一起保存。
     private var performerMissing: [String: Date] = [:]
     /// 网络出错的番号，1 小时内不再问；只在本次运行里记。
@@ -163,6 +172,11 @@ final class MediaMetadataStore: ObservableObject {
         let generation = scanGeneration
         isMatching = true
         // 匹配封面优先：补查演员和它共用 r18.dev 的限速，等匹配结束再继续。
+        if isEnrichingPerformers {
+            performerEnrichmentRequested = true
+            performerEnrichmentState = .waiting
+            publishPerformers()
+        }
         cancelEnrichment()
         syncTask = Task {
             await withTaskGroup(of: Void.self) { group in
@@ -230,6 +244,11 @@ final class MediaMetadataStore: ObservableObject {
         scanGeneration += 1
         syncTask?.cancel()
         syncTask = nil
+        if isEnrichingPerformers || performerEnrichmentRequested {
+            performerEnrichmentState = .stopped
+        }
+        performerEnrichmentRequested = false
+        performerForcePending = false
         cancelEnrichment()
         publishPerformers()
         clearPending()
@@ -260,7 +279,10 @@ final class MediaMetadataStore: ObservableObject {
         isMatching = false
         lastCompletedAt = Date()
         completedScanCount += 1
-        startPerformerEnrichment()
+        let force = performerForcePending
+        performerEnrichmentRequested = false
+        performerForcePending = false
+        startPerformerEnrichment(force: force)
     }
 
     // MARK: 演员资料补全
@@ -268,18 +290,49 @@ final class MediaMetadataStore: ObservableObject {
     /// 给已经有封面、但还没有演员名的番号影片补查演员（旧版本匹配的、或者只拿到封面的）。
     /// 匹配结束后自动在后台进行，一部一部查，不占用界面；用户点了停止、App 进入后台都会立即停下。
     func startPerformerEnrichment(force: Bool = false) {
-        guard performerLookup != nil, enrichTask == nil, syncTask == nil, force || !stoppedByUser,
-              AdultMetadataSettings.isEnabled else { return }
+        guard performerLookup != nil, AdultMetadataSettings.isEnabled else { return }
+        if force { performerEnrichmentStoppedByUser = false }
+        guard force || (!stoppedByUser && !performerEnrichmentStoppedByUser) else { return }
+        guard enrichTask == nil else { return }
+        if syncTask != nil {
+            if force {
+                performerEnrichmentRequested = true
+                performerForcePending = true
+                performerEnrichmentProcessed = 0
+                performerEnrichmentTotal = 0
+                performerEnrichmentFailures = 0
+                performerEnrichmentState = .waiting
+            }
+            return
+        }
         if force {
             performerMissing = [:]
             performerFailed = [:]
         }
         let candidates = performerCandidates()
-        guard !candidates.isEmpty else { return }
+        performerEnrichmentProcessed = 0
+        performerEnrichmentTotal = candidates.count
+        performerEnrichmentFailures = 0
+        guard !candidates.isEmpty else {
+            if force || performerEnrichmentState == .waiting { performerEnrichmentState = .completed }
+            return
+        }
         enrichGeneration += 1
         let generation = enrichGeneration
         isEnrichingPerformers = true
+        performerEnrichmentState = .running
         enrichTask = Task { await self.enrichPerformers(candidates, generation: generation) }
+    }
+
+    /// Stop only performer enrichment; cover matching and file scanning continue.
+    func stopPerformerEnrichment() {
+        performerEnrichmentStoppedByUser = true
+        performerEnrichmentRequested = false
+        performerForcePending = false
+        cancelEnrichment()
+        publishPerformers()
+        performerEnrichmentState = .stopped
+        flushSave()
     }
 
     private func cancelEnrichment() {
@@ -315,11 +368,13 @@ final class MediaMetadataStore: ObservableObject {
     }
 
     private func enrichPerformers(_ candidates: [(code: String, contentID: String?)], generation: Int) async {
+        var stoppedOnFailures = false
         defer {
             if generation == enrichGeneration {
                 publishPerformers()
                 enrichTask = nil
                 isEnrichingPerformers = false
+                performerEnrichmentState = stoppedOnFailures ? .failed : .completed
                 // 一轮结束写一次盘（逐部写会反复编码整份缓存）。
                 flushSave()
             }
@@ -342,14 +397,16 @@ final class MediaMetadataStore: ObservableObject {
                 save()
             case .unavailable:
                 performerFailed[candidate.code] = Date()
+                performerEnrichmentFailures += 1
                 failures += 1
                 // 连续几次都出错多半是网络问题，别把整个片库都白问一遍。
-                if failures >= 3 { return }
             }
+            performerEnrichmentProcessed += 1
             if Date().timeIntervalSince(lastPublish) >= 3 {
                 publishPerformers()
                 lastPublish = Date()
             }
+            if failures >= 3 { stoppedOnFailures = true; return }
             await Task.yield()
         }
     }

@@ -281,6 +281,93 @@ final class MediaMetadataStoreTests: XCTestCase {
 
     // MARK: 演员资料补全
 
+    func testCoverMatchingInterruptsAndResumesPerformerEnrichmentWithoutRepeatingFoundCodes() async throws {
+        let (defaults, suite) = makeDefaults()
+        UserDefaults.standard.set(true, forKey: AdultMetadataSettings.enabledKey)
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            UserDefaults.standard.removeObject(forKey: AdultMetadataSettings.enabledKey)
+        }
+        let performers = PerformerLookupStub(results: ["ABC-123": .found(["演员甲"]), "DEF-456": .found(["演员乙"])], pauseAtCall: 2)
+        let files = [codedFile("ABC-123"), codedFile("DEF-456")]
+        let store = MediaMetadataStore(defaults: defaults, performerLookup: { code, id in await performers.lookup(code, id) },
+                                       lookup: { parsed in parsed.catalogCode.map(makeR18Match) })
+        store.sync(files: files)
+        try await waitForScan(store)
+        for _ in 0..<200 {
+            if await performers.calls.count >= 2 { break }
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        let count = await performers.calls.count
+        XCTAssertEqual(count, 2)
+        store.sync(files: files + [codedFile("XYZ-789")])
+        await performers.releaseFirst()
+        try await waitForScan(store)
+        try await waitForEnrichment(store)
+        let calls = await performers.calls.map(\.code)
+        XCTAssertEqual(calls.filter { $0 == "ABC-123" }.count, 1)
+        XCTAssertEqual(store.metadataByMediaID[files[0].id]?.performers, ["演员甲"])
+    }
+
+    func testManualPerformerRequestWaitsForCoverMatching() async throws {
+        let (defaults, suite) = makeDefaults()
+        UserDefaults.standard.set(true, forKey: AdultMetadataSettings.enabledKey)
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            UserDefaults.standard.removeObject(forKey: AdultMetadataSettings.enabledKey)
+        }
+        let cover = MetadataLookupStub(responses: [makeR18Match("ABC-123")], pauseFirst: true)
+        let performers = PerformerLookupStub(results: ["ABC-123": .found(["演员甲"])])
+        let file = codedFile("ABC-123")
+        let store = MediaMetadataStore(defaults: defaults, performerLookup: { code, id in await performers.lookup(code, id) },
+                                       lookup: { _ in await cover.lookup() })
+        store.sync(files: [file])
+        for _ in 0..<200 {
+            if await cover.calls > 0 { break }
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        store.startPerformerEnrichment(force: true)
+        XCTAssertEqual(store.performerEnrichmentState, .waiting)
+        await cover.releaseFirst()
+        try await waitForScan(store)
+        try await waitForEnrichment(store)
+        XCTAssertEqual(store.performerEnrichmentState, .completed)
+        XCTAssertEqual(store.performerEnrichmentProcessed, 1)
+        XCTAssertEqual(store.performerEnrichmentTotal, 1)
+        XCTAssertEqual(store.metadataByMediaID[file.id]?.performers, ["演员甲"])
+    }
+
+    func testStoppingQueuedPerformerRequestDoesNotStopCoverMatching() async throws {
+        let (defaults, suite) = makeDefaults()
+        UserDefaults.standard.set(true, forKey: AdultMetadataSettings.enabledKey)
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            UserDefaults.standard.removeObject(forKey: AdultMetadataSettings.enabledKey)
+        }
+        let cover = MetadataLookupStub(responses: [makeR18Match("ABC-123")], pauseFirst: true)
+        let performers = PerformerLookupStub(results: ["ABC-123": .found(["演员甲"])])
+        let file = codedFile("ABC-123")
+        let store = MediaMetadataStore(defaults: defaults, performerLookup: { code, id in await performers.lookup(code, id) },
+                                       lookup: { _ in await cover.lookup() })
+        store.sync(files: [file])
+        for _ in 0..<200 {
+            if await cover.calls > 0 { break }
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        store.startPerformerEnrichment(force: true)
+        store.stopPerformerEnrichment()
+        XCTAssertEqual(store.performerEnrichmentState, .stopped)
+        XCTAssertTrue(store.isMatching)
+        await cover.releaseFirst()
+        try await waitForScan(store)
+        XCTAssertNotNil(store.metadataByMediaID[file.id])
+        let calls = await performers.calls.count
+        XCTAssertEqual(calls, 0)
+        store.startPerformerEnrichment(force: true)
+        try await waitForEnrichment(store)
+        XCTAssertEqual(store.metadataByMediaID[file.id]?.performers, ["演员甲"])
+    }
+
     func testBackgroundPassFillsPerformersForCoverOnlyMatchesAndRemembersThem() async throws {
         let (defaults, suite) = makeDefaults()
         UserDefaults.standard.set(true, forKey: AdultMetadataSettings.enabledKey)
@@ -335,6 +422,10 @@ final class MediaMetadataStoreTests: XCTestCase {
         try await waitForEnrichment(store)
         let first = await stub.calls.map(\.code)
         XCTAssertEqual(first, ["ABC-001", "ABC-002", "ABC-003"])
+        XCTAssertEqual(store.performerEnrichmentState, .failed)
+        XCTAssertEqual(store.performerEnrichmentProcessed, 3)
+        XCTAssertEqual(store.performerEnrichmentTotal, 5)
+        XCTAssertEqual(store.performerEnrichmentFailures, 3)
 
         store.startPerformerEnrichment()
         try await waitForEnrichment(store)
@@ -450,21 +541,23 @@ private actor PerformerLookupStub {
     private let results: [String: PerformerLookup]
     private let fallback: PerformerLookup
     private let pauseFirst: Bool
+    private let pauseAtCall: Int?
     private var continuation: CheckedContinuation<Void, Never>?
     private(set) var calls: [Call] = []
     private(set) var active = 0
 
-    init(results: [String: PerformerLookup], fallback: PerformerLookup = .none, pauseFirst: Bool = false) {
+    init(results: [String: PerformerLookup], fallback: PerformerLookup = .none, pauseFirst: Bool = false, pauseAtCall: Int? = nil) {
         self.results = results
         self.fallback = fallback
         self.pauseFirst = pauseFirst
+        self.pauseAtCall = pauseAtCall
     }
 
     func lookup(_ code: String, _ contentID: String?) async -> PerformerLookup {
         calls.append(Call(code: code, contentID: contentID))
         active += 1
         defer { active -= 1 }
-        if pauseFirst && calls.count == 1 {
+        if (pauseFirst && calls.count == 1) || calls.count == pauseAtCall {
             await withCheckedContinuation { continuation = $0 }
         }
         return results[code] ?? fallback
