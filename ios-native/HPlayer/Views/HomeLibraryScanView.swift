@@ -73,7 +73,7 @@ struct HomeLibraryScanView: View {
                 } header: {
                     Text("资料来源")
                 } footer: {
-                    Text("开启后自动用番号向 R18.dev 查询封面，只发送番号，不发送 115 Cookie、路径或视频内容。封面由第三方图片服务提供；关闭后已匹配的封面仍会保留。")
+                    Text("开启后，文件名带番号的影片会优先用 R18.dev 匹配，查不到才去番组计划和 IMDb。只发送番号，不发送 115 Cookie、路径或视频内容。封面由第三方图片服务提供；关闭后已匹配的封面仍会保留。")
                 }
 
                 Section {

@@ -121,7 +121,16 @@ final class MediaMetadataStore: ObservableObject {
     func sync(files: [LibraryMedia]) {
         hydrate(files: files)
         guard !stoppedByUser else { return }
-        pendingMedia = files.filter { metadataByMediaID[$0.id] == nil && shouldResolve($0) }
+        var todo = files.filter { metadataByMediaID[$0.id] == nil && shouldResolve($0) }
+        if AdultMetadataSettings.isEnabled {
+            // 开启番号匹配后，带番号的影片排在最前面，先用 R18.dev 匹配。
+            let coded = todo.filter { nameInfo($0.name).parsed.catalogCode != nil }
+            if !coded.isEmpty && coded.count < todo.count {
+                let ids = Set(coded.map(\.id))
+                todo = coded + todo.filter { !ids.contains($0.id) }
+            }
+        }
+        pendingMedia = todo
         pendingKeys = []
         pendingGroups = [:]
         for file in pendingMedia {
