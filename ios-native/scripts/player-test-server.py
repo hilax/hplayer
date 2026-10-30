@@ -43,7 +43,8 @@ class PlayerTestHandler(SimpleHTTPRequestHandler):
             start = int(first) if first.strip() else 0
             end = min(int(last), size - 1) if last.strip() else size - 1
         with stall_lock:
-            hang = self.command == "GET" and start > size * 0.4 and name not in stall_hung
+            # VLC 打开 MP4 时会探一下文件末尾（offset == size），那个不算跳转，不挂
+            hang = self.command == "GET" and size * 0.4 < start < size - 65536 and name not in stall_hung
             if hang:
                 stall_hung.add(name)
         print(f"STALL {self.command} {name} Range={header!r} hang={hang}", flush=True)
