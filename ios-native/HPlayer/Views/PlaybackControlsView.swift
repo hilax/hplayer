@@ -700,7 +700,7 @@ struct PlaybackControlsView: View {
         }
     }
     private var gestureStatus: String {
-        "\(lastAdjustment); brightness=\(String(format: "%.3f", brightnessLevel)); volume=\(String(format: "%.3f", systemVolume.level)); time=\(Double(playback.player.time.intValue) / 1000); rate=\(String(format: "%g", boosting ? VLCPlaybackController.boostRate : playback.rate))"
+        "\(lastAdjustment); brightness=\(String(format: "%.3f", brightnessLevel)); volume=\(String(format: "%.3f", systemVolume.level)); time=\(Double(playback.player.time.intValue) / 1000); rate=\(String(format: "%g", boosting ? VLCPlaybackController.boostRate : playback.rate)); buffering=\(playback.buffering ? 1 : 0); note=\(playback.statusNote); error=\(playback.error)"
     }
 
     private func toggleControls() {

@@ -186,6 +186,29 @@ jobs:
             cat "$RUNNER_TEMP/player-ui/test-summary.json"
           fi
 
+      - name: Report UI test failures as annotations
+        if: always()
+        continue-on-error: true
+        run: |
+          # 测试日志和产物下载不方便时，把失败原因和测试服务器的关键请求直接写进构建注解
+          summary="$RUNNER_TEMP/player-ui/test-summary.json"
+          if [[ -f "$summary" ]]; then
+            python3 - "$summary" <<'PY'
+          import json, sys
+          data = json.load(open(sys.argv[1]))
+          print(f"::notice title=UI tests::result={data.get('result')} passed={data.get('passedTests')} failed={data.get('failedTests')}")
+          for failure in data.get("testFailures", [])[:8]:
+              text = f"{failure.get('testName', '')}: {failure.get('failureText', '')}"
+              text = text.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
+              print(f"::warning title=UI test failure::{text[:3000]}")
+          PY
+          fi
+          log="$RUNNER_TEMP/player-http.log"
+          if [[ -f "$log" ]]; then
+            lines=$(grep -E "STALL" "$log" | tail -30 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            [[ -n "$lines" ]] && echo "::notice title=Stall server requests::$lines"
+          fi
+
       - name: Upload player UI screenshots
         if: always()
         uses: actions/upload-artifact@v4

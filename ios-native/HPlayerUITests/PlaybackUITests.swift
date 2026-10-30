@@ -118,7 +118,7 @@ final class PlaybackUITests: XCTestCase {
         XCTAssertTrue(wait {
             surface.exists && (pause.value as? String) == "playing"
                 && self.metric("time", surface: surface) > 1 && app.sliders.firstMatch.isEnabled
-        }, "MP4 should start playing")
+        }, "MP4 should start playing; status=\(surface.value as? String ?? "")")
 
         let before = metric("time", surface: surface)
         swipe(surface, from: CGVector(dx: 0.15, dy: 0.5), to: CGVector(dx: 0.85, dy: 0.5))
@@ -126,10 +126,10 @@ final class PlaybackUITests: XCTestCase {
 
         // 跳转用的请求被挂住了：播放器应自动重连，从目标位置继续播放
         XCTAssertTrue(wait(timeout: 45) { self.metric("time", surface: surface) > before + 40 },
-                      "Player should reconnect by itself and continue from the seek target")
+                      "Player should reconnect by itself and continue from the seek target; before=\(before) status=\(surface.value as? String ?? "")")
         let resumed = metric("time", surface: surface)
         XCTAssertTrue(wait(timeout: 15) { self.metric("time", surface: surface) > resumed + 2 },
-                      "Playback should keep advancing after reconnecting")
+                      "Playback should keep advancing after reconnecting; status=\(surface.value as? String ?? "")")
         XCTAssertEqual(pause.value as? String, "playing")
 
         let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
