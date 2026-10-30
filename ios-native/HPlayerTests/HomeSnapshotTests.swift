@@ -23,6 +23,14 @@ final class HomeSnapshotTests: XCTestCase {
         XCTAssertEqual(snapshot.items.count, 1)
     }
 
+    func testGroupsMoviesByPerformerOnlyWhenTheyHaveAtLeastTwoWorks() {
+        var a = makeMetadata(id: "a", poster: "https://images.example.org/a.jpg"); a.performers = ["甲", "乙"]
+        var b = makeMetadata(id: "b", poster: "https://images.example.org/b.jpg"); b.performers = ["甲"]
+        let snapshot = HomeSnapshot(items: [item("a.mp4", metadata: a), item("b.mp4", metadata: b)])
+        XCTAssertEqual(snapshot.performers.map(\.name), ["甲"])
+        XCTAssertEqual(snapshot.performers.first?.items.count, 2)
+    }
+
     private func item(_ name: String, metadata: MediaMetadata?) -> HomeMediaItem {
         HomeMediaItem(media: LibraryMedia(local: LocalMedia(url: URL(fileURLWithPath: "/tmp/\(name)"), size: 100, modified: .distantPast)), metadata: metadata)
     }

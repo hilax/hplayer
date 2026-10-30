@@ -25,6 +25,8 @@ final class CloudLibraryScanner: ObservableObject {
     private(set) var discoveredFiles: [P115File] = []
     @Published private(set) var currentFolderName = ""
     @Published private(set) var lastError = ""
+    /// 当前扫描范围：nil 为全盘，否则是所选文件夹的名称
+    @Published private(set) var scopeName: String?
 
     var canResume: Bool { phase == .paused || phase == .failed }
 
@@ -44,6 +46,8 @@ final class CloudLibraryScanner: ObservableObject {
         var inventoryChunks = 0
         var videoCount = 0
         var lastError = ""
+        /// 扫描范围的名称；nil 表示全盘
+        var scopeName: String?
     }
 
     private enum ScanError: LocalizedError {
@@ -102,6 +106,7 @@ final class CloudLibraryScanner: ObservableObject {
         phase = .idle
         currentFolderName = ""
         lastError = ""
+        scopeName = nil
         damagedCheckpoint = false
         guard let next, let data = defaults.data(forKey: checkpointKey(next)) else { return }
         do {
@@ -134,7 +139,7 @@ final class CloudLibraryScanner: ObservableObject {
 
     /// Starts a new scan or resumes its last committed page. Replays saved inventory first:
     /// a process exit between saving a page and updating the poster library cannot lose videos.
-    func start(accountID: String, fetchPage: @escaping FetchPage, onBatch: @escaping BatchHandler, restart: Bool = false, replayInventory: Bool = true) {
+    func start(accountID: String, root: (id: String, name: String)? = nil, fetchPage: @escaping FetchPage, onBatch: @escaping BatchHandler, restart: Bool = false, replayInventory: Bool = true) {
         selectAccount(accountID)
         guard self.accountID == accountID, !accountID.isEmpty else { return }
         if phase == .running && !restart { return }
@@ -143,10 +148,14 @@ final class CloudLibraryScanner: ObservableObject {
         do {
             if checkpoint == nil || restart {
                 let old = checkpoint
-                let fresh = Checkpoint(accountID: accountID, scanID: UUID().uuidString)
+                var fresh = Checkpoint(accountID: accountID, scanID: UUID().uuidString)
+                if let root, !root.id.isEmpty, root.id.allSatisfy(\.isNumber), root.id != "0" {
+                    fresh.pendingFolders = [Folder(id: root.id, name: root.name)]
+                    fresh.scopeName = root.name
+                }
                 try persist(fresh)
                 checkpoint = fresh
-                knownFolders = ["0"]
+                knownFolders = Set(fresh.pendingFolders.map(\.id))
                 knownVideos = []
                 discoveredFiles = []
                 damagedCheckpoint = false
@@ -322,6 +331,7 @@ final class CloudLibraryScanner: ObservableObject {
                             discoveredFolders: saved.completedFolders.count + saved.pendingFolders.count,
                             discoveredVideos: saved.videoCount)
         currentFolderName = saved.pendingFolders.first?.name ?? ""
+        scopeName = saved.scopeName
         lastError = saved.lastError
     }
 

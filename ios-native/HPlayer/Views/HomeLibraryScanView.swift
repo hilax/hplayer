@@ -11,6 +11,8 @@ struct HomeLibraryScanView: View {
     @AppStorage(AdultMetadataSettings.enabledKey) private var adultMatching = false
 
     let onStart: (Bool) -> Void
+    let onStartFolder: (String, String) -> Void
+    @State private var pickingFolder = false
     let onRetryMatching: () -> Void
 
     @State private var matchedVideos = 0
@@ -45,6 +47,7 @@ struct HomeLibraryScanView: View {
                         Spacer(minLength: 0)
                         if scanner.phase == .running || metadata.isMatching { ProgressView() }
                     }.padding(.vertical, 8)
+                    LabeledContent("扫描范围", value: scanner.scopeName ?? "整个网盘")
                     LabeledContent("已扫描文件夹", value: "\(scanner.progress.scannedFolders) / \(scanner.progress.discoveredFolders)")
                     LabeledContent("本次发现视频", value: "\(scanner.progress.discoveredVideos)")
                     LabeledContent("片库已匹配视频", value: "\(matchedVideos)")
@@ -89,6 +92,10 @@ struct HomeLibraryScanView: View {
                             onStart(scanner.phase == .completed)
                         }.accessibilityIdentifier("scan.start")
                     }
+                    if scanner.phase != .running {
+                        Button("选择文件夹扫描", systemImage: "folder.badge.gearshape") { pickingFolder = true }
+                            .accessibilityIdentifier("scan.chooseFolder")
+                    }
                     Button("重新匹配未识别封面", systemImage: "photo.badge.magnifyingglass", action: onRetryMatching)
                         .disabled(library.files(for: appState).isEmpty && local.files.isEmpty)
                     NavigationLink("管理未匹配影片") { HomeUnmatchedMediaView() }
@@ -104,6 +111,9 @@ struct HomeLibraryScanView: View {
             }
         }
         .tint(Theme.accent)
+        .sheet(isPresented: $pickingFolder) {
+            ScanFolderPicker(onSelect: onStartFolder).environmentObject(appState)
+        }
     }
 }
 

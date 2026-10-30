@@ -144,7 +144,7 @@ struct HomeTab: View {
                 .environmentObject(mediaLibrary)
         }
         .sheet(isPresented: $showScan) {
-            HomeLibraryScanView(onStart: startScan, onRetryMatching: retryMatching)
+            HomeLibraryScanView(onStart: { startScan($0) }, onStartFolder: { startScan(true, root: ($0, $1)) }, onRetryMatching: retryMatching)
                 .environmentObject(scanner)
                 .environmentObject(metadataStore)
                 .environmentObject(mediaLibrary)
@@ -323,11 +323,11 @@ struct HomeTab: View {
         .accessibilityIdentifier("home.more")
     }
 
-    private func startScan(_ restart: Bool) {
+    private func startScan(_ restart: Bool, root: (id: String, name: String)? = nil) {
         guard let accountID = appState.libraryAccountID, appState.isAuthenticated,
               let client = appState.directClient() else { return }
         // 不清空「已失败」记录：继续扫描时重新查询全部未匹配影片会重复请求并拖慢界面。
-        scanner.start(accountID: accountID, fetchPage: { cid, offset in
+        scanner.start(accountID: accountID, root: root, fetchPage: { cid, offset in
             try await client.filesPage(cid: cid, offset: offset)
         }, onBatch: { files in
             guard appState.isAuthenticated, appState.libraryAccountID == accountID else { return }
@@ -354,6 +354,9 @@ struct HomeTab: View {
             }
             if !library.series.isEmpty {
                 seriesShelf(library)
+            }
+            if !library.performers.isEmpty {
+                performerShelf(library)
             }
         }
         .padding(.horizontal, 18)
@@ -552,6 +555,44 @@ struct HomeTab: View {
         } onMatch: {
             matching = MatchRequest(item: item)
         }
+    }
+
+    private func performerShelf(_ library: HomeSnapshot) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            shelfHeader("演员合集", detail: "\(library.performers.count) 位") {
+                PosterGridScreen(title: "演员合集", items: library.performers) { group, width in
+                    performerLink(group, width: width)
+                }
+            }
+            ScrollView(.horizontal) {
+                LazyHStack(alignment: .top, spacing: 14) {
+                    ForEach(library.performers) { group in
+                        performerLink(group, width: 118)
+                    }
+                }
+                .padding(.horizontal, 18)
+                .padding(.vertical, 4)
+            }
+            .padding(.horizontal, -18)
+            .scrollIndicators(.hidden)
+        }
+    }
+
+    private func performerLink(_ group: PerformerGroup, width: CGFloat) -> some View {
+        NavigationLink {
+            PerformerCollectionView(name: group.name)
+        } label: {
+            VStack(alignment: .leading, spacing: 9) {
+                PosterArtwork(urlString: group.posterURL, title: group.name, width: width, alignment: .trailing)
+                    .overlay(alignment: .topLeading) { EpisodeCountBadge(text: "\(group.items.count) 部").padding(7) }
+                Text(group.name)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .frame(width: width, alignment: .leading)
+            }
+        }
+        .buttonStyle(PosterButtonStyle())
     }
 
     private func seriesShelf(_ library: HomeSnapshot) -> some View {

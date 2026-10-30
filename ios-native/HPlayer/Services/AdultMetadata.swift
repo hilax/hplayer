@@ -124,6 +124,14 @@ actor R18DevClient {
             genres: [], country: "Japan", season: nil, episode: nil
         )
         metadata.source = MetadataSource.r18dev.rawValue
+        var seen = Set<String>()
+        let names = (item.actresses ?? []).compactMap { actress -> String? in
+            let kanji = actress.kanji?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let romaji = actress.romaji?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let name = kanji.isEmpty ? romaji : kanji
+            return name.isEmpty || !seen.insert(name).inserted ? nil : name
+        }
+        metadata.performers = names.isEmpty ? nil : names
         return metadata
     }
 
@@ -133,9 +141,16 @@ actor R18DevClient {
         let title: String?
         let releaseDate: String?
         let images: Images?
+        let actresses: [Actress]?
 
         enum CodingKeys: String, CodingKey {
-            case contentID = "content_id", dvdID = "dvd_id", title, releaseDate = "release_date", images
+            case contentID = "content_id", dvdID = "dvd_id", title, releaseDate = "release_date", images, actresses
+        }
+
+        struct Actress: Decodable {
+            let kanji: String?
+            let romaji: String?
+            enum CodingKeys: String, CodingKey { case kanji = "name_kanji", romaji = "name_romaji" }
         }
 
         struct Images: Decodable {

@@ -18,6 +18,16 @@ final class AdultMetadataTests: XCTestCase {
         }
     }
 
+    func testDecodesPerformerNamesWithoutDuplicates() throws {
+        let body: [String: Any] = [
+            "content_id": "abc00123", "dvd_id": "ABC-123", "title": "T",
+            "images": ["jacket_image": ["large": "https://images.example/c.jpg"]],
+            "actresses": [["name_kanji": "演员甲", "name_romaji": "A"], ["name_kanji": "", "name_romaji": "Bee"], ["name_kanji": "演员甲"]],
+        ]
+        let match = try XCTUnwrap(R18DevClient.decode(JSONSerialization.data(withJSONObject: body), requestedCode: "ABC-123"))
+        XCTAssertEqual(match.performers, ["演员甲", "Bee"])
+    }
+
     func testRequiresMatchingSourceIdentityAndAUsableHTTPSPoster() throws {
         func decode(contentID: String, dvdID: String? = nil, poster: String = "https://images.example/cover.jpg") -> MediaMetadata? {
             let body: [String: Any] = [

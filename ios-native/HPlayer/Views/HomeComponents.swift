@@ -81,6 +81,14 @@ struct SeriesGroup: Identifiable {
     }
 }
 
+/// 同一演员的影片合集（至少两部）
+struct PerformerGroup: Identifiable {
+    let name: String
+    let items: [HomeMediaItem]
+    var id: String { name }
+    var posterURL: String { items.first?.posterURL ?? "" }
+}
+
 /// 首页一次刷新用到的全部分组，body 里只算一遍。
 struct HomeSnapshot {
     let items: [HomeMediaItem]
@@ -88,11 +96,21 @@ struct HomeSnapshot {
     let series: [SeriesGroup]
     let unmatched: [HomeMediaItem]
     let featured: [HomeMediaItem]
+    let performers: [PerformerGroup]
 
     init(items: [HomeMediaItem]) {
         self.items = items
         let matched = items.filter { $0.metadata?.hasUsablePoster == true }
         movies = matched.filter { $0.metadata?.isSeries == false }
+        var byPerformer: [String: [HomeMediaItem]] = [:]
+        var seenWork = Set<String>()
+        for item in movies {
+            guard let metadata = item.metadata, seenWork.insert(metadata.imdbID).inserted else { continue }
+            for name in metadata.performers ?? [] { byPerformer[name, default: []].append(item) }
+        }
+        performers = byPerformer.filter { $0.value.count >= 2 }
+            .map { PerformerGroup(name: $0.key, items: $0.value) }
+            .sorted { $0.items.count != $1.items.count ? $0.items.count > $1.items.count : $0.name < $1.name }
         let matchedIDs = Set(matched.map(\.id))
         unmatched = items.filter { !matchedIDs.contains($0.id) }
         let groups = HomeLibrary.seriesGroups(matched)

@@ -22,6 +22,8 @@ struct MediaMetadata: Codable, Identifiable, Hashable {
     var source: String? = nil
     /// 用户手动匹配的结果，清理旧缓存时不会动它
     var manual: Bool? = nil
+    /// 演员名（目前来自 R18.dev），用来把同一演员的影片归成合集
+    var performers: [String]? = nil
 
     var id: String { imdbID }
     var isSeries: Bool { type == "series" }

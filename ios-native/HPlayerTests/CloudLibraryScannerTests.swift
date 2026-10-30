@@ -27,6 +27,22 @@ final class CloudLibraryScannerTests: XCTestCase {
         XCTFail("Scanner did not reach expected state", file: file, line: line)
     }
 
+    func testScansOnlySelectedFolderAndRemembersScope() async {
+        let scanner = scanner()
+        var requests: [String] = []
+        scanner.start(accountID: "device:1", root: (id: "77", name: "电影"), fetchPage: { [self] cid, offset in
+            requests.append("\(cid):\(offset)")
+            if cid == "77" { return Direct115FilePage(files: [file("1"), file("78", parent: "77", directory: true)], nextOffset: nil) }
+            return Direct115FilePage(files: [file("2")], nextOffset: nil)
+        }, onBatch: { _ in }, restart: true)
+        await waitUntil { scanner.phase == .completed }
+        XCTAssertEqual(requests, ["77:0", "78:0"])
+        XCTAssertEqual(scanner.scopeName, "电影")
+        let restored = self.scanner()
+        restored.selectAccount("device:1")
+        XCTAssertEqual(restored.scopeName, "电影")
+    }
+
     func testRecursesEveryDirectoryAndPageWithoutDuplicateVideosOrCycles() async {
         let scanner = scanner()
         var requests: [String] = []
