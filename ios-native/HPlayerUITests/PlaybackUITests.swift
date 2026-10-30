@@ -147,6 +147,8 @@ final class PlaybackUITests: XCTestCase {
         app.launchEnvironment["HPLAYER_UI_TEST_115_HEADERS"] = "1"
         app.launchEnvironment["HPLAYER_UI_TEST_115_COOKIE"] = "UID=ui-test; CID=ui-test; SEID=ui-test; KID=ui-test"
         app.launchEnvironment["HPLAYER_UI_TEST_KEEP_CONTROLS_VISIBLE"] = "1"
+        // 缓存调小：和 4K 原画一样，大跨度跳转必须重新向服务器要数据（先读文件末尾的索引，再读目标位置）
+        app.launchEnvironment["HPLAYER_UI_TEST_PREFETCH_KB"] = "256"
         app.launch()
         addTeardownBlock {
             if self.testRun?.hasSucceeded == false {
