@@ -91,6 +91,53 @@ final class PlaybackUITests: XCTestCase {
         add(screenshot)
     }
 
+    /// 模拟 CDN 卡死：测试服务器对第一次往文件后半段跳转的请求只接受连接、不回数据。
+    /// VLC 读网络没有超时，以前会一直「正在缓冲」，只能退出重进；现在播放器要自己发现、重连，
+    /// 并从跳转的目标位置接着播。
+    func testPlaybackRecoversWhenSeekStalls() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["HPLAYER_UI_TEST_URL"] = "http://127.0.0.1:8765/stall/seek-fixture.mp4"
+        app.launchEnvironment["HPLAYER_UI_TEST_KEEP_CONTROLS_VISIBLE"] = "1"
+        // 预读调小，跳转时一定会发出新的网络请求
+        app.launchEnvironment["HPLAYER_UI_TEST_PREFETCH_KB"] = "256"
+        app.launch()
+        addTeardownBlock {
+            if self.testRun?.hasSucceeded == false {
+                let hierarchy = XCTAttachment(string: app.debugDescription)
+                hierarchy.lifetime = .keepAlways
+                self.add(hierarchy)
+                let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+                screenshot.lifetime = .keepAlways
+                self.add(screenshot)
+            }
+        }
+
+        let surface = app.otherElements["playback.surface"]
+        let pause = app.buttons["playback.playPause"]
+        XCTAssertTrue(wait {
+            surface.exists && (pause.value as? String) == "playing"
+                && self.metric("time", surface: surface) > 1 && app.sliders.firstMatch.isEnabled
+        }, "MP4 should start playing")
+
+        let before = metric("time", surface: surface)
+        swipe(surface, from: CGVector(dx: 0.15, dy: 0.5), to: CGVector(dx: 0.85, dy: 0.5))
+        XCTAssertTrue(wait { (surface.value as? String)?.contains("快进") == true })
+
+        // 跳转用的请求被挂住了：播放器应自动重连，从目标位置继续播放
+        XCTAssertTrue(wait(timeout: 45) { self.metric("time", surface: surface) > before + 40 },
+                      "Player should reconnect by itself and continue from the seek target")
+        let resumed = metric("time", surface: surface)
+        XCTAssertTrue(wait(timeout: 15) { self.metric("time", surface: surface) > resumed + 2 },
+                      "Playback should keep advancing after reconnecting")
+        XCTAssertEqual(pause.value as? String, "playing")
+
+        let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        screenshot.name = "HPlayer recovered after stalled seek"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+    }
+
     private func swipe(_ surface: XCUIElement, from: CGVector, to: CGVector) {
         surface.coordinate(withNormalizedOffset: from).press(forDuration: 0.05, thenDragTo: surface.coordinate(withNormalizedOffset: to))
     }

@@ -29,6 +29,15 @@ enum PrebufferLevel: Int, CaseIterable, Identifiable {
 
     var id: Int { rawValue }
     var milliseconds: Int { rawValue * 1000 }
+    /// VLC 在后台提前下载、放在内存里的数据量（KB）。默认只有 16MB，4K 原画两三秒就用完了；
+    /// 调大后网速抖一下也有足够的存货，往回拖进度时这段数据也不用重新下载。
+    var prefetchKiB: Int {
+        switch self {
+        case .standard: return 32 * 1024
+        case .long: return 64 * 1024
+        case .maximum: return 128 * 1024
+        }
+    }
     var title: String {
         switch self {
         case .standard: return "标准 · 3 秒"
@@ -182,6 +191,7 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
         // 长按 3× 松手时会重开音轨清掉错位的声音，缓存长一点也不会让声音对不上。
         media.addOption(":network-caching=\(prebuffer.milliseconds)")
         media.addOption(":file-caching=800")
+        Self.applyPrefetch(prebuffer, to: media)
         // 拖动进度时落到最近的关键帧就开始播，不必从关键帧一路解码到目标那一帧，4K 大跨度跳转快很多
         media.addOption(":input-fast-seek")
         Self.applyDecoding(decoding, to: media)
@@ -394,6 +404,18 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
         open(url, direct115: currentDirect115, directCookie: currentCookie, preservingPosition: true, refreshURL: urlRefresher, autoRecover: watchdogEnabled, openTimeoutSeconds: openTimeoutSeconds)
     }
 
+    private static func applyPrefetch(_ level: PrebufferLevel, to media: VLCMedia) {
+        #if DEBUG
+        // UI 测试用很小的预读，让跳转一定要发新的网络请求，才能模拟连接卡死
+        if let value = ProcessInfo.processInfo.environment["HPLAYER_UI_TEST_PREFETCH_KB"].flatMap(Int.init) {
+            media.addOption(":prefetch-buffer-size=\(value)")
+            media.addOption(":prefetch-read-size=65536")
+            return
+        }
+        #endif
+        media.addOption(":prefetch-buffer-size=\(level.prefetchKiB)")
+    }
+
     private static func applyDecoding(_ decoding: VideoDecoding, to media: VLCMedia) {
         switch decoding {
         case .hardware:
@@ -434,7 +456,7 @@ final class VLCPlaybackController: NSObject, ObservableObject, VLCMediaPlayerDel
         let speed = delta > 0 ? Double(delta) : 0
         if speed != downloadSpeed { downloadSpeed = speed }
         // 统计是 32 位整数，读过 2GB 会绕回负数，所以一旦看到过有效的字节数就一直认为能看到
-        if bytes > 2_000_000 { bytesVisible = true }
+        if bytes > 256_000 { bytesVisible = true }
         let time = player.time.intValue
         checkHealth(readBytes: delta, bytesVisible: bytesVisible, timeAdvanced: time != lastSampledTime)
         guard recoveryTask == nil else { return }
