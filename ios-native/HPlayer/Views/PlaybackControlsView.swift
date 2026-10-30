@@ -388,40 +388,56 @@ struct PlaybackControlsView: View {
                     .frame(minWidth: 44, alignment: .trailing)
             }
 
-            ZStack {
-                HStack(spacing: 8) {
-                    Button(action: lock) { controlIcon("lock.open", label: "锁定") }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier("playback.lock")
-                    GlassTextButton(title: "\(String(format: "%g", playback.rate))×", label: "播放速度") { openSettings(.playback) }
-                    Spacer(minLength: 0)
-                    GlassTextButton(title: "选集", label: "选集") { openList() }
-                        .accessibilityIdentifier("playback.playlist")
-                    Button { toggleOrientation(landscape: landscape) } label: {
-                        controlIcon(landscape ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
-                                    label: landscape ? "竖屏" : "横屏", size: 18)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("playback.orientation")
+            if landscape {
+                ZStack {
+                    sideControls(landscape: true)
+                    // 快进快退靠左右拖动画面，这里只留上一集、暂停、下一集，暂停键固定在屏幕正中
+                    transportControls(spacing: 44)
                 }
-
-                // 快进快退靠左右拖动画面，这里只留上一集、暂停、下一集，暂停键固定在屏幕正中
-                HStack(spacing: landscape ? 44 : 28) {
-                    Button { move(-1) } label: { controlIcon("backward.end.fill", label: "上一个", size: 20) }
-                        .disabled(previousID == nil)
-                        .opacity(previousID == nil ? 0.35 : 1)
-                    Button { playback.toggle(); revealControls() } label: {
-                        controlIcon(playback.playing ? "pause.fill" : "play.fill", label: playback.playing ? "暂停" : "播放", size: 34, frame: 64)
-                    }
-                    .accessibilityIdentifier("playback.playPause")
-                    .accessibilityValue(playback.playing ? "playing" : "paused")
-                    Button { move(1) } label: { controlIcon("forward.end.fill", label: "下一个", size: 20) }
-                        .disabled(nextID == nil)
-                        .opacity(nextID == nil ? 0.35 : 1)
+            } else {
+                // 竖屏宽度不够把五组按钮排成一行：上一集、暂停、下一集单独一行，其余放到下面
+                VStack(spacing: 6) {
+                    transportControls(spacing: 36)
+                    sideControls(landscape: false)
                 }
-                .buttonStyle(.plain)
             }
         }
+    }
+
+    /// 锁定、倍速在左，选集、横竖屏在右
+    private func sideControls(landscape: Bool) -> some View {
+        HStack(spacing: 8) {
+            Button(action: lock) { controlIcon("lock.open", label: "锁定") }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("playback.lock")
+            GlassTextButton(title: "\(String(format: "%g", playback.rate))×", label: "播放速度") { openSettings(.playback) }
+            Spacer(minLength: 0)
+            GlassTextButton(title: "选集", label: "选集") { openList() }
+                .accessibilityIdentifier("playback.playlist")
+            Button { toggleOrientation(landscape: landscape) } label: {
+                controlIcon(landscape ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
+                            label: landscape ? "竖屏" : "横屏", size: 18)
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("playback.orientation")
+        }
+    }
+
+    private func transportControls(spacing: CGFloat) -> some View {
+        HStack(spacing: spacing) {
+            Button { move(-1) } label: { controlIcon("backward.end.fill", label: "上一个", size: 20) }
+                .disabled(previousID == nil)
+                .opacity(previousID == nil ? 0.35 : 1)
+            Button { playback.toggle(); revealControls() } label: {
+                controlIcon(playback.playing ? "pause.fill" : "play.fill", label: playback.playing ? "暂停" : "播放", size: 34, frame: 64)
+            }
+            .accessibilityIdentifier("playback.playPause")
+            .accessibilityValue(playback.playing ? "playing" : "paused")
+            Button { move(1) } label: { controlIcon("forward.end.fill", label: "下一个", size: 20) }
+                .disabled(nextID == nil)
+                .opacity(nextID == nil ? 0.35 : 1)
+        }
+        .buttonStyle(.plain)
     }
 
     /// 拖进度条时，画面中间显示和左右滑动一样的跳转提示
@@ -586,6 +602,13 @@ struct PlaybackControlsView: View {
             chipGrid(SleepTimer.options.map { ($0.id, $0.title) }, selected: sleepTimer.id, columns: 3) { id in
                 if let option = SleepTimer.options.first(where: { $0.id == id }) { setSleepTimer(option) }
             }
+        }
+        settingGroup("遇到问题", footer: "播放不正常时点一下，把复制的内容发给开发者，里面有最近的跳转、重连记录和播放内核的报错，不含 Cookie。") {
+            chip(copiedDiagnostics ? "已复制" : "复制播放诊断信息", selected: false) {
+                UIPasteboard.general.string = playback.diagnostics
+                copiedDiagnostics = true
+            }
+            .accessibilityIdentifier("playback.copyDiagnosticsSetting")
         }
     }
 
@@ -1164,7 +1187,9 @@ struct PlaybackControlsView: View {
         case .seek:
             // 滑满一屏宽能跳的时长：最多 9 分钟
             let range = min(540, max(90, playback.duration * 0.6))
-            let target = min(max(adjustmentStartTime + Double(moveX / size.width) * range, 0), max(0, playback.duration - 0.25))
+            // 滑过头也只停在结尾前 5 秒，不会一下跳到最后、直接播完停住
+            let ceiling = max(adjustmentStartTime, playback.duration - 5)
+            let target = min(max(adjustmentStartTime + Double(moveX / size.width) * range, 0), max(0, ceiling))
             seekHaptic(target: target)
             adjustment = seekAdjustment(target: target, from: adjustmentStartTime)
         case .brightness:

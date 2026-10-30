@@ -138,6 +138,65 @@ final class PlaybackUITests: XCTestCase {
         add(screenshot)
     }
 
+    /// 像 115 上的 4K MKV 一样：索引在文件末尾、每个请求都要等一会儿、经过本机中转。
+    /// 大跨度往后滑要落在目标附近接着播；滑过头只停在结尾前，播完后往回滑还能继续播。
+    func testFarSeekInMKVThroughRelay() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["HPLAYER_UI_TEST_URL"] = "http://127.0.0.1:8765/range/seek-fixture.mkv"
+        app.launchEnvironment["HPLAYER_UI_TEST_115_HEADERS"] = "1"
+        app.launchEnvironment["HPLAYER_UI_TEST_115_COOKIE"] = "UID=ui-test; CID=ui-test; SEID=ui-test; KID=ui-test"
+        app.launchEnvironment["HPLAYER_UI_TEST_KEEP_CONTROLS_VISIBLE"] = "1"
+        app.launch()
+        addTeardownBlock {
+            if self.testRun?.hasSucceeded == false {
+                let hierarchy = XCTAttachment(string: app.debugDescription)
+                hierarchy.lifetime = .keepAlways
+                self.add(hierarchy)
+                let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+                screenshot.lifetime = .keepAlways
+                self.add(screenshot)
+            }
+        }
+
+        let surface = app.otherElements["playback.surface"]
+        let pause = app.buttons["playback.playPause"]
+        XCTAssertTrue(wait(timeout: 40) {
+            surface.exists && (pause.value as? String) == "playing"
+                && self.metric("time", surface: surface) > 1 && app.sliders.firstMatch.isEnabled
+        }, "MKV should start playing through the relay; status=\(surface.value as? String ?? "")")
+
+        // 300 秒的片子滑满一屏是 180 秒；滑七成大约往后 120 秒，是关键帧跳转
+        let before = metric("time", surface: surface)
+        swipe(surface, from: CGVector(dx: 0.12, dy: 0.42), to: CGVector(dx: 0.82, dy: 0.42))
+        XCTAssertTrue(wait { (surface.value as? String)?.contains("快进") == true })
+        XCTAssertTrue(wait(timeout: 30) {
+            let time = self.metric("time", surface: surface)
+            return time > before + 80 && time < 280
+        }, "Far seek should land near the target, not at the end; before=\(before) status=\(surface.value as? String ?? "")")
+        let landed = metric("time", surface: surface)
+        XCTAssertTrue(wait(timeout: 15) { self.metric("time", surface: surface) > landed + 2 },
+                      "Playback should keep going after the far seek; status=\(surface.value as? String ?? "")")
+
+        // 连着滑两次、远远超过结尾：最多停在结尾前 5 秒，播完后停在结尾
+        swipe(surface, from: CGVector(dx: 0.06, dy: 0.42), to: CGVector(dx: 0.94, dy: 0.42))
+        swipe(surface, from: CGVector(dx: 0.06, dy: 0.42), to: CGVector(dx: 0.94, dy: 0.42))
+        XCTAssertTrue(wait(timeout: 30) { self.metric("time", surface: surface) > 290 },
+                      "Overshooting should stop just before the end; status=\(surface.value as? String ?? "")")
+        XCTAssertTrue(wait(timeout: 20) { (pause.value as? String) == "paused" },
+                      "The video should finish; status=\(surface.value as? String ?? "")")
+
+        // 播完以后往回滑：要接着播，不能卡在结尾
+        swipe(surface, from: CGVector(dx: 0.82, dy: 0.42), to: CGVector(dx: 0.12, dy: 0.42))
+        XCTAssertTrue(wait(timeout: 30) {
+            let time = self.metric("time", surface: surface)
+            return time > 120 && time < 260 && (pause.value as? String) == "playing"
+        }, "Swiping back after the end should resume playback; status=\(surface.value as? String ?? "")")
+        let resumed = metric("time", surface: surface)
+        XCTAssertTrue(wait(timeout: 15) { self.metric("time", surface: surface) > resumed + 2 },
+                      "Playback should advance again after leaving the end; status=\(surface.value as? String ?? "")")
+    }
+
     private func swipe(_ surface: XCUIElement, from: CGVector, to: CGVector) {
         surface.coordinate(withNormalizedOffset: from).press(forDuration: 0.05, thenDragTo: surface.coordinate(withNormalizedOffset: to))
     }

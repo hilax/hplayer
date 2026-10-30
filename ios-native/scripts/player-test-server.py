@@ -28,8 +28,8 @@ class PlayerTestHandler(SimpleHTTPRequestHandler):
             flush=True,
         )
 
-    def serve_stall_fixture(self):
-        name = self.path.split("?", 1)[0].removeprefix("/stall/")
+    def serve_stall_fixture(self, prefix="/stall/", may_hang=True):
+        name = self.path.split("?", 1)[0].removeprefix(prefix)
         path = root / name
         if "/" in name or not path.is_file():
             self.send_error(404)
@@ -44,13 +44,16 @@ class PlayerTestHandler(SimpleHTTPRequestHandler):
             end = min(int(last), size - 1) if last.strip() else size - 1
         with stall_lock:
             # 播放器打开 MP4 时可能会探一下文件末尾（offset == size），那个不算跳转，不挂
-            hang = self.command == "GET" and size * 0.4 < start < size - 65536 and name not in stall_hung
+            hang = may_hang and self.command == "GET" and size * 0.4 < start < size - 65536 and name not in stall_hung
             if hang:
                 stall_hung.add(name)
-        print(f"STALL {self.command} {name} Range={header!r} hang={hang}", flush=True)
+        print(f"{'STALL' if may_hang else 'RANGE'} {self.command} {name} Range={header!r} hang={hang}", flush=True)
         if hang:
             time.sleep(90)
             return
+        if not may_hang:
+            # /range/ 模拟网盘 CDN：每个请求先等一会儿才回数据，跳转时要重新发请求
+            time.sleep(0.6)
         if start >= size:
             self.send_response(416)
             self.send_header("Content-Range", f"bytes */{size}")
@@ -59,7 +62,7 @@ class PlayerTestHandler(SimpleHTTPRequestHandler):
             return
         length = end - start + 1
         self.send_response(206 if ranged else 200)
-        self.send_header("Content-Type", "video/mp4")
+        self.send_header("Content-Type", "video/x-matroska" if name.endswith(".mkv") else "video/mp4")
         self.send_header("Accept-Ranges", "bytes")
         self.send_header("Content-Length", str(length))
         if ranged:
@@ -80,9 +83,25 @@ class PlayerTestHandler(SimpleHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
+    def range_headers_ok(self):
+        cookie = self.headers.get("Cookie", "")
+        return (
+            self.headers.get("User-Agent") == expected_agent
+            and self.headers.get("Referer") == "https://115.com/"
+            and all(value in cookie for value in expected_cookies)
+        )
+
     def do_GET(self):
         if self.path.startswith("/stall/"):
             self.serve_stall_fixture()
+            return
+        if self.path.startswith("/range/"):
+            # 和 115 一样要求带上请求头；支持分段下载，用来测 MKV（索引在文件末尾）的大跨度跳转
+            if not self.range_headers_ok():
+                self.log_playback_request()
+                self.send_error(403, "Expected 115 playback headers")
+                return
+            self.serve_stall_fixture(prefix="/range/", may_hang=False)
             return
         if self.path.startswith("/catalog/") or self.path.startswith("/meta/"):
             fixtures = json.loads((root / "metadata-fixture.json").read_text(encoding="utf-8"))
@@ -138,6 +157,9 @@ class PlayerTestHandler(SimpleHTTPRequestHandler):
     def do_HEAD(self):
         if self.path.startswith("/stall/"):
             self.serve_stall_fixture()
+            return
+        if self.path.startswith("/range/"):
+            self.serve_stall_fixture(prefix="/range/", may_hang=False)
             return
         self.log_playback_request()
         cookie = self.headers.get("Cookie", "")

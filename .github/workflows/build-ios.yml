@@ -211,6 +211,8 @@ jobs:
           if [[ -f "$log" ]]; then
             lines=$(grep -E "STALL" "$log" | tail -30 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
             [[ -n "$lines" ]] && echo "::notice title=Stall server requests::$lines"
+            lines=$(grep -E "^RANGE|/v0/search|/catalog/" "$log" | tail -40 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            [[ -n "$lines" ]] && echo "::notice title=Range and metadata server requests::$lines"
           fi
 
       - name: Upload player UI screenshots

@@ -150,6 +150,13 @@ final class PlaybackController: ObservableObject {
 
     /// 内核最近的警告和错误
     private var logLines: [String] = []
+    /// 最近的播放事件（打开、跳转、播到结尾、重连），和内核日志一起放进诊断信息
+    private var eventLines: [String] = []
+    private static let eventClock: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+        return formatter
+    }()
     private var openTimeoutTask: Task<Void, Never>?
     private var watchdogTask: Task<Void, Never>?
     private var recoveryTask: Task<Void, Never>?
@@ -303,6 +310,7 @@ final class PlaybackController: ObservableObject {
     }
 
     private func start(_ url: URL, direct115: Bool, cookie: String, position: Double, keepPlaying: Bool, keepDuration: Bool) {
+        logEvent("打开 \(url.host ?? url.lastPathComponent)，从 \(Self.clock(position))")
         currentURL = url
         currentDirect115 = direct115
         currentCookie = cookie
@@ -433,9 +441,16 @@ final class PlaybackController: ObservableObject {
 
     func seek(to seconds: Double) {
         guard seconds.isFinite, seconds >= 0 else { return }
-        let target = duration > 0 ? min(seconds, max(0, duration - 0.5)) : seconds
+        let target = duration > 0 ? min(seconds, max(0, duration - 1)) : seconds
+        logEvent("跳转 \(Self.clock(engineTime)) → \(Self.clock(target))（总长 \(Self.clock(duration))）")
         resumePoint = target
         currentTime = target
+        if ended || eofReached {
+            // 播到结尾停住以后再往回拖：接着播，不要停在那里
+            ended = false
+            userPaused = false
+            engine?.set("pause", false)
+        }
         if currentURL != nil, recoveryTask != nil || (!loaded && !opening) {
             // 连接已经断了或正在重连：直接从新的目标位置重新打开
             recoveryTask?.cancel()
@@ -584,6 +599,7 @@ final class PlaybackController: ObservableObject {
             openTimeoutTask?.cancel()
             refreshTracks()
         case .playbackRestart:
+            logEvent("开始播放 \(Self.clock(engineTime))")
             hasPlayed = true
             playedThisSession = true
             if !statusNote.isEmpty, recoveryTask == nil { statusNote = "" }
@@ -600,6 +616,7 @@ final class PlaybackController: ObservableObject {
         switch (name, value) {
         case ("time-pos", .double(let time)):
             engineTime = time
+            checkFailedSeek(time)
             if let pending = pendingSeek {
                 if abs(time - pending) < 2 || !seeking && Date().timeIntervalSince(pendingSeekStarted) > 6 {
                     pendingSeek = nil
@@ -612,9 +629,11 @@ final class PlaybackController: ObservableObject {
                 }
                 if time > 0 { resumePoint = time }
             }
-            checkFailedSeek(time)
         case ("duration", .double(let value)):
-            if value.isFinite, value > 0 { duration = value }
+            if value.isFinite, value > 0 {
+                if abs(value - duration) > 1 { logEvent("总时长 \(Self.clock(value))") }
+                duration = value
+            }
         case ("pause", .flag(let paused)):
             // 内核在缓存不够时不会改 pause；这里的变化来自用户或打开时的设定
             if paused != userPaused, loaded { userPaused = paused }
@@ -662,6 +681,7 @@ final class PlaybackController: ObservableObject {
 
     private func handleReachedEnd() {
         guard duration > 0 else { return }
+        logEvent("播到结尾：画面 \(Self.clock(engineTime))，位置 \(Self.clock(resumePoint))，总长 \(Self.clock(duration))")
         if resumePoint >= duration - 5 || engineTime >= duration - 5 {
             ended = true
         } else if watchdogEnabled, !userPaused {
@@ -675,6 +695,7 @@ final class PlaybackController: ObservableObject {
         let stopped = Int32(bitPattern: MPV_END_FILE_REASON_STOP.rawValue)
         let failed = Int32(bitPattern: MPV_END_FILE_REASON_ERROR.rawValue)
         guard reason != stopped else { return }
+        logEvent("内核结束文件 reason=\(reason)\(message.map { " \($0)" } ?? "")")
         loaded = false
         if reason == failed {
             if watchdogEnabled, currentURL != nil {
@@ -800,6 +821,7 @@ final class PlaybackController: ObservableObject {
         }
         recoveryAttempts.append(now)
         let position = pendingSeek ?? resumePoint
+        logEvent("重连（\(reason.isEmpty ? "手动" : reason)）第 \(recoveryAttempts.count) 次，从 \(Self.clock(position))")
         let refresher = urlRefresher
         let direct115 = currentDirect115
         let cookie = currentCookie
@@ -823,6 +845,7 @@ final class PlaybackController: ObservableObject {
     }
 
     private func giveUp(_ reason: String) {
+        logEvent("放弃：\(reason)")
         openTimeoutTask?.cancel()
         recoveryTask?.cancel()
         recoveryTask = nil
@@ -835,6 +858,11 @@ final class PlaybackController: ObservableObject {
             ? "\(reason)，自动重连几次都没成功。点「重试」会从 \(Self.clock(resumePoint)) 接着播放。"
             : "\(reason)，请点「重试」，或换一个画质。"
         updateFlags()
+    }
+
+    private func logEvent(_ text: String) {
+        eventLines.append("\(Self.eventClock.string(from: Date())) \(text)")
+        if eventLines.count > 40 { eventLines.removeFirst(eventLines.count - 40) }
     }
 
     /// 原画打不开、一次都没播出来时，播放页可以自动换成 115 转码画质
@@ -854,10 +882,13 @@ final class PlaybackController: ObservableObject {
             "地址：\(currentURL.map { "\($0.scheme ?? "")://\($0.host ?? "")\($0.path.suffix(40))" } ?? "无")",
             "115：\(currentDirect115) 解码：\(decoding.rawValue) 缓存：\(readahead.rawValue)s",
             "状态：loaded=\(loaded) opening=\(opening) playedOnce=\(hasPlayed) cache=\(pausedForCache) seeking=\(seeking) speed=\(Int(downloadSpeed)) cached=\(Int(cachedSeconds))s",
+            "位置：\(Self.clock(engineTime)) / \(Self.clock(duration)) 可跳转=\(seekable) 播完=\(ended) eof=\(eofReached) 暂停=\(userPaused)",
             "错误：\(error)",
             "中转：\(LocalStreamProxy.shared.problem.isEmpty ? "正常" : LocalStreamProxy.shared.problem)",
-            "—— 内核日志 ——",
+            "—— 播放事件 ——",
         ]
+        lines += eventLines
+        lines.append("—— 内核日志 ——")
         lines += logLines
         return lines.joined(separator: "\n")
     }
@@ -953,6 +984,10 @@ struct PlayerVideoSurface: UIViewRepresentable {
 
 final class PlayerLayerView: UIView {
     let metalLayer = MPVMetalLayer()
+    /// 画面图层固定用横屏尺寸渲染。MPVKit 的 iOS 渲染上下文不会把图层尺寸的变化告诉 mpv，
+    /// 转到竖屏后 mpv 还按横屏的大小算画面位置，画面会被挤到左上角、右边被裁掉。
+    /// 所以图层本身的尺寸始终不变，竖屏时只是把整块横屏画面等比缩小放在中间。
+    private var renderSize = CGSize.zero
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -967,9 +1002,18 @@ final class PlayerLayerView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        guard bounds.width > 0, bounds.height > 0 else { return }
+        if renderSize == .zero {
+            let screen = window?.screen.bounds.size ?? UIScreen.main.bounds.size
+            let reference = screen.width > 0 && screen.height > 0 ? screen : bounds.size
+            renderSize = CGSize(width: max(reference.width, reference.height), height: min(reference.width, reference.height))
+        }
+        let scale = min(bounds.width / renderSize.width, bounds.height / renderSize.height)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        metalLayer.frame = bounds
+        metalLayer.bounds = CGRect(origin: .zero, size: renderSize)
+        metalLayer.position = CGPoint(x: bounds.midX, y: bounds.midY)
+        metalLayer.setAffineTransform(CGAffineTransform(scaleX: scale, y: scale))
         metalLayer.contentsScale = window?.screen.nativeScale ?? UIScreen.main.nativeScale
         CATransaction.commit()
     }
