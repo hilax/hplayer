@@ -32,6 +32,52 @@ struct HomeLibraryScanView: View {
         performerStats.total == 0 ? "还没有匹配到番号影片" : "\(performerStats.have) / \(performerStats.total) 部"
     }
 
+    private var performerEnrichmentActive: Bool {
+        metadata.performerEnrichmentState == .waiting || metadata.performerEnrichmentState == .running
+    }
+
+    @ViewBuilder
+    private var performerEnrichmentStatus: some View {
+        switch metadata.performerEnrichmentState {
+        case .waiting:
+            Label("封面匹配完成后将自动开始补全演员", systemImage: "clock")
+                .font(.subheadline).foregroundStyle(.secondary)
+        case .running:
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    ProgressView()
+                    Text("正在补全演员资料")
+                    Spacer()
+                    Text("\(metadata.performerEnrichmentProcessed) / \(metadata.performerEnrichmentTotal) 个番号")
+                        .foregroundStyle(.secondary)
+                }
+                .font(.subheadline)
+                if metadata.performerEnrichmentTotal > 0 {
+                    ProgressView(value: Double(metadata.performerEnrichmentProcessed),
+                                 total: Double(metadata.performerEnrichmentTotal))
+                }
+            }
+            .accessibilityElement(children: .combine)
+        case .failed:
+            Label("部分资料暂时无法获取，请检查网络后重试。", systemImage: "exclamationmark.circle")
+                .font(.subheadline).foregroundStyle(Theme.warning)
+        case .completed:
+            Text(metadata.performerEnrichmentFailures > 0 ? "补全结束，部分资料暂时无法获取，可稍后重试。" : "本轮补全已结束，未收录的演员信息可能仍为空。")
+                .font(.subheadline).foregroundStyle(.secondary)
+        case .stopped:
+            Text("已停止，可随时重新补全。")
+                .font(.subheadline).foregroundStyle(.secondary)
+        case .idle:
+            if performerStats.total == 0 {
+                Text("尚无已识别的番号影片，扫描并匹配后可补全演员资料。")
+                    .font(.subheadline).foregroundStyle(.secondary)
+            } else {
+                Text("可补查已识别影片中缺失的演员信息。")
+                    .font(.subheadline).foregroundStyle(.secondary)
+            }
+        }
+    }
+
     /// 排查「为什么没匹配上、为什么慢」：开关和 Key 的状态加上最近的查找记录，不含 Cookie 和 Key 本身。
     private func copyDiagnostics() {
         let media = library.media(for: appState)
@@ -39,7 +85,7 @@ struct HomeLibraryScanView: View {
             "HPlayer 匹配诊断",
             "番号匹配：\(adultMatching ? "开" : "关")；DMM 接口 Key：\(hasDMMKey ? "已填" : "未填")；TMDB Key：\(TMDBClient.storedKey.isEmpty ? "未填" : "已填")",
             "片库 \(media.count) 部，已有封面 \(matchedVideos) 部，自动匹配：\(metadata.isMatching ? "进行中" : "空闲")，扫描：\(status)",
-            "番号影片 \(performerStats.total) 部，已有演员信息 \(performerStats.have) 部，补全演员：\(metadata.isEnrichingPerformers ? "进行中" : "空闲")",
+            "番号影片 \(performerStats.total) 部，已有演员信息 \(performerStats.have) 部，演员补全：\(metadata.performerEnrichmentState)，已处理 \(metadata.performerEnrichmentProcessed) / \(metadata.performerEnrichmentTotal) 个番号，失败 \(metadata.performerEnrichmentFailures) 个",
             "最近记录（新的在后）：",
         ]
         let recent = MatchDiagnostics.shared.snapshot
@@ -112,27 +158,32 @@ struct HomeLibraryScanView: View {
                             }
                         }
                         .buttonStyle(.plain)
-                        LabeledContent("演员信息") {
-                            HStack(spacing: 8) {
-                                if metadata.isEnrichingPerformers { ProgressView() }
-                                Text(performerSummary)
-                            }
-                        }
-                        Button(metadata.isEnrichingPerformers ? "停止补全演员" : "补全演员资料",
-                               systemImage: metadata.isEnrichingPerformers ? "stop.circle" : "person.2.badge.plus") {
-                            if metadata.isEnrichingPerformers {
-                                metadata.stopByUser()
-                            } else {
-                                metadata.startPerformerEnrichment(force: true)
-                            }
-                        }
-                        .disabled(!metadata.isEnrichingPerformers && performerStats.have >= performerStats.total)
-                        .accessibilityIdentifier("scan.enrichPerformers")
                     }
                 } header: {
                     Text("资料来源")
                 } footer: {
-                    Text("开启后，文件名带番号的影片会依次用 R18.dev、FANZA（DMM）匹配，都查不到才去番组计划和 IMDb。只发送番号，不发送 115 Cookie、路径或视频内容。封面由第三方图片服务提供；关闭后已匹配的封面仍会保留。匹配后会在后台补查演员名，同一演员有两部以上影片时，首页会出现「演员合集」。")
+                    Text("开启后，文件名带番号的影片会依次用 R18.dev、FANZA（DMM）匹配，都查不到才去番组计划和 IMDb。只发送番号，不发送 115 Cookie、路径或视频内容。封面由第三方图片服务提供；关闭后已匹配的资料仍会保留。")
+                }
+
+                if adultMatching {
+                    Section {
+                        LabeledContent("已识别影片的演员信息", value: performerSummary)
+                        performerEnrichmentStatus
+                        Button(performerEnrichmentActive ? "停止补全演员" : "补全演员资料",
+                               systemImage: performerEnrichmentActive ? "stop.circle" : "person.2.badge.plus") {
+                            if performerEnrichmentActive {
+                                metadata.stopPerformerEnrichment()
+                            } else {
+                                metadata.startPerformerEnrichment(force: true)
+                            }
+                        }
+                        .disabled(!performerEnrichmentActive && !metadata.isMatching && performerStats.have >= performerStats.total)
+                        .accessibilityIdentifier("scan.enrichPerformers")
+                    } header: {
+                        Text("演员资料")
+                    } footer: {
+                        Text("先扫描并识别番号影片，再补查缺失的演员信息。资料来源不一定收录所有演员；同一演员有两部以上影片时，首页会显示演员合集。")
+                    }
                 }
 
                 Section {

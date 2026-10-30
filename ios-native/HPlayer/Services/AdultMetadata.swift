@@ -128,7 +128,11 @@ actor R18DevClient {
         if let contentID {
             switch await detail(contentID: contentID) {
             case .data(let data):
-                if let parsed = Self.parse(data, requestedCode: code) { return Self.outcome(parsed.performers) }
+                if let parsed = Self.parse(data, requestedCode: code) {
+                    // Missing or malformed fields are not proof that the title has no performers.
+                    guard let names = parsed.performers else { return .unavailable }
+                    return Self.outcome(names)
+                }
                 // 编号对不上：记下的 content_id 不对，回到按番号查。
             case .notFound:
                 break
@@ -139,7 +143,7 @@ actor R18DevClient {
         switch await fetchRecord(for: code, needsPerformers: true) {
         case .record(let record):
             if let names = record.performers { return Self.outcome(names) }
-            return record.detailed ? .none : .unavailable
+            return .unavailable
         case .notFound:
             return .none
         case .unavailable:
@@ -147,8 +151,8 @@ actor R18DevClient {
         }
     }
 
-    nonisolated private static func outcome(_ names: [String]?) -> PerformerLookup {
-        guard let names, !names.isEmpty else { return .none }
+    nonisolated private static func outcome(_ names: [String]) -> PerformerLookup {
+        guard !names.isEmpty else { return .none }
         return .found(names)
     }
 
@@ -158,16 +162,12 @@ actor R18DevClient {
         var metadata: MediaMetadata?
         /// nil 表示来源没给出演员这一项（不等于没有演员）
         var performers: [String]?
-        /// 已经拿到完整详情
-        var detailed: Bool
-
         mutating func apply(_ parsed: Parsed) {
             if let found = parsed.metadata { metadata = found }
             if let names = parsed.performers {
                 performers = names
                 metadata?.performers = names.isEmpty ? nil : names
             }
-            detailed = true
         }
     }
 
@@ -186,8 +186,7 @@ actor R18DevClient {
                     continue
                 }
                 hyphenFirst = hyphenated
-                var record = Record(contentID: first.contentID, metadata: first.metadata, performers: first.performers,
-                                    detailed: first.metadata != nil && first.performers != nil)
+                var record = Record(contentID: first.contentID, metadata: first.metadata, performers: first.performers)
                 guard (needsPerformers && first.performers == nil) || first.metadata == nil else { return .record(record) }
                 switch await detail(contentID: first.contentID) {
                 case .data(let detailData):

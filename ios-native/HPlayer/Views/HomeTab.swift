@@ -341,7 +341,6 @@ struct HomeTab: View {
                     return
                 }
                 showScan = true
-                if scanner.phase == .idle { startScan(false) }
             }
             .accessibilityIdentifier("home.scan115")
             Button("重新自动匹配封面", systemImage: "photo.badge.magnifyingglass") {
