@@ -330,12 +330,12 @@ final class PlaybackController: ObservableObject {
         engine.set("user-agent", direct115 ? Direct115Client.userAgent : "HPlayer")
         engine.set("referrer", direct115 ? "https://115.com/" : "")
         let cookieHeader = Self.cookieHeader(cookie)
-        engine.set("http-header-fields", direct115 && !cookieHeader.isEmpty ? "Cookie: \(cookieHeader)" : "")
+        engine.set("http-header-fields", direct115 && !cookieHeader.isEmpty ? "Cookie: \(cookieHeader.replacingOccurrences(of: ",", with: "%2C"))" : "")
         engine.set("start", position > 0 ? String(format: "%.3f", position) : "none")
         engine.set("pause", !keepPlaying)
         engine.set("speed", Double(rate))
         applyAspect(engine)
-        engine.command(["loadfile", url.isFileURL ? url.path : url.absoluteString, "replace"])
+        engine.command(["loadfile", Self.engineAddress(for: url, direct115: direct115, cookieHeader: cookieHeader), "replace"])
         startWatchdog()
 
         let timeout = openTimeoutSeconds
@@ -815,7 +815,8 @@ final class PlaybackController: ObservableObject {
         statusNote = ""
         opening = false
         loaded = false
-        errorDetail = Self.shortReason(from: logLines)
+        let proxyProblem = LocalStreamProxy.shared.problem
+        errorDetail = proxyProblem.isEmpty ? Self.shortReason(from: logLines) : proxyProblem
         error = resumePoint > 1
             ? "\(reason)，自动重连几次都没成功。点「重试」会从 \(Self.clock(resumePoint)) 接着播放。"
             : "\(reason)，请点「重试」，或换一个画质。"
@@ -840,6 +841,7 @@ final class PlaybackController: ObservableObject {
             "115：\(currentDirect115) 解码：\(decoding.rawValue) 缓存：\(readahead.rawValue)s",
             "状态：loaded=\(loaded) opening=\(opening) playedOnce=\(hasPlayed) cache=\(pausedForCache) seeking=\(seeking) speed=\(Int(downloadSpeed)) cached=\(Int(cachedSeconds))s",
             "错误：\(error)",
+            "中转：\(LocalStreamProxy.shared.problem.isEmpty ? "正常" : LocalStreamProxy.shared.problem)",
             "—— 内核日志 ——",
         ]
         lines += logLines
@@ -891,7 +893,25 @@ final class PlaybackController: ObservableObject {
                 return !name.isEmpty && !["path", "domain", "expires", "max-age", "samesite"].contains(name)
             }
             .joined(separator: "; ")
-            .replacingOccurrences(of: ",", with: "%2C")
+    }
+
+    /// 网络视频交给本机中转，由系统网络栈去连 115（mpv 自带的 TLS 连 115 会被断开）；本机地址（磁力边下边播）直接给内核
+    private static func engineAddress(for url: URL, direct115: Bool, cookieHeader: String) -> String {
+        if url.isFileURL { return url.path }
+        guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return url.absoluteString }
+        let host = url.host?.lowercased() ?? ""
+        var loopback = host == "127.0.0.1" || host == "localhost" || host == "::1"
+        #if DEBUG
+        // UI 测试的视频在本机测试服务器上，也走中转，好在模拟器上把中转一起测了
+        if ProcessInfo.processInfo.environment["HPLAYER_UI_TEST_URL"] != nil { loopback = false }
+        #endif
+        guard !loopback else { return url.absoluteString }
+        var headers = ["User-Agent": direct115 ? Direct115Client.userAgent : "HPlayer"]
+        if direct115 {
+            headers["Referer"] = "https://115.com/"
+            if !cookieHeader.isEmpty { headers["Cookie"] = cookieHeader }
+        }
+        return LocalStreamProxy.shared.localURL(for: url, headers: headers)?.absoluteString ?? url.absoluteString
     }
 
     static func clock(_ seconds: Double) -> String {
