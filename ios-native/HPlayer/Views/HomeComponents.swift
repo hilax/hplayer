@@ -88,7 +88,17 @@ struct PerformerGroup: Identifiable {
     /// 显示用的名字
     let name: String
     let items: [HomeMediaItem]
-    var posterURL: String { items.first?.posterURL ?? "" }
+    var posterURL: String { collectionItems.first?.posterURL ?? "" }
+
+    /// The actor id is authoritative. This also repairs a stale or malformed
+    /// cached group instead of letting another actor's work leak into the page.
+    var collectionItems: [HomeMediaItem] {
+        items.filter { item in
+            item.metadata?.performers?.contains {
+                PerformerName.key($0) == id
+            } == true
+        }
+    }
 }
 
 /// 首页一次刷新用到的全部分组，body 里只算一遍。
@@ -117,7 +127,12 @@ struct HomeSnapshot {
         }
         performers = byPerformer.filter { $0.value.items.count >= 2 }
             .map { PerformerGroup(id: $0.key, name: $0.value.name, items: $0.value.items) }
-            .sorted { $0.items.count != $1.items.count ? $0.items.count > $1.items.count : $0.name < $1.name }
+            .filter { $0.collectionItems.count >= 2 }
+            .sorted {
+                let left = $0.collectionItems.count
+                let right = $1.collectionItems.count
+                return left != right ? left > right : $0.name < $1.name
+            }
         let matchedIDs = Set(matched.map(\.id))
         unmatched = items.filter { !matchedIDs.contains($0.id) }
         let groups = HomeLibrary.seriesGroups(matched)

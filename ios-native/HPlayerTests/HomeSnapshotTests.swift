@@ -41,6 +41,18 @@ final class HomeSnapshotTests: XCTestCase {
                        "A repeated name inside one work must not count the work twice")
     }
 
+    func testPerformerCollectionNeverKeepsAnotherActorsWork() {
+        var a1 = makeMetadata(id: "a1", poster: "https://images.example.org/a1.jpg"); a1.performers = ["甲"]
+        var a2 = makeMetadata(id: "a2", poster: "https://images.example.org/a2.jpg"); a2.performers = ["甲"]
+        var b = makeMetadata(id: "b", poster: "https://images.example.org/b.jpg"); b.performers = ["乙"]
+        let group = PerformerGroup(
+            id: PerformerName.key("甲"),
+            name: "甲",
+            items: [item("a1.mp4", metadata: a1), item("b.mp4", metadata: b), item("a2.mp4", metadata: a2)]
+        )
+        XCTAssertEqual(group.collectionItems.map(\.metadata?.imdbID), ["a1", "a2"])
+    }
+
     func testArtworkPrefetchStartsAtTheCurrentHeroThenSpreadsOut() {
         let items = (0..<4).map { index in
             item("m\(index).mp4", metadata: makeMetadata(id: "m\(index)", poster: "https://images.example.org/\(index).jpg"))

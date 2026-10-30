@@ -37,7 +37,6 @@ struct SearchView: View {
     @State private var error = ""
     @State private var playing: PlaybackQueue?
     @State private var openSeriesID: String?
-    @State private var openPerformer: PerformerGroup?
 
     private var query: String {
         keyword.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -102,14 +101,6 @@ struct SearchView: View {
                 SeriesDetailView(seriesID: openSeriesID)
             }
         }
-        .navigationDestination(isPresented: Binding(
-            get: { openPerformer != nil },
-            set: { if !$0 { openPerformer = nil } }
-        )) {
-            if let openPerformer {
-                PerformerCollectionView(group: openPerformer)
-            }
-        }
         .fullScreenCover(item: $playing) { queue in
             PlayerView(source: queue.source, playlist: queue.items)
                 .environmentObject(appState)
@@ -152,9 +143,7 @@ struct SearchView: View {
                 .searchRow(top: 2, bottom: 12)
         } else {
             ForEach(hits.performers) { group in
-                Button {
-                    openPerformer = group
-                } label: {
+                PerformerNavigationLink(group: group) {
                     HStack(spacing: 14) {
                         Image(systemName: "person.2.fill")
                             .font(.system(size: 20))
@@ -162,7 +151,7 @@ struct SearchView: View {
                             .frame(width: 56, height: 56)
                         VStack(alignment: .leading, spacing: 4) {
                             Text(group.name).font(.headline).foregroundStyle(.primary).lineLimit(1)
-                            Text("演员合集 · \(group.items.count) 部").font(.caption).foregroundStyle(.secondary)
+                            Text("演员合集 · \(group.collectionItems.count) 部").font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer(minLength: 8)
                         Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
@@ -171,6 +160,7 @@ struct SearchView: View {
                     .surfaceCard(cornerRadius: 20)
                     .contentShape(Rectangle())
                 }
+                .accessibilityIdentifier("search.performer.\(group.id)")
                 .buttonStyle(.plain)
                 .searchRow()
             }

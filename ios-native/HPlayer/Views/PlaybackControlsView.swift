@@ -98,8 +98,6 @@ struct PlaybackControlsView: View {
     @State private var lastSeekTick = 0
     /// 正在转回竖屏准备关闭，期间不再响应关闭和手势
     @State private var closing = false
-    @State private var closeAwaitingDismissal = false
-    @State private var dismissCoverID: UUID?
     @State private var initialLandscapeRequested = false
     @State private var rotateError = ""
     @State private var adjustment: PlaybackAdjustment?
@@ -225,8 +223,6 @@ struct PlaybackControlsView: View {
         .statusBarHidden(true)
         .persistentSystemOverlays(controlsVisible ? .automatic : .hidden)
         .onAppear {
-            // A newly opened player must never inherit a stale cover from an older one.
-            PlayerDismissCover.removeImmediately()
             updateBusy(loading || playback.buffering)
             originalBrightness = ScreenBrightness.screen.brightness
             brightnessLevel = Double(ScreenBrightness.screen.brightness)
@@ -248,13 +244,7 @@ struct PlaybackControlsView: View {
             // 播放器之外的页面都只用竖屏。正常从关闭按钮退出时已经先转好了；
             // 万一是别的方式退出的，这里兜底转回竖屏
             onScreen = false
-            closeAwaitingDismissal = false
-            if closing {
-                OrientationSupport.restorePortraitIfNeeded()
-                PlayerDismissCover.reveal(dismissCoverID)
-            } else {
-                OrientationSupport.restorePortrait()
-            }
+            if !closing { OrientationSupport.restorePortrait() }
         }
         .onChange(of: systemVolume.externalChangeCount) { _ in
             showSystemVolumeChange()
@@ -1281,11 +1271,10 @@ struct PlaybackControlsView: View {
             if revealing { revealControls() }
         }
     }
-    /// 遮住画面后再旋转和关闭，避免在退出时看到播放器重新排成竖屏。
+    /// 让画面和界面一起完成横屏到竖屏的系统旋转，再关闭播放器。
     private func closePlayer() {
         guard !closing else { return }
         closing = true
-        closeAwaitingDismissal = true
         onScreen = false
         hideTask?.cancel()
         playback.setBoost(false)
@@ -1293,16 +1282,11 @@ struct PlaybackControlsView: View {
         showList = false
         settingsPage = nil
         showAspect = false
-        PlayerDismissCover.show { coverID in
-            guard closeAwaitingDismissal else {
-                PlayerDismissCover.reveal(coverID)
-                return
-            }
-            dismissCoverID = coverID
-            OrientationSupport.rotateToPortrait {
-                guard closeAwaitingDismissal else { return }
-                onClose()
-            }
+        withAnimation(.easeOut(duration: 0.16)) {
+            controlsVisible = false
+        }
+        OrientationSupport.rotateToPortrait {
+            onClose()
         }
     }
 

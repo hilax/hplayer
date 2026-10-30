@@ -626,12 +626,10 @@ struct HomeTab: View {
     }
 
     private func performerLink(_ group: PerformerGroup, width: CGFloat) -> some View {
-        NavigationLink {
-            PerformerCollectionView(group: group)
-        } label: {
+        PerformerNavigationLink(group: group) {
             VStack(alignment: .leading, spacing: 9) {
                 PosterArtwork(urlString: group.posterURL, title: group.name, width: width, alignment: .trailing)
-                    .overlay(alignment: .topLeading) { EpisodeCountBadge(text: "\(group.items.count) 部").padding(7) }
+                    .overlay(alignment: .topLeading) { EpisodeCountBadge(text: "\(group.collectionItems.count) 部").padding(7) }
                 Text(group.name)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.primary)
@@ -639,6 +637,7 @@ struct HomeTab: View {
                     .frame(width: width, alignment: .leading)
             }
         }
+        .accessibilityIdentifier("home.performer.\(group.id)")
         .buttonStyle(PosterButtonStyle())
     }
 

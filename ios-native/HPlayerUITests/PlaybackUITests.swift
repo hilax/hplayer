@@ -10,13 +10,15 @@ final class PlaybackUITests: XCTestCase {
 
         let close = app.buttons["playback.close"]
         let reopen = app.buttons["playbackTest.reopen"]
+        let previousPage = app.staticTexts["playbackTest.previousPage"]
         let orientation = app.buttons["playback.orientation"]
         let surface = app.otherElements["playback.surface"]
         XCTAssertTrue(wait { close.exists && surface.exists && app.windows.firstMatch.frame.width > app.windows.firstMatch.frame.height },
                       "Player should open in landscape")
         close.tap()
-        XCTAssertTrue(wait { !surface.exists && reopen.isHittable && app.windows.firstMatch.frame.height > app.windows.firstMatch.frame.width },
-                      "Closing must leave a usable portrait page without a blocking transition")
+        XCTAssertTrue(wait { !surface.exists && previousPage.exists && reopen.isHittable
+            && app.windows.firstMatch.frame.height > app.windows.firstMatch.frame.width },
+                      "Closing must reveal the previous page in portrait without a blocking transition")
 
         reopen.tap()
         XCTAssertTrue(wait { close.exists && surface.exists && app.windows.firstMatch.frame.width > app.windows.firstMatch.frame.height },
@@ -25,7 +27,8 @@ final class PlaybackUITests: XCTestCase {
         XCTAssertTrue(wait { orientation.label == "横屏" && surface.frame.height > surface.frame.width },
                       "Player should switch to portrait before the second close")
         close.tap()
-        XCTAssertTrue(wait { !surface.exists && reopen.isHittable && app.windows.firstMatch.frame.height > app.windows.firstMatch.frame.width },
+        XCTAssertTrue(wait { !surface.exists && previousPage.exists && reopen.isHittable
+            && app.windows.firstMatch.frame.height > app.windows.firstMatch.frame.width },
                       "Closing a portrait player should also restore an interactive previous page")
     }
 
