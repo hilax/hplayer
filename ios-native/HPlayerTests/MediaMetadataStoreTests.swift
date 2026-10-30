@@ -14,6 +14,32 @@ final class MediaMetadataStoreTests: XCTestCase {
         XCTAssertNil(AppState.accountID(in: "UID=not-an-account; CID=local-session"))
     }
 
+    func testDifferentCodesWithTheSameCleanedTitleKeepSeparateCovers() async throws {
+        let (defaults, suite) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let first = LibraryMedia(cloud: P115File(id: "a", parentId: "0", name: "[ABC-123] Same.Name.mp4",
+            isDir: false, kind: "video", size: 10, pickCode: "a", sha1: "", updatedAt: "", thumbUrl: ""))
+        let second = LibraryMedia(cloud: P115File(id: "b", parentId: "0", name: "[DEF-456] Same.Name.mp4",
+            isDir: false, kind: "video", size: 10, pickCode: "b", sha1: "", updatedAt: "", thumbUrl: ""))
+        let store = MediaMetadataStore(defaults: defaults, lookup: { parsed in
+            guard let code = parsed.catalogCode else { return nil }
+            var result = MediaMetadata(imdbID: "r18dev:\(code)", type: "movie", title: code, year: "",
+                posterURL: "https://images.example/\(code).jpg", backgroundURL: "", logoURL: "", overview: "",
+                rating: "", genres: [], country: "Japan", season: nil, episode: nil)
+            result.source = MetadataSource.r18dev.rawValue
+            return result
+        })
+        store.sync(files: [first, second])
+        try await waitForScan(store)
+        XCTAssertEqual(store.metadataByMediaID[first.id]?.imdbID, "r18dev:ABC-123")
+        XCTAssertEqual(store.metadataByMediaID[second.id]?.imdbID, "r18dev:DEF-456")
+
+        let restored = MediaMetadataStore(defaults: defaults, lookup: { _ in XCTFail("Cached codes should restore"); return nil })
+        restored.hydrate(files: [first, second])
+        XCTAssertEqual(restored.metadataByMediaID[first.id]?.imdbID, "r18dev:ABC-123")
+        XCTAssertEqual(restored.metadataByMediaID[second.id]?.imdbID, "r18dev:DEF-456")
+    }
+
     func testSavedSessionUsesHistoricalMediaLibraryAccountScope() throws {
         let (defaults, suite) = makeDefaults()
         defer { defaults.removePersistentDomain(forName: suite) }

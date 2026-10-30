@@ -8,6 +8,7 @@ struct HomeLibraryScanView: View {
     @EnvironmentObject private var local: LocalMediaStore
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
+    @AppStorage(AdultMetadataSettings.enabledKey) private var adultMatching = false
 
     let onStart: (Bool) -> Void
     let onRetryMatching: () -> Void
@@ -61,6 +62,15 @@ struct HomeLibraryScanView: View {
                     } footer: {
                         Text("已发现的影片和扫描进度都已保留，可稍后继续。")
                     }
+                }
+
+                Section {
+                    Toggle("按番号匹配成人影片", isOn: $adultMatching)
+                        .accessibilityIdentifier("scan.adultMatching")
+                } header: {
+                    Text("资料来源")
+                } footer: {
+                    Text("开启后自动用番号向 R18.dev 查询封面，只发送番号，不发送 115 Cookie、路径或视频内容。封面由第三方图片服务提供；关闭后已匹配的封面仍会保留。")
                 }
 
                 Section {

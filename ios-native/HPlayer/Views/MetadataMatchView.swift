@@ -14,6 +14,9 @@ struct MetadataMatchView: View {
     @State private var applying = false
     @State private var showTMDB = false
     @State private var tmdbEnabled = !TMDBClient.storedKey.isEmpty
+    @State private var searchGeneration = 0
+    @State private var searchTask: Task<Void, Never>?
+    @AppStorage(AdultMetadataSettings.enabledKey) private var adultMatching = false
 
     private var parsed: MediaNameParser.ParsedName { MediaNameParser.parse(file.name) }
 
@@ -36,11 +39,11 @@ struct MetadataMatchView: View {
                 Section {
                     HStack(spacing: 10) {
                         Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                        TextField("电影或剧集名称，中文、英文都可以", text: $query)
+                        TextField("输入片名或番号", text: $query)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                             .submitLabel(.search)
-                            .onSubmit { Task { await search() } }
+                            .onSubmit { startSearch() }
                         if !query.isEmpty {
                             Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary) }
                                 .buttonStyle(.plain)
@@ -54,7 +57,7 @@ struct MetadataMatchView: View {
                                 ForEach(parsed.searchTitles, id: \.self) { title in
                                     Button(title) {
                                         query = title
-                                        Task { await search() }
+                                        startSearch()
                                     }
                                     .font(.footnote.weight(.medium))
                                     .padding(.horizontal, 12)
@@ -67,18 +70,18 @@ struct MetadataMatchView: View {
                         .scrollIndicators(.hidden)
                     }
                 } footer: {
-                    Text("搜索只发送片名，不发送 115 Cookie 或视频内容。选好后会记住这个片名和文件的对应关系，文件改名后也认得。")
+                    Text("搜索向资料来源发送片名；启用番号匹配后，识别到番号时只向 R18.dev 发送番号。不发送 115 Cookie、路径或视频内容。")
                 }
 
                 Section {
                     if searching && results.isEmpty {
                         HStack(spacing: 10) {
                             ProgressView()
-                            Text(tmdbEnabled ? "正在搜索番组计划、IMDb 和 TMDB…" : "正在搜索番组计划和 IMDb…")
+                            Text("正在搜索资料来源…")
                                 .foregroundStyle(.secondary)
                         }
                     } else if searched && results.isEmpty {
-                        Text("没有找到。可以只输入中文名，或者换成英文原名再搜一次。")
+                        Text("没有找到。可以换个片名或检查番号后再试。")
                             .foregroundStyle(.secondary)
                     }
                     ForEach(results) { metadata in
@@ -97,6 +100,8 @@ struct MetadataMatchView: View {
                 }
 
                 Section {
+                    Toggle("按番号匹配成人影片", isOn: $adultMatching)
+                        .accessibilityIdentifier("metadata.adultMatching")
                     Button {
                         showTMDB = true
                     } label: {
@@ -111,7 +116,7 @@ struct MetadataMatchView: View {
                 } header: {
                     Text("资料来源")
                 } footer: {
-                    Text("番组计划：国产动画、日本动画和华语、日韩剧，中文名齐全。IMDb：欧美电影和剧集，用英文名搜。TMDB 收录最全、有中文海报，需要填自己的免费 API Key。")
+                    Text("番组计划、IMDb 和可选的 TMDB 用于影视资料。开启番号匹配后使用 R18.dev；封面由第三方图片服务提供。关闭后已匹配的封面仍会保留。")
                 }
 
                 Section("源文件") {
@@ -123,15 +128,26 @@ struct MetadataMatchView: View {
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("完成") { dismiss() } } }
             .task {
                 guard query.isEmpty else { return }
-                query = parsed.chineseTitle ?? parsed.title
-                await search()
+                query = (adultMatching ? parsed.catalogCode : nil) ?? parsed.chineseTitle ?? parsed.title
+                startSearch()
             }
+            .onChange(of: adultMatching) { enabled in
+                if enabled {
+                    if let code = parsed.catalogCode { query = code }
+                    startSearch()
+                } else {
+                    cancelSearch()
+                    results = []
+                    searched = false
+                }
+            }
+            .onDisappear { searchTask?.cancel() }
             .scrollDismissesKeyboard(.interactively)
             .sheet(isPresented: $showTMDB, onDismiss: {
                 let enabled = !TMDBClient.storedKey.isEmpty
                 if enabled != tmdbEnabled {
                     tmdbEnabled = enabled
-                    Task { await search() }
+                    startSearch()
                 }
             }) {
                 TMDBKeyView()
@@ -139,21 +155,37 @@ struct MetadataMatchView: View {
         }
     }
 
-    private func search() async {
+    private func startSearch() {
+        cancelSearch()
+        let generation = searchGeneration
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !searching, !text.isEmpty else { return }
+        guard !text.isEmpty else { results = []; searched = false; return }
         searching = true
+        searched = false
         results = []
         let hint = parsed
+        searchTask = Task { await search(text, hint: hint, generation: generation) }
+    }
+
+    private func cancelSearch() {
+        searchTask?.cancel()
+        searchTask = nil
+        searchGeneration += 1
+        searching = false
+    }
+
+    private func search(_ text: String, hint: MediaNameParser.ParsedName, generation: Int) async {
         // 几个来源同时搜，哪个先回来先显示，TMDB 连接慢也不会拖住番组计划和 IMDb 的结果
         await withTaskGroup(of: [MediaMetadata].self) { group in
             for source in MetadataSource.allCases {
                 group.addTask { await MetadataSearch.shared.candidates(from: source, query: text) }
             }
-            for await items in group where !items.isEmpty {
-                results = MetadataSearch.rank(results + items, query: text, hint: hint)
+            for await items in group {
+                guard !Task.isCancelled, generation == searchGeneration else { group.cancelAll(); break }
+                if !items.isEmpty { results = MetadataSearch.rank(results + items, query: text, hint: hint) }
             }
         }
+        guard !Task.isCancelled, generation == searchGeneration else { return }
         searched = true
         searching = false
     }

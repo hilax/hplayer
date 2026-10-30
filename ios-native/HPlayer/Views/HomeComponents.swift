@@ -291,12 +291,13 @@ struct PosterArtwork: View {
     let title: String
     var width: CGFloat = 118
     var caption = ""
+    var alignment: Alignment = .center
 
     var body: some View {
         ZStack(alignment: .bottomLeading) {
             ArtworkView(urlString: urlString, title: title)
                 .scaledToFill()
-                .frame(width: width, height: width * 1.5)
+                .frame(width: width, height: width * 1.5, alignment: alignment)
                 .clipped()
 
             if !caption.isEmpty {
@@ -329,7 +330,8 @@ struct PosterCard: View {
     var body: some View {
         Button(action: onPlay) {
             VStack(alignment: .leading, spacing: 9) {
-                PosterArtwork(urlString: item.posterURL, title: item.title, width: width, caption: item.caption)
+                PosterArtwork(urlString: item.posterURL, title: item.title, width: width, caption: item.caption,
+                              alignment: item.metadata?.sourceKind == .r18dev ? .trailing : .center)
                     .overlay(alignment: .topTrailing) {
                         if !item.rating.isEmpty {
                             RatingBadge(rating: item.rating).padding(7)

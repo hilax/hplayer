@@ -8,12 +8,15 @@ enum MetadataSource: String, Codable, CaseIterable {
     case cinemeta
     /// TMDB：覆盖最全，有中文名和中文海报，需要用户自己填 API Key
     case tmdb
+    /// R18.dev：按番号查找，用户开启后才访问
+    case r18dev
 
     var label: String {
         switch self {
         case .bangumi: return "番组计划"
         case .cinemeta: return "IMDb"
         case .tmdb: return "TMDB"
+        case .r18dev: return "R18.dev"
         }
     }
 
@@ -22,6 +25,7 @@ enum MetadataSource: String, Codable, CaseIterable {
         case .bangumi: return "Bangumi"
         case .cinemeta: return "IMDb"
         case .tmdb: return "TMDB"
+        case .r18dev: return "R18.dev"
         }
     }
 }
@@ -94,9 +98,21 @@ enum MetadataScoring {
 
 actor MetadataSearch {
     static let shared = MetadataSearch()
+    private let r18dev: R18DevClient
+    private let adultEnabled: () -> Bool
+
+    init(r18dev: R18DevClient = .shared, adultEnabled: @escaping () -> Bool = { AdultMetadataSettings.isEnabled }) {
+        self.r18dev = r18dev
+        self.adultEnabled = adultEnabled
+    }
 
     /// 首页自动识别：中文名先查番组计划（和填了 Key 的 TMDB），英文名查 IMDb，只接受片名几乎一样的结果
     func lookup(_ parsed: MediaNameParser.ParsedName) async -> MediaMetadata? {
+        guard !Task.isCancelled else { return nil }
+        // 番号文件只发番号给 R18.dev，不把包含私人信息的完整文件名发给其他来源。
+        if adultEnabled(), let code = parsed.catalogCode {
+            return await r18dev.lookup(code)
+        }
         let queries = parsed.searchTitles
         let wantsSeries = parsed.looksLikeSeries
         var candidates: [MediaMetadata] = []
@@ -126,6 +142,9 @@ actor MetadataSearch {
 
     /// 手动匹配：从一个来源搜。页面上几个来源同时搜，哪个先回来先显示哪个
     func candidates(from source: MetadataSource, query: String) async -> [MediaMetadata] {
+        guard !Task.isCancelled else { return [] }
+        let code = AVCatalogCode.extract(query)
+        if adultEnabled(), code != nil, source != .r18dev { return [] }
         let parsed = MediaNameParser.parse(query)
         switch source {
         case .bangumi:
@@ -136,6 +155,9 @@ actor MetadataSearch {
             // 只有中文时 IMDb 搜不到东西，不浪费一次请求
             guard let latin = parsed.latinTitle else { return [] }
             return await CinemetaClient.shared.search(latin)
+        case .r18dev:
+            guard adultEnabled(), let code, let result = await r18dev.lookup(code) else { return [] }
+            return [result]
         }
     }
 

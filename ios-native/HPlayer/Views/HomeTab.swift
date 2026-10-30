@@ -9,6 +9,7 @@ struct HomeTab: View {
     @EnvironmentObject private var metadataStore: MediaMetadataStore
     @EnvironmentObject private var scanner: CloudLibraryScanner
     @Environment(\.scenePhase) private var scenePhase
+    @AppStorage(AdultMetadataSettings.enabledKey) private var adultMatching = false
     @ObservedObject private var magnetHistory = MagnetHistoryStore.shared
 
     @State private var showImporter = false
@@ -112,6 +113,15 @@ struct HomeTab: View {
                     mediaLibrary.flush()
                 } else {
                     // 初始视图可能在 inactive 阶段挂载；无需等一次可能已错过的 active 变化。
+                    metadataStore.sync(files: libraryFiles)
+                }
+            }
+            .onChange(of: adultMatching) { enabled in
+                metadataStore.pause()
+                guard scenePhase != .background else { return }
+                if enabled {
+                    metadataStore.retryFailed(files: libraryFiles)
+                } else {
                     metadataStore.sync(files: libraryFiles)
                 }
             }

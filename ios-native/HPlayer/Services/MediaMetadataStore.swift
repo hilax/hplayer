@@ -66,6 +66,7 @@ final class MediaMetadataStore: ObservableObject {
     private struct NameInfo {
         let parsed: MediaNameParser.ParsedName
         let key: String
+        let legacyKey: String
     }
     private var nameCache: [String: NameInfo] = [:]
     private var cacheDirty = false
@@ -160,16 +161,18 @@ final class MediaMetadataStore: ObservableObject {
     }
 
     private func shouldResolve(_ file: LibraryMedia) -> Bool {
-        let key = titleKey(file.name)
-        if ignored.contains(key) || cachedFingerprint(file).map(ignored.contains) == true { return false }
+        let info = nameInfo(file.name)
+        let key = info.key
+        if ignored.contains(key) || ignored.contains(info.legacyKey) || cachedFingerprint(file).map(ignored.contains) == true { return false }
         if let last = missed[key], Date().timeIntervalSince(last) < 12 * 3600 { return false }
         return true
     }
 
     private func cachedMetadata(for file: LibraryMedia) -> MediaMetadata? {
-        let key = titleKey(file.name)
-        guard !ignored.contains(key) else { return nil }
-        let parsed = nameInfo(file.name).parsed
+        let info = nameInfo(file.name)
+        let key = info.key
+        guard !ignored.contains(key), !ignored.contains(info.legacyKey) else { return nil }
+        let parsed = info.parsed
         if let hash = cachedFingerprint(file) {
             guard !ignored.contains(hash) else { return nil }
             if var cached = hashCache[hash], cached.hasUsablePoster || cached.manual == true {
@@ -178,6 +181,13 @@ final class MediaMetadataStore: ObservableObject {
             }
         }
         if var cached = titleCache[key], cached.hasUsablePoster || cached.manual == true {
+            cached.matchedByHash = false
+            return withEpisode(cached, parsed)
+        }
+        // 未开启番号匹配时保留旧缓存；开启后只沿用旧版的手动选择，不拿普通片名猜番号。
+        if key != info.legacyKey, var cached = titleCache[info.legacyKey],
+           (cached.manual == true || !AdultMetadataSettings.isEnabled),
+           (cached.hasUsablePoster || cached.manual == true) {
             cached.matchedByHash = false
             return withEpisode(cached, parsed)
         }
@@ -198,6 +208,7 @@ final class MediaMetadataStore: ObservableObject {
         metadataByMediaID[file.id] = value
         titleCache[key] = value
         ignored.remove(key)
+        ignored.remove(nameInfo(file.name).legacyKey)
         missed.removeValue(forKey: key)
         // 封面先保存，补算本机文件 SHA1 时即使退出 App，下次仍能立即恢复手动匹配。
         save(immediately: true)
@@ -231,8 +242,9 @@ final class MediaMetadataStore: ObservableObject {
     private func nameInfo(_ filename: String) -> NameInfo {
         if let cached = nameCache[filename] { return cached }
         let parsed = MediaNameParser.parse(filename)
-        let key = "\(MediaNameParser.cacheKey(parsed.title))|\(parsed.year ?? "")|\(parsed.season != nil || parsed.episode != nil ? "series" : "movie")"
-        let value = NameInfo(parsed: parsed, key: key)
+        let legacyKey = "\(MediaNameParser.cacheKey(parsed.title))|\(parsed.year ?? "")|\(parsed.season != nil || parsed.episode != nil ? "series" : "movie")"
+        let key = parsed.catalogCode.map { "av:\($0)" } ?? legacyKey
+        let value = NameInfo(parsed: parsed, key: key, legacyKey: legacyKey)
         nameCache[filename] = value
         return value
     }
@@ -268,7 +280,7 @@ final class MediaMetadataStore: ObservableObject {
         let hash = await fingerprint(file, generation: generation)
         guard isCurrent(generation) else { return nil }
         let key = titleKey(file.name)
-        if ignored.contains(key) || hash.map(ignored.contains) == true { return nil }
+        if ignored.contains(key) || ignored.contains(nameInfo(file.name).legacyKey) || hash.map(ignored.contains) == true { return nil }
         let parsed = nameInfo(file.name).parsed
         if let hash, var cached = hashCache[hash], cached.hasUsablePoster || cached.manual == true {
             cached.matchedByHash = true
@@ -284,7 +296,7 @@ final class MediaMetadataStore: ObservableObject {
         let metadata = parsed.title.isEmpty ? nil : await lookup(parsed)
         guard isCurrent(generation) else { return nil }
         // 网络查找期间可能已手动匹配或取消，不能让晚回来的自动结果覆盖用户选择。
-        if ignored.contains(key) || hash.map(ignored.contains) == true { return nil }
+        if ignored.contains(key) || ignored.contains(nameInfo(file.name).legacyKey) || hash.map(ignored.contains) == true { return nil }
         if let cached = cachedMetadata(for: file) { return cached }
         guard let metadata, metadata.hasUsablePoster else {
             // 用户在本次请求等待期间点了重扫：现有请求结束后再查一次，不并发请求同一个来源。
@@ -404,6 +416,8 @@ enum MediaNameParser {
         let year: String?
         let season: Int?
         let episode: Int?
+        /// 从原始文件名提取，避免方括号和字幕组清理时丢失番号。
+        let catalogCode: String?
 
         /// 片名里的中文部分：「鬼谜东宫 The East Palace」里的「鬼谜东宫」
         var chineseTitle: String? {
@@ -506,7 +520,8 @@ enum MediaNameParser {
             title: value.isEmpty ? (filename as NSString).deletingPathExtension : value,
             year: year,
             season: season,
-            episode: episode
+            episode: episode,
+            catalogCode: AVCatalogCode.extract(filename)
         )
     }
 
