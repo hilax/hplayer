@@ -51,6 +51,7 @@ struct PerformerCollectionView: View {
                 }
             }
             .buttonStyle(PosterButtonStyle())
+            .accessibilityIdentifier("performer.work.\(item.metadata?.imdbID ?? item.id)")
         }
         .navigationTitle(group.name)
         .navigationBarTitleDisplayMode(.inline)

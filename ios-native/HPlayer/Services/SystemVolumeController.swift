@@ -17,21 +17,32 @@ final class SystemVolumeController: ObservableObject {
 
     private weak var slider: UISlider?
     private var observation: NSKeyValueObservation?
+    private var started = false
     private var lastProgrammaticChange = Date.distantPast
     private var pendingValue: Double?
 
     init() {
-        level = Double(AVAudioSession.sharedInstance().outputVolume)
+        // 这里不读系统音量：音频会话第一次访问要和系统服务通信，会拖慢播放页出现。
+        // 真实音量在 start() 里等会话在后台激活之后再读。
+        level = 1
     }
 
     func start() {
-        let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playback, mode: .moviePlayback)
-        try? session.setActive(true)
-        level = Double(session.outputVolume)
+        guard !started else { return }
+        started = true
+        // 激活音频会话可能阻塞几十到几百毫秒，放到后台；好了再回到主线程读音量、开始监听
+        PlayerAudioSession.activate { [weak self] volume in
+            Task { @MainActor [weak self] in self?.audioSessionDidActivate(volume) }
+        }
+    }
+
+    private func audioSessionDidActivate(_ volume: Double) {
+        // 等待激活的时候播放页已经退出了
+        guard started else { return }
+        level = volume
         guard observation == nil else { return }
         // KVO 可能在任意线程回调，切回主线程再更新
-        observation = session.observe(\.outputVolume, options: [.new]) { @Sendable [weak self] _, change in
+        observation = AVAudioSession.sharedInstance().observe(\.outputVolume, options: [.new]) { @Sendable [weak self] _, change in
             guard let value = change.newValue else { return }
             Task { @MainActor [weak self] in
                 self?.systemVolumeDidChange(Double(value))
@@ -40,6 +51,7 @@ final class SystemVolumeController: ObservableObject {
     }
 
     func stop() {
+        started = false
         observation?.invalidate()
         observation = nil
     }

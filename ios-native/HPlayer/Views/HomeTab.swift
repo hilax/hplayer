@@ -712,6 +712,8 @@ struct HomeTab: View {
                 .scaledToFill()
                 .frame(width: 46, height: 46)
                 .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+                // 封面铺满后会伸出框外，clipShape 只裁画面不裁点击区域；整行的点击区域由下面的 contentShape 决定
+                .allowsHitTesting(false)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(item.media.name)

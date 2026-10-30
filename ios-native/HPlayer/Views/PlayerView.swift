@@ -81,10 +81,20 @@ struct PlayerView: View {
         }
     }
 
+    /// 记播放历史会让首页「继续观看」重新排一遍；放到播放页进场动画走完之后再记，
+    /// 免得首页在后面整页重算，和打开播放页抢主线程。
+    private func recordWhenPresented(_ source: PlaybackSource) {
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            guard visible, current == source else { return }
+            RecentStore.shared.record(source)
+        }
+    }
+
     private func load(_ source: PlaybackSource) async {
         loading = true; error = ""; directQualities = []; selectedQuality = ""; fellBack = false
         let resume = tracksHistory ? RecentStore.shared.position(for: source) : nil
-        if tracksHistory { RecentStore.shared.record(source) }
+        if tracksHistory { recordWhenPresented(source) }
         lastSavedAt = Date()
         do {
             switch source {

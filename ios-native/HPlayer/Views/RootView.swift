@@ -7,6 +7,7 @@ struct RootView: View {
     var body: some View {
         HomeView(appState: appState)
             .task {
+                PlayerWarmup.prepare()
                 await appState.checkAuth()
             }
             .onOpenURL { url in
