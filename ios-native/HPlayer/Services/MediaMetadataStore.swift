@@ -42,7 +42,9 @@ struct MediaMetadata: Codable, Identifiable, Hashable {
 @MainActor
 final class MediaMetadataStore: ObservableObject {
     @Published private(set) var metadataByMediaID: [String: MediaMetadata] = [:]
-    @Published private(set) var resolvingIDs: Set<String> = []
+    private(set) var resolvingIDs: Set<String> = []
+    private var bufferedResults: [String: MediaMetadata] = [:]
+    private var lastPublishAt = Date()
     @Published private(set) var isMatching = false
     @Published private(set) var completedScanCount = 0
     @Published private(set) var lastCompletedAt: Date?
@@ -100,8 +102,19 @@ final class MediaMetadataStore: ObservableObject {
         if metadataByMediaID != restored { metadataByMediaID = restored }
     }
 
+    /// 用户在扫描页点了暂停或停止后，自动匹配不再自行重启，直到用户再次开始扫描或重新匹配。
+    private(set) var stoppedByUser = false
+
+    func stopByUser() {
+        stoppedByUser = true
+        pause()
+    }
+
+    func resumeAutomatic() { stoppedByUser = false }
+
     func sync(files: [LibraryMedia]) {
         hydrate(files: files)
+        guard !stoppedByUser else { return }
         pendingMedia = files.filter { metadataByMediaID[$0.id] == nil && shouldResolve($0) }
         pendingIndex = 0
         guard syncTask == nil else { return }
@@ -118,11 +131,15 @@ final class MediaMetadataStore: ObservableObject {
                 let metadata = await resolve(file, generation: generation)
                 guard isCurrent(generation) else { return }
                 if let metadata, validMediaIDs.contains(file.id), metadataByMediaID[file.id] == nil {
-                    metadataByMediaID[file.id] = metadata
+                    bufferedResults[file.id] = metadata
                 }
                 resolvingIDs.remove(file.id)
+                // 每匹配一部就发布一次会让首页整页重算、界面卡死；攒一批再一起更新。
+                if bufferedResults.count >= 20 || Date().timeIntervalSince(lastPublishAt) >= 1.5 { publishBuffered() }
+                await Task.yield()
             }
             guard isCurrent(generation) else { return }
+            publishBuffered()
             pendingMedia = []
             pendingIndex = 0
             syncTask = nil
@@ -131,7 +148,17 @@ final class MediaMetadataStore: ObservableObject {
     }
 
     /// 退到后台时立即停止自动查找。旧请求即使晚回来，也不能写入缓存或失败等待时间。
+    private func publishBuffered() {
+        lastPublishAt = Date()
+        guard !bufferedResults.isEmpty else { return }
+        var merged = metadataByMediaID
+        for (id, value) in bufferedResults where validMediaIDs.contains(id) && merged[id] == nil { merged[id] = value }
+        bufferedResults = [:]
+        metadataByMediaID = merged
+    }
+
     func pause() {
+        publishBuffered()
         scanGeneration += 1
         syncTask?.cancel()
         syncTask = nil
@@ -148,6 +175,7 @@ final class MediaMetadataStore: ObservableObject {
 
     /// 用户主动重新扫描时，不沿用上一次失败的 12 小时等待；已手动取消匹配的文件仍然保持取消。
     func retryFailed(files: [LibraryMedia]) {
+        stoppedByUser = false
         for file in files {
             let key = titleKey(file.name)
             missed.removeValue(forKey: key)

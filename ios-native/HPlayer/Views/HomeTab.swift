@@ -304,6 +304,7 @@ struct HomeTab: View {
             .disabled(libraryFiles.isEmpty)
             Button("刷新媒体库", systemImage: "arrow.clockwise") {
                 localStore.refresh()
+                metadataStore.resumeAutomatic()
                 metadataStore.sync(files: libraryFiles)
             }
             if !recents.items.isEmpty || !magnetHistory.items.isEmpty {
@@ -327,6 +328,7 @@ struct HomeTab: View {
         guard let accountID = appState.libraryAccountID, appState.isAuthenticated,
               let client = appState.directClient() else { return }
         // 不清空「已失败」记录：继续扫描时重新查询全部未匹配影片会重复请求并拖慢界面。
+        metadataStore.resumeAutomatic()
         scanner.start(accountID: accountID, root: root, fetchPage: { cid, offset in
             try await client.filesPage(cid: cid, offset: offset)
         }, onBatch: { files in

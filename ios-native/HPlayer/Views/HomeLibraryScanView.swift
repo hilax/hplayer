@@ -80,7 +80,7 @@ struct HomeLibraryScanView: View {
                     if scanner.phase == .running {
                         Button("暂停扫描", systemImage: "pause.circle") {
                             scanner.pause()
-                            metadata.pause()
+                            metadata.stopByUser()
                             library.flush()
                         }.accessibilityIdentifier("scan.pause")
                     } else if scanner.canResume {
@@ -91,6 +91,12 @@ struct HomeLibraryScanView: View {
                         Button(scanner.phase == .completed ? "重新扫描全盘" : "开始全盘扫描", systemImage: "sparkle.magnifyingglass") {
                             onStart(scanner.phase == .completed)
                         }.accessibilityIdentifier("scan.start")
+                    }
+                    if metadata.isMatching {
+                        Button("停止匹配封面", systemImage: "stop.circle", role: .destructive) {
+                            metadata.stopByUser()
+                            library.flush()
+                        }.accessibilityIdentifier("scan.stopMatching")
                     }
                     if scanner.phase != .running {
                         Button("选择文件夹扫描", systemImage: "folder.badge.gearshape") { pickingFolder = true }
