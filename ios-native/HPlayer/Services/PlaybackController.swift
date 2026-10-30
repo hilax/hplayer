@@ -142,6 +142,8 @@ final class PlaybackController: ObservableObject {
     private var videoHeight: Int64 = 0
     private var hdr = false
 
+    /// 内核最近的警告和错误
+    private var logLines: [String] = []
     private var openTimeoutTask: Task<Void, Never>?
     private var watchdogTask: Task<Void, Never>?
     private var recoveryTask: Task<Void, Never>?
@@ -217,7 +219,13 @@ final class PlaybackController: ObservableObject {
             ("cache", "yes"),
             ("cache-pause", "yes"),
             ("cache-pause-initial", "no"),
-            ("cache-pause-wait", "3"),
+            // 卡住后攒够 1 秒就接着播，不要等太久
+            ("cache-pause-wait", "1"),
+            // 打开时少探测一点格式信息，网络视频更快出画面
+            ("demuxer-lavf-analyzeduration", "1"),
+            ("demuxer-lavf-probesize", "4194304"),
+            // 续播和大跨度跳转只落到关键帧，4K 原画不用从关键帧一路解码到目标；小跳转单独要求精确
+            ("hr-seek", "no"),
             ("cache-on-disk", "yes"),
             ("demuxer-cache-dir", Self.cacheDirectory.path),
             ("demuxer-max-back-bytes", "256MiB"),
@@ -431,7 +439,7 @@ final class PlaybackController: ObservableObject {
         noDataSeconds = 0
         // 大跨度跳转只落到关键帧，4K 原画也能很快开播；小跳转精确到帧
         let far = abs(target - engineTime) > 60
-        engine?.command(["seek", String(format: "%.3f", target), far ? "absolute+keyframes" : "absolute"])
+        engine?.command(["seek", String(format: "%.3f", target), far ? "absolute+keyframes" : "absolute+exact"])
         updateFlags()
     }
 
@@ -569,6 +577,9 @@ final class PlaybackController: ObservableObject {
             if !statusNote.isEmpty, recoveryTask == nil { statusNote = "" }
         case .endFile(let reason, let message):
             handleEndFile(reason: reason, message: message)
+        case .log(let line):
+            logLines.append(line)
+            if logLines.count > 60 { logLines.removeFirst(logLines.count - 60) }
         }
         updateFlags()
     }
@@ -767,7 +778,12 @@ final class PlaybackController: ObservableObject {
         let cookie = currentCookie
         let currentSession = session
         openTimeoutTask?.cancel()
-        statusNote = reason.isEmpty ? "正在重新连接…" : "\(reason)，正在重新连接…"
+        // 刚打开就失败的第一次重试悄悄进行，不弹「打开失败」吓人；之后再说明在重连
+        if recoveryAttempts.count == 1 && !hasPlayed {
+            statusNote = ""
+        } else {
+            statusNote = reason.isEmpty ? "正在重新连接…" : "\(reason)，正在重新连接…"
+        }
         engine?.command(["stop"])
         recoveryTask = Task { @MainActor [weak self] in
             var target = url
@@ -790,6 +806,20 @@ final class PlaybackController: ObservableObject {
             ? "\(reason)，自动重连几次都没成功。点「重试」会从 \(Self.clock(resumePoint)) 接着播放。"
             : "\(reason)，请点「重试」，或换一个画质。"
         updateFlags()
+    }
+
+    /// 播放出问题时复制给开发者的诊断信息：地址类型、状态和内核最近的警告错误
+    var diagnostics: String {
+        var lines = [
+            "HPlayer 播放诊断",
+            "地址：\(currentURL.map { "\($0.scheme ?? "")://\($0.host ?? "")\($0.path.suffix(40))" } ?? "无")",
+            "115：\(currentDirect115) 解码：\(decoding.rawValue) 缓存：\(readahead.rawValue)s",
+            "状态：loaded=\(loaded) opening=\(opening) playedOnce=\(hasPlayed) cache=\(pausedForCache) seeking=\(seeking) speed=\(Int(downloadSpeed)) cached=\(Int(cachedSeconds))s",
+            "错误：\(error)",
+            "—— 内核日志 ——",
+        ]
+        lines += logLines
+        return lines.joined(separator: "\n")
     }
 
     /// 出错提示里的「重试」：从原位置重新打开（会先换新地址）

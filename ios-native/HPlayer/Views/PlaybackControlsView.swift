@@ -116,6 +116,10 @@ struct PlaybackControlsView: View {
     @State private var brightnessAdjusted = false
     @State private var sleepTimer: SleepTimer = .off
     @State private var sleepTask: Task<Void, Never>?
+    /// 缓冲超过一小会儿才显示转圈，打开视频和小卡顿时画面上不闪「正在缓冲」
+    @State private var showBusy = false
+    @State private var busyTask: Task<Void, Never>?
+    @State private var copiedDiagnostics = false
 
     private static let speedOptions: [Float] = [0.75, 1, 1.25, 1.5, 2, 3]
 
@@ -219,6 +223,7 @@ struct PlaybackControlsView: View {
         .statusBarHidden(true)
         .persistentSystemOverlays(controlsVisible ? .automatic : .hidden)
         .onAppear {
+            updateBusy(loading || playback.buffering)
             originalBrightness = ScreenBrightness.screen.brightness
             brightnessLevel = Double(ScreenBrightness.screen.brightness)
             systemVolume.start()
@@ -243,6 +248,9 @@ struct PlaybackControlsView: View {
         }
         .onChange(of: systemVolume.externalChangeCount) { _ in
             showSystemVolumeChange()
+        }
+        .onChange(of: loading || playback.buffering) { busy in
+            updateBusy(busy)
         }
         .onChange(of: playback.currentTime) { time in
             // 定时关闭「本集结束」：快到结尾时暂停，不再自动播下一集
@@ -791,7 +799,7 @@ struct PlaybackControlsView: View {
         if !message.isEmpty {
             errorCard(message)
                 .transition(.opacity)
-        } else if (loading || playback.buffering) && adjustment == nil {
+        } else if showBusy && (loading || playback.buffering) && adjustment == nil {
             bufferingPill
                 .transition(.opacity)
         }
@@ -820,11 +828,40 @@ struct PlaybackControlsView: View {
                     .padding(.vertical, 2)
             }
             .glassProminentButton()
+            if error.isEmpty {
+                // 真机上打不开时，把内核日志复制下来发给开发者
+                Button {
+                    UIPasteboard.general.string = playback.diagnostics
+                    copiedDiagnostics = true
+                } label: {
+                    Text(copiedDiagnostics ? "已复制" : "复制诊断信息")
+                        .font(.footnote)
+                        .foregroundStyle(.white.opacity(0.7))
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("playback.copyDiagnostics")
+            }
         }
         .padding(.horizontal, 22)
         .padding(.vertical, 18)
         .frame(maxWidth: 320)
         .playerPanelBackground(cornerRadius: 20)
+    }
+
+    /// 开播前 1.5 秒、播放中 0.8 秒内缓冲好了就什么都不显示；超过了才出转圈
+    private func updateBusy(_ busy: Bool) {
+        busyTask?.cancel()
+        guard busy else {
+            showBusy = false
+            copiedDiagnostics = false
+            return
+        }
+        let delay: UInt64 = playback.currentTime > 0.5 && !loading ? 800_000_000 : 1_500_000_000
+        busyTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: delay)
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.2)) { showBusy = true }
+        }
     }
 
     /// 缓冲时画面中间一个转圈，下面是当前网速和已经缓存了多少秒

@@ -21,6 +21,8 @@ final class MPVEngine {
         case playbackRestart
         /// reason：eof / stop / quit / error / redirect；error 是 mpv 给出的错误说明
         case endFile(reason: Int32, error: String?)
+        /// 内核的警告和错误日志
+        case log(String)
     }
 
     private(set) var handle: OpaquePointer?
@@ -31,11 +33,8 @@ final class MPVEngine {
     init?(options: [(String, String)], layer: CAMetalLayer) {
         guard let mpv = mpv_create() else { return nil }
         handle = mpv
-        #if DEBUG
+        // 警告和错误留着，播放出问题时可以复制给开发者看
         mpv_request_log_messages(mpv, "warn")
-        #else
-        mpv_request_log_messages(mpv, "no")
-        #endif
         attach(layer: layer, beforeInitialize: true)
         for (name, value) in options {
             mpv_set_option_string(mpv, name, value)
@@ -196,13 +195,13 @@ final class MPVEngine {
             let message = info.error < 0 ? String(cString: mpv_error_string(info.error)) : nil
             return .endFile(reason: reason, error: message)
         case MPV_EVENT_LOG_MESSAGE:
+            guard let pointer = event.data?.assumingMemoryBound(to: mpv_event_log_message.self) else { return nil }
+            let message = pointer.pointee
+            let line = "[\(String(cString: message.prefix))] \(String(cString: message.level)): \(String(cString: message.text))"
             #if DEBUG
-            if let pointer = event.data?.assumingMemoryBound(to: mpv_event_log_message.self) {
-                let message = pointer.pointee
-                print("[mpv] \(String(cString: message.prefix)): \(String(cString: message.text))", terminator: "")
-            }
+            print(line, terminator: "")
             #endif
-            return nil
+            return .log(line.trimmingCharacters(in: .whitespacesAndNewlines))
         default:
             return nil
         }
