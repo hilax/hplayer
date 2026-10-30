@@ -71,7 +71,7 @@ struct MetadataMatchView: View {
                 }
 
                 Section {
-                    if searching {
+                    if searching && results.isEmpty {
                         HStack(spacing: 10) {
                             ProgressView()
                             Text(tmdbEnabled ? "正在搜索番组计划、IMDb 和 TMDB…" : "正在搜索番组计划和 IMDb…")
@@ -143,7 +143,17 @@ struct MetadataMatchView: View {
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !searching, !text.isEmpty else { return }
         searching = true
-        results = await MetadataSearch.shared.candidates(query: text, hint: parsed)
+        results = []
+        let hint = parsed
+        // 几个来源同时搜，哪个先回来先显示，TMDB 连接慢也不会拖住番组计划和 IMDb 的结果
+        await withTaskGroup(of: [MediaMetadata].self) { group in
+            for source in MetadataSource.allCases {
+                group.addTask { await MetadataSearch.shared.candidates(from: source, query: text) }
+            }
+            for await items in group where !items.isEmpty {
+                results = MetadataSearch.rank(results + items, query: text, hint: hint)
+            }
+        }
         searched = true
         searching = false
     }

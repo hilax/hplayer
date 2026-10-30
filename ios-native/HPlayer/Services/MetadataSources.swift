@@ -69,9 +69,12 @@ enum MetadataScoring {
             guard let year = year.flatMap(Int.init), let found = Int(item.year) else { return false }
             return abs(year - found) <= 1
         }
-        let ranked = candidates.sorted {
-            score($0, queries: queries, year: year, wantsSeries: wantsSeries) > score($1, queries: queries, year: year, wantsSeries: wantsSeries)
-        }
+        // 分数一样时保持搜索结果原来的先后（来源自己按相关度排过）
+        let ranked = candidates.enumerated().sorted { lhs, rhs in
+            let left = score(lhs.element, queries: queries, year: year, wantsSeries: wantsSeries)
+            let right = score(rhs.element, queries: queries, year: year, wantsSeries: wantsSeries)
+            return left == right ? lhs.offset < rhs.offset : left > right
+        }.map(\.element)
         // 片名完全一样：类型对得上，或者年份对得上，或者同名的只有这一个
         let exact = ranked.filter { titleScore(names: names(of: $0), queries: queries) == 200 }
         if let pick = exact.first(where: { wantsSeries == nil || $0.isSeries == wantsSeries || yearMatches($0) }) {
@@ -121,22 +124,30 @@ actor MetadataSearch {
         return nil
     }
 
-    /// 手动匹配：几个来源一起搜，按和片名的接近程度排好
-    func candidates(query: String, hint: MediaNameParser.ParsedName) async -> [MediaMetadata] {
+    /// 手动匹配：从一个来源搜。页面上几个来源同时搜，哪个先回来先显示哪个
+    func candidates(from source: MetadataSource, query: String) async -> [MediaMetadata] {
+        let parsed = MediaNameParser.parse(query)
+        switch source {
+        case .bangumi:
+            return await BangumiClient.shared.search(parsed.chineseTitle ?? parsed.title, limit: 12)
+        case .tmdb:
+            return await TMDBClient.shared.search(parsed.title)
+        case .cinemeta:
+            // 只有中文时 IMDb 搜不到东西，不浪费一次请求
+            guard let latin = parsed.latinTitle else { return [] }
+            return await CinemetaClient.shared.search(latin)
+        }
+    }
+
+    /// 去掉重复的，按和片名的接近程度排好，剧集带上这一集的季数和集数
+    nonisolated static func rank(_ items: [MediaMetadata], query: String, hint: MediaNameParser.ParsedName) -> [MediaMetadata] {
         let parsed = MediaNameParser.parse(query)
         let queries = parsed.searchTitles
-        let bangumiQuery = parsed.chineseTitle ?? parsed.title
-        async let bangumi = BangumiClient.shared.search(bangumiQuery, limit: 12)
-        async let tmdb = TMDBClient.shared.search(parsed.title)
-        // 只有中文时 IMDb 搜不到东西，不浪费一次请求
-        async let cinemeta = cinemetaSearch(parsed.latinTitle)
-        let merged = await bangumi + tmdb + cinemeta
-
-        var seen = Set<String>()
-        let unique = merged.filter { seen.insert($0.imdbID).inserted }
         let wantsSeries = hint.looksLikeSeries
         let year = parsed.year ?? hint.year
-        return unique
+        var seen = Set<String>()
+        return items
+            .filter { seen.insert($0.imdbID).inserted }
             .map { item -> MediaMetadata in
                 var value = item
                 value.season = item.isSeries ? (hint.season ?? (hint.episode == nil ? nil : 1)) : nil
@@ -150,11 +161,6 @@ actor MetadataSearch {
                 return left == right ? lhs.offset < rhs.offset : left > right
             }
             .map(\.element)
-    }
-
-    private func cinemetaSearch(_ query: String?) async -> [MediaMetadata] {
-        guard let query else { return [] }
-        return await CinemetaClient.shared.search(query)
     }
 
     private func finish(_ found: MediaMetadata, _ parsed: MediaNameParser.ParsedName) async -> MediaMetadata {
@@ -305,14 +311,20 @@ actor TMDBClient {
         }
     }
 
-    /// api.themoviedb.org 在一些网络下连不上时，换官方的另一个域名再试
+    /// api.themoviedb.org 在一些网络下连不上时，换官方的另一个域名再试，并记住能用的那个
     private static let hosts = ["https://api.themoviedb.org", "https://api.tmdb.org"]
+    private var workingHost: String?
 
     func search(_ query: String) async -> [MediaMetadata] {
         let key = Self.storedKey
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty, !query.isEmpty else { return [] }
-        for host in Self.hosts {
+        var order = Self.hosts
+        if let workingHost, let index = order.firstIndex(of: workingHost) {
+            order.remove(at: index)
+            order.insert(workingHost, at: 0)
+        }
+        for host in order {
             guard var components = URLComponents(string: "\(host)/3/search/multi") else { continue }
             components.queryItems = [
                 URLQueryItem(name: "query", value: query),
@@ -330,6 +342,7 @@ actor TMDBClient {
             if bearer { request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization") }
             guard let (data, response) = try? await URLSession.shared.data(for: request),
                   let http = response as? HTTPURLResponse else { continue }
+            workingHost = host
             guard (200..<300).contains(http.statusCode),
                   let page = try? JSONDecoder().decode(Page.self, from: data) else { return [] }
             return page.results.compactMap(\.metadata)
