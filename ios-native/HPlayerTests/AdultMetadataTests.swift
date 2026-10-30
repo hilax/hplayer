@@ -123,6 +123,89 @@ final class AdultMetadataTests: XCTestCase {
     }
 }
 
+final class DMMSourceTests: XCTestCase {
+    func testCoverURLsCoverPlainAndDigitPrefixedContentIDs() throws {
+        let urls = try XCTUnwrap(DMMClient.coverURLs(for: "START-656")).map(\.absoluteString)
+        XCTAssertEqual(urls, [
+            "https://pics.dmm.co.jp/digital/video/start00656/start00656pl.jpg",
+            "https://pics.dmm.co.jp/digital/video/1start00656/1start00656pl.jpg",
+            "https://pics.dmm.co.jp/mono/movie/adult/start00656/start00656pl.jpg",
+            "https://pics.dmm.co.jp/mono/movie/adult/1start00656/1start00656pl.jpg",
+        ])
+        XCTAssertNil(DMMClient.coverURLs(for: "START-656 private filename"))
+    }
+
+    func testCoverLookupUsesHeadRequestsAndPicksTheExistingImage() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [DMMURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        DMMURLProtocol.reset()
+        let client = DMMClient(session: session, credentials: { nil })
+        let found = await client.lookup("START-656")
+        let match = try XCTUnwrap(found)
+        XCTAssertEqual(match.imdbID, "dmm:START-656")
+        XCTAssertEqual(match.sourceKind, .dmm)
+        XCTAssertTrue(match.posterURL.hasSuffix("/digital/video/1start00656/1start00656pl.jpg"))
+        XCTAssertTrue(match.isWideJacket)
+        let recorded = DMMURLProtocol.requests()
+        XCTAssertEqual(recorded.count, 4)
+        XCTAssertTrue(recorded.allSatisfy { $0.httpMethod == "HEAD" && $0.url?.host == "pics.dmm.co.jp" })
+        XCTAssertTrue(recorded.allSatisfy { $0.value(forHTTPHeaderField: "Cookie") == nil })
+        let missing = await client.lookup("ZZZ-999")
+        XCTAssertNil(missing)
+    }
+
+    func testAPIRequestAndIdentityCheckedDecode() throws {
+        let request = try XCTUnwrap(DMMClient.apiRequest(code: "START-656", credentials: ("api123", "me-990")))
+        let query = URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.queryItems ?? []
+        func value(_ name: String) -> String? { query.first { $0.name == name }?.value }
+        XCTAssertEqual(request.url?.host, "api.dmm.com")
+        XCTAssertEqual(value("keyword"), "START-656")
+        XCTAssertEqual(value("api_id"), "api123")
+        XCTAssertEqual(value("floor"), "videoa")
+        XCTAssertFalse(request.httpShouldHandleCookies)
+
+        let body: [String: Any] = ["result": ["status": 200, "items": [
+            ["content_id": "1start00655", "product_id": "start00655", "title": "Other",
+             "imageURL": ["large": "https://pics.dmm.co.jp/digital/video/1start00655/1start00655pl.jpg"]],
+            ["content_id": "1start00656", "product_id": "start00656", "title": "Target", "date": "2025-03-04 10:00:00",
+             "imageURL": ["large": "https://pics.dmm.co.jp/digital/video/1start00656/1start00656pl.jpg"],
+             "iteminfo": ["actress": [["id": 1, "name": "演员甲"], ["id": 2, "name": "演员乙"], ["id": 1, "name": "演员甲"]]]],
+        ]]]
+        let data = try JSONSerialization.data(withJSONObject: body)
+        let match = try XCTUnwrap(DMMClient.decodeAPI(data, requestedCode: "START-656"))
+        XCTAssertEqual(match.title, "START-656 · Target")
+        XCTAssertEqual(match.year, "2025")
+        XCTAssertEqual(match.performers, ["演员甲", "演员乙"])
+        XCTAssertTrue(match.posterURL.contains("1start00656"))
+        XCTAssertNil(DMMClient.decodeAPI(data, requestedCode: "START-700"))
+        XCTAssertNil(DMMClient.decodeAPI(Data("{\"result\":{\"status\":401}}".utf8), requestedCode: "START-656"))
+    }
+}
+
+private final class DMMURLProtocol: URLProtocol {
+    private static let lock = NSLock()
+    private static var recorded: [URLRequest] = []
+
+    static func reset() { lock.lock(); defer { lock.unlock() }; recorded = [] }
+    static func requests() -> [URLRequest] { lock.lock(); defer { lock.unlock() }; return recorded }
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        Self.lock.lock()
+        Self.recorded.append(request)
+        Self.lock.unlock()
+        let exists = request.url?.absoluteString.contains("/digital/video/1start00656/") == true
+        let response = HTTPURLResponse(url: request.url!, statusCode: exists ? 200 : 404, httpVersion: nil,
+                                       headerFields: ["Content-Type": exists ? "image/jpeg" : "text/html"])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}
+
 private final class AdultMetadataURLProtocol: URLProtocol {
     private static let lock = NSLock()
     private static var recorded: [URLRequest] = []

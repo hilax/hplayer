@@ -13,6 +13,8 @@ struct HomeLibraryScanView: View {
     let onStart: (Bool) -> Void
     let onStartFolder: (String, String) -> Void
     @State private var pickingFolder = false
+    @State private var showDMMKey = false
+    @State private var hasDMMKey = DMMClient.storedCredentials() != nil
     let onRetryMatching: () -> Void
 
     @State private var matchedVideos = 0
@@ -70,10 +72,23 @@ struct HomeLibraryScanView: View {
                 Section {
                     Toggle("按番号匹配成人影片", isOn: $adultMatching)
                         .accessibilityIdentifier("scan.adultMatching")
+                    if adultMatching {
+                        Button {
+                            showDMMKey = true
+                        } label: {
+                            HStack {
+                                Label("FANZA（DMM）官方接口", systemImage: "key")
+                                Spacer()
+                                Text(hasDMMKey ? "已开启" : "未开启（可选）").foregroundStyle(.secondary)
+                                Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
                 } header: {
                     Text("资料来源")
                 } footer: {
-                    Text("开启后，文件名带番号的影片会优先用 R18.dev 匹配，查不到才去番组计划和 IMDb。只发送番号，不发送 115 Cookie、路径或视频内容。封面由第三方图片服务提供；关闭后已匹配的封面仍会保留。")
+                    Text("开启后，文件名带番号的影片会依次用 R18.dev、FANZA（DMM）匹配，都查不到才去番组计划和 IMDb。只发送番号，不发送 115 Cookie、路径或视频内容。封面由第三方图片服务提供；关闭后已匹配的封面仍会保留。")
                 }
 
                 Section {
@@ -117,6 +132,9 @@ struct HomeLibraryScanView: View {
             }
         }
         .tint(Theme.accent)
+        .sheet(isPresented: $showDMMKey, onDismiss: { hasDMMKey = DMMClient.storedCredentials() != nil }) {
+            DMMKeyView()
+        }
         .sheet(isPresented: $pickingFolder) {
             ScanFolderPicker(onSelect: onStartFolder).environmentObject(appState)
         }

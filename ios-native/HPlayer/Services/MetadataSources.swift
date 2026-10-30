@@ -10,6 +10,8 @@ enum MetadataSource: String, Codable, CaseIterable {
     case tmdb
     /// R18.dev：按番号查找，用户开启后才访问
     case r18dev
+    /// DMM（FANZA）：官方 Web API 或封面图片服务，按番号查找，用户开启后才访问
+    case dmm
 
     var label: String {
         switch self {
@@ -17,6 +19,7 @@ enum MetadataSource: String, Codable, CaseIterable {
         case .cinemeta: return "IMDb"
         case .tmdb: return "TMDB"
         case .r18dev: return "R18.dev"
+        case .dmm: return "FANZA"
         }
     }
 
@@ -26,6 +29,7 @@ enum MetadataSource: String, Codable, CaseIterable {
         case .cinemeta: return "IMDb"
         case .tmdb: return "TMDB"
         case .r18dev: return "R18.dev"
+        case .dmm: return "FANZA"
         }
     }
 }
@@ -99,10 +103,12 @@ enum MetadataScoring {
 actor MetadataSearch {
     static let shared = MetadataSearch()
     private let r18dev: R18DevClient
+    private let dmm: DMMClient
     private let adultEnabled: () -> Bool
 
-    init(r18dev: R18DevClient = .shared, adultEnabled: @escaping () -> Bool = { AdultMetadataSettings.isEnabled }) {
+    init(r18dev: R18DevClient = .shared, dmm: DMMClient = .shared, adultEnabled: @escaping () -> Bool = { AdultMetadataSettings.isEnabled }) {
         self.r18dev = r18dev
+        self.dmm = dmm
         self.adultEnabled = adultEnabled
     }
 
@@ -112,7 +118,10 @@ actor MetadataSearch {
         // 番号文件只发番号给 R18.dev，不把包含私人信息的完整文件名发给其他来源。
         if adultEnabled(), let code = parsed.catalogCode {
             if let found = await r18dev.lookup(code) { return found }
-            // 没查到就回到普通来源，避免被误认成番号的剧集永远匹配不上。
+            if Task.isCancelled { return nil }
+            // R18.dev 没有就问 DMM（填了 Key 用官方接口，否则只找封面图）。
+            if let found = await dmm.lookup(code) { return found }
+            // 都没查到就回到普通来源，避免被误认成番号的剧集永远匹配不上。
             if Task.isCancelled { return nil }
         }
         let queries = parsed.searchTitles
@@ -150,7 +159,7 @@ actor MetadataSearch {
     func candidates(from source: MetadataSource, query: String) async -> [MediaMetadata] {
         guard !Task.isCancelled else { return [] }
         let code = AVCatalogCode.extract(query)
-        if adultEnabled(), code != nil, source != .r18dev { return [] }
+        if adultEnabled(), code != nil, source != .r18dev, source != .dmm { return [] }
         let parsed = MediaNameParser.parse(query)
         switch source {
         case .bangumi:
@@ -163,6 +172,9 @@ actor MetadataSearch {
             return await CinemetaClient.shared.search(latin)
         case .r18dev:
             guard adultEnabled(), let code, let result = await r18dev.lookup(code) else { return [] }
+            return [result]
+        case .dmm:
+            guard adultEnabled(), let code, let result = await dmm.lookup(code) else { return [] }
             return [result]
         }
     }

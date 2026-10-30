@@ -354,7 +354,7 @@ struct PosterCard: View {
         Button(action: onPlay) {
             VStack(alignment: .leading, spacing: 9) {
                 PosterArtwork(urlString: item.posterURL, title: item.title, width: width, caption: item.caption,
-                              alignment: item.metadata?.sourceKind == .r18dev ? .trailing : .center)
+                              alignment: item.metadata?.isWideJacket == true ? .trailing : .center)
                     .overlay(alignment: .topTrailing) {
                         if !item.rating.isEmpty {
                             RatingBadge(rating: item.rating).padding(7)
