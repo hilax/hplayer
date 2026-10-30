@@ -1,5 +1,7 @@
+import Darwin
 import Foundation
 import Network
+import UIKit
 
 /// 本机播放中转。
 ///
@@ -38,6 +40,45 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
         delegateQueue.maxConcurrentOperationCount = 1
         delegateQueue.underlyingQueue = queue
         session = URLSession(configuration: configuration, delegate: self, delegateQueue: delegateQueue)
+        // 手机锁屏或切到别的 App 再回来，系统可能已经收走了监听端口，但监听对象还显示「就绪」。
+        // 回到前台时检查一次，端口连不上就丢掉，下次播放时重建。
+        NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: nil) { [weak self] _ in
+            self?.queue.async { self?.dropListenerIfDead() }
+        }
+    }
+
+    private func dropListenerIfDead() {
+        guard listener != nil, port != 0, !Self.accepts(port: port) else { return }
+        listener?.cancel()
+        listener = nil
+        port = 0
+    }
+
+    /// 真的往这个端口连一次。监听对象的状态可能过期（显示就绪，实际端口已被系统收走），以连接结果为准。
+    static func accepts(port: UInt16) -> Bool {
+        let descriptor = socket(AF_INET, SOCK_STREAM, 0)
+        // 连 socket 都建不出来（句柄耗尽）时没法检查，按正常处理，别因此反复重建监听
+        guard descriptor >= 0 else { return true }
+        defer { close(descriptor) }
+        _ = fcntl(descriptor, F_SETFL, fcntl(descriptor, F_GETFL, 0) | O_NONBLOCK)
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = port.bigEndian
+        address.sin_addr = in_addr(s_addr: UInt32(0x7F00_0001).bigEndian)
+        let result = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        if result == 0 { return true }
+        guard errno == EINPROGRESS else { return false }
+        var poller = pollfd(fd: descriptor, events: Int16(POLLOUT), revents: 0)
+        guard poll(&poller, 1, 300) > 0 else { return false }
+        var failure: Int32 = 0
+        var length = socklen_t(MemoryLayout<Int32>.size)
+        getsockopt(descriptor, SOL_SOCKET, SO_ERROR, &failure, &length)
+        return failure == 0
     }
 
     // MARK: 对外
@@ -64,12 +105,27 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
         queue.sync { lastProblem }
     }
 
+    /// 诊断信息里的中转状态：监听端口，以及真的连一次的结果
+    var statusText: String {
+        queue.sync {
+            guard listener != nil, port != 0 else { return "未启动" }
+            return "端口 \(port)，自检\(Self.accepts(port: port) ? "可连接" : "被拒绝（监听已失效，下次打开会重建）")"
+        }
+    }
+
+    #if DEBUG
+    /// 测试用：把记录的端口改成一个没人监听的值，模拟监听被系统收走但状态还显示就绪
+    func simulateStalePortForTesting() {
+        queue.sync { port = port == 1 ? 2 : 1 }
+    }
+    #endif
+
     // MARK: 监听
 
     private func ensureRunning() -> UInt16? {
         let ready = DispatchSemaphore(value: 0)
         let running: UInt16? = queue.sync {
-            if let listener, case .ready = listener.state, port != 0 { return port }
+            if let listener, case .ready = listener.state, port != 0, Self.accepts(port: port) { return port }
             listener?.cancel()
             listener = nil
             port = 0

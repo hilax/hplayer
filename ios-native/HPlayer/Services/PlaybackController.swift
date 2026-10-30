@@ -884,7 +884,7 @@ final class PlaybackController: ObservableObject {
             "状态：loaded=\(loaded) opening=\(opening) playedOnce=\(hasPlayed) cache=\(pausedForCache) seeking=\(seeking) speed=\(Int(downloadSpeed)) cached=\(Int(cachedSeconds))s",
             "位置：\(Self.clock(engineTime)) / \(Self.clock(duration)) 可跳转=\(seekable) 播完=\(ended) eof=\(eofReached) 暂停=\(userPaused)",
             "错误：\(error)",
-            "中转：\(LocalStreamProxy.shared.problem.isEmpty ? "正常" : LocalStreamProxy.shared.problem)",
+            "中转：\(LocalStreamProxy.shared.statusText)\(LocalStreamProxy.shared.problem.isEmpty ? "" : "；上游出错：" + LocalStreamProxy.shared.problem)",
             "—— 播放事件 ——",
         ]
         lines += eventLines
