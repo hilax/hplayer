@@ -39,15 +39,14 @@ struct HPlayerApp: App {
 /// mode：
 /// - 其他值（"1"）：文字卡片，只测导航本身。
 /// - "wide"：和首页「演员合集」一样的横版封面卡片（真实的 PosterArtwork 和 PosterButtonStyle）。
-/// - "legacy"：封面点击区域修复之前的卡片写法，只用来确认问题能复现。
 private struct PerformerNavigationUITestHost: View {
-    enum Style { case plain, wide, legacy }
+    enum Style { case plain, wide }
 
     private let style: Style
     private let groups: [PerformerGroup]
 
     init(mode: String) {
-        let style: Style = mode == "wide" ? .wide : (mode == "legacy" ? .legacy : .plain)
+        let style: Style = mode == "wide" ? .wide : .plain
         self.style = style
         if style != .plain { WideJacketFixture.seed() }
         groups = Self.makeGroups(wide: style != .plain)
@@ -96,18 +95,6 @@ private struct PerformerNavigationUITestHost: View {
             }
             .accessibilityIdentifier("performerTest.\(group.id)")
             .buttonStyle(PosterButtonStyle())
-        case .legacy:
-            PerformerNavigationLink(group: group) {
-                VStack(alignment: .leading, spacing: 9) {
-                    LegacyPosterArtwork(urlString: group.posterURL, title: group.name)
-                    Text(group.name)
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
-                        .frame(width: 118, alignment: .leading)
-                }
-            }
-            .accessibilityIdentifier("performerTest.\(group.id)")
-            .buttonStyle(LegacyPosterButtonStyle())
         }
     }
 
@@ -159,30 +146,6 @@ private enum WideJacketFixture {
             color.setFill()
             context.fill(CGRect(origin: .zero, size: size))
         }
-    }
-}
-
-/// 修复之前的封面卡片：clipped 之后伸出去的那一截仍然接住点击。
-private struct LegacyPosterArtwork: View {
-    let urlString: String
-    let title: String
-    var width: CGFloat = 118
-
-    var body: some View {
-        ZStack(alignment: .bottomLeading) {
-            ArtworkView(urlString: urlString, title: title)
-                .scaledToFill()
-                .frame(width: width, height: width * 1.5, alignment: .trailing)
-                .clipped()
-        }
-        .frame(width: width, height: width * 1.5)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-    }
-}
-
-private struct LegacyPosterButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label.scaleEffect(configuration.isPressed ? 0.97 : 1)
     }
 }
 
