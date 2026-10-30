@@ -2,172 +2,70 @@
 
 把 115 网盘变成自己的在线影视库，在 iPhone 上直接播放。
 
-iOS 端是原生 SwiftUI App，默认手机直连 115，无需运行电脑后端。也可选用 Windows / NAS / VPS 后端，使用原有的服务端转封装能力。
-
-## 架构
-
-```
-iPhone（原生 SwiftUI App）
-        ├─ 手机直连：登录、浏览、搜索和 115 在线画质
-        │  （授权和 Cookie 只保存在手机 Keychain）
-        └─ 可选服务器模式：
-        │  HTTPS
-        ▼
-Cloudflare Tunnel（免费，自带域名和证书）
-        │
-        ▼
-Node 后端
-  ├─ 单用户密码登录（Bearer token / Cookie）
-  ├─ 115 开放平台扫码授权、目录浏览（保留 Cookie 兼容方式）
-  ├─ 直链签发：mp4/H.264 → 302 到 115 CDN
-  └─ ffmpeg 实时转封装：mkv/DTS → HLS(fMP4)
-```
-
-- **手机直连**：使用 115 网页端在线播放画质；能否播放和画质受 115 账号权益、片源及接口状态影响。
-- **服务器模式直连**：AVPlayer 原生支持的格式直接 302 到 115 CDN，不占服务器带宽。
-- **播不了才转**：mkv、DTS/AC3 这类 AVPlayer 不支持的组合，后端用 ffmpeg 做 remux（视频流 `copy`，音频转 AAC），CPU 开销很小。
+iOS 端是原生 SwiftUI App，115 的登录、浏览、搜索和播放都直接在手机上完成，不需要电脑、服务器或任何后端。
 
 ## 功能
 
-- 115 目录浏览、面包屑导航
-- 115 官方登录授权、BT 种子解析与云下载任务
-- 磁力链接手机端解析和边缓冲边播放（无需 115 账号或服务器）
-- VLC 播放内核，自定义横屏控制、锁屏、长按快进、双击暂停和播放列表
-- 自动判断直连 / 转封装
-- HLS 播放，支持拖动进度（已生成的片段）
-- 单用户密码保护
-- 原生 iOS App：本地视频导入、网络地址直接播放、最近播放
+- 115 目录浏览、面包屑导航、搜索；默认播放原画，也可切换 115 转码画质
+- 115 官方扫码授权、BT 种子解析与云下载任务
+- 磁力链接：选「使用 115 解析」时交给 115 离线下载后播放，不选时用手机上的 BT 引擎边下边播
+- 首页海报媒体库、继续观看、剧集合并与分集
+- mpv 播放内核：硬解 / 软解、边播边存、卡住自动重连、字幕和音轨切换、画面比例与缩放、截图、定时关闭
+- 本地视频导入、网络地址直接播放
 - Liquid Glass 界面（iOS 26），低版本自动降级毛玻璃
 - 外观可选跟随系统、浅色、深色（设置 → 外观），播放页始终为深色
 
-## 前置要求
+## 播放器
 
-- Node.js 20+（当前环境是 24，没问题）
-- ffmpeg（必须）
+视频播放使用 [mpv](https://mpv.io/)，通过 [MPVKit](https://github.com/mpvkit/MPVKit) 1.1.0（LGPL-3.0，mpv 0.41 / FFmpeg 9.0）以 Swift Package 引入，画面用 Metal 渲染，硬解使用 VideoToolbox。支持 MP4、MKV、MOV、HEVC、HDR 等常见格式。
 
-Windows 安装 ffmpeg：
+- **边播边存**：打开视频不等缓存，攒够一点就开播；播放过程中在后台往后多下载 1 / 5 / 10 分钟（默认 10 分钟，设置面板里可调）。缓存写在手机存储里，最多 2GB（剩余空间不足时自动缩小），退出播放后清掉。用手机流量时最多只存 1 分钟。进度条上浅白色的一段就是已经缓存好的部分。
+- **卡住自动重连**：网络 10 秒没反应会自动超时重连；长时间一个字节都没收到、跳转没生效、或者没到结尾却停了，会换一个新的 115 地址从原位置重新打开，90 秒内最多自动试 3 次。
+- **控制层**：关闭、画面比例、字幕音轨、更多设置、倍速、选集都是液态玻璃按钮；暂停键固定在正中，上一集和下一集在两边。右侧中间是截图按钮，截图保存到相册。
+- **画面比例**：适应、铺满裁切、拉伸、强制 16:9 / 4:3 / 2.35，并可放大到 200%。
+- **设置面板**：画质、倍速（0.75–3×）、硬解 / 软解、提前缓存、定时关闭（本集结束、15 / 30 / 60 分钟），以及字幕和音轨切换。
+- **手势**：打开视频默认横屏。左右拖动画面快进快退（滑满一屏最多 9 分钟，每跨 10 秒轻震一下），左半屏上下调亮度，右半屏上下调系统音量；长按 3× 快进，声音一起加速；双击暂停或继续；锁定后只保留解锁。关闭播放器时先在播放器里转回竖屏，列表页始终是竖屏。
 
-```bash
-winget install Gyan.FFmpeg
-```
+## 连接 115
 
-或者从 <https://www.gyan.dev/ffmpeg/builds/> 下载，解压后把 `bin` 目录加进 PATH，或在 `server/.env` 里写 `FFMPEG_PATH`。
-
-## 本地启动
-
-```bash
-npm install
-cp server/.env.example server/.env
-```
-
-编辑 `server/.env`，至少改掉 `HPLAYER_PASSWORD`。然后：
-
-```bash
-npm run start
-```
-
-服务监听 `http://localhost:8787`，只提供 API，没有网页界面。打开 App，在「设置」里填这个地址、输入密码登录即可。
-
-## 连接 115 开放平台
-
-1. 手机直连浏览和在线播放：在「资源库」点击 115 并在应用内登录，不需要 AppID。Cookie 存在手机 Keychain，网页会话和非官方接口可能失效。
-2. BT 云下载需要在 [115 开放平台](https://open.115.com/) 申请应用并开通文件列表、上传和云下载等所需接口权限。
-3. 手机直连的 BT 页面选择「115 云下载授权」，填写审核通过的 AppID，并使用 115 扫码授权。令牌保存在手机 Keychain，PKCE 扫码不需要 AppSecret 或服务器。
-4. 如需切换服务器模式，启动 HPlayer 后端，在「设置」选择「服务器」并填写地址和访问密码。服务器模式的网页登录还需要 AppSecret 和已登记的 HTTPS 回调域名。
+1. 浏览和在线播放：在「资源库」点击 115 并在应用内登录，不需要 AppID。Cookie 只存在手机 Keychain，网页会话和非官方接口可能失效，失效后重新登录即可。
+2. BT 云下载需要在 [115 开放平台](https://open.115.com/) 申请应用并开通文件列表、上传和云下载等接口权限。
+3. 在 BT 页面选择「115 云下载授权」，填写审核通过的 AppID，用 115 扫码授权。令牌保存在手机 Keychain，扫码授权不需要 AppSecret。
 
 ## BT 种子和云下载
 
-进入「资源库 → BT 种子与云下载」，先完成官方扫码授权，再从手机导入 `.torrent` 文件，或从 115 网盘中选择已有的种子。手机导入会先将种子上传到 115 网盘根目录（最大 4 MB）；解析后可勾选文件、设置目标文件夹 ID 和相对保存路径，提交云下载任务并查看状态。下载后的文件可以从资源库浏览、播放。此功能需要已获批的上传及云下载权限，并可能消耗 115 云下载配额。115 官方接口和实际播放需在凭证获批后实测。
+进入「资源库 → BT 种子与云下载」，先完成官方扫码授权，再从手机导入 `.torrent` 文件，或从 115 网盘中选择已有的种子。手机导入会先将种子上传到 115 网盘根目录（最大 4 MB）；解析后可勾选文件、设置目标文件夹和保存路径，提交云下载任务并查看状态。此功能需要已获批的上传及云下载权限，并可能消耗 115 云下载配额。
 
 ## 磁力播放
 
-「资源库 → 磁力在线播放」可粘贴磁力链接；从其他 App 交给 HPlayer 的 `magnet:` 链接也会进入此页面。输入框能从整段文字里识别磁力链接，也支持只有 40 位或 Base32 信息哈希、大写链接、未编码中文名和迅雷 `thunder://` 链接。解析时自动补上公共 Tracker（每天在线更新一次）和 DHT 引导节点，进入页面就预热 BT 引擎，并显示找节点、取文件列表的进度。文件列表按集数自然排序，样片、广告视频和其他文件分组折叠；只有一个正片时直接播放。解析过的资源会记在「最近播放」里，种子信息保存在本机，再次打开不用重新解析，并从上次看到的位置继续；一集播完自动播下一集。链接由手机上的 BT 引擎解析，选择视频后按需缓冲，无需 115 凭证或外部后端。手机直连登录 115 后，可以打开「同时交给 115 离线下载」：解析的同时把磁力提交到 115 云下载（网页接口，请求加密参照开源项目 115driver），热门资源通常几秒就离线完成，直接用 115 在线播放，没有转码时自动播放原画；BT 已经在播放时，页面会提示可以改用 115。离线文件保存在 115 默认的「云下载」文件夹，会占用离线额度。VLC 支持 MP4、MOV、MKV 等常见格式；能否播放取决于节点、网络及视频编码。磁力播放会使用网络流量和手机缓存。
+「资源库 → 磁力在线播放」可粘贴磁力链接；从其他 App 交给 HPlayer 的 `magnet:` 链接也会进入此页面。输入框能从整段文字里识别磁力链接，也支持只有 40 位或 Base32 信息哈希、大写链接、未编码中文名和迅雷 `thunder://` 链接。
+
+- **使用 115 解析**（登录 115 后可选，默认打开）：只把磁力提交到 115 离线下载，热门资源通常几秒完成，直接用 115 播放；离线文件保存在 115 的「云下载」文件夹，会占用离线额度。
+- **软件自带解析**（关闭上面的开关）：手机上的 BT 引擎解析并边下边播，自动补上公共 Tracker 和 DHT 引导节点，显示找节点、取文件列表的进度。
+
+文件列表按集数自然排序，样片、广告视频和其他文件分组折叠；只有一个正片时直接播放。解析过的资源会记在「继续观看」里，再次打开不用重新解析，并从上次看到的位置继续；一集播完自动播下一集。
 
 磁力功能使用 [Nuvio Engine v0.1.6](https://github.com/NuvioMedia/nuvio-engine/tree/v0.1.6)（GPL-3.0），其授权及第三方许可文件包含在 App 中；分发包含此组件的应用时需遵守其许可证。此组件要求 iOS 16.1 及以上。构建脚本下载官方发布的 XCFramework 并校验 SHA-256。
 
-视频播放使用 [VideoLAN VLCKit](https://github.com/videolan/vlckit) 3.6.0（LGPL-2.1-or-later）；构建脚本下载官方 iOS 包并校验 SHA-256。打开视频默认横屏，也可以手动切回竖屏。向右拖动画面快进、向左拖动快退，松手后定位（手指走出约 18 点后才判定横滑还是竖滑，斜着起手也不会误调亮度和音量）；左半屏上下滑动调亮度，右半屏上下滑动调系统音量（与音量键、控制中心同步，按音量键时播放页显示自己的小提示）。长按画面以 3× 快进，松开恢复原来的速度，并在当前位置重新对齐声音；双击暂停或继续，锁定后只保留解锁操作。退出播放页会恢复进入前的屏幕亮度。
+## 首页海报媒体库
 
-### 首页海报媒体库
+点首页右上角的「＋」导入本地视频、添加 115 文件夹，或者打开磁力链接播放；进入包含视频的目录后点击「加入首页」。也可以在资源库目录右上角的「⋯」菜单里点击「加入首页」，或者「选择」多个文件后批量播放、加入首页。
 
-在「首页 → 文件源」导入本地视频，或选择「添加 115 文件夹」，进入包含视频的目录后点击「加入首页」。也可以在资源库目录右上角的「⋯」菜单里点击「加入首页」；点击首页海报直接播放对应的本地或网盘视频。该菜单还有「选择」（多选后批量播放或加入首页）、按名称、大小、日期排序（再点一次反向）和「文件夹置顶」，排序方式会被记住。
+首页最上面是铺满屏幕的精选横幅，往下拉会放大并回弹，整页底色取自当前精选图。下面依次是继续观看、电影、剧集和待匹配封面。同一部剧的各集合并成一张海报，点进去是剧集详情和按季排好的分集。「搜索」可以只搜片库、只搜 115 网盘，或者两个一起搜。
 
-影片资料使用 [Cinemeta](https://github.com/Stremio/stremio-addon-sdk/blob/master/docs/advanced.md)，无需填写元数据 API Key。自动清理文件名中的季集、清晰度和编码标记，匹配封面、年份、评分等资料。长按海报选择「匹配封面」可以搜索并纠正同名影片或译名。
-
-SHA-1 用于复用本机已建立的影片匹配记录，不是全球哈希查询服务。115 文件使用网盘已有的 SHA-1；本地文件在后台按块计算 SHA-1。首次确认影片后，同样内容改名或再次加入仍能匹配。元数据查询只发送片名，不发送登录 Cookie 或视频内容。
-
-后端数据目录包含授权令牌和登录密钥，应仅由服务器的使用者访问，不要提交到 Git 或发给其他人。外网访问建议使用 HTTPS。授权或接口权限尚未获批时，真实接口和播放效果需要获批后再验证。
-
-## 兼容方式：获取 115 Cookie
-
-手机直连模式在资源库点击 115 后，使用应用内的 115 网页登录。HPlayer 会读取该会话所需的 Cookie，在手机直接验证并保存。网页形式可能改变，若自动连接失败可在服务器模式使用下面的手动方式。Cookie 方式的浏览和播放使用非官方接口；BT 云下载单独使用上面的官方扫码授权。
-
-1. 电脑浏览器打开 <https://115.com> 并登录
-2. 按 F12 打开开发者工具，切到 **Network（网络）**
-3. 刷新页面，随便点一个发往 `webapi.115.com` 的请求
-4. 在 **Request Headers** 里找到 `Cookie`，整行复制
-5. 粘贴到 App 的「设置 → 更新 Cookie」
-
-Cookie 里必须包含这四项：`UID`、`CID`、`SEID`、`KID`。
-
-> Cookie 等同于账号登录态，泄露就等于把网盘交出去。只填在自己的服务器上，不要发给别人。
-
-Cookie 会过期（通常几周到几个月）。失效后页面会提示，重新复制一次即可。
-
-## 公网部署（Cloudflare Tunnel）
-
-推荐用 Cloudflare Tunnel：免费、不用公网 IP、不用开路由器端口、自带 HTTPS。
-
-### 临时试用
-
-```bash
-cloudflared tunnel --url http://localhost:8787
-```
-
-会输出一个 `https://xxx.trycloudflare.com` 地址。重启就变，只适合测试。
-
-### 长期使用
-
-```bash
-cloudflared tunnel login
-cloudflared tunnel create hplayer
-cloudflared tunnel route dns hplayer hplayer.你的域名.com
-```
-
-`%USERPROFILE%\.cloudflared\config.yml`：
-
-```yaml
-tunnel: <上一步输出的 TUNNEL_ID>
-credentials-file: C:\Users\<你的用户名>\.cloudflared\<TUNNEL_ID>.json
-
-ingress:
-  - hostname: hplayer.你的域名.com
-    service: http://localhost:8787
-  - service: http_status:404
-```
-
-```bash
-cloudflared tunnel run hplayer
-```
-
-想开机自启，用 `cloudflared service install`，或者把 `cloudflared tunnel run hplayer` 和 `npm run start` 都做成计划任务。
+影片资料使用 [Cinemeta](https://github.com/Stremio/stremio-addon-sdk/blob/master/docs/advanced.md)，无需填写 API Key。自动清理文件名中的季集、清晰度和编码标记，匹配封面、年份、评分等资料。长按海报选择「匹配封面」可以纠正同名影片或译名。SHA-1 用于复用本机已建立的匹配记录；元数据查询只发送片名，不发送登录 Cookie 或视频内容。
 
 ## 打包 iOS App
 
-iOS 端是 **SwiftUI 原生实现**（`ios-native/`），不是 WebView 套壳。工程文件用 XcodeGen 从 `project.yml` 生成，所以 `HPlayer.xcodeproj` 不入库，避免手写 pbxproj。
+工程文件用 XcodeGen 从 `ios-native/project.yml` 生成，`HPlayer.xcodeproj` 不入库。
 
 Windows 上无法编译 iOS，用 GitHub Actions 的 macOS runner 云构建：
 
-1. 把项目推到 GitHub（公开/私有都行）
-2. 打开仓库的 **Actions → Build unsigned iOS IPA → Run workflow**
-3. 等几分钟，下载 artifact `HPlayer-unsigned-ipa`
-4. 解压得到 `HPlayer-unsigned.ipa`
-5. 用全能签导入、签名、安装
+1. 推送到 `main` 会自动构建，也可以在 **Actions → Build unsigned iOS IPA → Run workflow** 手动运行
+2. 等构建和模拟器测试完成，下载 artifact `HPlayer-unsigned-ipa`
+3. 解压得到 `HPlayer-unsigned.ipa`，用全能签导入、签名、安装
 
-首次打开 App 会让你填服务器地址（就是上面的 Cloudflare Tunnel 域名，比如 `https://hplayer.你的域名.com`）。
-
-> 构建产物是**未签名** IPA，不需要 Apple 开发者账号。签名和有效期取决于你的全能签证书。
->
-> 原生版 Bundle ID 是 `app.hplayer.native`。如果全能签证书不支持，改 `ios-native/project.yml` 里的 `PRODUCT_BUNDLE_IDENTIFIER` 后重新构建。
+> 构建产物是**未签名** IPA，不需要 Apple 开发者账号。原生版 Bundle ID 是 `app.hplayer.native`，如果签名证书不支持，改 `ios-native/project.yml` 里的 `PRODUCT_BUNDLE_IDENTIFIER` 后重新构建。
 
 ### 本地有 Mac 时
 
@@ -175,36 +73,29 @@ Windows 上无法编译 iOS，用 GitHub Actions 的 macOS runner 云构建：
 cd ios-native
 brew install xcodegen
 bash scripts/prepare-nuvio.sh
-bash scripts/prepare-vlc.sh
 xcodegen generate
 open HPlayer.xcodeproj
 ```
 
+第一次打开时 Xcode 会自动下载 MPVKit（体积较大）。
+
 ## 已知限制
 
-- **官方接入需要应用与接口权限获批**。扫码授权、文件和下载接口是否可用以 115 审核结果为准；保留的 Cookie 方式使用非官方接口，可能发生变化。
-- **mkv 首次播放要等**。后端需要先 remux 出 HLS 分片，大文件可能等几十秒；之后拖动到已生成的部分是即时的。
-- **AV1 / VP9 片源很慢**。这类编码 iOS 不支持硬解，需要真转码，CPU 占用高。当前实现是直接 `copy`，遇到这类片源会播不了，需要改成 `libx264`。
-- **单用户**。没有多账号体系，也没做并发控制。
-- **Cookie 兼容方式会过期**，需要手动更新。
+- **115 网页接口会变**：手机直连使用 115 网页端接口，接口或登录方式改变时可能需要更新 App；BT 云下载使用官方接口，以 115 审核结果为准。
+- **4K 原画吃网速**：原画码率很高，网速长时间低于码率时缓存会被用完而卡顿，这时可以在设置面板里换成 115 转码画质。
+- **MPVKit 维护频率不高**：它的作者说明主要用于学习 libmpv；目前功能和测试都正常，后续如有问题可以换成其他 mpv 封装。
 
 ## 目录结构
 
 ```
 HPlayer/
-├── server/                 后端
-│   └── src/
-│       ├── index.ts        Fastify 入口
-│       ├── auth.ts         登录与凭据校验
-│       ├── config.ts       环境变量
-│       ├── p115/           115 客户端（含私有加密协议）
-│       ├── media/          ffprobe 探测、ffmpeg 转封装
-│       └── routes/api.ts   全部 API
 ├── ios-native/             iOS 原生 App（SwiftUI）
-│   ├── project.yml         XcodeGen 工程描述
-│   └── HPlayer/
-│       ├── Models/         数据模型
-│       ├── Services/       API 客户端、Keychain、全局状态
-│       └── Views/          登录、文件库、播放器、设置
-└── .github/workflows/      iOS 云构建（xcodegen + xcodebuild）
+│   ├── project.yml         XcodeGen 工程描述（含 MPVKit 依赖）
+│   ├── HPlayer/
+│   │   ├── Models/         数据模型
+│   │   ├── Services/       115 客户端、mpv 播放控制、磁力引擎、Keychain
+│   │   └── Views/          首页、资源库、播放器、设置
+│   ├── HPlayerUITests/     播放和首页的模拟器测试
+│   └── scripts/            引擎下载脚本和测试素材
+└── .github/workflows/      iOS 云构建（xcodegen + xcodebuild + 模拟器测试）
 ```
