@@ -298,7 +298,8 @@ final class CloudLibraryScanner: ObservableObject {
     private static func isTransient(_ error: Error) -> Bool {
         if let http = error as? Direct115HTTPError { return http.statusCode == 429 || (500...599).contains(http.statusCode) }
         let nsError = error as NSError
-        guard nsError.domain == NSURLErrorDomain, let code = URLError.Code(rawValue: nsError.code) else { return false }
+        guard nsError.domain == NSURLErrorDomain else { return false }
+        let code = URLError.Code(rawValue: nsError.code)
         return [.timedOut, .cannotFindHost, .cannotConnectToHost, .networkConnectionLost, .dnsLookupFailed, .notConnectedToInternet, .resourceUnavailable].contains(code)
     }
 
