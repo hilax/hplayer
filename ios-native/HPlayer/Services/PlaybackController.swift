@@ -765,8 +765,9 @@ final class PlaybackController: ObservableObject {
             recover(reason: "跳转后网络没有响应")
             return
         }
-        // 卡在缓冲里、8 秒一个字节都没收到：连接多半已经死了，换地址从原位置接着连
-        if hasPlayed, pausedForCache, noDataSeconds >= 8 {
+        // 卡在缓冲或跳转里、8 秒一个字节都没收到：连接多半已经死了，换地址从原位置接着连
+        // 跳转后 mpv 处在「seeking」而不是「paused-for-cache」，两种都算
+        if hasPlayed, pausedForCache || seeking, noDataSeconds >= 8 {
             recover(reason: "网络卡住了")
         }
     }
