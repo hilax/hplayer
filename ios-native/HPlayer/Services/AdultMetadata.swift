@@ -41,10 +41,12 @@ enum AVCatalogCode {
     }
 
     /// 来源的 content_id 必须完整地表示同一个番号，不能只匹配其中一部分。
+    /// 很多厂商的 content_id 带数字或 h_ 前缀（1start00656、h_1234abc00123、118abp00123），先去掉再核对。
     static func contentID(_ text: String) -> String? {
-        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard value.range(of: #"(?i)^[a-z]{2,8}[0-9]{3,5}$"#, options: .regularExpression) != nil else { return nil }
-        return extract(value)
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let stripped = value.replacingOccurrences(of: #"^(?:h_)?[0-9]{0,4}_?"#, with: "", options: .regularExpression)
+        guard stripped.range(of: #"^[a-z]{2,8}[0-9]{3,5}$"#, options: .regularExpression) != nil else { return nil }
+        return extract(stripped)
     }
 }
 
@@ -70,8 +72,31 @@ actor R18DevClient {
         }
     }
 
+    /// r18.dev 的 dvd_id 有「start-656」和「start656」两种写法，哪种有效就记住哪种。
+    private var hyphenFirst = true
+
     func lookup(_ code: String) async -> MediaMetadata? {
-        guard let request = Self.request(for: code) else { return nil }
+        for hyphenated in [hyphenFirst, !hyphenFirst] {
+            guard !Task.isCancelled else { return nil }
+            guard let request = Self.request(for: code, hyphenated: hyphenated) else { return nil }
+            switch await fetch(request) {
+            case .data(let data):
+                if let metadata = Self.decode(data, requestedCode: code) {
+                    hyphenFirst = hyphenated
+                    return metadata
+                }
+            case .notFound:
+                continue
+            case .failed:
+                return nil
+            }
+        }
+        return nil
+    }
+
+    private enum FetchResult { case data(Data), notFound, failed }
+
+    private func fetch(_ request: URLRequest) async -> FetchResult {
         // 自动扫描可能涉及许多文件，串行限速，避免快速请求同一个公共接口。
         let now = Date()
         let scheduled = max(now, nextRequestAt)
@@ -79,22 +104,25 @@ actor R18DevClient {
         let delay = scheduled.timeIntervalSince(now)
         if delay > 0 {
             do { try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
-            catch { return nil }
+            catch { return .failed }
         }
         guard !Task.isCancelled,
               let (data, response) = try? await session.data(for: request),
-              let http = response as? HTTPURLResponse else { return nil }
+              let http = response as? HTTPURLResponse else { return .failed }
         if http.statusCode == 429 {
             let seconds = min(max(Double(http.value(forHTTPHeaderField: "Retry-After") ?? "") ?? 30, 1), 60)
             nextRequestAt = max(nextRequestAt, Date().addingTimeInterval(seconds))
+            return .failed
         }
-        guard (200..<300).contains(http.statusCode), !Task.isCancelled else { return nil }
-        return Self.decode(data, requestedCode: code)
+        if http.statusCode == 404 { return .notFound }
+        guard (200..<300).contains(http.statusCode), !Task.isCancelled else { return .failed }
+        return .data(data)
     }
 
-    nonisolated static func request(for code: String) -> URLRequest? {
-        guard let normalized = AVCatalogCode.extract(code), normalized == code.uppercased(),
-              let url = URL(string: "https://r18.dev/videos/vod/movies/detail/-/dvd_id=\(normalized.replacingOccurrences(of: "-", with: "").lowercased())/json") else { return nil }
+    nonisolated static func request(for code: String, hyphenated: Bool = false) -> URLRequest? {
+        guard let normalized = AVCatalogCode.extract(code), normalized == code.uppercased() else { return nil }
+        let id = hyphenated ? normalized.lowercased() : normalized.replacingOccurrences(of: "-", with: "").lowercased()
+        guard let url = URL(string: "https://r18.dev/videos/vod/movies/detail/-/dvd_id=\(id)/json") else { return nil }
         var request = URLRequest(url: url)
         request.httpShouldHandleCookies = false
         request.timeoutInterval = 15
@@ -109,12 +137,13 @@ actor R18DevClient {
               AVCatalogCode.contentID(item.contentID) == expected else { return nil }
         if let dvdID = item.dvdID, !dvdID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
            AVCatalogCode.extract(dvdID) != expected { return nil }
-        let posters = [item.images?.jacketImage?.large, item.images?.jacketImage?.large2]
+        // r18.dev 的详情有两种写法：新的 jacket_full_url，和沿用 DMM 的 images.jacket_image。
+        let posters = [item.jacketFullURL, item.images?.jacketImage?.large, item.images?.jacketImage?.large2, item.jacketThumbURL]
         guard let poster = posters.compactMap({ $0?.trimmingCharacters(in: .whitespacesAndNewlines) }).first(where: { value in
             guard let url = URL(string: value), url.scheme?.lowercased() == "https", let host = url.host else { return false }
             return !host.isEmpty
         }) else { return nil }
-        let title = item.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let title = [item.titleEN, item.titleJA, item.title].compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }.first { !$0.isEmpty } ?? ""
         let year = String((item.releaseDate ?? "").prefix(4))
         var metadata = MediaMetadata(
             imdbID: "r18dev:\(expected)", type: "movie",
@@ -139,12 +168,18 @@ actor R18DevClient {
         let contentID: String
         let dvdID: String?
         let title: String?
+        let titleEN: String?
+        let titleJA: String?
+        let jacketFullURL: String?
+        let jacketThumbURL: String?
         let releaseDate: String?
         let images: Images?
         let actresses: [Actress]?
 
         enum CodingKeys: String, CodingKey {
-            case contentID = "content_id", dvdID = "dvd_id", title, releaseDate = "release_date", images, actresses
+            case contentID = "content_id", dvdID = "dvd_id", title, titleEN = "title_en", titleJA = "title_ja"
+            case jacketFullURL = "jacket_full_url", jacketThumbURL = "jacket_thumb_url"
+            case releaseDate = "release_date", images, actresses
         }
 
         struct Actress: Decodable {

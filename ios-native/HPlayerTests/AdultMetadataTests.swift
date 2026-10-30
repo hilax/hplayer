@@ -18,6 +18,26 @@ final class AdultMetadataTests: XCTestCase {
         }
     }
 
+    func testDecodesCurrentR18DevFormatWithDigitPrefixedContentID() throws {
+        let body: [String: Any] = [
+            "content_id": "1start00656", "dvd_id": "START-656", "title_en": "English title", "title_ja": "日本語",
+            "jacket_full_url": "https://pics.dmm.co.jp/mono/movie/adult/1start00656/1start00656pl.jpg",
+            "release_date": "2025-03-04",
+            "actresses": [["name_kanji": "演员甲", "name_romaji": "A"]],
+        ]
+        let match = try XCTUnwrap(R18DevClient.decode(JSONSerialization.data(withJSONObject: body), requestedCode: "START-656"))
+        XCTAssertEqual(match.imdbID, "r18dev:START-656")
+        XCTAssertTrue(match.posterURL.hasSuffix("1start00656pl.jpg"))
+        XCTAssertEqual(match.title, "START-656 · English title")
+        XCTAssertEqual(match.performers, ["演员甲"])
+        XCTAssertEqual(AVCatalogCode.contentID("h_1234abc00123"), "ABC-123")
+        XCTAssertEqual(AVCatalogCode.contentID("118abp00123"), "ABP-123")
+        XCTAssertNil(AVCatalogCode.contentID("start00655x"))
+        XCTAssertEqual(R18DevClient.request(for: "START-656", hyphenated: true)?.url?.absoluteString,
+                       "https://r18.dev/videos/vod/movies/detail/-/dvd_id=start-656/json")
+        XCTAssertEqual(AVCatalogCode.extract("[START-656] 标题.mp4"), "START-656")
+    }
+
     func testDecodesPerformerNamesWithoutDuplicates() throws {
         let body: [String: Any] = [
             "content_id": "abc00123", "dvd_id": "ABC-123", "title": "T",
