@@ -123,21 +123,25 @@ actor MetadataSearch {
             MetadataScoring.confidentPick(candidates, queries: queries, year: parsed.year, wantsSeries: wantsSeries)
         }
 
+        // 几个来源同时发出请求，但仍按原来的先后顺序看结果：前面的来源够确定就直接用，
+        // 不用等后面的。总耗时是最慢那个来源的时间，而不是每个来源的时间加在一起。
+        var jobs: [Task<[MediaMetadata], Never>] = []
         if let chinese = parsed.chineseTitle {
-            candidates += await BangumiClient.shared.search(chinese)
-            if let found = pick() { return await finish(found, parsed) }
-            candidates += await TMDBClient.shared.search(chinese)
-            if let found = pick() { return await finish(found, parsed) }
+            jobs.append(Task { await BangumiClient.shared.search(chinese) })
+            jobs.append(Task { await TMDBClient.shared.search(chinese) })
         }
         if let latin = parsed.latinTitle {
-            candidates += await CinemetaClient.shared.search(latin)
-            if let found = pick() { return await finish(found, parsed) }
+            jobs.append(Task { await CinemetaClient.shared.search(latin) })
             if parsed.chineseTitle == nil {
-                candidates += await TMDBClient.shared.search(latin)
-                if let found = pick() { return await finish(found, parsed) }
-                candidates += await BangumiClient.shared.search(latin)
-                if let found = pick() { return await finish(found, parsed) }
+                jobs.append(Task { await TMDBClient.shared.search(latin) })
+                jobs.append(Task { await BangumiClient.shared.search(latin) })
             }
+        }
+        defer { jobs.forEach { $0.cancel() } }
+        for job in jobs {
+            candidates += await job.value
+            if Task.isCancelled { return nil }
+            if let found = pick() { return await finish(found, parsed) }
         }
         return nil
     }

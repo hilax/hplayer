@@ -122,6 +122,13 @@ final class MediaMetadataStore: ObservableObject {
         hydrate(files: files)
         guard !stoppedByUser else { return }
         pendingMedia = files.filter { metadataByMediaID[$0.id] == nil && shouldResolve($0) }
+        pendingKeys = []
+        pendingGroups = [:]
+        for file in pendingMedia {
+            let key = titleKey(file.name)
+            if pendingGroups[key] == nil { pendingKeys.append(key) }
+            pendingGroups[key, default: []].append(file)
+        }
         pendingIndex = 0
         guard syncTask == nil else { return }
         guard !pendingMedia.isEmpty else { finishScan(); return }
@@ -136,44 +143,46 @@ final class MediaMetadataStore: ObservableObject {
             }
             guard isCurrent(generation) else { return }
             publishBuffered()
-            pendingMedia = []
-            pendingIndex = 0
+            clearPending()
             syncTask = nil
             finishScan()
         }
     }
 
     private var inFlightKeys = Set<String>()
+    /// 待匹配的文件按片名分组：同一片名只查一次网络，其余文件直接用结果。
+    private var pendingKeys: [String] = []
+    private var pendingGroups: [String: [LibraryMedia]] = [:]
+
+    private func clearPending() {
+        pendingMedia = []
+        pendingKeys = []
+        pendingGroups = [:]
+        pendingIndex = 0
+    }
 
     /// 几个工作线程同时匹配不同的片名；同一个片名（例如同一部剧的各集）一次只查一份，
     /// 其余等第一份查完后直接用缓存，不会重复请求。
     private func matchWorker(_ generation: Int) async {
-        var deferred = 0
-        while isCurrent(generation), pendingIndex < pendingMedia.count {
-            let file = pendingMedia[pendingIndex]
+        while isCurrent(generation), pendingIndex < pendingKeys.count {
+            let key = pendingKeys[pendingIndex]
             pendingIndex += 1
-            guard metadataByMediaID[file.id] == nil else { continue }
-            let key = titleKey(file.name)
-            if inFlightKeys.contains(key) {
-                pendingMedia.append(file)
-                deferred += 1
-                // 剩下的全是正在查的片名：稍等一下再回来，别空转。
-                if deferred > pendingMedia.count - pendingIndex { deferred = 0; try? await Task.sleep(nanoseconds: 150_000_000) }
-                continue
-            }
-            deferred = 0
+            guard !inFlightKeys.contains(key), let files = pendingGroups.removeValue(forKey: key) else { continue }
             inFlightKeys.insert(key)
-            resolvingIDs.insert(file.id)
-            let metadata = await resolve(file, generation: generation)
-            inFlightKeys.remove(key)
-            guard isCurrent(generation) else { return }
-            if let metadata, validMediaIDs.contains(file.id), metadataByMediaID[file.id] == nil {
-                bufferedResults[file.id] = metadata
+            for file in files {
+                guard isCurrent(generation), metadataByMediaID[file.id] == nil else { break }
+                resolvingIDs.insert(file.id)
+                let metadata = await resolve(file, generation: generation)
+                resolvingIDs.remove(file.id)
+                guard isCurrent(generation) else { break }
+                if let metadata, validMediaIDs.contains(file.id), metadataByMediaID[file.id] == nil {
+                    bufferedResults[file.id] = metadata
+                }
+                // 每匹配一部就发布一次会让首页整页重算、界面卡死；攒一批再一起更新。
+                if bufferedResults.count >= 20 || Date().timeIntervalSince(lastPublishAt) >= 1.5 { publishBuffered() }
+                await Task.yield()
             }
-            resolvingIDs.remove(file.id)
-            // 每匹配一部就发布一次会让首页整页重算、界面卡死；攒一批再一起更新。
-            if bufferedResults.count >= 20 || Date().timeIntervalSince(lastPublishAt) >= 1.5 { publishBuffered() }
-            await Task.yield()
+            inFlightKeys.remove(key)
         }
     }
 
@@ -192,8 +201,8 @@ final class MediaMetadataStore: ObservableObject {
         scanGeneration += 1
         syncTask?.cancel()
         syncTask = nil
-        pendingMedia = []
-        pendingIndex = 0
+        clearPending()
+        inFlightKeys = []
         resolvingIDs = []
         isMatching = false
         flushSave()
@@ -426,20 +435,29 @@ final class MediaMetadataStore: ObservableObject {
         if immediately { flushSave(); return }
         guard saveTask == nil else { return }
         saveTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 750_000_000)
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
             guard !Task.isCancelled else { return }
-            self?.flushSave()
+            self?.flushSave(background: true)
         }
     }
 
-    private func flushSave() {
+    private static let ioQueue = DispatchQueue(label: "hplayer.metadata.io", qos: .utility)
+
+    /// 缓存里每部影片都带简介，整份编码可达几 MB。定时保存放到后台队列做，不占主线程；
+    /// 暂停、结束、退到后台时的保存同步等它写完，保证随后重启能读到。
+    private func flushSave(background: Bool = false) {
         saveTask?.cancel()
         saveTask = nil
         guard cacheDirty else { return }
         let payload = CachePayload(hash: hashCache, title: titleCache, ignored: ignored, missed: missed, localFingerprints: localFingerprints)
-        guard let data = try? JSONEncoder().encode(payload) else { return }
-        defaults.set(data, forKey: storageKey)
         cacheDirty = false
+        let defaults = defaults
+        let key = storageKey
+        let write = {
+            guard let data = try? JSONEncoder().encode(payload) else { return }
+            defaults.set(data, forKey: key)
+        }
+        if background { Self.ioQueue.async(execute: write) } else { Self.ioQueue.sync(execute: write) }
     }
 
     private struct CachePayload: Codable {

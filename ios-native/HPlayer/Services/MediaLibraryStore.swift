@@ -91,19 +91,28 @@ final class MediaLibraryStore: ObservableObject {
         needsSave = true
         saveTask?.cancel()
         saveTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 750_000_000)
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
             guard !Task.isCancelled else { return }
-            self?.flush()
+            self?.flush(background: true)
         }
     }
 
     /// 扫描的多页更新合并落盘；退出前立即保存，避免每页重编码整份片库。
-    func flush() {
+    private static let ioQueue = DispatchQueue(label: "hplayer.library.io", qos: .utility)
+
+    func flush(background: Bool = false) {
         saveTask?.cancel()
         saveTask = nil
         guard needsSave else { return }
-        guard let data = try? JSONEncoder().encode(cloudByAccount) else { return }
-        defaults.set(data, forKey: storageKey)
         needsSave = false
+        let snapshot = cloudByAccount
+        let defaults = defaults
+        let key = storageKey
+        let write = {
+            guard let data = try? JSONEncoder().encode(snapshot) else { return }
+            defaults.set(data, forKey: key)
+        }
+        // 定时保存在后台编码；退出、暂停时的保存等写完再返回。
+        if background { Self.ioQueue.async(execute: write) } else { Self.ioQueue.sync(execute: write) }
     }
 }
