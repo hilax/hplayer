@@ -16,53 +16,25 @@ struct SettingsView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                accountSection
+            ScrollView {
+                VStack(alignment: .leading, spacing: 26) {
+                    Text("让 HPlayer 更适合你")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
 
-                Section {
-                    AppearancePicker(selection: $appearance)
-                        .listRowInsets(EdgeInsets(top: 14, leading: 14, bottom: 14, trailing: 14))
-                } header: {
-                    Text("外观")
-                } footer: {
-                    Text("播放页始终使用深色，避免画面周围的亮光分散注意力。")
+                    accountSection
+                    appearanceSection
+                    aboutSection
                 }
-
-                if !error.isEmpty {
-                    Section {
-                        Text(error).foregroundColor(.red)
-                    }
-                }
-
-                Section {
-                    HStack(spacing: 14) {
-                        BrandLogo(size: 52)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text("HPlayer")
-                                .font(.headline)
-                            Text("版本 \(appVersion)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .padding(.vertical, 4)
-
-                    NavigationLink {
-                        LicensesView()
-                    } label: {
-                        Text("开源许可")
-                    }
-                } header: {
-                    Text("关于")
-                } footer: {
-                    Text("播放内核使用 mpv / MPVKit（LGPL-3.0），磁力播放使用 Nuvio Engine（GPL-3.0）。")
-                }
+                .frame(maxWidth: 620)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 20)
+                .padding(.top, 8)
+                .padding(.bottom, 40)
             }
-            .listRowSeparator(.hidden)
+            .background(Theme.pageBackground.ignoresSafeArea())
             .navigationTitle("设置")
-            .task {
-                await loadStatus()
-            }
+            .task { await loadStatus() }
             .onChange(of: appState.isAuthenticated) { _ in
                 Task { await loadStatus() }
             }
@@ -71,65 +43,135 @@ struct SettingsView: View {
 
     // MARK: 115 账号
 
-    @ViewBuilder
     private var accountSection: some View {
-        Section {
-            HStack(spacing: 14) {
-                Text("115")
-                    .font(.system(size: 16, weight: .heavy, design: .rounded))
-                    .foregroundStyle(.white)
-                    .frame(width: 52, height: 52)
-                    .background(Theme.accentGradient, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(status?.userName ?? "115 网盘")
-                        .font(.headline)
-                        .lineLimit(1)
-                    HStack(spacing: 6) {
-                        Circle()
-                            .fill(accountState.color)
-                            .frame(width: 7, height: 7)
-                        Text(accountState.text)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
+        VStack(alignment: .leading, spacing: 10) {
+            GroupLabel(title: "账号与连接")
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 14) {
+                    Text("115")
+                        .font(.system(size: 16, weight: .heavy, design: .rounded))
+                        .foregroundStyle(.white)
+                        .frame(width: 48, height: 48)
+                        .background(Theme.accentGradient, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(status?.userName ?? "115 网盘")
+                            .font(.headline)
+                            .lineLimit(1)
+                        HStack(spacing: 6) {
+                            Circle().fill(accountState.color).frame(width: 7, height: 7)
+                            Text(accountState.text)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
+                    Spacer(minLength: 0)
+                    if loadingStatus { ProgressView() }
                 }
+                .padding(16)
 
-                Spacer(minLength: 0)
+                Divider().padding(.horizontal, 16)
+                NavigationLink {
+                    CookieWebLoginView(onConnected: { Task { await loadStatus() } })
+                } label: {
+                    settingsRow(title: appState.isAuthenticated ? "重新登录 115" : "登录 115",
+                                systemImage: "person.crop.circle", tint: Theme.accent)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("settings.account.login")
 
-                if loadingStatus {
-                    ProgressView()
+                if appState.isAuthenticated {
+                    Divider().padding(.horizontal, 16)
+                    Button(role: .destructive) {
+                        appState.logout()
+                        status = nil
+                        error = ""
+                    } label: {
+                        settingsRow(title: "退出 115", systemImage: "rectangle.portrait.and.arrow.right", tint: .red, chevron: false)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("settings.account.logout")
+                }
+                if !error.isEmpty {
+                    Divider().padding(.horizontal, 16)
+                    Label(error, systemImage: "exclamationmark.circle")
+                        .font(.caption)
+                        .foregroundStyle(Theme.warning)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(16)
                 }
             }
-            .padding(.vertical, 6)
-
-            NavigationLink {
-                CookieWebLoginView(onConnected: { Task { await loadStatus() } })
-            } label: {
-                Text(appState.isAuthenticated ? "重新登录 115" : "登录 115")
-            }
-            if appState.isAuthenticated {
-                Button("退出 115", role: .destructive) {
-                    appState.logout()
-                    status = nil
-                }
-            }
-        } footer: {
-            Text("115 的登录、浏览和播放都直接在手机上完成，默认播放原画，可在播放页切换 115 转码画质。")
+            .surfaceCard(cornerRadius: 20)
         }
+    }
+
+    private var appearanceSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            GroupLabel(title: "外观")
+            Text("选择应用的显示方式")
+                .font(.caption).foregroundStyle(.secondary)
+                .padding(.leading, 6)
+            AppearancePicker(selection: $appearance)
+            Text("播放页面始终使用深色外观。")
+                .font(.caption).foregroundStyle(.secondary)
+                .padding(.leading, 6)
+        }
+    }
+
+    private var aboutSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            GroupLabel(title: "关于")
+            VStack(spacing: 0) {
+                HStack(spacing: 14) {
+                    BrandLogo(size: 42)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("HPlayer").font(.headline)
+                        Text("版本 \(appVersion)").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(16)
+                Divider().padding(.horizontal, 16)
+                NavigationLink {
+                    LicensesView()
+                } label: {
+                    settingsRow(title: "开源许可", systemImage: "doc.text", tint: Theme.accent)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("settings.licenses")
+            }
+            .surfaceCard(cornerRadius: 20)
+            Text("播放内核使用 mpv / MPVKit，磁力播放使用 Nuvio Engine。")
+                .font(.caption).foregroundStyle(.secondary)
+                .padding(.leading, 6)
+        }
+    }
+
+    private func settingsRow(title: String, systemImage: String, tint: Color, chevron: Bool = true) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: systemImage)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(tint)
+                .frame(width: 32, height: 32)
+                .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(chevron ? Color.primary : tint)
+            Spacer(minLength: 8)
+            if chevron {
+                Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+            }
+        }
+        .frame(minHeight: 52)
+        .padding(.horizontal, 16)
+        .contentShape(Rectangle())
     }
 
     private var accountState: (text: String, color: Color) {
         let idle = Color(uiColor: .systemGray3)
         guard appState.isAuthenticated else { return ("尚未登录 115", idle) }
-        guard let status else { return (loadingStatus ? "检查中" : "已登录", idle) }
-        if !status.configured {
-            return (status.message ?? "等待授权", Theme.warning)
-        }
-        if status.error != nil {
-            return (status.message ?? "Cookie 可能已失效", Theme.warning)
-        }
+        if loadingStatus { return ("检查中", idle) }
+        if !error.isEmpty { return ("连接状态待确认", Theme.warning) }
+        guard let status else { return ("已登录", idle) }
+        if !status.configured { return (status.message ?? "等待授权", Theme.warning) }
+        if status.error != nil { return (status.message ?? "Cookie 可能已失效", Theme.warning) }
         return ("已连接", Theme.success)
     }
 
@@ -143,6 +185,7 @@ struct SettingsView: View {
     private func loadStatus() async {
         guard appState.isAuthenticated else {
             status = nil
+            error = ""
             return
         }
         loadingStatus = true
@@ -228,37 +271,58 @@ private struct LicenseTextView: View {
 /// 外观选择：三张小预览图，选中的那张描边高亮。
 private struct AppearancePicker: View {
     @Binding var selection: AppearanceMode
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
-        HStack(spacing: 10) {
-            ForEach(AppearanceMode.allCases) { mode in
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) { selection = mode }
-                } label: {
-                    VStack(spacing: 9) {
-                        AppearancePreview(mode: mode)
-                            .frame(height: 76)
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .strokeBorder(selection == mode ? Theme.accent : Theme.hairline, lineWidth: selection == mode ? 2 : 1)
-                            }
-                        HStack(spacing: 5) {
-                            Image(systemName: selection == mode ? "checkmark.circle.fill" : "circle")
-                                .foregroundStyle(selection == mode ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(HierarchicalShapeStyle.tertiary))
-                            Text(mode.title)
-                                .foregroundStyle(.primary)
-                        }
-                        .font(.caption.weight(.semibold))
-                    }
-                    .frame(maxWidth: .infinity)
-                    .contentShape(Rectangle())
+        Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(spacing: 10) {
+                    ForEach(AppearanceMode.allCases) { mode in option(mode) }
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel(mode.title)
-                .accessibilityAddTraits(selection == mode ? .isSelected : [])
-                .accessibilityIdentifier("settings.appearance.\(mode.rawValue)")
+            } else {
+                HStack(spacing: 10) {
+                    ForEach(AppearanceMode.allCases) { mode in option(mode) }
+                }
             }
         }
+    }
+
+    private func option(_ mode: AppearanceMode) -> some View {
+        let selected = selection == mode
+        return Button {
+            withAnimation(.easeInOut(duration: 0.2)) { selection = mode }
+        } label: {
+            VStack(spacing: 9) {
+                AppearancePreview(mode: mode)
+                    .frame(height: 64)
+                    .overlay(alignment: .topTrailing) {
+                        if selected {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 18, weight: .semibold))
+                                .symbolRenderingMode(.palette)
+                                .foregroundStyle(.white, Theme.accent)
+                                .offset(x: 4, y: -4)
+                        }
+                    }
+                Text(mode.title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity)
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(selected ? Theme.accent : Theme.hairline, lineWidth: selected ? 2 : 1)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(mode.title)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityIdentifier("settings.appearance.\(mode.rawValue)")
     }
 }
 
