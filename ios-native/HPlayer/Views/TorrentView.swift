@@ -82,16 +82,14 @@ struct TorrentView: View {
 
     var body: some View {
         List {
-            if appState.isDirect {
-                Section {
-                    NavigationLink {
-                        Official115SettingsView(onSourceChanged: { Task { await loadTasks(page: 1) } })
-                    } label: {
-                        Label("115 云下载授权", systemImage: "key.horizontal")
-                    }
-                } footer: {
-                    Text("BT 云下载可在手机直接使用，但需在 115 开放平台申请 AppID 和上传、云下载权限。")
+            Section {
+                NavigationLink {
+                    Official115SettingsView(onSourceChanged: { Task { await loadTasks(page: 1) } })
+                } label: {
+                    Label("115 云下载授权", systemImage: "key.horizontal")
                 }
+            } footer: {
+                Text("BT 云下载可在手机直接使用，但需在 115 开放平台申请 AppID 和上传、云下载权限。")
             }
             Section {
                 Button { importing = true } label: {
@@ -102,7 +100,7 @@ struct TorrentView: View {
                 }.disabled(busy || !appState.isAuthenticated)
                 if busy { HStack { ProgressView(); Text(busyText).foregroundStyle(.secondary) } }
             } header: { Text("添加种子") }
-            footer: { Text(appState.isDirect ? "需要先完成上方 115 官方授权。手机导入的种子会上传到你的 115 网盘根目录。" : "需要先连接服务器并使用 115 官方授权。手机导入的种子会上传到你的 115 网盘根目录。") }
+            footer: { Text("需要先完成上方 115 官方授权。手机导入的种子会上传到你的 115 网盘根目录。") }
 
             if let info {
                 Section {
@@ -211,7 +209,7 @@ struct TorrentView: View {
     }
 
     private func importTorrent(_ url: URL) async {
-        guard let client = appState.client(), appState.isAuthenticated else { error = "请先连接服务器并登录"; return }
+        guard let client = appState.client(), appState.isAuthenticated else { error = "请先登录 115"; return }
         busy = true; busyText = "正在上传种子…"; error = ""; message = ""; info = nil
         defer { busy = false }
         do {
@@ -230,7 +228,7 @@ struct TorrentView: View {
     }
 
     private func parse(sha1: String, pickCode: String) async {
-        guard let client = appState.client(), appState.isAuthenticated else { error = "请先连接服务器并登录"; return }
+        guard let client = appState.client(), appState.isAuthenticated else { error = "请先登录 115"; return }
         busy = true; busyText = "正在解析种子…"; error = ""; message = ""; info = nil
         defer { busy = false }
         do { try await parseWithClient(client, sha1: sha1, pickCode: pickCode) }
@@ -319,7 +317,7 @@ private struct TorrentFolder: View {
     }
 
     private func load() async {
-        guard !loading, let client = appState.client() else { error = "请先连接服务器"; return }
+        guard !loading, let client = appState.client() else { error = "请先登录 115"; return }
         loading = true; error = ""
         defer { loading = false }
         do {

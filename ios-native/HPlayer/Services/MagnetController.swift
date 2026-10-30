@@ -111,7 +111,7 @@ final class MagnetEngineHost {
 }
 
 /// 磁力在线播放：识别链接、解析文件列表、边下边播、记住每一集看到哪里。
-/// 只使用本机 BT 引擎和本机 HTTP 流，不依赖 HPlayer 服务器或 115 账号。
+/// 只使用本机 BT 引擎和本机 HTTP 流，不依赖 115 账号。
 @MainActor
 final class MagnetController: ObservableObject {
     enum Phase: Equatable {

@@ -1,17 +1,12 @@
 node_modules/
-dist/
-data/
 ios/
-android/
 *.ipa
 Payload/
 *.m4s
-server/init.mp4
 build/
 ios-native/build/
 ios-native/*.xcodeproj/
 ios-native/Vendor/NuvioEngine/NuvioEngine.xcframework/
-ios-native/Vendor/MobileVLCKit/MobileVLCKit.xcframework/
 ios-native/HPlayer/Info.plist
 .DS_Store
 .env

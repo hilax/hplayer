@@ -1,15 +1,5 @@
 import SwiftUI
 
-private struct Open115Playback: Decodable { let qualities: [Open115Quality] }
-private struct Open115Quality: Decodable {
-    let url: String
-    let title: String
-    let definition: String
-    let width: Int
-    let height: Int
-    var label: String { !title.isEmpty ? title : (height > 0 ? "\(height)P" : "清晰度 \(definition)") }
-}
-
 struct PlayerView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
@@ -18,8 +8,6 @@ struct PlayerView: View {
     private let playlist: [PlaybackSource]
     @State private var loading = true
     @State private var error = ""
-    @State private var originalURL: URL?
-    @State private var qualities: [Open115Quality] = []
     @State private var directQualities: [Direct115Stream] = []
     @State private var selectedQuality = ""
     @State private var visible = true
@@ -73,25 +61,20 @@ struct PlayerView: View {
     }
 
     private var qualityChoices: [PlaybackChoice] {
-        if appState.isDirect {
-            // 原画直接播放原文件，不依赖 115 的转码
-            return [PlaybackChoice(id: "direct-original", title: "原画")]
-                + directQualities.enumerated().map { PlaybackChoice(id: "direct-\($0.offset)", title: $0.element.title) }
-        }
-        var result: [PlaybackChoice] = originalURL == nil ? [] : [PlaybackChoice(id: "original", title: "原画")]
-        result += qualities.enumerated().map { PlaybackChoice(id: "open-\($0.offset)", title: $0.element.label) }
-        return result
+        guard case .p115 = current else { return [] }
+        // 原画直接播放原文件，不依赖 115 的转码
+        return [PlaybackChoice(id: "direct-original", title: "原画")]
+            + directQualities.enumerated().map { PlaybackChoice(id: "direct-\($0.offset)", title: $0.element.title) }
     }
 
     private func load(_ source: PlaybackSource) async {
-        loading = true; error = ""; originalURL = nil; qualities = []; directQualities = []; selectedQuality = ""
+        loading = true; error = ""; directQualities = []; selectedQuality = ""
         let resume = tracksHistory ? RecentStore.shared.position(for: source) : nil
         if tracksHistory { RecentStore.shared.record(source) }
         lastSavedAt = Date()
         do {
             switch source {
             case .direct(_, let url):
-                originalURL = url
                 guard visible && !Task.isCancelled && current == source else { return }
                 #if DEBUG
                 let use115Headers = ProcessInfo.processInfo.environment["HPLAYER_UI_TEST_115_HEADERS"] == "1"
@@ -102,7 +85,7 @@ struct PlayerView: View {
                 #endif
                 playback.open(url, direct115: use115Headers, directCookie: testCookie, startTime: resume)
             case .p115(_, let pickCode):
-                if appState.isDirect {
+                do {
                     guard let client = appState.directClient() else { throw APIError.server("请先登录 115") }
                     // 默认播原画：直接读原文件，不经过 115 转码，画质和音轨都是原样
                     var originalError: Error?
@@ -129,13 +112,6 @@ struct PlayerView: View {
                         playback.open(first.url, direct115: true, directCookie: client.cookie, startTime: resume,
                                       refreshURL: Self.streamRefresher(client, pickCode: pickCode, title: first.title))
                     }
-                } else {
-                    guard let url = appState.mediaURL("/api/play/\(pickCode)") else { throw APIError.server("未连接服务器") }
-                    originalURL = url; selectedQuality = "原画"
-                    guard visible && !Task.isCancelled && current == source else { return }
-                    playback.open(url, startTime: resume)
-                    loading = false
-                    if let fetched = try? await fetchQualities(pickCode), visible && !Task.isCancelled && current == source { qualities = fetched }
                 }
             }
         } catch { if visible && !Task.isCancelled && current == source { self.error = error.localizedDescription } }
@@ -158,16 +134,9 @@ struct PlayerView: View {
         }
     }
 
-    private func fetchQualities(_ pickCode: String) async throws -> [Open115Quality] {
-        guard let client = appState.client(), let encoded = pickCode.addingPercentEncoding(withAllowedCharacters: .alphanumerics) else { throw APIError.badURL }
-        let result: Open115Playback = try await client.get("/api/115/open/play?pickCode=\(encoded)")
-        return result.qualities
-    }
-
     private func switchQuality(_ id: String) async {
         guard case .p115(_, let pickCode) = current else { return }
         let source = current
-        if id == "original", let originalURL { selectedQuality = "原画"; playback.open(originalURL, preservingPosition: true); return }
         loading = true; error = ""
         defer { loading = false }
         do {
@@ -185,14 +154,6 @@ struct PlayerView: View {
                 directQualities = refreshed; selectedQuality = fresh.title
                 playback.open(fresh.url, direct115: true, directCookie: client.cookie, preservingPosition: true,
                               refreshURL: Self.streamRefresher(client, pickCode: pickCode, title: fresh.title))
-            } else if id.hasPrefix("open-"), let index = Int(id.dropFirst(5)), qualities.indices.contains(index) {
-                let old = qualities[index]
-                let refreshed = try await fetchQualities(pickCode)
-                guard visible && !Task.isCancelled && current == source else { return }
-                guard let fresh = refreshed.first(where: { $0.definition == old.definition && $0.title == old.title }),
-                      let url = URL(string: fresh.url), ["https", "http"].contains(url.scheme?.lowercased() ?? ""), url.host != nil else { throw APIError.server("该画质暂不可用") }
-                qualities = refreshed; selectedQuality = fresh.label
-                playback.open(url, preservingPosition: true)
             }
         } catch { if visible && current == source { self.error = error.localizedDescription } }
     }

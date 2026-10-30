@@ -186,7 +186,7 @@ struct MagnetPlayerView: View {
     }
 
     private var cloudAvailable: Bool {
-        appState.isDirect && appState.isAuthenticated
+        appState.isAuthenticated
     }
 
     private func configureCloud() {

@@ -191,7 +191,7 @@ struct SearchView: View {
         if !appState.isAuthenticated {
             hintRow(
                 icon: "person.crop.circle.badge.questionmark",
-                text: appState.isDirect ? "登录 115 后才能搜索网盘，到「资源库」登录。" : "到「设置」里连接服务器并登录 115 后才能搜索网盘。"
+                text: "登录 115 后才能搜索网盘，到「资源库」登录。"
             )
         } else if loading {
             HStack {
@@ -256,12 +256,8 @@ struct SearchView: View {
         error = ""
         do {
             let files: [P115File]
-            if let direct = appState.directClient() {
-                files = try await direct.search(text)
-            } else if let client = appState.client() {
-                let response: SearchResponse = try await client.get("/api/search?q=\(text.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")")
-                files = response.files
-            } else { throw APIError.server("请先登录 115") }
+            guard let direct = appState.directClient() else { throw APIError.server("请先登录 115") }
+            files = try await direct.search(text)
             results = files.filter { !$0.isDir && $0.isVideo }
             searchedKeyword = text
         } catch let err {

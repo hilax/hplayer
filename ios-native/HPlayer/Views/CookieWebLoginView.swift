@@ -60,12 +60,7 @@ struct CookieWebLoginView: View {
         error = ""
         defer { checking = false }
         do {
-            if appState.isDirect {
-                try await appState.connectDirect(cookie: cookie)
-            } else {
-                guard let client = appState.client(), appState.isAuthenticated else { throw APIError.server("请先登录服务器") }
-                let _: CookieResponse = try await client.post("/api/115/cookie", body: ["cookie": cookie])
-            }
+            try await appState.connectDirect(cookie: cookie)
             candidate = ""
             lastAttempt = ""
             onConnected()

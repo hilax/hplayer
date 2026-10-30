@@ -60,38 +60,11 @@ struct P115Status: Codable {
     let message: String?
 }
 
-struct FileListResponse: Codable {
-    let cid: String
-    let files: [P115File]
-}
-
-struct LoginResponse: Codable {
-    let ok: Bool
-    let token: String
-}
-
-struct MeResponse: Codable {
-    let authenticated: Bool
-}
-
-struct CookieResponse: Codable {
-    let ok: Bool
-    let userName: String
-}
-
-struct ErrorResponse: Codable {
-    let error: String
-}
-
 struct QuotaResponse: Codable {
     let usedText: String
     let totalText: String
     let usedBytes: Int
     let totalBytes: Int
-}
-
-struct SearchResponse: Codable {
-    let files: [P115File]
 }
 
 func formatSize(_ bytes: Int) -> String {

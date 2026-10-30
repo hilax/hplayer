@@ -62,17 +62,14 @@ final class MediaLibraryStore: ObservableObject {
     }
 
     private func scope(_ appState: AppState) -> String? {
-        if appState.isDirect {
-            let cookie = appState.directCookie ?? ""
-            for part in cookie.split(separator: ";") {
-                let pair = part.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
-                if pair.count == 2, pair[0] == "UID", let userID = pair[1].split(separator: "_").first {
-                    return "device:\(userID)"
-                }
+        let cookie = appState.directCookie ?? ""
+        for part in cookie.split(separator: ";") {
+            let pair = part.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+            if pair.count == 2, pair[0] == "UID", let userID = pair[1].split(separator: "_").first {
+                return "device:\(userID)"
             }
-            return nil
         }
-        return appState.serverURL.map { "server:\($0.absoluteString)" }
+        return nil
     }
 
     private func save() {

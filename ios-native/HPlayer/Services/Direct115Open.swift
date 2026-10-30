@@ -65,7 +65,7 @@ actor Direct115Open {
         case ("GET", "/api/115/torrent/tasks"):
             result = try await tasks(page: Int(params["page"] ?? "1") ?? 0)
         default:
-            throw APIError.server("当前功能需要服务器模式")
+            throw APIError.server("暂不支持这个操作")
         }
         return try JSONSerialization.data(withJSONObject: result)
     }
