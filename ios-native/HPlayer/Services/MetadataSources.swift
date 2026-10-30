@@ -218,7 +218,7 @@ actor BangumiClient {
         guard !keyword.isEmpty, let url = URL(string: "\(endpoint)/v0/search/subjects?limit=\(limit)") else { return [] }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.timeoutInterval = 15
+        request.timeoutInterval = 8
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
@@ -361,7 +361,7 @@ actor TMDBClient {
             if !bearer { components.queryItems?.append(URLQueryItem(name: "api_key", value: key)) }
             guard let url = components.url else { continue }
             var request = URLRequest(url: url)
-            request.timeoutInterval = 12
+            request.timeoutInterval = 6
             request.setValue("application/json", forHTTPHeaderField: "Accept")
             if bearer { request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization") }
             guard let (data, response) = try? await URLSession.shared.data(for: request),

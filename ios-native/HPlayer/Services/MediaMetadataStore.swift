@@ -78,12 +78,16 @@ final class MediaMetadataStore: ObservableObject {
     private var cacheDirty = false
     private var saveTask: Task<Void, Never>?
 
+    private let concurrency: Int
+
     init(
         defaults: UserDefaults = .standard,
+        concurrency: Int = 1,
         lookup: @escaping (MediaNameParser.ParsedName) async -> MediaMetadata? = { await MetadataSearch.shared.lookup($0) }
     ) {
         self.defaults = defaults
         self.lookup = lookup
+        self.concurrency = max(1, concurrency)
         load()
     }
 
@@ -123,20 +127,10 @@ final class MediaMetadataStore: ObservableObject {
         let generation = scanGeneration
         isMatching = true
         syncTask = Task {
-            while pendingIndex < pendingMedia.count && !Task.isCancelled {
-                let file = pendingMedia[pendingIndex]
-                pendingIndex += 1
-                guard metadataByMediaID[file.id] == nil else { continue }
-                resolvingIDs.insert(file.id)
-                let metadata = await resolve(file, generation: generation)
-                guard isCurrent(generation) else { return }
-                if let metadata, validMediaIDs.contains(file.id), metadataByMediaID[file.id] == nil {
-                    bufferedResults[file.id] = metadata
+            await withTaskGroup(of: Void.self) { group in
+                for _ in 0..<concurrency {
+                    group.addTask { @MainActor [weak self] in await self?.matchWorker(generation) }
                 }
-                resolvingIDs.remove(file.id)
-                // 每匹配一部就发布一次会让首页整页重算、界面卡死；攒一批再一起更新。
-                if bufferedResults.count >= 20 || Date().timeIntervalSince(lastPublishAt) >= 1.5 { publishBuffered() }
-                await Task.yield()
             }
             guard isCurrent(generation) else { return }
             publishBuffered()
@@ -147,7 +141,40 @@ final class MediaMetadataStore: ObservableObject {
         }
     }
 
-    /// 退到后台时立即停止自动查找。旧请求即使晚回来，也不能写入缓存或失败等待时间。
+    private var inFlightKeys = Set<String>()
+
+    /// 几个工作线程同时匹配不同的片名；同一个片名（例如同一部剧的各集）一次只查一份，
+    /// 其余等第一份查完后直接用缓存，不会重复请求。
+    private func matchWorker(_ generation: Int) async {
+        var deferred = 0
+        while isCurrent(generation), pendingIndex < pendingMedia.count {
+            let file = pendingMedia[pendingIndex]
+            pendingIndex += 1
+            guard metadataByMediaID[file.id] == nil else { continue }
+            let key = titleKey(file.name)
+            if inFlightKeys.contains(key) {
+                pendingMedia.append(file)
+                deferred += 1
+                // 剩下的全是正在查的片名：稍等一下再回来，别空转。
+                if deferred > pendingMedia.count - pendingIndex { deferred = 0; try? await Task.sleep(nanoseconds: 150_000_000) }
+                continue
+            }
+            deferred = 0
+            inFlightKeys.insert(key)
+            resolvingIDs.insert(file.id)
+            let metadata = await resolve(file, generation: generation)
+            inFlightKeys.remove(key)
+            guard isCurrent(generation) else { return }
+            if let metadata, validMediaIDs.contains(file.id), metadataByMediaID[file.id] == nil {
+                bufferedResults[file.id] = metadata
+            }
+            resolvingIDs.remove(file.id)
+            // 每匹配一部就发布一次会让首页整页重算、界面卡死；攒一批再一起更新。
+            if bufferedResults.count >= 20 || Date().timeIntervalSince(lastPublishAt) >= 1.5 { publishBuffered() }
+            await Task.yield()
+        }
+    }
+
     private func publishBuffered() {
         lastPublishAt = Date()
         guard !bufferedResults.isEmpty else { return }
@@ -157,6 +184,7 @@ final class MediaMetadataStore: ObservableObject {
         metadataByMediaID = merged
     }
 
+    /// 退到后台时立即停止自动查找。旧请求即使晚回来，也不能写入缓存或失败等待时间。
     func pause() {
         publishBuffered()
         scanGeneration += 1
@@ -427,7 +455,20 @@ enum MediaFingerprint {
             guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
             defer { try? handle.close() }
             var hash = Insecure.SHA1()
+            // 大文件只取开头和结尾各 4MB 加上大小，整部读完要几十秒到几分钟。
+            if let size = try? handle.seekToEnd(), size > 64 * 1024 * 1024 {
+                let chunk = 4 * 1024 * 1024
+                do {
+                    try handle.seek(toOffset: 0)
+                    if let head = try handle.read(upToCount: chunk) { hash.update(data: head) }
+                    try handle.seek(toOffset: size - UInt64(chunk))
+                    if let tail = try handle.read(upToCount: chunk) { hash.update(data: tail) }
+                    hash.update(data: Data(String(size).utf8))
+                    return hash.finalize().map { String(format: "%02x", $0) }.joined()
+                } catch { return nil }
+            }
             do {
+                try handle.seek(toOffset: 0)
                 while !Task.isCancelled {
                     guard let data = try handle.read(upToCount: 1024 * 1024), !data.isEmpty else {
                         return hash.finalize().map { String(format: "%02x", $0) }.joined()
