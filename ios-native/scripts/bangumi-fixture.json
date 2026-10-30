@@ -1,0 +1,34 @@
+[
+    {
+        "id": 400602,
+        "type": 2,
+        "name": "仙逆",
+        "name_cn": "仙逆",
+        "summary": "王林出身贫寒，凭借一颗逆天之心踏上修仙之路。",
+        "date": "2023-09-25",
+        "platform": "WEB",
+        "images": {
+            "large": "http://127.0.0.1:8765/bangumi-poster.jpg",
+            "common": "http://127.0.0.1:8765/bangumi-poster.jpg",
+            "medium": "http://127.0.0.1:8765/bangumi-poster.jpg",
+            "small": "http://127.0.0.1:8765/bangumi-poster.jpg",
+            "grid": "http://127.0.0.1:8765/bangumi-poster.jpg"
+        },
+        "rating": {"rank": 0, "total": 1000, "score": 7.4},
+        "eps": 0,
+        "total_episodes": 0
+    },
+    {
+        "id": 400999,
+        "type": 2,
+        "name": "仙逆 剧场版",
+        "name_cn": "仙逆 剧场版",
+        "summary": "",
+        "date": "2025-01-01",
+        "platform": "剧场版",
+        "images": {"large": "", "common": "", "medium": "", "small": "", "grid": ""},
+        "rating": {"rank": 0, "total": 0, "score": 0},
+        "eps": 1,
+        "total_episodes": 1
+    }
+]

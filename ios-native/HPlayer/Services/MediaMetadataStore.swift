@@ -13,12 +13,21 @@ struct MediaMetadata: Codable, Identifiable, Hashable {
     let rating: String
     let genres: [String]
     let country: String
-    let season: Int?
-    let episode: Int?
+    var season: Int?
+    var episode: Int?
     var matchedByHash = false
+    /// 原名（番组计划的日文/中文原名、TMDB 的原始片名），和 title 一样时为空
+    var originalTitle: String? = nil
+    /// 资料来源，见 MetadataSource；旧数据没有这个字段，都来自 IMDb（Cinemeta）
+    var source: String? = nil
+    /// 用户手动匹配的结果，清理旧缓存时不会动它
+    var manual: Bool? = nil
 
     var id: String { imdbID }
     var isSeries: Bool { type == "series" }
+    var sourceKind: MetadataSource { source.flatMap(MetadataSource.init(rawValue:)) ?? .cinemeta }
+    /// 评分前面带上来源：IMDb 8.0、Bangumi 7.4、TMDB 7.9
+    var ratingLabel: String { rating.isEmpty ? "" : "\(sourceKind.ratingPrefix) \(rating)" }
 }
 
 @MainActor
@@ -26,9 +35,14 @@ final class MediaMetadataStore: ObservableObject {
     @Published private(set) var metadataByMediaID: [String: MediaMetadata] = [:]
     @Published private(set) var resolvingIDs: Set<String> = []
 
-    private let storageKey = "hplayer.mediaMetadata.v2"
+    private let storageKey = "hplayer.mediaMetadata.v3"
+    private let legacyStorageKey = "hplayer.mediaMetadata.v2"
     private var hashCache: [String: MediaMetadata] = [:]
     private var titleCache: [String: MediaMetadata] = [:]
+    /// 用户点了「取消匹配」的片名和文件，不再自动识别
+    private var ignored: Set<String> = []
+    /// 自动识别没找到的片名和时间，半天内不重复去搜
+    private var missed: [String: Date] = [:]
     private var pendingMedia: [LibraryMedia] = []
     private var syncTask: Task<Void, Never>?
     private var validMediaIDs: Set<String> = []
@@ -60,9 +74,35 @@ final class MediaMetadataStore: ObservableObject {
     func match(_ metadata: MediaMetadata, to file: LibraryMedia) async {
         var value = metadata
         value.matchedByHash = false
+        value.manual = true
+        // 一部剧的每一集各记各的集数
+        if value.isSeries {
+            let parsed = MediaNameParser.parse(file.name)
+            value.season = parsed.season ?? (parsed.episode == nil ? nil : 1)
+            value.episode = parsed.episode
+        }
+        let key = titleKey(file.name)
         metadataByMediaID[file.id] = value
-        titleCache[titleKey(file.name)] = value
-        if let hash = await fingerprint(file) { hashCache[hash] = value }
+        titleCache[key] = value
+        ignored.remove(key)
+        missed.removeValue(forKey: key)
+        if let hash = await fingerprint(file) {
+            hashCache[hash] = value
+            ignored.remove(hash)
+        }
+        save()
+    }
+
+    /// 取消匹配：去掉封面和资料，以后也不再自动识别这个片名，可以随时重新手动匹配
+    func unmatch(_ file: LibraryMedia) async {
+        let key = titleKey(file.name)
+        metadataByMediaID.removeValue(forKey: file.id)
+        titleCache.removeValue(forKey: key)
+        ignored.insert(key)
+        if let hash = await fingerprint(file) {
+            hashCache.removeValue(forKey: hash)
+            ignored.insert(hash)
+        }
         save()
     }
 
@@ -79,39 +119,66 @@ final class MediaMetadataStore: ObservableObject {
 
     private func resolve(_ file: LibraryMedia) async -> MediaMetadata? {
         let hash = await fingerprint(file)
+        let key = titleKey(file.name)
+        if ignored.contains(key) || hash.map(ignored.contains) == true { return nil }
+        let parsed = MediaNameParser.parse(file.name)
         if let hash, var cached = hashCache[hash] {
             cached.matchedByHash = true
-            return cached
+            return withEpisode(cached, parsed)
         }
-        let key = titleKey(file.name)
         if var cached = titleCache[key] {
             cached.matchedByHash = false
             if let hash { hashCache[hash] = cached; save() }
-            return cached
+            return withEpisode(cached, parsed)
         }
-        let parsed = MediaNameParser.parse(file.name)
-        guard !parsed.title.isEmpty,
-              let metadata = await CinemetaClient.shared.lookup(
-                  title: parsed.title, year: parsed.year,
-                  season: parsed.season ?? (parsed.episode == nil ? nil : 1), episode: parsed.episode
-              ) else { return nil }
+        if let last = missed[key], Date().timeIntervalSince(last) < 12 * 3600 { return nil }
+        guard !parsed.title.isEmpty, let metadata = await MetadataSearch.shared.lookup(parsed) else {
+            missed[key] = Date()
+            save()
+            return nil
+        }
         titleCache[key] = metadata
+        missed.removeValue(forKey: key)
         if let hash { hashCache[hash] = metadata }
         save()
         return metadata
     }
 
+    /// 缓存里存的是第一次识别时那一集的集数，换成当前文件自己的
+    private func withEpisode(_ metadata: MediaMetadata, _ parsed: MediaNameParser.ParsedName) -> MediaMetadata {
+        guard metadata.isSeries else { return metadata }
+        var value = metadata
+        value.season = parsed.season ?? (parsed.episode == nil ? nil : 1)
+        value.episode = parsed.episode
+        return value
+    }
+
     private func load() {
-        guard let data = UserDefaults.standard.data(forKey: storageKey),
+        if let data = UserDefaults.standard.data(forKey: storageKey),
+           let payload = try? JSONDecoder().decode(CachePayload.self, from: data) {
+            hashCache = payload.hash
+            titleCache = payload.title
+            ignored = payload.ignored ?? []
+            missed = payload.missed ?? [:]
+            return
+        }
+        // 第一次用新版：旧版对中文片名会直接取第一个搜索结果，配错的不少。
+        // 只留下片名对得上的旧结果，其余的换新的识别方式重新识别。
+        guard let data = UserDefaults.standard.data(forKey: legacyStorageKey),
               let payload = try? JSONDecoder().decode(CachePayload.self, from: data) else {
             return
         }
-        hashCache = payload.hash
-        titleCache = payload.title
+        titleCache = payload.title.filter { key, metadata in
+            let title = key.components(separatedBy: "|").first ?? ""
+            return MetadataScoring.titleScore(names: MetadataScoring.names(of: metadata), queries: [title]) >= 120
+        }
+        let kept = Set(titleCache.values.map(\.imdbID))
+        hashCache = payload.hash.filter { kept.contains($0.value.imdbID) }
+        save()
     }
 
     private func save() {
-        let payload = CachePayload(hash: hashCache, title: titleCache)
+        let payload = CachePayload(hash: hashCache, title: titleCache, ignored: ignored, missed: missed)
         guard let data = try? JSONEncoder().encode(payload) else { return }
         UserDefaults.standard.set(data, forKey: storageKey)
     }
@@ -119,6 +186,8 @@ final class MediaMetadataStore: ObservableObject {
     private struct CachePayload: Codable {
         let hash: [String: MediaMetadata]
         let title: [String: MediaMetadata]
+        var ignored: Set<String>? = nil
+        var missed: [String: Date]? = nil
     }
 }
 
@@ -147,25 +216,78 @@ enum MediaNameParser {
         let year: String?
         let season: Int?
         let episode: Int?
+
+        /// 片名里的中文部分：「鬼谜东宫 The East Palace」里的「鬼谜东宫」
+        var chineseTitle: String? {
+            let words = title.split(separator: " ").map(String.init)
+            let hanIndexes = words.indices.filter { MediaNameParser.containsHan(words[$0]) }
+            guard let first = hanIndexes.first, let last = hanIndexes.last else { return nil }
+            var end = last
+            // 「流浪地球 2」这样紧跟在中文后面的续集编号一起带上
+            if end + 1 < words.count, words[end + 1].count <= 2, words[end + 1].allSatisfy(\.isNumber) { end += 1 }
+            return words[first...end].joined(separator: " ")
+        }
+
+        /// 片名里的英文部分：「鬼谜东宫 The East Palace」里的「The East Palace」
+        var latinTitle: String? {
+            let words = title.split(separator: " ").map(String.init).filter { !MediaNameParser.containsHan($0) }
+            let joined = words.joined(separator: " ")
+            return joined.filter(\.isLetter).count >= 3 ? joined : nil
+        }
+
+        /// 搜索时依次用中文名、英文名、完整片名
+        var searchTitles: [String] {
+            var seen = Set<String>()
+            return [chineseTitle, latinTitle, title].compactMap { $0 }.filter { !$0.isEmpty && seen.insert($0).inserted }
+        }
+
+        var looksLikeSeries: Bool { season != nil || episode != nil }
+    }
+
+    static func containsHan(_ text: String) -> Bool {
+        text.range(of: #"\p{Han}"#, options: .regularExpression) != nil
     }
 
     static func parse(_ filename: String) -> ParsedName {
-        let extensions: Set<String> = ["mp4", "mkv", "mov", "m4v", "avi", "ts", "webm", "flv", "wmv", "m2ts", "mpg", "mpeg"]
+        let extensions: Set<String> = ["mp4", "mkv", "mov", "m4v", "avi", "ts", "webm", "flv", "wmv", "m2ts", "mpg", "mpeg", "rmvb", "iso"]
         var value = extensions.contains((filename as NSString).pathExtension.lowercased()) ? (filename as NSString).deletingPathExtension : filename
+        // 网址水印、字幕组和下载站的标记：【www.xxx.com】、[某某字幕组]、[电影天堂www.dytt.com]
+        value = value.replacingOccurrences(of: #"(?i)[\[【(（][^\]】)）]*(?:www|\.com|\.net|\.cc|\.org|\.tv|字幕|压制|下载|首发|论坛|bbs|高清)[^\]】)）]*[\]】)）]"#, with: " ", options: .regularExpression)
+        value = value.replacingOccurrences(of: #"(?i)\bwww\.[a-z0-9-]+\.[a-z]{2,4}\b"#, with: " ", options: .regularExpression)
+        // 动漫字幕组的命名：[组名] 片名 - 05 [1080p] 或 [组名][片名][05]，开头那一组方括号是组名。
+        // 「[仙逆][Renegade Immortal][05]」这种第一组就是片名的不去掉
+        if let range = value.range(of: #"^\s*\[[^\]]+\]"#, options: .regularExpression) {
+            let group = String(value[range])
+            let rest = value[range.upperBound...]
+            let looksLikeGroup = group.range(of: #"(?i)(raws?|subs?|字幕|组|組|社|fansub|studio|&|-)"#, options: .regularExpression) != nil
+            let titleFollows = rest.trimmingCharacters(in: .whitespaces).first.map { $0 != "[" } ?? false
+            if looksLikeGroup || (titleFollows && rest.contains("[")) { value = String(rest) }
+        }
+        let bracketEpisode = capture(#"\[(\d{1,3})(?:v\d)?\]"#, in: value)
         value = value.replacingOccurrences(of: "[._]+", with: " ", options: .regularExpression)
-        value = value.replacingOccurrences(of: "[()\\[\\]【】]", with: " ", options: .regularExpression)
+        value = value.replacingOccurrences(of: "[()\\[\\]【】（）《》]", with: " ", options: .regularExpression)
 
-        let seasonEpisode = capture(#"(?i)\bS(\d{1,2})E(\d{1,3})\b"#, in: value)
+        let seasonEpisode = capture(#"(?i)\bS(\d{1,2})\s?E(\d{1,4})\b"#, in: value)
         let chineseEpisode = capture(#"第\s*(\d{1,4})\s*[集话話]"#, in: value)
-        let episodeOnly = capture(#"(?i)\bE(\d{1,4})\b"#, in: value)
+        let episodeOnly = capture(#"(?i)\bEP?\s?(\d{1,4})\b"#, in: value)
+        let dashEpisode = capture(#"(?:^|\s)-\s(\d{1,3})(?:v\d)?(?:\s|$)"#, in: value)
+        let seasonOnly = capture(#"(?i)\b(?:S|Season\s?)(\d{1,2})\b"#, in: value)
+        let chineseSeason = capture(#"第\s*([一二三四五六七八九十\d]{1,3})\s*季"#, in: value)
         let season = seasonEpisode.first.flatMap(Int.init)
+            ?? seasonOnly.first.flatMap(Int.init) ?? chineseSeason.first.flatMap(chineseNumber)
         let episode = seasonEpisode.dropFirst().first.flatMap(Int.init)
             ?? chineseEpisode.first.flatMap(Int.init) ?? episodeOnly.first.flatMap(Int.init)
+            ?? bracketEpisode.first.flatMap(Int.init) ?? dashEpisode.first.flatMap(Int.init)
 
         let year = capture(#"\b(19\d{2}|20\d{2})\b"#, in: value).first
-        let releaseMarkers = [
-            #"(?i)\bS\d{1,2}E\d{1,3}\b"#,
-            #"(?i)\bE\d{1,4}\b"#,
+        var releaseMarkers = [
+            #"(?i)\bS\d{1,2}\s?E\d{1,4}\b"#,
+            #"(?i)\bEP?\s?\d{1,4}\b"#,
+            #"(?i)\b(?:S|Season\s?)\d{1,2}\b"#,
+            #"第\s*[一二三四五六七八九十\d]{1,3}\s*季"#,
+            #"(?:^|\s)-\s\d{1,3}(?:v\d)?(?:\s|$)"#,
+            #"(?i)\b(?:NF|AMZN|DSNP|HMAX|ATVP|iTunes|HQ|60fps|120fps|1080i|AV1|VP9|FLAC|Opus|SDR|DV)\b"#,
+            #"(?:国语中字|国粤双语|中英双字|中英字幕|双语字幕|内封字幕|内嵌字幕|特效字幕|全\d{1,4}集|更新至)"#,
             #"(?i)\b(?:19|20)\d{2}\b"#,
             #"(?i)\b(?:2160p|1080p|720p|480p|4k|uhd)\b"#,
             #"(?i)\b(?:WEB[- ]?DL|WEBRip|BluRay|BDRip|HDTV|HDRip|DVDRip)\b"#,
@@ -177,6 +299,10 @@ enum MediaNameParser {
             #"第\s*\d{1,4}\s*[集话話]"#,
         ]
 
+        // [仙逆][Renegade Immortal][05]：方括号里的集数去掉方括号后成了单独的数字，从它开始都不算片名
+        if let number = bracketEpisode.first {
+            releaseMarkers.append(#"(?:^|\s)"# + NSRegularExpression.escapedPattern(for: number) + #"(?:v\d)?(?=\s|$)"#)
+        }
         var cutoff = value.endIndex
         for marker in releaseMarkers {
             if let range = value.range(of: marker, options: .regularExpression),
@@ -194,6 +320,18 @@ enum MediaNameParser {
             season: season,
             episode: episode
         )
+    }
+
+    /// 「二」「十二」「3」这样的季数
+    private static func chineseNumber(_ text: String) -> Int? {
+        if let value = Int(text) { return value }
+        let digits: [Character: Int] = ["一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9]
+        if text == "十" { return 10 }
+        if text.hasPrefix("十"), let last = text.last, let unit = digits[last] { return 10 + unit }
+        if text.count == 1, let first = text.first { return digits[first] }
+        if text.count == 2, let first = text.first, text.last == "十", let tens = digits[first] { return tens * 10 }
+        if text.count == 3, let first = text.first, let last = text.last, let tens = digits[first], let unit = digits[last] { return tens * 10 + unit }
+        return nil
     }
 
     static func cacheKey(_ title: String) -> String {
@@ -221,50 +359,41 @@ actor CinemetaClient {
         return "https://v3-cinemeta.strem.io"
     }
 
-    func lookup(title: String, year: String?, season: Int?, episode: Int?) async -> MediaMetadata? {
+    /// 电影和剧集一起搜，结果交给 MetadataSearch 打分
+    func search(_ title: String) async -> [MediaMetadata] {
         async let movies = search(title: title, type: "movie")
         async let series = search(title: title, type: "series")
-        let (movieResults, seriesResults) = await (movies, series)
-        let candidates = movieResults + seriesResults
-        guard !candidates.isEmpty else { return nil }
-
-        let ranked = candidates.enumerated().sorted { lhs, rhs in
-            score(lhs.element, title: title, year: year, preferredSeries: season != nil)
-                > score(rhs.element, title: title, year: year, preferredSeries: season != nil)
-        }
-        guard let selected = ranked.first?.element else { return nil }
-        let usesTranslatedTitle = title.range(of: #"\p{Han}"#, options: .regularExpression) != nil
-        guard usesTranslatedTitle || score(selected, title: title, year: year, preferredSeries: season != nil) >= 100 else { return nil }
-
-        let detail = await detail(type: selected.type, id: selected.id)
-        return MediaMetadata(
-            imdbID: selected.id,
-            type: selected.type,
-            title: detail?.name.nonEmpty ?? selected.name,
-            year: extractYear(detail?.releaseInfo ?? selected.releaseInfo),
-            posterURL: detail?.poster.nonEmpty ?? selected.poster,
-            backgroundURL: detail?.background.nonEmpty ?? selected.background,
-            logoURL: detail?.logo ?? "",
-            overview: detail?.description ?? "",
-            rating: detail?.imdbRating ?? "",
-            genres: detail?.genres ?? [],
-            country: detail?.country ?? "",
-            season: season,
-            episode: episode
-        )
-    }
-
-    func candidates(query: String) async -> [MediaMetadata] {
-        let parsed = MediaNameParser.parse(query)
-        async let movies = search(title: parsed.title, type: "movie")
-        async let series = search(title: parsed.title, type: "series")
         let results = await (movies, series)
         return (results.0 + results.1).map { item in
-            MediaMetadata(imdbID: item.id, type: item.type, title: item.name,
+            var metadata = MediaMetadata(imdbID: item.id, type: item.type, title: item.name,
                 year: extractYear(item.releaseInfo), posterURL: item.poster,
                 backgroundURL: item.background, logoURL: "", overview: "", rating: "",
-                genres: [], country: "", season: parsed.season, episode: parsed.episode)
+                genres: [], country: "", season: nil, episode: nil)
+            metadata.source = MetadataSource.cinemeta.rawValue
+            return metadata
         }
+    }
+
+    /// 自动匹配选中以后，再补上简介、评分、Logo 这些搜索结果里没有的资料
+    func withDetail(_ metadata: MediaMetadata) async -> MediaMetadata {
+        guard let detail = await detail(type: metadata.type, id: metadata.imdbID) else { return metadata }
+        var value = MediaMetadata(
+            imdbID: metadata.imdbID,
+            type: metadata.type,
+            title: detail.name.nonEmpty ?? metadata.title,
+            year: extractYear(detail.releaseInfo ?? "").nonEmpty ?? metadata.year,
+            posterURL: detail.poster.nonEmpty ?? metadata.posterURL,
+            backgroundURL: detail.background.nonEmpty ?? metadata.backgroundURL,
+            logoURL: detail.logo ?? "",
+            overview: detail.description ?? "",
+            rating: detail.imdbRating ?? "",
+            genres: detail.genres ?? [],
+            country: detail.country ?? "",
+            season: metadata.season,
+            episode: metadata.episode
+        )
+        value.source = MetadataSource.cinemeta.rawValue
+        return value
     }
 
     private func search(title: String, type: String) async -> [CinemetaSearchItem] {
@@ -296,22 +425,6 @@ actor CinemetaClient {
             return nil
         }
         return try? JSONDecoder().decode(T.self, from: data)
-    }
-
-    private func score(
-        _ item: CinemetaSearchItem,
-        title: String,
-        year: String?,
-        preferredSeries: Bool
-    ) -> Int {
-        let expected = MediaNameParser.cacheKey(title)
-        let actual = MediaNameParser.cacheKey(item.name)
-        var value = 0
-        if expected == actual { value += 200 }
-        else if actual.contains(expected) || expected.contains(actual) { value += 100 }
-        if preferredSeries == (item.type == "series") { value += 40 }
-        if let year, item.releaseInfo.contains(year) { value += 20 }
-        return value
     }
 
     private func extractYear(_ value: String) -> String {

@@ -44,11 +44,15 @@ struct SeriesDetailView: View {
                 .environmentObject(appState)
         }
         .sheet(item: $matching) { request in
-            MetadataMatchView(file: request.file, current: request.current) { metadata in
+            MetadataMatchView(file: request.file, current: request.current, onMatch: { metadata in
                 for target in request.targets {
                     await metadataStore.match(metadata, to: target)
                 }
-            }
+            }, onClear: request.current == nil ? nil : { () async -> Void in
+                for target in request.targets {
+                    await metadataStore.unmatch(target)
+                }
+            })
         }
     }
 

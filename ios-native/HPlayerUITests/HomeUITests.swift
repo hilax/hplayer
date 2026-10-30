@@ -20,6 +20,10 @@ final class HomeUITests: XCTestCase {
         add(screenshot)
 
         app.swipeUp()
+        // 中文片名走番组计划：「仙逆.Renegade.Immortal.S01E05…」要配上「仙逆」这部剧，而不是随便一个搜索结果
+        let chineseSeries = app.descendants(matching: .any)["home.series.bgm:400602"].firstMatch
+        XCTAssertTrue(chineseSeries.waitForExistence(timeout: 30), "Chinese title should match through Bangumi")
+
         dune.press(forDuration: 1)
         app.buttons["匹配封面"].tap()
         let result = app.buttons["metadata.result.tt1160419"]

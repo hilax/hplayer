@@ -91,9 +91,38 @@ class PlayerTestHandler(SimpleHTTPRequestHandler):
             and all(value in cookie for value in expected_cookies)
         )
 
+    def send_json(self, result):
+        body = json.dumps(result, ensure_ascii=False).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self):
+        # 番组计划搜索接口 POST /v0/search/subjects：按关键字在本地样例里找
+        if self.path.split("?", 1)[0] == "/v0/search/subjects":
+            length = int(self.headers.get("Content-Length", "0") or 0)
+            payload = json.loads(self.rfile.read(length) or b"{}")
+            keyword = str(payload.get("keyword", "")).strip().lower()
+            subjects = json.loads((root / "bangumi-fixture.json").read_text(encoding="utf-8"))
+            found = [item for item in subjects if keyword and (keyword in item["name"].lower() or keyword in item["name_cn"].lower())]
+            print(f"BANGUMI POST /v0/search/subjects keyword={keyword!r} UA={self.headers.get('User-Agent', '')!r} found={len(found)}", flush=True)
+            self.send_json({"total": len(found), "limit": 10, "offset": 0, "data": found})
+            return
+        self.send_error(404)
+
     def do_GET(self):
         if self.path.startswith("/stall/"):
             self.serve_stall_fixture()
+            return
+        if self.path == "/bangumi-poster.jpg":
+            body = (root / "bangumi-poster.jpg").read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
             return
         if self.path.startswith("/range/"):
             # 和 115 一样要求带上请求头；支持分段下载，用来测 MKV（索引在文件末尾）的大跨度跳转

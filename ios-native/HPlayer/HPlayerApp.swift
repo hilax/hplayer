@@ -40,7 +40,8 @@ private struct HomeUITestHost: View {
             else { ProgressView() }
         }.task {
             let store = LocalMediaStore()
-            for name in ["The.Demon.Hunter.S01E71.2026.mkv", "Arrival.2016.mp4", "Dune.2021.mp4"] {
+            for name in ["The.Demon.Hunter.S01E71.2026.mkv", "Arrival.2016.mp4", "Dune.2021.mp4",
+                         "仙逆.Renegade.Immortal.S01E05.2023.1080p.WEB-DL.mp4"] {
                 let url = store.mediaDirectory.appendingPathComponent(name)
                 if !FileManager.default.fileExists(atPath: url.path) { try? Data(name.utf8).write(to: url) }
             }
