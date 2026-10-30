@@ -113,6 +113,10 @@ final class PlaybackController: ObservableObject {
     @Published private(set) var videoBadges: [String] = []
     /// 自动重连时画面中间显示的说明
     @Published private(set) var statusNote = ""
+    /// 出错时内核给出的具体原因（技术信息，小字显示在错误提示下面）
+    @Published private(set) var errorDetail = ""
+    /// 需要在画面上方短暂提示的一句话，显示后由界面清空
+    @Published var notice = ""
     /// 内核报告的真实播放时间（不含正在跳转的目标），给 UI 测试读
     @Published private(set) var engineTime: Double = 0
 
@@ -125,7 +129,9 @@ final class PlaybackController: ObservableObject {
     private var currentCookie = ""
     private var urlRefresher: (() async throws -> URL)?
     private var watchdogEnabled = true
-    private var openTimeoutSeconds: UInt64 = 20
+    private var openTimeoutSeconds: UInt64 = 45
+    /// 这次 open 之后有没有真正播出来过（自动重连不清零）
+    private var playedThisSession = false
 
     /// 用户自己按了暂停
     private var userPaused = false
@@ -212,8 +218,8 @@ final class PlaybackController: ObservableObject {
             ("subs-fallback", "yes"),
             ("slang", "zh,chi,zho,chs,sc,cht,tc,en,eng"),
             ("screenshot-format", "jpg"),
-            // 网络：连接或读取 10 秒没反应就算超时，断了自动重连
-            ("network-timeout", "10"),
+            // 网络：115 的冷门文件第一次读可能要等十几秒，给足 30 秒；真卡死由看门狗换地址重连
+            ("network-timeout", "30"),
             ("stream-lavf-o", "reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=4"),
             // 边播边存：开头不等缓存，攒到一点就播；卡住时攒够 3 秒再继续，免得一顿一顿
             ("cache", "yes"),
@@ -273,9 +279,10 @@ final class PlaybackController: ObservableObject {
         startTime: Double? = nil,
         refreshURL: (() async throws -> URL)? = nil,
         autoRecover: Bool = true,
-        openTimeoutSeconds: UInt64 = 20
+        openTimeoutSeconds: UInt64 = 45
     ) {
         session += 1
+        playedThisSession = false
         recoveryTask?.cancel()
         recoveryTask = nil
         recoveryAttempts = []
@@ -298,6 +305,7 @@ final class PlaybackController: ObservableObject {
         currentCookie = cookie
         resetState(keepDuration: keepDuration)
         resumePoint = position
+        errorDetail = ""
         if position > 0 {
             currentTime = position
             pendingSeek = position
@@ -574,6 +582,7 @@ final class PlaybackController: ObservableObject {
             refreshTracks()
         case .playbackRestart:
             hasPlayed = true
+            playedThisSession = true
             if !statusNote.isEmpty, recoveryTask == nil { statusNote = "" }
         case .endFile(let reason, let message):
             handleEndFile(reason: reason, message: message)
@@ -765,8 +774,11 @@ final class PlaybackController: ObservableObject {
     private func recover(reason: String) {
         guard let url = currentURL, recoveryTask == nil else { return }
         let now = Date()
-        recoveryAttempts = recoveryAttempts.filter { now.timeIntervalSince($0) < 90 }
-        guard recoveryAttempts.count < 3 else {
+        // 播过之后断了：90 秒内最多试 3 次；一次都没播出来：总共只再试 2 次，免得一直转圈
+        if playedThisSession {
+            recoveryAttempts = recoveryAttempts.filter { now.timeIntervalSince($0) < 90 }
+        }
+        guard recoveryAttempts.count < (playedThisSession ? 3 : 2) else {
             engine?.command(["stop"])
             giveUp(reason.isEmpty ? "网络连接中断" : reason)
             return
@@ -802,10 +814,21 @@ final class PlaybackController: ObservableObject {
         statusNote = ""
         opening = false
         loaded = false
+        errorDetail = Self.shortReason(from: logLines)
         error = resumePoint > 1
             ? "\(reason)，自动重连几次都没成功。点「重试」会从 \(Self.clock(resumePoint)) 接着播放。"
             : "\(reason)，请点「重试」，或换一个画质。"
         updateFlags()
+    }
+
+    /// 原画打不开、一次都没播出来时，播放页可以自动换成 115 转码画质
+    var failedBeforePlaying: Bool { !error.isEmpty && !playedThisSession }
+
+    /// 从内核日志里挑最后一条错误，截短后给用户看
+    private static func shortReason(from lines: [String]) -> String {
+        let line = lines.last(where: { $0.contains("] error:") || $0.contains("] fatal:") }) ?? lines.last ?? ""
+        let text = line.replacingOccurrences(of: "\n", with: " ")
+        return text.count > 120 ? String(text.prefix(120)) + "…" : text
     }
 
     /// 播放出问题时复制给开发者的诊断信息：地址类型、状态和内核最近的警告错误

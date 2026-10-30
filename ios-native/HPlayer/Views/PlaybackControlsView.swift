@@ -252,6 +252,11 @@ struct PlaybackControlsView: View {
         .onChange(of: loading || playback.buffering) { busy in
             updateBusy(busy)
         }
+        .onChange(of: playback.notice) { text in
+            guard !text.isEmpty else { return }
+            showNotice(text)
+            playback.notice = ""
+        }
         .onChange(of: playback.currentTime) { time in
             // 定时关闭「本集结束」：快到结尾时暂停，不再自动播下一集
             guard sleepTimer == .episodeEnd, playback.duration > 0, time >= playback.duration - 1.5, playback.playing else { return }
@@ -813,6 +818,14 @@ struct PlaybackControlsView: View {
             Text(text)
                 .font(.subheadline)
                 .multilineTextAlignment(.center)
+            if error.isEmpty && !playback.errorDetail.isEmpty {
+                // 内核给出的具体原因，截图发过来就能看出是哪一步出的错
+                Text(playback.errorDetail)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.white.opacity(0.55))
+                    .multilineTextAlignment(.center)
+                    .lineLimit(3)
+            }
             Button {
                 // 播放中途断掉的，从原位置重新连接；还没拿到地址的（例如 115 接口出错），重新加载
                 if error.isEmpty && playback.canRetryInPlace {
@@ -824,9 +837,11 @@ struct PlaybackControlsView: View {
             } label: {
                 Text("重试")
                     .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.black)
                     .padding(.horizontal, 18)
                     .padding(.vertical, 2)
             }
+            .tint(.white)
             .glassProminentButton()
             if error.isEmpty {
                 // 真机上打不开时，把内核日志复制下来发给开发者

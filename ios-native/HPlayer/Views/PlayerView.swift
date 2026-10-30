@@ -12,6 +12,8 @@ struct PlayerView: View {
     @State private var selectedQuality = ""
     @State private var visible = true
     @State private var lastSavedAt = Date.distantPast
+    /// 这一集已经自动从原画换到转码过，不再反复换
+    @State private var fellBack = false
 
     init(source: PlaybackSource, playlist: [PlaybackSource] = []) {
         _current = State(initialValue: source)
@@ -40,6 +42,7 @@ struct PlayerView: View {
         )
         .task(id: current.id) { await load(current) }
         .onChange(of: playback.currentTime) { _ in saveProgress(force: false) }
+        .onChange(of: playback.error) { _ in fallBackIfOriginalFails() }
         .onDisappear { saveProgress(force: true); visible = false; playback.stop() }
     }
 
@@ -67,8 +70,19 @@ struct PlayerView: View {
             + directQualities.enumerated().map { PlaybackChoice(id: "direct-\($0.offset)", title: $0.element.title) }
     }
 
+    /// 原画一次都没播出来就失败了（有些文件 115 不让直接读原文件）：自动换成 115 转码画质
+    private func fallBackIfOriginalFails() {
+        guard !fellBack, selectedQuality == "原画", playback.failedBeforePlaying, !directQualities.isEmpty else { return }
+        fellBack = true
+        let title = directQualities[0].title
+        Task {
+            await switchQuality("direct-0")
+            if selectedQuality == title { playback.notice = "原画打不开，已自动换成「\(title)」" }
+        }
+    }
+
     private func load(_ source: PlaybackSource) async {
-        loading = true; error = ""; directQualities = []; selectedQuality = ""
+        loading = true; error = ""; directQualities = []; selectedQuality = ""; fellBack = false
         let resume = tracksHistory ? RecentStore.shared.position(for: source) : nil
         if tracksHistory { RecentStore.shared.record(source) }
         lastSavedAt = Date()
