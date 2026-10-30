@@ -99,23 +99,20 @@ struct HomeTab: View {
                 Text(playError)
             }
             .task { localStore.refresh() }
-            .task(id: libraryFiles) {
-                if scenePhase == .active { metadataStore.sync(files: libraryFiles) }
-            }
-            .task(id: appState.libraryAccountID) {
-                metadataStore.pause()
-                scanner.selectAccount(appState.libraryAccountID)
-                mediaLibrary.add(scanner.discoveredFiles, for: appState)
+            .task(id: HomeMatchingInput(files: libraryFiles, accountID: appState.libraryAccountID, background: scenePhase == .background)) {
+                if scanner.accountID != appState.libraryAccountID {
+                    metadataStore.pause()
+                    scanner.selectAccount(appState.libraryAccountID)
+                    mediaLibrary.add(scanner.discoveredFiles, for: appState)
+                }
                 metadataStore.hydrate(files: libraryFiles)
-                if scenePhase == .active { metadataStore.sync(files: libraryFiles) }
-            }
-            .onChange(of: scenePhase) { phase in
-                if phase == .active {
-                    metadataStore.sync(files: libraryFiles)
-                } else if phase == .background {
+                if scenePhase == .background {
                     scanner.pause()
                     metadataStore.pause()
                     mediaLibrary.flush()
+                } else {
+                    // 初始视图可能在 inactive 阶段挂载；无需等一次可能已错过的 active 变化。
+                    metadataStore.sync(files: libraryFiles)
                 }
             }
             .onChange(of: library.featured.count) { count in
@@ -756,6 +753,12 @@ struct HomeTab: View {
         .surfaceCard(cornerRadius: 30)
         .accessibilityIdentifier("home.emptyLibrary")
     }
+}
+
+private struct HomeMatchingInput: Equatable {
+    let files: [LibraryMedia]
+    let accountID: String?
+    let background: Bool
 }
 
 // MARK: - 横幅单页
