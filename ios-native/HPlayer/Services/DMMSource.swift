@@ -49,8 +49,13 @@ actor DMMClient {
 
     func lookupAPI(_ code: String, credentials: Credentials) async -> MediaMetadata? {
         guard let request = Self.apiRequest(code: code, credentials: credentials),
-              let data = await fetch(request, interval: 1) else { return nil }
-        return Self.decodeAPI(data, requestedCode: code)
+              let data = await fetch(request, interval: 1, label: "DMM 接口 \(code)") else { return nil }
+        if let found = Self.decodeAPI(data, requestedCode: code) {
+            MatchDiagnostics.shared.record("DMM 接口 \(code) 已匹配")
+            return found
+        }
+        MatchDiagnostics.shared.record("DMM 接口 \(code) 没有同番号的结果。\(MatchDiagnostics.keys(of: data))")
+        return nil
     }
 
     nonisolated static func apiRequest(code: String, credentials: Credentials) -> URLRequest? {
@@ -110,8 +115,12 @@ actor DMMClient {
             }
             for await (index, url) in group { if let url { found[index] = url } }
         }
-        guard let index = found.keys.sorted().first, let url = found[index] else { return nil }
+        guard let index = found.keys.sorted().first, let url = found[index] else {
+            MatchDiagnostics.shared.record("DMM 封面 \(code) 4 个常见地址都不存在")
+            return nil
+        }
         guard let normalized = AVCatalogCode.extract(code) else { return nil }
+        MatchDiagnostics.shared.record("DMM 封面 \(code) 找到 \(url.deletingLastPathComponent().lastPathComponent)")
         return Self.metadata(code: normalized, title: "", year: "", poster: url.absoluteString)
     }
 
@@ -136,9 +145,17 @@ actor DMMClient {
         request.httpMethod = "HEAD"
         request.httpShouldHandleCookies = false
         request.timeoutInterval = 8
-        guard await waitForSlot(interval: 0.25), !Task.isCancelled,
-              let (_, response) = try? await session.data(for: request),
-              let http = response as? HTTPURLResponse, http.statusCode == 200 else { return nil }
+        guard await waitForSlot(interval: 0.25), !Task.isCancelled else { return nil }
+        let result: (Data, URLResponse)
+        do {
+            result = try await session.data(for: request)
+        } catch {
+            if !(error is CancellationError) {
+                MatchDiagnostics.shared.record("DMM 封面 \(url.deletingLastPathComponent().lastPathComponent) 请求失败：\(MatchDiagnostics.describe(error))")
+            }
+            return nil
+        }
+        guard let http = result.1 as? HTTPURLResponse, http.statusCode == 200 else { return nil }
         // 不存在的图片可能被转到「暂无图片」占位图，地址里要还是原来的编号。
         let cid = url.deletingLastPathComponent().lastPathComponent
         guard http.url?.absoluteString.contains(cid) != false else { return nil }
@@ -176,11 +193,22 @@ actor DMMClient {
         do { try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)); return true } catch { return false }
     }
 
-    private func fetch(_ request: URLRequest, interval: TimeInterval) async -> Data? {
-        guard await waitForSlot(interval: interval), !Task.isCancelled,
-              let (data, response) = try? await session.data(for: request),
-              let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return nil }
-        return data
+    private func fetch(_ request: URLRequest, interval: TimeInterval, label: String) async -> Data? {
+        guard await waitForSlot(interval: interval), !Task.isCancelled else { return nil }
+        let started = Date()
+        let result: (Data, URLResponse)
+        do {
+            result = try await session.data(for: request)
+        } catch {
+            if !(error is CancellationError) {
+                MatchDiagnostics.shared.record("\(label) 请求失败（\(MatchDiagnostics.seconds(since: started))）：\(MatchDiagnostics.describe(error))")
+            }
+            return nil
+        }
+        guard let http = result.1 as? HTTPURLResponse else { return nil }
+        MatchDiagnostics.shared.record("\(label) → HTTP \(http.statusCode)（\(MatchDiagnostics.seconds(since: started))）")
+        guard (200..<300).contains(http.statusCode) else { return nil }
+        return result.0
     }
 
     private struct APIResponse: Decodable {

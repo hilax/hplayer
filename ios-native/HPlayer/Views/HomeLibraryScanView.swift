@@ -14,6 +14,7 @@ struct HomeLibraryScanView: View {
     let onStartFolder: (String, String) -> Void
     @State private var pickingFolder = false
     @State private var showDMMKey = false
+    @State private var copiedDiagnostics = false
     @State private var hasDMMKey = DMMClient.storedCredentials() != nil
     let onRetryMatching: () -> Void
 
@@ -22,6 +23,25 @@ struct HomeLibraryScanView: View {
     private func refreshMatched() {
         // 只在匹配结果变化时数一次，不在每次扫描进度刷新时重算。
         matchedVideos = library.media(for: appState).filter { metadata.metadataByMediaID[$0.id]?.hasUsablePoster == true }.count
+    }
+
+    /// 排查「为什么没匹配上、为什么慢」：开关和 Key 的状态加上最近的查找记录，不含 Cookie 和 Key 本身。
+    private func copyDiagnostics() {
+        let media = library.media(for: appState)
+        var lines = [
+            "HPlayer 匹配诊断",
+            "番号匹配：\(adultMatching ? "开" : "关")；DMM 接口 Key：\(hasDMMKey ? "已填" : "未填")；TMDB Key：\(TMDBClient.storedKey.isEmpty ? "未填" : "已填")",
+            "片库 \(media.count) 部，已有封面 \(matchedVideos) 部，自动匹配：\(metadata.isMatching ? "进行中" : "空闲")，扫描：\(status)",
+            "最近记录（新的在后）：",
+        ]
+        let recent = MatchDiagnostics.shared.snapshot
+        lines += recent.isEmpty ? ["（还没有记录。先点「重新匹配未识别封面」再复制）"] : recent
+        UIPasteboard.general.string = lines.joined(separator: "\n")
+        copiedDiagnostics = true
+        Task {
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            copiedDiagnostics = false
+        }
     }
 
     private var status: String {
@@ -120,6 +140,8 @@ struct HomeLibraryScanView: View {
                     Button("重新匹配未识别封面", systemImage: "photo.badge.magnifyingglass", action: onRetryMatching)
                         .disabled(library.files(for: appState).isEmpty && local.files.isEmpty)
                     NavigationLink("管理未匹配影片") { HomeUnmatchedMediaView() }
+                    Button(copiedDiagnostics ? "已复制" : "复制匹配诊断信息", systemImage: "doc.on.doc") { copyDiagnostics() }
+                        .accessibilityIdentifier("scan.copyDiagnostics")
                 } footer: {
                     Text("扫描在前台进行，退出 App 后可从这里继续。只读取文件列表，不下载整部视频，也不删除网盘文件。")
                 }

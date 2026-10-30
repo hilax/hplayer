@@ -381,6 +381,7 @@ final class MediaMetadataStore: ObservableObject {
             // 用户在本次请求等待期间点了重扫：现有请求结束后再查一次，不并发请求同一个来源。
             guard retryVersions[key, default: 0] == retryVersion else { return nil }
             missed[key] = Date()
+            MatchDiagnostics.shared.record("未匹配「\(parsed.title)」，12 小时内不再自动重试（点「重新匹配未识别封面」可立即重试）")
             save()
             return nil
         }

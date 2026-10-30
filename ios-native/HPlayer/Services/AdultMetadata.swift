@@ -83,20 +83,24 @@ actor R18DevClient {
             case .data(let data):
                 if let metadata = Self.decode(data, requestedCode: code) {
                     hyphenFirst = hyphenated
+                    MatchDiagnostics.shared.record("r18.dev \(code) 已匹配（\(hyphenated ? "带连字符" : "无连字符")写法）")
                     return metadata
                 }
+                MatchDiagnostics.shared.record("r18.dev \(code) 返回了内容但不能用（编号不符或没有 https 封面）。\(MatchDiagnostics.keys(of: data))")
             case .notFound:
                 continue
             case .failed:
                 return nil
             }
         }
+        MatchDiagnostics.shared.record("r18.dev \(code) 两种写法都没有结果")
         return nil
     }
 
     private enum FetchResult { case data(Data), notFound, failed }
 
     private func fetch(_ request: URLRequest) async -> FetchResult {
+        let tag = request.url?.lastPathComponent == "json" ? (request.url?.deletingLastPathComponent().lastPathComponent ?? "") : ""
         // 自动扫描可能涉及许多文件，串行限速，避免快速请求同一个公共接口。
         let now = Date()
         let scheduled = max(now, nextRequestAt)
@@ -106,9 +110,19 @@ actor R18DevClient {
             do { try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
             catch { return .failed }
         }
-        guard !Task.isCancelled,
-              let (data, response) = try? await session.data(for: request),
-              let http = response as? HTTPURLResponse else { return .failed }
+        guard !Task.isCancelled else { return .failed }
+        let started = Date()
+        let result: (Data, URLResponse)
+        do {
+            result = try await session.data(for: request)
+        } catch {
+            if !(error is CancellationError) {
+                MatchDiagnostics.shared.record("r18.dev \(tag) 请求失败（\(MatchDiagnostics.seconds(since: started))）：\(MatchDiagnostics.describe(error))")
+            }
+            return .failed
+        }
+        guard let http = result.1 as? HTTPURLResponse else { return .failed }
+        MatchDiagnostics.shared.record("r18.dev \(tag) → HTTP \(http.statusCode)（\(MatchDiagnostics.seconds(since: started))）")
         if http.statusCode == 429 {
             let seconds = min(max(Double(http.value(forHTTPHeaderField: "Retry-After") ?? "") ?? 30, 1), 60)
             nextRequestAt = max(nextRequestAt, Date().addingTimeInterval(seconds))
@@ -116,7 +130,7 @@ actor R18DevClient {
         }
         if http.statusCode == 404 { return .notFound }
         guard (200..<300).contains(http.statusCode), !Task.isCancelled else { return .failed }
-        return .data(data)
+        return .data(result.0)
     }
 
     nonisolated static func request(for code: String, hyphenated: Bool = false) -> URLRequest? {

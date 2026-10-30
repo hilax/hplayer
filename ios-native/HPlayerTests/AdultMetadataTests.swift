@@ -123,6 +123,19 @@ final class AdultMetadataTests: XCTestCase {
     }
 }
 
+final class MatchDiagnosticsTests: XCTestCase {
+    func testKeepsOnlyTheLatestLinesAndListsTopLevelKeys() {
+        let diagnostics = MatchDiagnostics()
+        for index in 0..<350 { diagnostics.record("line \(index)") }
+        XCTAssertEqual(diagnostics.snapshot.count, 300)
+        XCTAssertTrue(diagnostics.snapshot.last?.hasSuffix("line 349") == true)
+        XCTAssertEqual(MatchDiagnostics.keys(of: Data("{\"b\":1,\"a\":2}".utf8)), "字段：a,b")
+        XCTAssertTrue(MatchDiagnostics.keys(of: Data("<html>".utf8)).hasPrefix("不是 JSON"))
+        diagnostics.clear()
+        XCTAssertTrue(diagnostics.snapshot.isEmpty)
+    }
+}
+
 final class DMMSourceTests: XCTestCase {
     func testCoverURLsCoverPlainAndDigitPrefixedContentIDs() throws {
         let urls = try XCTUnwrap(DMMClient.coverURLs(for: "START-656")).map(\.absoluteString)

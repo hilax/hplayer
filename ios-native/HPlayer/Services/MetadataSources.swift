@@ -115,6 +115,15 @@ actor MetadataSearch {
     /// 首页自动识别：中文名先查番组计划（和填了 Key 的 TMDB），英文名查 IMDb，只接受片名几乎一样的结果
     func lookup(_ parsed: MediaNameParser.ParsedName) async -> MediaMetadata? {
         guard !Task.isCancelled else { return nil }
+        let started = Date()
+        let outcome = await lookupSources(parsed)
+        let codeText = parsed.catalogCode.map { "番号 \($0)" } ?? "无番号"
+        MatchDiagnostics.shared.record("查找「\(parsed.searchTitles.first ?? parsed.title)」（\(codeText)）→ \(outcome.map { "命中 \($0.sourceKind.label)" } ?? "未匹配")，用时 \(MatchDiagnostics.seconds(since: started))")
+        return outcome
+    }
+
+    private func lookupSources(_ parsed: MediaNameParser.ParsedName) async -> MediaMetadata? {
+        guard !Task.isCancelled else { return nil }
         // 番号文件只发番号给 R18.dev，不把包含私人信息的完整文件名发给其他来源。
         if adultEnabled(), let code = parsed.catalogCode {
             if let found = await r18dev.lookup(code) { return found }
