@@ -12,3 +12,4 @@ ios-native/HPlayer/Info.plist
 .env
 *.log
 __pycache__/
+.spm/

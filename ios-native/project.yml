@@ -6,6 +6,11 @@ options:
     iOS: "16.1"
   createIntermediateGroups: true
 
+packages:
+  MPVKit:
+    url: https://github.com/mpvkit/MPVKit
+    exactVersion: 1.1.0-n9.0.2
+
 settings:
   base:
     SWIFT_VERSION: "5.9"
@@ -23,8 +28,8 @@ targets:
     dependencies:
       - framework: Vendor/NuvioEngine/NuvioEngine.xcframework
         embed: false
-      - framework: Vendor/MobileVLCKit/MobileVLCKit.xcframework
-        embed: true
+      - package: MPVKit
+        product: MPVKit
       - sdk: libc++.tbd
       - sdk: Security.framework
       - sdk: SystemConfiguration.framework
@@ -63,6 +68,7 @@ targets:
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
           NSAllowsLocalNetworking: true
+        NSPhotoLibraryAddUsageDescription: "截图时把当前画面保存到相册。"
         NSLocalNetworkUsageDescription: "用于磁力播放时在本机播放缓存并发现局域网节点。"
         CFBundleURLTypes:
           - CFBundleURLName: app.hplayer.magnet

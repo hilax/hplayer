@@ -1,7 +1,7 @@
 import XCTest
 
 final class PlaybackUITests: XCTestCase {
-    func testVLCPlaybackControlsAndLandscape() throws {
+    func testPlaybackControlsAndLandscape() throws {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchEnvironment["HPLAYER_UI_TEST_URL"] = "http://127.0.0.1:8765/hls-fixture/index.m3u8"
@@ -92,7 +92,7 @@ final class PlaybackUITests: XCTestCase {
     }
 
     /// 模拟 CDN 卡死：测试服务器对第一次往文件后半段跳转的请求只接受连接、不回数据。
-    /// VLC 读网络没有超时，以前会一直「正在缓冲」，只能退出重进；现在播放器要自己发现、重连，
+    /// 以前会一直「正在缓冲」，只能退出重进；现在播放器要自己发现、重连，
     /// 并从跳转的目标位置接着播。
     func testPlaybackRecoversWhenSeekStalls() throws {
         continueAfterFailure = false

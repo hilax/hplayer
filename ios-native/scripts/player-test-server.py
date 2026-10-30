@@ -13,7 +13,7 @@ expected_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/60
 expected_cookies = ("UID=ui-test", "CID=ui-test", "SEID=ui-test", "KID=ui-test")
 
 # /stall/ 下的文件支持分段下载，并模拟 CDN 卡死：第一次往文件后半段跳转的请求只接受连接、
-# 永远不回数据（VLC 读网络没有超时，会一直等）。之后的请求都正常返回，用来验证播放器能自己重连恢复。
+# 永远不回数据（播放器要能自己发现并重连）。之后的请求都正常返回，用来验证播放器能自己重连恢复。
 stall_lock = threading.Lock()
 stall_hung = set()
 
@@ -43,7 +43,7 @@ class PlayerTestHandler(SimpleHTTPRequestHandler):
             start = int(first) if first.strip() else 0
             end = min(int(last), size - 1) if last.strip() else size - 1
         with stall_lock:
-            # VLC 打开 MP4 时会探一下文件末尾（offset == size），那个不算跳转，不挂
+            # 播放器打开 MP4 时可能会探一下文件末尾（offset == size），那个不算跳转，不挂
             hang = self.command == "GET" and size * 0.4 < start < size - 65536 and name not in stall_hung
             if hang:
                 stall_hung.add(name)

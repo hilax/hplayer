@@ -139,7 +139,7 @@ final class MagnetController: ObservableObject {
         var downloadRate: UInt64 = 0
     }
 
-    let playback = VLCPlaybackController()
+    let playback = PlaybackController()
 
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var step: ResolveStep = .engine
@@ -181,7 +181,7 @@ final class MagnetController: ObservableObject {
     private var engineReady = false
     private var active = false
     private var lastSavedAt = Date.distantPast
-    /// 最近一次看到的播放进度，播放结束时 VLC 报告的时间不一定可靠
+    /// 最近一次看到的播放进度，播放结束时内核报告的时间不一定可靠
     private var lastKnownTime: Double = 0
     private var lastKnownDuration: Double = 0
     private var cancellables = Set<AnyCancellable>()
@@ -459,7 +459,7 @@ final class MagnetController: ObservableObject {
             try await waitForHead(of: next, engine: engine)
             guard !Task.isCancelled else { return }
             preparing = false
-            // 开头已经下好，后面边播边下；节点少时缓冲会慢一些，给 VLC 足够的等待时间
+            // 开头已经下好，后面边播边下；节点少时缓冲会慢一些，给播放器足够的等待时间
             // 边下边播等的是种子数据，慢一点很正常，不做「卡住自动重连」
             playback.open(next.url, startTime: resume, autoRecover: false, openTimeoutSeconds: 120)
         } catch is CancellationError {

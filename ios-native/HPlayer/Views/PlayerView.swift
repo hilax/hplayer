@@ -3,7 +3,7 @@ import SwiftUI
 struct PlayerView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var playback = VLCPlaybackController()
+    @StateObject private var playback = PlaybackController()
     @State private var current: PlaybackSource
     private let playlist: [PlaybackSource]
     @State private var loading = true

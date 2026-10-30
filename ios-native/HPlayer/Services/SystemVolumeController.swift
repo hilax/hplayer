@@ -3,7 +3,7 @@ import MediaPlayer
 import SwiftUI
 import UIKit
 
-/// 播放页右侧上下滑动调节的是 iPhone 的系统音量，而不是 VLC 内部的软件音量。
+/// 播放页右侧上下滑动调节的是 iPhone 的系统音量，而不是播放器内部的软件音量。
 ///
 /// - 写入：通过隐藏的 MPVolumeView 滑块设置系统音量，与音量键、控制中心是同一个值。
 /// - 读取：监听 AVAudioSession.outputVolume，按音量键或在控制中心调节时同步回来。

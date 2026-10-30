@@ -45,14 +45,10 @@ jobs:
         with:
           path: |
             ios-native/Vendor/NuvioEngine/NuvioEngine.xcframework
-            ios-native/Vendor/MobileVLCKit/MobileVLCKit.xcframework
-          key: hplayer-nuvio-0.1.6-vlc-3.6.0-v1
+          key: hplayer-nuvio-0.1.6-v2
 
       - name: Download verified torrent engine
         run: bash ios-native/scripts/prepare-nuvio.sh
-
-      - name: Download verified VLC playback engine
-        run: bash ios-native/scripts/prepare-vlc.sh
 
       - name: Cache verified native frameworks
         if: steps.native-cache.outputs.cache-hit != 'true'
@@ -60,8 +56,7 @@ jobs:
         with:
           path: |
             ios-native/Vendor/NuvioEngine/NuvioEngine.xcframework
-            ios-native/Vendor/MobileVLCKit/MobileVLCKit.xcframework
-          key: hplayer-nuvio-0.1.6-vlc-3.6.0-v1
+          key: hplayer-nuvio-0.1.6-v2
 
       # 引擎检查失败时继续编译 App，这样一次构建就能看到所有问题；最后一步再让整个任务失败
       - name: Verify torrent engine lifecycle
@@ -122,6 +117,13 @@ jobs:
         working-directory: ios-native
         run: xcodegen generate
 
+      # mpv 播放内核（MPVKit）以 Swift Package 引入，预编译好的二进制包较大，缓存起来
+      - name: Restore Swift packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.spm
+          key: hplayer-spm-${{ hashFiles('ios-native/project.yml') }}
+
       - name: Build unsigned .app
         working-directory: ios-native
         run: |
@@ -131,6 +133,7 @@ jobs:
             -configuration Release \
             -sdk iphoneos \
             -derivedDataPath build \
+            -clonedSourcePackagesDirPath "$GITHUB_WORKSPACE/.spm" \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
@@ -154,7 +157,7 @@ jobs:
           path: HPlayer-unsigned.ipa
           retention-days: 30
 
-      - name: Test VLC playback and controls on iPhone simulator
+      - name: Test playback and controls on iPhone simulator
         # 公开仓库的构建机较慢，测试有时要 7 分钟左右
         timeout-minutes: 15
         run: |
@@ -172,6 +175,7 @@ jobs:
             -parallel-testing-enabled NO \
             -destination-timeout 90 \
             -derivedDataPath "$RUNNER_TEMP/hplayer-simulator" \
+            -clonedSourcePackagesDirPath "$GITHUB_WORKSPACE/.spm" \
             -resultBundlePath "$RUNNER_TEMP/player-tests.xcresult" \
             CODE_SIGNING_ALLOWED=NO \
             -quiet
