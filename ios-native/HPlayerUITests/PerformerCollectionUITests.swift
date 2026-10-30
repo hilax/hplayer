@@ -25,8 +25,9 @@ final class PerformerCollectionUITests: XCTestCase {
         app.launch()
         addFailureDiagnostics(app)
 
-        // 演员甲在左边，演员乙的横版封面向左伸出来盖在它上面
-        open("演员甲", id: "演员甲", works: ["作品甲1", "作品甲2"], excludedWork: "作品乙1", in: app)
+        // 演员甲在左边，演员乙的横版封面向左伸出来盖在它上面：点的正是被盖住的那一块
+        open("演员甲", id: "演员甲", works: ["作品甲1", "作品甲2"], excludedWork: "作品乙1", in: app,
+             tapping: tapArtwork)
 
         // 演员页是三列网格：作品甲1在第一列，作品甲2的封面同样向左伸出来盖在它上面
         let firstCover = app.buttons["performer.work.fixture:作品甲1"].firstMatch
@@ -46,7 +47,8 @@ final class PerformerCollectionUITests: XCTestCase {
         open("演员乙", id: "演员乙", works: ["作品乙1", "作品乙2"], excludedWork: "作品甲1", in: app)
     }
 
-    /// 对照：修复之前的卡片写法。如果这条测试不通过，说明「封面伸出去抢点击」不是演员对不上的原因。
+    /// 对照：修复之前的卡片写法，点同一个位置（左边卡片封面正中间）。
+    /// 如果这条测试不通过，说明「封面伸出去抢点击」不是演员对不上的原因。
     func testControlLegacyJacketOverlapStealsTheNeighbourTap() {
         continueAfterFailure = false
         let app = XCUIApplication()
@@ -54,19 +56,38 @@ final class PerformerCollectionUITests: XCTestCase {
         app.launch()
         addFailureDiagnostics(app)
 
-        let link = app.descendants(matching: .any)["performerTest.演员甲"]
-        XCTAssertTrue(link.waitForExistence(timeout: 10))
-        link.tap()
+        let left = app.descendants(matching: .any)["performerTest.演员甲"]
+        let right = app.descendants(matching: .any)["performerTest.演员乙"]
+        XCTAssertTrue(left.waitForExistence(timeout: 10))
+        XCTAssertTrue(right.waitForExistence(timeout: 10))
+        // 封面图是异步加载的，等它出来、伸出去的那一截才存在
+        Thread.sleep(forTimeInterval: 1.5)
+        let frames = "left card \(left.frame), right card \(right.frame), window \(app.windows.firstMatch.frame)"
+
+        tapArtwork(of: left, in: app)
         XCTAssertTrue(app.navigationBars["演员乙"].waitForExistence(timeout: 5),
-                      "Legacy layout: the left card's tap is expected to land on the right card; got \(app.navigationBars.allElementsBoundByIndex.map(\.identifier))")
+                      "Legacy layout: the left card's tap is expected to land on the right card; navigation bars: \(app.navigationBars.allElementsBoundByIndex.map(\.identifier)); \(frames)")
     }
 
-    private func open(_ name: String, id: String, works: [String], excludedWork: String, in app: XCUIApplication) {
+    /// 点卡片封面「看得见的那一块」的正中间（封面 118×177，贴着卡片右边缘）。
+    /// 不用元素自带的 tap()：它点的是辅助功能边框的中心，旧写法里那个边框把伸出去的封面也算了进去，
+    /// 中心落在屏幕边上，根本没点到卡片。
+    private func tapArtwork(of card: XCUIElement, in app: XCUIApplication) {
+        let frame = card.frame
+        app.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: frame.maxX - 59, dy: frame.minY + 88))
+            .tap()
+    }
+
+    private func open(
+        _ name: String, id: String, works: [String], excludedWork: String, in app: XCUIApplication,
+        tapping tap: ((XCUIElement, XCUIApplication) -> Void)? = nil
+    ) {
         let link = app.descendants(matching: .any)["performerTest.\(id)"]
         XCTAssertTrue(link.waitForExistence(timeout: 10))
-        link.tap()
+        if let tap { tap(link, app) } else { link.tap() }
         XCTAssertTrue(app.navigationBars[name].waitForExistence(timeout: 5),
-                      "Expected \(name)'s collection; navigation bars: \(app.navigationBars.allElementsBoundByIndex.map(\.identifier))")
+                      "Expected \(name)'s collection; navigation bars: \(app.navigationBars.allElementsBoundByIndex.map(\.identifier)); card frame \(link.frame)")
         for work in works {
             XCTAssertTrue(app.staticTexts[work].waitForExistence(timeout: 5))
         }
