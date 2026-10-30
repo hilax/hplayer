@@ -16,7 +16,8 @@ struct HomeTab: View {
     @State private var playing: PlaybackQueue?
     @State private var importError = ""
     @State private var playError = ""
-    @State private var heroSelection = 0
+    /// 横幅的翻页位置和下拉拉伸量。放在独立对象里，翻页、滚动时只重算横幅，不重算整个首页。
+    @State private var heroState = HeroState()
     @State private var showCloudBrowser = false
     @State private var matching: MatchRequest?
     @State private var magnetLaunch: MagnetLaunch?
@@ -60,7 +61,6 @@ struct HomeTab: View {
     var body: some View {
         let library = snapshot
         let continueItems = continueEntries(library)
-        let heroItem = currentHero(library)
 
         NavigationStack {
             GeometryReader { outer in
@@ -93,10 +93,13 @@ struct HomeTab: View {
             }
             // 整页底色取当前精选图的颜色：横幅往下渐渐透明，融进这层底色，下面的列表也压在它上面
             .background {
-                AmbientBackdrop(
-                    urlString: heroItem.map { $0.backgroundURL.isEmpty ? $0.posterURL : $0.backgroundURL } ?? "",
-                    fallbackURLString: heroItem?.posterURL ?? ""
-                )
+                HeroObserver(state: heroState) { state in
+                    let heroItem = currentHero(library, selection: state.selection)
+                    AmbientBackdrop(
+                        urlString: heroItem.map { $0.backgroundURL.isEmpty ? $0.posterURL : $0.backgroundURL } ?? "",
+                        fallbackURLString: heroItem?.posterURL ?? ""
+                    )
+                }
             }
             .toolbar(.hidden, for: .navigationBar)
             .fileImporter(
@@ -155,7 +158,7 @@ struct HomeTab: View {
                 }
             }
             .onChange(of: library.featured.count) { count in
-                if heroSelection >= count { heroSelection = 0 }
+                if heroState.selection >= count { heroState.selection = 0 }
             }
         }
         .fullScreenCover(item: $playing) { queue in
@@ -203,30 +206,39 @@ struct HomeTab: View {
 
     // MARK: 精选横幅
 
-    private func currentHero(_ library: HomeSnapshot) -> HomeMediaItem? {
+    private func currentHero(_ library: HomeSnapshot, selection: Int) -> HomeMediaItem? {
         let featured = library.featured
-        return featured.indices.contains(heroSelection) ? featured[heroSelection] : featured.first
+        return featured.indices.contains(selection) ? featured[selection] : featured.first
     }
 
     /// 横幅铺到屏幕最上面；往下拉时从底边向上放大，松手跟着滚动视图的弹性一起回弹。
+    /// 正常滚动时拉伸量恒为 0，不会触发任何重算。
     private func hero(_ library: HomeSnapshot, topInset: CGFloat) -> some View {
-        GeometryReader { proxy in
-            let minY = proxy.frame(in: .named(Self.scrollSpace)).minY
-            let stretch = max(minY, 0)
-            heroPager(library, topInset: topInset)
-                .frame(width: proxy.size.width, height: heroHeight + stretch)
-                .offset(y: -stretch)
+        HeroObserver(state: heroState) { state in
+            heroPager(library, topInset: topInset, selection: state.selection)
+                .frame(height: heroHeight + state.stretch)
+                .offset(y: -state.stretch)
         }
         .frame(height: heroHeight)
+        .background {
+            GeometryReader { proxy in
+                Color.clear.preference(key: HeroMinYKey.self, value: proxy.frame(in: .named(Self.scrollSpace)).minY)
+            }
+        }
+        .onPreferenceChange(HeroMinYKey.self) { minY in
+            let stretch = max(minY, 0)
+            if stretch != heroState.stretch { heroState.stretch = stretch }
+        }
     }
 
     /// 翻页时只有图片和片名跟着滑，播放和换封面两个按钮固定在原处，作用于当前这一页
-    private func heroPager(_ library: HomeSnapshot, topInset: CGFloat) -> some View {
+    private func heroPager(_ library: HomeSnapshot, topInset: CGFloat, selection: Int) -> some View {
         let featured = library.featured
-        let current = currentHero(library)
+        let current = currentHero(library, selection: selection)
         let bottomInset: CGFloat = featured.count > 1 ? 34 : 8
+        let binding = Binding<Int>(get: { selection }, set: { heroState.selection = $0 })
         return ZStack(alignment: .top) {
-            TabView(selection: $heroSelection) {
+            TabView(selection: binding) {
                 ForEach(Array(featured.enumerated()), id: \.element.id) { index, item in
                     HeroPage(item: item, bottomInset: bottomInset + HeroActions.height + 16)
                         .tag(index)
@@ -249,7 +261,7 @@ struct HomeTab: View {
         }
         .overlay(alignment: .bottom) {
             if featured.count > 1 {
-                heroIndicator(count: featured.count)
+                heroIndicator(count: featured.count, selection: selection)
                     .padding(.bottom, 2)
             }
         }
@@ -273,15 +285,15 @@ struct HomeTab: View {
         .padding(.top, topInset + 6)
     }
 
-    private func heroIndicator(count: Int) -> some View {
+    private func heroIndicator(count: Int, selection: Int) -> some View {
         HStack(spacing: 6) {
             ForEach(0..<count, id: \.self) { index in
                 Capsule()
-                    .fill(index == heroSelection ? Color.white : Color.white.opacity(0.45))
-                    .frame(width: index == heroSelection ? 18 : 6, height: 6)
+                    .fill(index == selection ? Color.white : Color.white.opacity(0.45))
+                    .frame(width: index == selection ? 18 : 6, height: 6)
                     .contentShape(Rectangle().inset(by: -6))
                     .onTapGesture {
-                        withAnimation(.easeInOut(duration: 0.3)) { heroSelection = index }
+                        withAnimation(.easeInOut(duration: 0.3)) { heroState.selection = index }
                     }
             }
         }
@@ -289,7 +301,7 @@ struct HomeTab: View {
         .frame(height: 24)
         .glassCapsule()
         .environment(\.colorScheme, .dark)
-        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: heroSelection)
+        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: selection)
         .accessibilityHidden(true)
     }
 
@@ -839,6 +851,27 @@ struct HomeTab: View {
 
 /// 只比较数量和状态，不比较整份片库。扫描中每新增 300 个视频才重新匹配一次，
 /// 否则每扫一页就把整个片库重新过一遍，界面会卡死。
+final class HeroState: ObservableObject {
+    @Published var selection = 0
+    @Published var stretch: CGFloat = 0
+}
+
+private struct HeroMinYKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
+/// 只在横幅状态变化时重算自己的内容，父页面不订阅这个对象。
+private struct HeroObserver<Content: View>: View {
+    @ObservedObject var state: HeroState
+    let content: (HeroState) -> Content
+    init(state: HeroState, @ViewBuilder content: @escaping (HeroState) -> Content) {
+        self.state = state
+        self.content = content
+    }
+    var body: some View { content(state) }
+}
+
 private struct HomeSnapshotKey: Equatable {
     let local: Int
     let cloudRevision: Int
@@ -869,7 +902,8 @@ private struct HeroPage: View {
                 ArtworkView(
                     urlString: item.backgroundURL.isEmpty ? item.posterURL : item.backgroundURL,
                     fallbackURLString: item.posterURL,
-                    title: item.title
+                    title: item.title,
+                    maxPixel: 1280
                 )
                 .scaledToFill()
                 .frame(width: geometry.size.width, height: geometry.size.height)

@@ -333,7 +333,12 @@ struct PosterArtwork: View {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .strokeBorder(Theme.hairline, lineWidth: 0.5)
         }
-        .shadow(color: Theme.shadow, radius: 10, x: 0, y: 6)
+        .background {
+            // 阴影画在纯色形状上，滚动时不用对整张海报图重新取阴影
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color.black)
+                .shadow(color: Theme.shadow, radius: 10, x: 0, y: 6)
+        }
     }
 }
 
@@ -530,39 +535,36 @@ struct PosterButtonStyle: ButtonStyle {
     }
 }
 
-/// 网络图片；加载失败时先试备用地址，再用品牌色画一张「空白海报」
+/// 网络图片；加载失败时先试备用地址，再用品牌色画一张「空白海报」。
+/// maxPixel 是按显示尺寸缩小后的最长边，海报 600、全屏横幅 1280，越小解码越快、内存越省。
 struct ArtworkView: View {
     let urlString: String
     var fallbackURLString = ""
     let title: String
     var letterSize: CGFloat = 52
+    var maxPixel = 600
 
     var body: some View {
-        if let url = URL(string: urlString), !urlString.isEmpty {
-            AsyncImage(url: url, transaction: Transaction(animation: .easeInOut(duration: 0.25))) { phase in
-                switch phase {
-                case .success(let image):
-                    image.resizable()
-                        .accessibilityLabel(title)
-                        .accessibilityIdentifier("home.artwork.\(title)")
-                case .failure:
-                    secondaryArtwork
-                case .empty:
-                    secondaryArtwork
-                @unknown default:
-                    fallback
-                }
+        PipelineImage(url: Self.url(urlString), maxPixel: maxPixel) { image in
+            if let image {
+                Image(uiImage: image).resizable()
+                    .accessibilityLabel(title)
+                    .accessibilityIdentifier("home.artwork.\(title)")
+            } else {
+                secondaryArtwork
             }
-        } else {
-            secondaryArtwork
         }
     }
 
+    private static func url(_ value: String) -> URL? {
+        value.isEmpty ? nil : URL(string: value)
+    }
+
     @ViewBuilder private var secondaryArtwork: some View {
-        if !fallbackURLString.isEmpty, fallbackURLString != urlString, let url = URL(string: fallbackURLString) {
-            AsyncImage(url: url) { phase in
-                if let image = phase.image {
-                    image.resizable().accessibilityLabel(title).accessibilityIdentifier("home.artwork.\(title)")
+        if !fallbackURLString.isEmpty, fallbackURLString != urlString, let url = Self.url(fallbackURLString) {
+            PipelineImage(url: url, maxPixel: maxPixel) { image in
+                if let image {
+                    Image(uiImage: image).resizable().accessibilityLabel(title).accessibilityIdentifier("home.artwork.\(title)")
                 } else { fallback }
             }
         } else { fallback }
@@ -601,11 +603,15 @@ struct AmbientBackdrop: View {
             ZStack {
                 Theme.pageBackground
                 if !urlString.isEmpty || !fallbackURLString.isEmpty {
-                    ArtworkView(urlString: urlString, fallbackURLString: fallbackURLString, title: "", letterSize: 1)
+                    // 全屏大半径模糊每帧都很贵：在 1/8 大小上模糊，再放大铺满，视觉几乎一样。
+                    ArtworkView(urlString: urlString, fallbackURLString: fallbackURLString, title: "", letterSize: 1, maxPixel: 160)
                         .scaledToFill()
+                        .frame(width: proxy.size.width / 8, height: proxy.size.height / 8)
+                        .clipped()
+                        .blur(radius: 7.5, opaque: true)
+                        .scaleEffect(8)
                         .frame(width: proxy.size.width, height: proxy.size.height)
                         .clipped()
-                        .blur(radius: 60, opaque: true)
                         .saturation(1.4)
                         .opacity(colorScheme == .dark ? 0.9 : 0.75)
                         .id(urlString)
