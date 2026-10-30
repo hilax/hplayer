@@ -119,7 +119,7 @@ struct HomeSnapshot {
 enum HomeLibrary {
     /// 首页媒体库：导入的本地视频加上当前账号加入首页的 115 文件
     static func media(local: LocalMediaStore, cloud: MediaLibraryStore, appState: AppState) -> [LibraryMedia] {
-        local.files.map(LibraryMedia.init(local:)) + cloud.files(for: appState).map(LibraryMedia.init(cloud:))
+        local.files.map(LibraryMedia.init(local:)) + cloud.media(for: appState)
     }
 
     static func items(_ media: [LibraryMedia], metadata: [String: MediaMetadata]) -> [HomeMediaItem] {

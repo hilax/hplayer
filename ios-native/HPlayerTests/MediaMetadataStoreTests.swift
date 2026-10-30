@@ -16,7 +16,11 @@ final class MediaMetadataStoreTests: XCTestCase {
 
     func testDifferentCodesWithTheSameCleanedTitleKeepSeparateCovers() async throws {
         let (defaults, suite) = makeDefaults()
-        defer { defaults.removePersistentDomain(forName: suite) }
+        UserDefaults.standard.set(true, forKey: AdultMetadataSettings.enabledKey)
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            UserDefaults.standard.removeObject(forKey: AdultMetadataSettings.enabledKey)
+        }
         let first = LibraryMedia(cloud: P115File(id: "a", parentId: "0", name: "[ABC-123] Same.Name.mp4",
             isDir: false, kind: "video", size: 10, pickCode: "a", sha1: "", updatedAt: "", thumbUrl: ""))
         let second = LibraryMedia(cloud: P115File(id: "b", parentId: "0", name: "[DEF-456] Same.Name.mp4",

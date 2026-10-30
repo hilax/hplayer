@@ -10,7 +10,7 @@ final class CloudLibraryScannerTests: XCTestCase {
     }()
 
     private func scanner(maximumAttempts: Int = 3) -> CloudLibraryScanner {
-        CloudLibraryScanner(defaults: defaults, minimumRequestInterval: 0, maximumAttempts: maximumAttempts, retryBaseDelay: 0)
+        CloudLibraryScanner(defaults: defaults, minimumRequestInterval: 0, persistInterval: 0, maximumAttempts: maximumAttempts, retryBaseDelay: 0)
     }
 
     private func file(_ id: String, parent: String = "0", directory: Bool = false, video: Bool = true) -> P115File {

@@ -65,8 +65,10 @@ final class MediaMetadataStore: ObservableObject {
     private var retryVersions: [String: Int] = [:]
     private struct NameInfo {
         let parsed: MediaNameParser.ParsedName
-        let key: String
+        let catalogKey: String?
         let legacyKey: String
+        /// 番号只在开启番号匹配后才参与缓存，关闭时与以往完全一致。
+        var key: String { AdultMetadataSettings.isEnabled ? (catalogKey ?? legacyKey) : legacyKey }
     }
     private var nameCache: [String: NameInfo] = [:]
     private var cacheDirty = false
@@ -243,8 +245,7 @@ final class MediaMetadataStore: ObservableObject {
         if let cached = nameCache[filename] { return cached }
         let parsed = MediaNameParser.parse(filename)
         let legacyKey = "\(MediaNameParser.cacheKey(parsed.title))|\(parsed.year ?? "")|\(parsed.season != nil || parsed.episode != nil ? "series" : "movie")"
-        let key = parsed.catalogCode.map { "av:\($0)" } ?? legacyKey
-        let value = NameInfo(parsed: parsed, key: key, legacyKey: legacyKey)
+        let value = NameInfo(parsed: parsed, catalogKey: parsed.catalogCode.map { "av:\($0)" }, legacyKey: legacyKey)
         nameCache[filename] = value
         return value
     }

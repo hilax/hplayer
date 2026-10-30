@@ -5,6 +5,10 @@ enum AVCatalogCode {
     private static let ignoredPrefixes: Set<String> = [
         "WEB", "WEBRIP", "BLURAY", "HDTV", "BDRIP", "HDRIP", "DVDRIP",
         "HEVC", "AVC", "AAC", "DDP", "DTS", "HDR", "CHD", "HD",
+        // 剧集、动画常见的集数、卷数、分辨率写法，不是番号。
+        "EP", "EPS", "EPISODE", "EPISODES", "VOL", "PART", "PT", "CD", "DISC", "DISK",
+        "SEASON", "NO", "NUM", "CH", "CHAPTER", "OVA", "OAD", "SP", "NCOP", "NCED",
+        "UHD", "FHD", "DV", "FLAC", "OPUS", "MP", "AC",
     ]
 
     static func extract(_ text: String) -> String? {
@@ -25,7 +29,9 @@ enum AVCatalogCode {
             let separator = String(value[separatorRange])
             let digits = String(value[numberRange])
             guard !ignoredPrefixes.contains(prefix), let number = Int(digits), number > 0 else { continue }
-            // 普通片名常以空格或点号接年份，不把它当作番号。
+            // 番号写成「ABC-123」「ABC123」「ABC_123」。用点号或空格隔开的多半是片名加集数
+            // （One.Piece.1100、Naruto Episode 100），不当作番号。
+            guard separator.isEmpty || separator == "-" || separator == "_" else { continue }
             if separator != "-", digits.count == 4, (1900...2099).contains(number) { continue }
             let normalized = String(number)
             let padded = String(repeating: "0", count: max(0, 3 - normalized.count)) + normalized

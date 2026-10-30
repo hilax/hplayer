@@ -13,11 +13,11 @@ struct HomeLibraryScanView: View {
     let onStart: (Bool) -> Void
     let onRetryMatching: () -> Void
 
-    private var matchedVideos: Int {
-        library.files(for: appState).filter { file in
-            guard let match = metadata.metadataByMediaID[LibraryMedia(cloud: file).id] else { return false }
-            return match.hasUsablePoster
-        }.count
+    @State private var matchedVideos = 0
+
+    private func refreshMatched() {
+        // 只在匹配结果变化时数一次，不在每次扫描进度刷新时重算。
+        matchedVideos = library.media(for: appState).filter { metadata.metadataByMediaID[$0.id]?.hasUsablePoster == true }.count
     }
 
     private var status: String {
@@ -96,6 +96,7 @@ struct HomeLibraryScanView: View {
                     Text("扫描在前台进行，退出 App 后可从这里继续。只读取文件列表，不下载整部视频，也不删除网盘文件。")
                 }
             }
+            .task(id: metadata.metadataByMediaID.count) { refreshMatched() }
             .navigationTitle("115 全盘扫描")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

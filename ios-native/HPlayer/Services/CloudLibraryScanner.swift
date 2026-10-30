@@ -21,7 +21,8 @@ final class CloudLibraryScanner: ObservableObject {
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var progress = Progress()
     @Published private(set) var accountID: String?
-    @Published private(set) var discoveredFiles: [P115File] = []
+    /// 不发布：几千个文件每页变化一次会让所有观察扫描器的页面整体重算。
+    private(set) var discoveredFiles: [P115File] = []
     @Published private(set) var currentFolderName = ""
     @Published private(set) var lastError = ""
 
@@ -60,6 +61,8 @@ final class CloudLibraryScanner: ObservableObject {
     private let storageKeyPrefix: String
     private let minimumRequestInterval: TimeInterval
     private let retryBaseDelay: TimeInterval
+    private let persistInterval: TimeInterval
+    private var lastPersistAt = Date.distantPast
     private let maximumAttempts: Int
     private var checkpoint: Checkpoint?
     private var knownFolders = Set<String>()
@@ -72,7 +75,8 @@ final class CloudLibraryScanner: ObservableObject {
     init(
         defaults: UserDefaults = .standard,
         storageKeyPrefix: String = "hplayer.cloudLibraryScan.v1",
-        minimumRequestInterval: TimeInterval = 0.35,
+        minimumRequestInterval: TimeInterval = 1.0,
+        persistInterval: TimeInterval = 2,
         maximumAttempts: Int = 3,
         retryBaseDelay: TimeInterval = 1
     ) {
@@ -81,6 +85,7 @@ final class CloudLibraryScanner: ObservableObject {
         self.minimumRequestInterval = max(0, minimumRequestInterval)
         self.maximumAttempts = max(1, maximumAttempts)
         self.retryBaseDelay = max(0, retryBaseDelay)
+        self.persistInterval = max(0, persistInterval)
     }
 
     /// accountID is a public account scope such as device:12345, never a Cookie or token.
@@ -243,7 +248,11 @@ final class CloudLibraryScanner: ObservableObject {
                 }
                 saved.phase = saved.pendingFolders.isEmpty ? .completed : .running
                 saved.lastError = ""
-                try persist(saved)
+                // 目录清单可能很大，每页都整份重写会拖慢主线程；中途最多每隔几秒保存一次，
+                // 暂停、失败、完成时一定保存。丢失的页面重启后会按去重规则重新扫到。
+                if saved.phase != .running || Date().timeIntervalSince(lastPersistAt) >= persistInterval {
+                    try persist(saved)
+                }
                 checkpoint = saved
                 knownFolders.formUnion(newFolderIDs)
                 knownVideos.formUnion(newVideoIDs)
@@ -325,6 +334,7 @@ final class CloudLibraryScanner: ObservableObject {
     }
 
     private func persist(_ saved: Checkpoint) throws {
+        lastPersistAt = Date()
         defaults.set(try JSONEncoder().encode(saved), forKey: checkpointKey(saved.accountID))
     }
 

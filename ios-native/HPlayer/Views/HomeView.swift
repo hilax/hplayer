@@ -2,29 +2,32 @@ import SwiftUI
 
 struct HomeView: View {
     @StateObject private var recents = RecentStore.shared
-    @StateObject private var mediaLibrary: MediaLibraryStore
-    @StateObject private var localStore: LocalMediaStore
-    @StateObject private var metadataStore: MediaMetadataStore
-    @StateObject private var scanner: CloudLibraryScanner
+    @StateObject private var mediaLibrary = MediaLibraryStore()
+    @StateObject private var localStore = LocalMediaStore()
+    @StateObject private var metadataStore = MediaMetadataStore()
+    @StateObject private var scanner = CloudLibraryScanner()
     @State private var selection: HomeSection = .home
+    @State private var restored = false
+    private let appState: AppState
 
+    /// init 会在上层页面每次刷新时被重新调用，这里不做任何读盘或联网，
+    /// 恢复工作放到 restoreOnce，只执行一次。
     init(appState: AppState) {
-        let local = LocalMediaStore()
-        let library = MediaLibraryStore()
-        let metadata = MediaMetadataStore()
-        let scan = CloudLibraryScanner()
-        scan.selectAccount(appState.libraryAccountID)
+        self.appState = appState
+    }
+
+    private func restoreOnce() {
+        guard !restored else { return }
+        restored = true
+        scanner.selectAccount(appState.libraryAccountID)
         // 扫描检查点先于首页恢复，避免上次退出时的最后一批文件遗漏。
-        library.add(scan.discoveredFiles, for: appState)
-        metadata.hydrate(files: HomeLibrary.media(local: local, cloud: library, appState: appState))
-        _localStore = StateObject(wrappedValue: local)
-        _mediaLibrary = StateObject(wrappedValue: library)
-        _metadataStore = StateObject(wrappedValue: metadata)
-        _scanner = StateObject(wrappedValue: scan)
+        mediaLibrary.add(scanner.discoveredFiles, for: appState)
+        metadataStore.hydrate(files: HomeLibrary.media(local: localStore, cloud: mediaLibrary, appState: appState))
     }
 
     var body: some View {
         tabs
+            .onAppear(perform: restoreOnce)
             .environmentObject(recents)
             .environmentObject(mediaLibrary)
             .environmentObject(localStore)

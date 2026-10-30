@@ -48,6 +48,18 @@ final class MediaLibraryStore: ObservableObject {
         return cloudByAccount[scope] ?? []
     }
 
+    private var mediaCache: (scope: String, revision: Int, items: [LibraryMedia])?
+    private var revision = 0
+
+    /// 首页每次刷新都要用到；片库很大时缓存转换结果，只在内容变化后重算。
+    func media(for appState: AppState) -> [LibraryMedia] {
+        guard appState.isAuthenticated, let scope = appState.libraryAccountID else { return [] }
+        if let cache = mediaCache, cache.scope == scope, cache.revision == revision { return cache.items }
+        let items = (cloudByAccount[scope] ?? []).map(LibraryMedia.init(cloud:))
+        mediaCache = (scope, revision, items)
+        return items
+    }
+
     func add(_ files: [P115File], for appState: AppState) {
         guard appState.isAuthenticated, let scope = appState.libraryAccountID else { return }
         var result = cloudByAccount[scope] ?? []
@@ -64,12 +76,14 @@ final class MediaLibraryStore: ObservableObject {
         }
         guard changed else { return }
         cloudByAccount[scope] = result
+        revision += 1
         save()
     }
 
     func remove(pickCode: String, for appState: AppState) {
         guard let scope = appState.libraryAccountID else { return }
         cloudByAccount[scope]?.removeAll { $0.pickCode == pickCode }
+        revision += 1
         save()
     }
 

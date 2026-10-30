@@ -111,7 +111,9 @@ actor MetadataSearch {
         guard !Task.isCancelled else { return nil }
         // 番号文件只发番号给 R18.dev，不把包含私人信息的完整文件名发给其他来源。
         if adultEnabled(), let code = parsed.catalogCode {
-            return await r18dev.lookup(code)
+            if let found = await r18dev.lookup(code) { return found }
+            // 没查到就回到普通来源，避免被误认成番号的剧集永远匹配不上。
+            if Task.isCancelled { return nil }
         }
         let queries = parsed.searchTitles
         let wantsSeries = parsed.looksLikeSeries

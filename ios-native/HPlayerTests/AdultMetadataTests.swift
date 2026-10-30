@@ -12,6 +12,10 @@ final class AdultMetadataTests: XCTestCase {
         XCTAssertNil(AVCatalogCode.extract("Movie.2024.1080p.WEB-DL.x265.mkv"))
         XCTAssertNil(AVCatalogCode.extract("FC2-PPV-1234567.mp4"))
         XCTAssertNil(AVCatalogCode.extract("ABC-000.mp4"))
+        for name in ["凡人修仙传.EP120.2160p.WEB-DL.mp4", "仙逆.EP078.mp4", "One.Piece.1100.1080p.mkv",
+                     "Detective.Conan.1120.mkv", "Naruto Episode 100.mp4", "名侦探柯南 Vol 001.mkv", "Gundam.0079.E01.mkv"] {
+            XCTAssertNil(AVCatalogCode.extract(name), name)
+        }
     }
 
     func testRequiresMatchingSourceIdentityAndAUsableHTTPSPoster() throws {

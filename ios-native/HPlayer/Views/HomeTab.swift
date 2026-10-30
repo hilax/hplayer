@@ -25,6 +25,11 @@ struct HomeTab: View {
     private static let scrollSpace = "home.scroll"
     private let heroHeight: CGFloat = 540
 
+    private var matchingBucket: Int {
+        let count = localStore.files.count + mediaLibrary.files(for: appState).count
+        return scanner.phase == .running ? count / 300 : count
+    }
+
     private var libraryFiles: [LibraryMedia] {
         HomeLibrary.media(local: localStore, cloud: mediaLibrary, appState: appState)
     }
@@ -100,7 +105,7 @@ struct HomeTab: View {
                 Text(playError)
             }
             .task { localStore.refresh() }
-            .task(id: HomeMatchingInput(files: libraryFiles, accountID: appState.libraryAccountID, background: scenePhase == .background)) {
+            .task(id: HomeMatchingInput(count: matchingBucket, accountID: appState.libraryAccountID, background: scenePhase == .background, scanning: scanner.phase == .running)) {
                 if scanner.accountID != appState.libraryAccountID {
                     metadataStore.pause()
                     scanner.selectAccount(appState.libraryAccountID)
@@ -321,7 +326,7 @@ struct HomeTab: View {
     private func startScan(_ restart: Bool) {
         guard let accountID = appState.libraryAccountID, appState.isAuthenticated,
               let client = appState.directClient() else { return }
-        metadataStore.retryFailed(files: libraryFiles)
+        // 不清空「已失败」记录：继续扫描时重新查询全部未匹配影片会重复请求并拖慢界面。
         scanner.start(accountID: accountID, fetchPage: { cid, offset in
             try await client.filesPage(cid: cid, offset: offset)
         }, onBatch: { files in
@@ -765,10 +770,13 @@ struct HomeTab: View {
     }
 }
 
+/// 只比较数量和状态，不比较整份片库。扫描中每新增 300 个视频才重新匹配一次，
+/// 否则每扫一页就把整个片库重新过一遍，界面会卡死。
 private struct HomeMatchingInput: Equatable {
-    let files: [LibraryMedia]
+    let count: Int
     let accountID: String?
     let background: Bool
+    let scanning: Bool
 }
 
 // MARK: - 横幅单页
