@@ -94,6 +94,9 @@ struct HomeTab: View {
                 .coordinateSpace(name: Self.scrollSpace)
                 .scrollIndicators(.hidden)
                 .ignoresSafeArea(edges: .top)
+                .overlay(alignment: .top) {
+                    HomeScrolledBar(state: heroState, onAdd: { showAdd = true })
+                }
             }
             .background(Theme.pageBackground.ignoresSafeArea())
             .navigationDestination(for: PerformerRoute.self) { route in
@@ -218,6 +221,8 @@ struct HomeTab: View {
         .onPreferenceChange(HeroMinYKey.self) { minY in
             let stretch = max(minY, 0)
             if stretch != heroState.stretch { heroState.stretch = stretch }
+            let scrolled = minY < -heroHeight + 90
+            if scrolled != heroState.scrolled { heroState.scrolled = scrolled }
         }
     }
 
@@ -658,6 +663,26 @@ struct HomeTab: View {
 final class HeroState: ObservableObject {
     @Published var selection = 0
     @Published var stretch: CGFloat = 0
+    @Published var scrolled = false
+}
+
+private struct HomeScrolledBar: View {
+    @ObservedObject var state: HeroState
+    let onAdd: () -> Void
+    var body: some View {
+        if state.scrolled {
+            HStack {
+                Text("你的片库").font(.title2.bold())
+                Spacer()
+                Button(action: onAdd) {
+                    Image(systemName: "plus").font(.body.weight(.semibold)).frame(width: 44, height: 44).glassCircle()
+                }.accessibilityLabel("添加影片").accessibilityIdentifier("home.scrolledAdd")
+            }
+            .padding(.horizontal, Theme.contentInset).padding(.top, 4).padding(.bottom, 10)
+            .background(Theme.pageBackground.ignoresSafeArea(edges: .top))
+            .overlay(alignment: .bottom) { Rectangle().fill(Theme.hairline).frame(height: 0.5) }
+        }
+    }
 }
 
 private struct HeroMinYKey: PreferenceKey {

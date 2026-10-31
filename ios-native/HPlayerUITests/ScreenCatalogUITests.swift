@@ -71,7 +71,16 @@ final class ScreenCatalogUITests: XCTestCase {
         } else {
             XCTAssertTrue(app.descendants(matching: .any)["catalog.\(screen)"].firstMatch.waitForExistence(timeout: 25))
         }
-        if screen == "home-more" { app.swipeUp(); app.swipeUp() }
+        if screen == "home-more" {
+            let movies = app.staticTexts["电影"].firstMatch
+            for _ in 0..<3 {
+                let distance = movies.frame.minY - 140
+                if distance < 30 { break }
+                let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8))
+                let end = start.withOffset(CGVector(dx: 0, dy: -min(distance, app.windows.firstMatch.frame.height * 0.45)))
+                start.press(forDuration: 0.05, thenDragTo: end)
+            }
+        }
         if screen == "add" { app.buttons["home.sources"].tap() }
         if screen == "film-menu" { app.buttons["影片选项"].tap() }
         if screen != "portrait" && screen != "landscape" {
