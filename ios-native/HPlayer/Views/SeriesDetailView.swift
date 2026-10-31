@@ -35,6 +35,7 @@ struct SeriesDetailView: View {
             }
         }
         .background(Theme.pageBackground.ignoresSafeArea())
+        .designScreen("detail")
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
@@ -225,25 +226,14 @@ struct SeriesDetailView: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 8)
-                if seasons.count > 1 {
-                    Menu {
-                        ForEach(seasons, id: \.self) { value in
-                            Button("第 \(value) 季") { season = value }
-                        }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Text("第 \(currentSeason) 季")
-                            Image(systemName: "chevron.down")
-                                .font(.caption.weight(.bold))
-                        }
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.primary)
-                        .padding(.horizontal, 12)
-                        .frame(height: 32)
-                        .glassCapsule()
+            }
+            ScrollView(.horizontal) {
+                HStack(spacing: 8) {
+                    ForEach(seasons, id: \.self) { value in
+                        SelectionPill(title: "第 \(value) 季 · \(group.episodes.filter { ($0.parsed.season ?? 1) == value }.count) 集", selected: value == currentSeason) { season = value }
                     }
                 }
-            }
+            }.scrollIndicators(.hidden)
 
             VStack(spacing: 0) {
                 ForEach(episodes) { episode in

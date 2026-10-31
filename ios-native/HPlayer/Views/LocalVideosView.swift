@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 struct LocalVideosView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var localStore: LocalMediaStore
+    @EnvironmentObject private var metadataStore: MediaMetadataStore
 
     @State private var showImporter = false
     @State private var importError = ""
@@ -26,11 +27,15 @@ struct LocalVideosView: View {
                         .padding(.vertical, 16)
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
+                    Button { showImporter = true } label: {
+                        LibraryActionRow(symbol: "folder", title: "从「文件」导入", subtitle: "导入后，可直接在本机播放。")
+                            .surfaceCard()
+                    }.buttonStyle(.plain).listRowBackground(Color.clear).listRowSeparator(.hidden)
                     ForEach(localStore.files) { file in
                         Button {
                             play(file)
                         } label: {
-                            LocalVideoRow(file: file)
+                            LocalVideoRow(file: file, artwork: metadataStore.metadataByMediaID[LibraryMedia(local: file).id]?.posterURL ?? "")
                         }
                         .buttonStyle(.plain)
                         .listRowBackground(Color.clear)
@@ -56,6 +61,11 @@ struct LocalVideosView: View {
             }
         }
         .background(Theme.pageBackground.ignoresSafeArea())
+        .designScreen("local")
+        .safeAreaInset(edge: .bottom) {
+            Button { showImporter = true } label: { Label("导入视频", systemImage: "plus") }
+                .buttonStyle(PrimaryActionStyle()).padding(Theme.contentInset).background(Theme.pageBackground)
+        }
         .navigationTitle("本机视频")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
@@ -104,21 +114,13 @@ struct LocalVideosView: View {
 
 private struct LocalVideoRow: View {
     let file: LocalMedia
+    var artwork = ""
 
     var body: some View {
         HStack(spacing: 14) {
-            Image(systemName: "film")
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.9))
-                .frame(width: 96, height: 54)
-                .background(
-                    LinearGradient(
-                        colors: [Theme.brandBlue.opacity(0.85), Theme.brandViolet.opacity(0.85)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    in: RoundedRectangle(cornerRadius: 14, style: .continuous)
-                )
+            ArtworkView(urlString: artwork, title: file.name)
+                .scaledToFill().frame(width: 56, height: 78).clipped()
+                .clipShape(RoundedRectangle(cornerRadius: 10)).allowsHitTesting(false)
 
             VStack(alignment: .leading, spacing: 5) {
                 Text(file.name)
@@ -133,6 +135,7 @@ private struct LocalVideoRow: View {
             }
 
             Spacer(minLength: 0)
+            Image(systemName: "play.circle").font(.title3).foregroundStyle(Theme.accent)
         }
         .contentShape(Rectangle())
     }

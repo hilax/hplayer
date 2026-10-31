@@ -21,7 +21,7 @@ private struct TorrentUpload: Decodable {
     let pickCode: String
 }
 
-private struct TorrentEntry: Decodable, Identifiable {
+struct TorrentEntry: Decodable, Identifiable {
     let index: Int
     let path: String
     let size: Int
@@ -29,7 +29,7 @@ private struct TorrentEntry: Decodable, Identifiable {
     var id: Int { index }
 }
 
-private struct TorrentInfo: Decodable {
+struct TorrentInfo: Decodable {
     let name: String
     let infoHash: String
     let sha1: String
@@ -38,7 +38,7 @@ private struct TorrentInfo: Decodable {
     let files: [TorrentEntry]
 }
 
-private struct TorrentTask: Decodable, Identifiable {
+struct TorrentTask: Decodable, Identifiable {
     let id: String
     let name: String
     let progress: Double
@@ -55,7 +55,7 @@ private struct TorrentTask: Decodable, Identifiable {
     }
 }
 
-private struct TorrentTasks: Decodable {
+struct TorrentTasks: Decodable {
     let page: Int
     let pageCount: Int
     let count: Int
@@ -72,6 +72,7 @@ struct TorrentView: View {
     @State private var browsing = false
     @State private var busy = false
     @State private var busyText = ""
+    @State private var showingFiles = false
     @State private var info: TorrentInfo?
     @State private var selected: Set<Int> = []
     @State private var savePath = "HPlayer"
@@ -80,122 +81,78 @@ struct TorrentView: View {
     @State private var error = ""
     @State private var message = ""
 
+    init(initialTasks: TorrentTasks? = nil) { _tasks = State(initialValue: initialTasks) }
+
     var body: some View {
-        List {
-            PageIntroduction(eyebrow: "Cloud download", title: "BT 云下载", subtitle: "解析种子，交给 115 保存。")
-                .padding(.vertical, 12)
-                .listRowBackground(Color.clear)
-                .listRowSeparator(.hidden)
-            Section {
-                NavigationLink {
-                    Official115SettingsView(onSourceChanged: { Task { await loadTasks(page: 1) } })
-                } label: {
-                    Label("115 云下载授权", systemImage: "key.horizontal")
-                }
-            } footer: {
-                Text("BT 云下载可在手机直接使用，但需在 115 开放平台申请 AppID 和上传、云下载权限。")
-            }
-            Section {
-                Button { importing = true } label: {
-                    Label("从手机导入 .torrent", systemImage: "doc.badge.plus")
-                }.disabled(busy || !appState.isAuthenticated)
-                Button { browsing = true } label: {
-                    Label("选择网盘中的种子", systemImage: "folder")
-                }.disabled(busy || !appState.isAuthenticated)
-                if busy { HStack { ProgressView(); Text(busyText).foregroundStyle(.secondary) } }
-            } header: { Text("添加种子") }
-            footer: { Text("需要先完成上方 115 官方授权。手机导入的种子会上传到你的 115 网盘根目录。") }
-
+        DesignPage(eyebrow: "Cloud download", title: "BT 云下载", subtitle: "解析种子，交给 115 保存。") {
+            NavigationLink {
+                Official115SettingsView(onSourceChanged: { Task { await loadTasks(page: 1) } })
+            } label: {
+                LibraryActionRow(symbol: "key.horizontal", title: "115 云下载授权", subtitle: "配置开放平台与云下载权限").surfaceCard()
+            }.buttonStyle(.plain)
+            VStack(spacing: 14) {
+                Image(systemName: "doc.badge.arrow.up").font(.system(size: 38, weight: .light)).foregroundStyle(Theme.accent)
+                    .padding(.top, 12)
+                Text("添加一个种子").font(.title3.bold())
+                Text("选择 .torrent 文件，查看内容后再创建下载任务。")
+                    .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                Button { importing = true } label: { Label("从手机导入 .torrent", systemImage: "plus") }
+                    .buttonStyle(PrimaryActionStyle()).disabled(busy || !appState.isAuthenticated)
+                Button { browsing = true } label: { Label("选择网盘中的种子", systemImage: "folder") }
+                    .buttonStyle(SecondaryActionStyle()).disabled(busy || !appState.isAuthenticated)
+            }.padding(22).surfaceCard()
+            if busy { HStack(spacing: 12) { ProgressView(); Text(busyText).font(.subheadline).foregroundStyle(.secondary) } }
             if let info {
-                Section {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(info.name.isEmpty ? "BT 种子" : info.name).font(.headline)
-                        Text("\(info.files.count) 个文件 · \(formatSize(info.size))")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    HStack {
-                        Button("全选") { selected = Set(info.files.map(\.index)) }
-                        Spacer()
-                        Text("已选 \(selected.count) 项").font(.caption).foregroundStyle(.secondary)
-                        Spacer()
-                        Button("清空") { selected.removeAll() }
-                    }
-                    ForEach(info.files) { file in
-                        Button { toggle(file.index) } label: {
-                            HStack(alignment: .top, spacing: 12) {
-                                Image(systemName: selected.contains(file.index) ? "checkmark.circle.fill" : "circle")
-                                    .foregroundStyle(selected.contains(file.index) ? Theme.accent : Color.secondary)
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(file.path).foregroundStyle(.primary).multilineTextAlignment(.leading)
-                                    Text(formatSize(file.size)).font(.caption).foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                            }
-                        }.buttonStyle(.plain)
-                    }
-                } header: { Text("选择要下载的文件") }
-
-                Section {
-                    TextField("保存路径", text: $savePath)
-                        .focused($focusedField, equals: .savePath)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled()
-                        .submitLabel(.done).onSubmit { focusedField = nil }
-                    TextField("目标文件夹 ID，根目录为 0", text: $folderId)
-                        .focused($focusedField, equals: .folderId)
-                        .keyboardType(.numberPad)
-                    Button { Task { await submit(info) } } label: {
-                        Label("创建云下载任务", systemImage: "icloud.and.arrow.down")
-                    }
-                    .disabled(busy || selected.isEmpty || savePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                } header: { Text("保存位置") }
-                footer: { Text("路径相对于目标文件夹。创建任务可能使用 115 云下载配额。") }
+                Button { showingFiles = true } label: {
+                    LibraryActionRow(symbol: "checklist", title: info.name, subtitle: "\(info.files.count) 个文件 · \(formatSize(info.size))", value: "选文件").surfaceCard()
+                }.buttonStyle(.plain)
             }
-
-            if !message.isEmpty { Section { Label(message, systemImage: "checkmark.circle").foregroundStyle(.green) } }
-            if !error.isEmpty { Section { Label(error, systemImage: "exclamationmark.circle").foregroundStyle(.red) } }
-
-            Section {
-                if let tasks, !tasks.tasks.isEmpty {
-                    ForEach(tasks.tasks) { task in
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(task.name).font(.subheadline.weight(.medium))
-                            HStack {
-                                Text(task.statusText)
-                                Spacer()
-                                Text("\(Int(max(0, min(100, task.progress))))% · \(formatSize(task.size))")
-                            }.font(.caption).foregroundStyle(.secondary)
-                            ProgressView(value: max(0, min(100, task.progress)), total: 100)
-                        }.padding(.vertical, 3)
-                    }
-                    if tasks.pageCount > 1 {
-                        HStack {
-                            Button("上一页") { Task { await loadTasks(page: tasks.page - 1) } }.disabled(tasks.page <= 1)
-                            Spacer()
-                            Text("\(tasks.page) / \(tasks.pageCount)").font(.caption)
-                            Spacer()
-                            Button("下一页") { Task { await loadTasks(page: tasks.page + 1) } }.disabled(tasks.page >= tasks.pageCount)
-                        }
-                    }
-                } else {
-                    Text("暂无可显示的任务").foregroundStyle(.secondary)
-                }
-                Button("刷新任务") { Task { await loadTasks(page: tasks?.page ?? 1) } }
-                    .disabled(!appState.isAuthenticated)
-            } header: { Text("115 云下载任务") }
-        }
-        .listRowSeparator(.hidden)
-        .scrollDismissesKeyboard(.interactively)
-        .toolbar {
-            ToolbarItemGroup(placement: .keyboard) {
+            if !message.isEmpty { DesignNotice(symbol: "checkmark.circle", text: message) }
+            if !error.isEmpty { DesignNotice(symbol: "exclamationmark.circle", text: error, warning: true) }
+            HStack {
+                Text("云下载任务").font(.headline)
                 Spacer()
-                Button("完成") { focusedField = nil }
+                Button("刷新") { Task { await loadTasks(page: tasks?.page ?? 1) } }
+                    .font(.subheadline).disabled(!appState.isAuthenticated)
+            }
+            if let tasks, !tasks.tasks.isEmpty {
+                ForEach(tasks.tasks) { task in
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack(alignment: .top, spacing: 12) {
+                            Image(systemName: task.status == 2 ? "checkmark.circle" : "arrow.down.circle")
+                                .font(.title2).foregroundStyle(task.status == -1 ? Theme.warning : Theme.accent)
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(task.name).font(.subheadline.weight(.medium)).lineLimit(2)
+                                Text("\(task.statusText) · \(formatSize(task.size))").font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer(minLength: 0)
+                            Text("\(Int(max(0, min(100, task.progress))))%").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                        }
+                        ProgressView(value: max(0, min(100, task.progress)), total: 100).tint(Theme.accent)
+                    }.padding(18).surfaceCard()
+                }
+                if tasks.pageCount > 1 {
+                    HStack {
+                        Button("上一页") { Task { await loadTasks(page: tasks.page - 1) } }.disabled(tasks.page <= 1)
+                        Spacer(); Text("\(tasks.page) / \(tasks.pageCount)").font(.caption); Spacer()
+                        Button("下一页") { Task { await loadTasks(page: tasks.page + 1) } }.disabled(tasks.page >= tasks.pageCount)
+                    }
+                }
+            } else {
+                Text("暂无可显示的任务").font(.subheadline).foregroundStyle(.secondary).frame(maxWidth: .infinity).padding(24).surfaceCard()
+            }
+            DesignNotice(text: "需要先完成 115 官方授权。手机导入的种子会上传到网盘根目录；创建任务可能使用云下载配额。")
+        }
+        .navigationTitle("BT 云下载")
+        .designScreen("torrent")
+        .navigationDestination(isPresented: $showingFiles) {
+            if let info {
+                TorrentSelectionView(info: info, selected: $selected, savePath: $savePath, folderId: $folderId, busy: busy, error: error) {
+                    Task { await submit(info) }
+                }
             }
         }
-        .libraryFormStyle()
-        .navigationTitle("BT 云下载")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar(.visible, for: .navigationBar)
-        .task { await loadTasks(page: 1) }
+        .task { if !InterfacePreview.active { await loadTasks(page: 1) } }
         .sheet(isPresented: $browsing) {
             TorrentBrowser { seed in
                 browsing = false
@@ -247,6 +204,7 @@ struct TorrentView: View {
         let defaults = parsed.files.filter(\.wanted).map(\.index)
         selected = Set(defaults.isEmpty ? parsed.files.map(\.index) : defaults)
         if parsed.files.isEmpty { error = "115 没有返回可下载的文件。" }
+        else { showingFiles = true }
     }
 
     private func submit(_ info: TorrentInfo) async {
@@ -260,6 +218,7 @@ struct TorrentView: View {
                 "savePath": savePath.trimmingCharacters(in: .whitespacesAndNewlines), "folderId": folderId
             ])
             message = "已提交云下载任务，可在下方查看进度。"
+            showingFiles = false
             self.info = nil; selected.removeAll()
             await loadTasks(page: 1)
         } catch { self.error = error.localizedDescription }

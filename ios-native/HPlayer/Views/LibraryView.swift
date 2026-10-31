@@ -47,6 +47,18 @@ struct DirectoryView: View {
     @State private var selecting = false
     @State private var selection: Set<String> = []
 
+    init(cid: String, trail: [Crumb] = [], onJump: ((Int) -> Void)? = nil,
+         onOpenDir: @escaping (Crumb) -> Void, onPlay: @escaping (P115File, [P115File]) -> Void,
+         onImported: (() -> Void)? = nil, initialFiles: [P115File]? = nil, initialSelection: Set<String>? = nil) {
+        self.cid = cid; self.trail = trail; self.onJump = onJump
+        self.onOpenDir = onOpenDir; self.onPlay = onPlay; self.onImported = onImported
+        _files = State(initialValue: initialFiles ?? [])
+        _items = State(initialValue: initialFiles ?? [])
+        _loading = State(initialValue: initialFiles == nil)
+        _selecting = State(initialValue: initialSelection != nil)
+        _selection = State(initialValue: initialSelection ?? [])
+    }
+
     var body: some View {
         Group {
             if loading {
@@ -71,13 +83,24 @@ struct DirectoryView: View {
             }
         }
         .background(Theme.pageBackground.ignoresSafeArea())
+        .designScreen(selecting ? "files-select" : "files")
         .toolbar(.visible, for: .navigationBar)
         .navigationBarTitleDisplayMode(.inline)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if selecting { selectionBar }
+            else if !loading && !items.isEmpty {
+                VStack(spacing: 8) {
+                    Button(action: addAllToHome) { Label("将当前目录视频加入首页", systemImage: "plus") }
+                        .buttonStyle(SecondaryActionStyle())
+                        .disabled(!files.contains { $0.isVideo && !$0.pickCode.isEmpty })
+                    Text("只加入当前文件夹中的视频，不修改网盘文件。")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }.padding(.horizontal, Theme.contentInset).padding(.vertical, 12)
+                    .background(Theme.pageBackground)
+            }
         }
         .task(id: cid) {
-            await load()
+            if !InterfacePreview.active { await load() }
         }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
@@ -103,7 +126,7 @@ struct DirectoryView: View {
                 .listRowSeparator(.hidden)
                 .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 6, trailing: 16))
 
-            ForEach(items) { file in
+            ForEach(items.filter { !selecting || ($0.isVideo && !$0.pickCode.isEmpty) }) { file in
                 Button {
                     tap(file)
                 } label: {
@@ -114,6 +137,7 @@ struct DirectoryView: View {
                 .listRowSeparator(.visible)
                 .listRowSeparatorTint(Theme.hairline)
                 .listRowInsets(EdgeInsets(top: 8, leading: 22, bottom: 8, trailing: 22))
+                .accessibilityIdentifier("library.file.\(file.id)")
                 .accessibilityAddTraits(selection.contains(file.id) ? AccessibilityTraits.isSelected : AccessibilityTraits())
             }
         }
@@ -125,9 +149,11 @@ struct DirectoryView: View {
 
     private var listHeader: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if trail.count > 1 {
-                breadcrumb
-            }
+            if trail.count > 1 { breadcrumb }
+            PageIntroduction(eyebrow: selecting ? "Select files" : "Your cloud library",
+                             title: selecting ? "选择视频" : trail.last?.name ?? "115 网盘",
+                             subtitle: "\(items.filter(\.isDir).count) 个文件夹 · \(items.filter { $0.isVideo }.count) 个视频")
+                .padding(.vertical, 10)
             sortBar
         }
     }
@@ -177,7 +203,7 @@ struct DirectoryView: View {
 
     /// 排序方式常驻在列表顶部，点当前的那项再点一次就反向
     private var sortBar: some View {
-        HStack(spacing: 8) {
+        ScrollView(.horizontal) { HStack(spacing: 8) {
             ForEach(FileSortKey.allCases) { key in
                 let active = key == sortKey
                 Button {
@@ -220,8 +246,7 @@ struct DirectoryView: View {
             .buttonStyle(.plain)
             .accessibilityAddTraits(foldersFirst ? AccessibilityTraits.isSelected : AccessibilityTraits())
 
-            Spacer(minLength: 0)
-        }
+        }}.scrollIndicators(.hidden)
     }
 
     private func tap(_ file: P115File) {
@@ -282,26 +307,22 @@ struct DirectoryView: View {
     }
 
     private var allSelected: Bool {
-        !items.isEmpty && selection.count == items.count
+        let eligible = items.filter { $0.isVideo && !$0.pickCode.isEmpty }
+        return !eligible.isEmpty && selection.count == eligible.count
     }
 
     private var selectionBar: some View {
-        HStack(spacing: 10) {
-            Text(selection.isEmpty ? "请选择文件" : "已选 \(selection.count) 项")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-            Spacer(minLength: 8)
+        VStack(spacing: 10) {
             if onImported == nil {
-                actionPill("播放", systemImage: "play.fill", prominent: false) { playSelected() }
+                Button { playSelected() } label: { Label("播放所选 · \(selectedVideos.count) 项", systemImage: "play.fill") }
+                    .buttonStyle(PrimaryActionStyle()).disabled(selectedVideos.isEmpty)
             }
-            actionPill("加入首页", systemImage: "rectangle.stack.badge.plus", prominent: true) { addSelectedToHome() }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .glassCard(cornerRadius: 24)
-        .padding(.horizontal, 16)
-        .padding(.bottom, 8)
+            Button(action: addSelectedToHome) { Label("加入首页", systemImage: "plus") }
+                .buttonStyle(SecondaryActionStyle()).disabled(selectedVideos.isEmpty)
+            Text("按当前列表顺序连续播放所选视频。")
+                .font(.caption2).foregroundStyle(.secondary)
+        }.padding(.horizontal, Theme.contentInset).padding(.vertical, 12)
+            .background(Theme.pageBackground)
     }
 
     private func actionPill(_ title: String, systemImage: String, prominent: Bool, action: @escaping () -> Void) -> some View {

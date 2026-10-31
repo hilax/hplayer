@@ -112,12 +112,7 @@ struct HomeLibraryScanView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("媒体库管理")
-                            .font(.largeTitle.bold())
-                        Text("整理你的文件、封面与影片资料")
-                            .font(.subheadline).foregroundStyle(.secondary)
-                    }
+                    PageIntroduction(eyebrow: "Keep your library in shape", title: "媒体库管理", subtitle: "整理你的文件、封面与影片资料。")
                     .accessibilityElement(children: .combine)
 
                     scanCard
@@ -152,6 +147,7 @@ struct HomeLibraryScanView: View {
             }
         }
         .tint(Theme.accent)
+        .designScreen("manage")
         .sheet(isPresented: $pickingFolder) {
             ScanFolderPicker(onSelect: onStartFolder).environmentObject(appState)
         }
@@ -367,7 +363,7 @@ private extension View {
 }
 
 /// 未识别文件不占用首页，但仍可以从扫描页播放或手动校正封面。
-private struct HomeUnmatchedMediaView: View {
+struct HomeUnmatchedMediaView: View {
     @EnvironmentObject private var library: MediaLibraryStore
     @EnvironmentObject private var local: LocalMediaStore
     @EnvironmentObject private var metadata: MediaMetadataStore
@@ -381,34 +377,32 @@ private struct HomeUnmatchedMediaView: View {
     }
 
     var body: some View {
-        List {
+        DesignPage(eyebrow: "A little attention", title: "未匹配影片", subtitle: "\(items.count) 个视频可以手动补充资料，也可以直接播放。") {
             if items.isEmpty {
-                Text("当前没有待匹配影片").foregroundStyle(.secondary)
+                EmptyStateView(icon: "checkmark.circle", title: "片库已经整理好了", message: "当前没有待匹配影片。")
             }
             ForEach(items) { item in
-                Button {
-                    matching = MatchRequest(item: item)
-                } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: "film").foregroundStyle(Theme.accent)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(item.media.name).foregroundStyle(.primary).lineLimit(2)
-                            Text(item.sourceLabel).font(.caption).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 16) {
+                    HStack(spacing: 14) {
+                        Image(systemName: "doc.video").font(.title).foregroundStyle(Theme.accent)
+                            .frame(width: 52, height: 68).background(Theme.tileTint, in: RoundedRectangle(cornerRadius: 12))
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(item.media.name).font(.subheadline.weight(.medium)).lineLimit(2)
+                            Text([item.sourceLabel, formatSize(item.media.size)].filter { !$0.isEmpty }.joined(separator: " · "))
+                                .font(.caption).foregroundStyle(.secondary)
                         }
-                        Spacer(minLength: 6)
-                        Text("匹配").font(.subheadline).foregroundStyle(Theme.accent)
-                    }.padding(.vertical, 4)
-                }
-                .contextMenu {
-                    Button("播放", systemImage: "play.fill") {
-                        playing = PlaybackQueue(source: item.media.source, items: [item.media.source])
                     }
-                }
+                    HStack(spacing: 10) {
+                        Button { matching = MatchRequest(item: item) } label: { Label("匹配封面", systemImage: "photo") }
+                            .buttonStyle(PrimaryActionStyle())
+                        Button { playing = PlaybackQueue(source: item.media.source, items: [item.media.source]) } label: { Label("直接播放", systemImage: "play") }
+                            .buttonStyle(SecondaryActionStyle())
+                    }
+                }.padding(16).surfaceCard()
             }
         }
-        .libraryFormStyle()
         .navigationTitle("未匹配影片")
-        .navigationBarTitleDisplayMode(.inline)
+        .designScreen("unmatched")
         .sheet(item: $matching) { request in
             MetadataMatchView(file: request.file, current: request.current, onMatch: { result in
                 await metadata.match(result, to: request.file)

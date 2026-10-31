@@ -2,14 +2,14 @@ import SwiftUI
 import UIKit
 import CoreImage.CIFilterBuiltins
 
-private struct Open115Status: Decodable {
+struct Open115Status: Decodable {
     let configured: Bool
     let authorized: Bool
     let message: String?
     let userName: String?
 }
 
-private struct Open115Start: Decodable {
+struct Open115Start: Decodable {
     let verificationUri: String
     let userCode: String?
     let expiresIn: Int
@@ -39,128 +39,65 @@ struct Official115SettingsView: View {
     @State private var message = ""
     @State private var error = ""
 
+    init(onSourceChanged: @escaping () -> Void, initialStatus: Open115Status? = nil, initialAuthorization: Open115Start? = nil) {
+        self.onSourceChanged = onSourceChanged
+        _status = State(initialValue: initialStatus)
+        _authorization = State(initialValue: initialAuthorization)
+    }
+
     var body: some View {
-        Form {
-            Section {
-                HStack(spacing: 14) {
-                    Image(systemName: status?.authorized == true ? "checkmark.shield.fill" : "lock.shield")
-                        .font(.title2)
-                        .foregroundStyle(Theme.accentGradient)
-                        .frame(width: 42, height: 42)
-                        .background(Theme.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(statusTitle).font(.headline)
-                        Text(statusDetail).font(.caption).foregroundColor(.secondary)
-                    }
-                    Spacer()
+        DesignPage(eyebrow: "Official authorization", title: "115 官方授权", subtitle: "为 BT 云下载连接开放平台能力。") {
+            HStack(spacing: 14) {
+                Image(systemName: status?.authorized == true ? "checkmark.shield.fill" : "lock.shield")
+                    .font(.title).foregroundStyle(Theme.accent)
+                    .frame(width: 52, height: 52).background(Theme.tileTint, in: RoundedRectangle(cornerRadius: 14))
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(statusTitle).font(.headline)
+                    Text(statusDetail).font(.caption).foregroundStyle(.secondary)
                 }
-                .padding(.vertical, 6)
-            } header: {
-                Text("连接状态")
-            }
-
-            Section {
-                TextField("AppID / Client ID", text: $clientId)
-                    .focused($focusedField, equals: .clientId)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .submitLabel(.done)
-                    .onSubmit { focusedField = nil }
-                Button(busy ? "处理中…" : "保存应用凭证") {
-                    Task { await saveConfiguration() }
-                }
-                .disabled(busy || clientId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            } header: {
-                Text("应用凭证")
-            } footer: {
-                Text("填写开放平台批准的 AppID。扫码授权使用 PKCE，无需提供 AppSecret。")
-            }
-
-            Section {
-                Button(authorization == nil ? "开始 115 授权" : "重新获取授权码") {
-                    Task { await startAuthorization() }
-                }
-                .disabled(busy || status?.configured != true)
-
+            }.frame(maxWidth: .infinity, alignment: .leading).padding(18).surfaceCard()
+            VStack(alignment: .leading, spacing: 16) {
+                Label("1 · 配置应用凭证", systemImage: "key").font(.headline)
+                DesignField(label: "AppID / Client ID", placeholder: "输入开放平台批准的 AppID", text: $clientId)
+                    .focused($focusedField, equals: .clientId).submitLabel(.done).onSubmit { focusedField = nil }
+                Button(busy ? "处理中…" : "保存应用凭证") { Task { await saveConfiguration() } }
+                    .buttonStyle(SecondaryActionStyle())
+                    .disabled(busy || clientId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                DesignNotice(text: "填写已获批的 AppID，扫码授权使用 PKCE，无需提供 AppSecret。")
+            }.padding(18).surfaceCard()
+            VStack(alignment: .leading, spacing: 18) {
+                Label("2 · 扫码授权", systemImage: "qrcode.viewfinder").font(.headline)
                 if let authorization {
-                    VStack(alignment: .leading, spacing: 14) {
-                        Text("使用 115 扫描二维码完成授权；也可复制授权内容在其他设备打开。")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                        if let image = qrImage(authorization.verificationUri) {
-                            Image(uiImage: image)
-                                .interpolation(.none)
-                                .resizable()
-                                .scaledToFit()
-                                .frame(width: 180, height: 180)
-                                .padding(12)
-                                .background(Color.white, in: RoundedRectangle(cornerRadius: 14))
-                                .frame(maxWidth: .infinity)
-                                .accessibilityLabel("115 授权二维码")
-                        }
-                        if let code = authorization.userCode, !code.isEmpty {
-                            HStack {
-                                Text(code)
-                                    .font(.system(.title2, design: .monospaced).weight(.bold))
-                                    .textSelection(.enabled)
-                                Spacer()
-                                Button {
-                                    UIPasteboard.general.string = code
-                                    message = "验证码已复制"
-                                } label: {
-                                    Image(systemName: "doc.on.doc")
-                                }
-                                .accessibilityLabel("复制验证码")
-                            }
-                            .padding(14)
-                            .background(Theme.accent.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
-                        }
-                        if let url = URL(string: authorization.verificationUri), url.scheme?.lowercased() == "https", url.host != nil {
-                            Button {
-                                openURL(url)
-                            } label: {
-                                Label("打开 115 授权页面", systemImage: "arrow.up.right.square")
-                            }
-                        }
-                        Button {
-                            UIPasteboard.general.string = authorization.verificationUri
-                            message = "授权内容已复制"
-                        } label: {
-                            Label("复制授权内容", systemImage: "doc.on.doc")
-                        }
-                        Text("完成授权后返回此页面，连接状态会自动更新。")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                    if let image = qrImage(authorization.verificationUri) {
+                        Image(uiImage: image).interpolation(.none).resizable().scaledToFit()
+                            .frame(width: 180, height: 180).padding(14)
+                            .background(.white, in: RoundedRectangle(cornerRadius: 16))
+                            .frame(maxWidth: .infinity).accessibilityLabel("115 授权二维码")
                     }
-                    .padding(.vertical, 6)
+                    if let code = authorization.userCode, !code.isEmpty {
+                        HStack {
+                            Text(code).font(.system(.title2, design: .monospaced).bold()).textSelection(.enabled)
+                            Spacer()
+                            Button { UIPasteboard.general.string = code; message = "验证码已复制" } label: { Image(systemName: "doc.on.doc") }.accessibilityLabel("复制验证码")
+                        }.padding(14).background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: 12))
+                    }
+                    if let url = URL(string: authorization.verificationUri), url.scheme?.lowercased() == "https", url.host != nil {
+                        Button { openURL(url) } label: { Label("打开 115 授权页面", systemImage: "arrow.up.right.square") }.buttonStyle(PrimaryActionStyle())
+                    }
+                    Button { UIPasteboard.general.string = authorization.verificationUri; message = "授权内容已复制" } label: { Label("复制授权内容", systemImage: "doc.on.doc") }.buttonStyle(SecondaryActionStyle())
+                    DesignNotice(text: "用 115 扫码完成授权。返回此页面后，连接状态会自动更新。")
                 }
-            } header: {
-                Text("扫码授权")
-            } footer: {
-                Text("无需 AppSecret 或回调域名。授权码有有效期，如果失效可重新获取。")
-            }
-
-            if !message.isEmpty {
-                Section { Label(message, systemImage: "checkmark.circle").foregroundColor(.green) }
-            }
-            if !error.isEmpty {
-                Section { Label(error, systemImage: "exclamationmark.circle").foregroundColor(.red) }
-            }
+                Button(authorization == nil ? "开始 115 授权" : "重新获取授权码") { Task { await startAuthorization() } }
+                    .buttonStyle(SecondaryActionStyle()).disabled(busy || status?.configured != true)
+            }.padding(18).surfaceCard()
+            if !message.isEmpty { DesignNotice(symbol: "checkmark.circle", text: message) }
+            if !error.isEmpty { DesignNotice(symbol: "exclamationmark.circle", text: error, warning: true) }
+            DesignNotice(symbol: "lock.shield", text: "授权码在有效期内使用。失效后可重新获取，不需要 AppSecret 或回调域名。")
         }
-        .listRowSeparator(.hidden)
-        .scrollDismissesKeyboard(.interactively)
-        .toolbar {
-            ToolbarItemGroup(placement: .keyboard) {
-                Spacer()
-                Button("完成") { focusedField = nil }
-            }
-        }
-        .libraryFormStyle()
         .navigationTitle("115 官方授权")
-        .navigationBarTitleDisplayMode(.inline)
-        .task {
-            await loadStatus()
-        }
+        .designScreen("official")
+        .toolbar { ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("完成") { focusedField = nil } } }
+        .task { if !InterfacePreview.active { await loadStatus() } }
         .onDisappear { pollTask?.cancel() }
     }
 

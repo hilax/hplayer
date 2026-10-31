@@ -1,0 +1,1 @@
+Test-only poster and backdrop fixtures from the reviewed prototype. Sources are listed in sources.json. Served over localhost by player-test-server.py for native simulator screenshots; not bundled in the application.

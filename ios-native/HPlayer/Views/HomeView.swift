@@ -16,12 +16,28 @@ struct HomeView: View {
 
     /// init 会在上层页面每次刷新时被重新调用，这里不做任何读盘或联网，
     /// 恢复工作放到 restoreOnce，只执行一次。
-    init(appState: AppState) {
+    private var sourceStatus: P115Status?
+    private var sourceQuota: QuotaResponse?
+    private var initialSearch = ""
+    private var searchFiles: [P115File] = []
+
+    init(appState: AppState, initialSection: HomeSection = .home,
+         library: MediaLibraryStore? = nil, local: LocalMediaStore? = nil,
+         metadata: MediaMetadataStore? = nil, recents: RecentStore? = nil,
+         sourceStatus: P115Status? = nil, sourceQuota: QuotaResponse? = nil,
+         initialSearch: String = "", searchFiles: [P115File] = []) {
         self.appState = appState
+        _selection = State(initialValue: initialSection)
+        if let library { _mediaLibrary = StateObject(wrappedValue: library) }
+        if let local { _localStore = StateObject(wrappedValue: local) }
+        if let metadata { _metadataStore = StateObject(wrappedValue: metadata) }
+        if let recents { _recents = StateObject(wrappedValue: recents) }
+        self.sourceStatus = sourceStatus; self.sourceQuota = sourceQuota
+        self.initialSearch = initialSearch; self.searchFiles = searchFiles
     }
 
     private func restoreOnce() {
-        guard !restored else { return }
+        guard !restored, !InterfacePreview.active else { return }
         restored = true
         scanner.selectAccount(appState.libraryAccountID)
         // 扫描检查点先于首页恢复，避免上次退出时的最后一批文件遗漏。
@@ -33,6 +49,7 @@ struct HomeView: View {
         tabs
             .onAppear(perform: restoreOnce)
             .task(id: syncInput) {
+                guard !InterfacePreview.active else { return }
                 if scanner.accountID != appState.libraryAccountID {
                     metadataStore.pause()
                     scanner.selectAccount(appState.libraryAccountID)
@@ -82,13 +99,13 @@ struct HomeView: View {
                     HomeTab(onBrowseLibrary: { selection = .library })
                 }
                 Tab("资源库", systemImage: "square.stack.3d.up.fill", value: HomeSection.library) {
-                    LibraryTab()
+                    LibraryTab(initialStatus: sourceStatus, initialQuota: sourceQuota)
                 }
                 Tab("设置", systemImage: "gearshape.fill", value: HomeSection.settings) {
                     SettingsTab()
                 }
                 Tab("搜索", systemImage: "magnifyingglass", value: HomeSection.search, role: .search) {
-                    SearchTab()
+                    SearchTab(initialQuery: initialSearch, initialResults: searchFiles)
                 }
             }
         } else {
@@ -99,7 +116,7 @@ struct HomeView: View {
                         Label("首页", systemImage: "play.rectangle.on.rectangle.fill")
                     }
 
-                LibraryTab()
+                LibraryTab(initialStatus: sourceStatus, initialQuota: sourceQuota)
                     .tag(HomeSection.library)
                     .tabItem {
                         Label("资源库", systemImage: "square.stack.3d.up.fill")
@@ -111,7 +128,7 @@ struct HomeView: View {
                         Label("设置", systemImage: "gearshape.fill")
                     }
 
-                SearchTab()
+                SearchTab(initialQuery: initialSearch, initialResults: searchFiles)
                     .tag(HomeSection.search)
                     .tabItem {
                         Label("搜索", systemImage: "magnifyingglass")

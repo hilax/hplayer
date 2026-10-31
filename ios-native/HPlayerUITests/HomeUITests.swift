@@ -40,10 +40,10 @@ final class HomeUITests: XCTestCase {
         XCTAssertFalse(app.buttons["home.scanStatus"].exists, "Home never shows scan or matching maintenance")
         XCTAssertFalse(app.otherElements["home.matchingState"].exists)
         app.tabBars.buttons["资源库"].tap()
-        capture("Resources - redesign", in: app)
         let manage = app.buttons["library.manage"]
         if !manage.isHittable { app.swipeUp() }
         XCTAssertTrue(manage.waitForExistence(timeout: 5))
+        capture("Resources - redesign", in: app)
         manage.tap()
         XCTAssertTrue(app.navigationBars["媒体库管理"].waitForExistence(timeout: 5))
         capture("Library management - redesign", in: app)

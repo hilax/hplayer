@@ -74,4 +74,106 @@ extension View {
             .background(Theme.pageBackground.ignoresSafeArea())
             .tint(Theme.accent)
     }
+
+    func designScreen(_ identifier: String) -> some View {
+        self.accessibilityIdentifier("screen.\(identifier)")
+    }
+}
+
+struct DesignPage<Content: View>: View {
+    let eyebrow: String
+    let title: String
+    var subtitle = ""
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                PageIntroduction(eyebrow: eyebrow, title: title, subtitle: subtitle)
+                content()
+            }
+            .frame(maxWidth: 680)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, Theme.contentInset)
+            .padding(.top, 18)
+            .padding(.bottom, 36)
+        }
+        .scrollIndicators(.hidden)
+        .scrollDismissesKeyboard(.interactively)
+        .background(Theme.pageBackground.ignoresSafeArea())
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
+    }
+}
+
+struct DesignGroup<Content: View>: View {
+    @ViewBuilder var content: () -> Content
+    var body: some View {
+        VStack(spacing: 0, content: content)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .surfaceCard()
+    }
+}
+
+struct DesignField: View {
+    let label: String
+    let placeholder: String
+    @Binding var text: String
+    var secure = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Text(label).font(.caption).foregroundStyle(.secondary)
+            Group {
+                if secure { SecureField(placeholder, text: $text) }
+                else { TextField(placeholder, text: $text) }
+            }
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .font(.subheadline)
+            .padding(15)
+            .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: 13))
+        }
+    }
+}
+
+struct DesignNotice: View {
+    var symbol = "info.circle"
+    let text: String
+    var warning = false
+    var body: some View {
+        Label {
+            Text(text).fixedSize(horizontal: false, vertical: true)
+        } icon: { Image(systemName: symbol) }
+        .font(.footnote)
+        .foregroundStyle(warning ? Theme.warning : Color.secondary)
+        .lineSpacing(3)
+    }
+}
+
+struct SecondaryActionStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.font(.subheadline.weight(.semibold))
+            .frame(maxWidth: .infinity, minHeight: 46)
+            .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: 14))
+            .opacity(configuration.isPressed ? 0.7 : 1)
+    }
+}
+
+struct SelectionPill: View {
+    let title: String
+    let selected: Bool
+    let action: () -> Void
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        Button(action: action) {
+            Text(title).font(.caption.weight(selected ? .semibold : .regular))
+                .foregroundStyle(selected ? (scheme == .dark ? Color.black : .white) : .secondary)
+                .padding(.horizontal, 16).frame(minHeight: 36)
+                .background(selected ? Color.primary : Theme.surface, in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
 }

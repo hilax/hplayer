@@ -12,12 +12,12 @@ final class SettingsUITests: XCTestCase {
         XCTAssertTrue(settings.waitForExistence(timeout: 20))
         settings.tap()
 
+        let appearance = app.buttons["settings.appearance"]
+        XCTAssertTrue(appearance.waitForExistence(timeout: 10))
         let settingsShot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         settingsShot.name = "Settings - redesign"
         settingsShot.lifetime = .keepAlways
         add(settingsShot)
-        let appearance = app.buttons["settings.appearance"]
-        XCTAssertTrue(appearance.waitForExistence(timeout: 10))
         appearance.tap()
         let light = app.buttons["settings.appearance.light"]
         let dark = app.buttons["settings.appearance.dark"]

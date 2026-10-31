@@ -113,6 +113,19 @@ class PlayerTestHandler(SimpleHTTPRequestHandler):
         self.send_error(404)
 
     def do_GET(self):
+        if self.path.startswith("/design-art/"):
+            name = self.path.removeprefix("/design-art/")
+            asset = root / "design-art" / name
+            if "/" in name or not asset.is_file() or asset.suffix != ".jpg":
+                self.send_error(404)
+                return
+            body = asset.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path.startswith("/stall/"):
             self.serve_stall_fixture()
             return

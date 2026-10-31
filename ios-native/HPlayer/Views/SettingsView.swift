@@ -43,6 +43,7 @@ struct SettingsView: View {
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(.hidden, for: .navigationBar)
+            .designScreen("settings")
             .task { await loadStatus() }
             .onChange(of: appState.isAuthenticated) { _ in
                 Task { await loadStatus() }
@@ -193,6 +194,7 @@ struct SettingsView: View {
     }
 
     private func loadStatus() async {
+        guard !InterfacePreview.active else { return }
         guard appState.isAuthenticated else {
             status = nil
             error = ""
@@ -239,6 +241,7 @@ struct AppearanceSettingsView: View {
             .padding(Theme.contentInset)
         }
         .background(Theme.pageBackground.ignoresSafeArea())
+        .designScreen("appearance")
         .navigationTitle("外观")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
@@ -273,21 +276,34 @@ struct LicensesView: View {
     }
 
     var body: some View {
-        List {
-            if entries.isEmpty {
-                Text("这个版本没有打包许可文件。")
-                    .foregroundStyle(.secondary)
-            }
-            ForEach(entries) { entry in
-                NavigationLink {
-                    LicenseTextView(title: entry.title, url: entry.url)
-                } label: {
-                    Text(entry.title)
+        DesignPage(eyebrow: "Made possible by open source", title: "致谢开源社区", subtitle: "HPlayer 的播放体验，离不开这些开源项目。") {
+            DesignGroup {
+                if entries.isEmpty { Text("这个版本没有打包许可文件。").foregroundStyle(.secondary).padding(20) }
+                ForEach(entries) { entry in
+                    NavigationLink { LicenseTextView(title: entry.title, url: entry.url) } label: {
+                        LibraryActionRow(symbol: "doc.text", title: entry.title, subtitle: entryDetail(entry.id))
+                    }.buttonStyle(.plain)
+                    if entry.id != entries.last?.id { Divider().padding(.leading, 62) }
                 }
             }
+            DesignNotice(text: "许可文件随应用打包，可在离线状态下阅读。")
         }
+        .designScreen("licenses")
         .navigationTitle("开源许可")
-        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func entryDetail(_ id: String) -> String {
+        switch id {
+        case "MPVKit-LICENSE": return "视频播放内核"
+        case "NUVIO-ENGINE-LICENSE": return "磁力播放引擎"
+        case "THIRD_PARTY_NOTICES": return "第三方许可与版权声明"
+        case "LIBTORRENT-LICENSE": return "BitTorrent 库"
+        case "BOOST-LICENSE_1_0": return "C++ 库"
+        case "OPENSSL-LICENSE": return "加密与安全通信"
+        case "TRY_SIGNAL-LICENSE": return "信号处理库"
+        default: return "版权与许可文本"
+        }
+
     }
 }
 

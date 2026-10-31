@@ -223,6 +223,7 @@ struct PlaybackControlsView: View {
         }
         .background(SystemVolumeHost(controller: systemVolume).frame(width: 1, height: 1).allowsHitTesting(false))
         .background(DarkPresentationStyle().frame(width: 0, height: 0))
+        .designScreen("player")
         .environment(\.colorScheme, .dark)
         .tint(.white)
         .statusBarHidden(true)
@@ -233,6 +234,15 @@ struct PlaybackControlsView: View {
             brightnessLevel = Double(ScreenBrightness.screen.brightness)
             systemVolume.start()
             onScreen = true
+            #if DEBUG
+            switch InterfacePreview.screen {
+            case "playback": settingsPage = .playback
+            case "tracks": settingsPage = .subtitles
+            case "episodes": showList = true
+            case "aspect": showAspect = true
+            default: break
+            }
+            #endif
             revealControls()
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 350_000_000)
@@ -473,13 +483,14 @@ struct PlaybackControlsView: View {
             VStack(alignment: .leading, spacing: 14) {
                 HStack {
                     Text("画面比例")
-                        .font(.headline)
+                        .font(.title2.bold())
                     Spacer()
-                    Text("只影响当前视频")
+                    GlassIconButton(systemImage: "xmark", label: "关闭画面比例", diameter: 32) { closeAspect() }
+                }
+                Text("只影响当前视频")
                         .font(.caption)
                         .foregroundStyle(.white.opacity(0.6))
-                }
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 6), spacing: 8) {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), spacing: 10) {
                     ForEach(VideoAspect.allCases) { option in
                         aspectOption(option)
                     }
@@ -500,10 +511,12 @@ struct PlaybackControlsView: View {
                 }
             }
             .padding(18)
+            .padding(.bottom, insets.bottom)
             .frame(maxWidth: 620)
-            .playerPanelBackground(cornerRadius: 24)
-            .padding(.horizontal, 16)
-            .padding(.bottom, max(insets.bottom, 16))
+            .playerPanelBackground(cornerRadius: 26)
+            .designScreen("aspect")
+            .padding(.horizontal, 0)
+            .padding(.bottom, 0)
         }
         .transition(.move(edge: .bottom).combined(with: .opacity))
     }
@@ -562,7 +575,11 @@ struct PlaybackControlsView: View {
                         .frame(maxWidth: .infinity).accessibilityHidden(true)
                 }
                 HStack {
-                    Text(page.title).font(.title2.weight(.bold))
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(page == .playback ? "播放设置" : "字幕与音轨").font(.title2.weight(.bold))
+                        Text(page == .playback ? "设置会应用于当前播放" : "选择适合你的观看语言")
+                            .font(.caption).foregroundStyle(.white.opacity(0.5))
+                    }
                     Spacer()
                     GlassIconButton(systemImage: "xmark", label: "关闭设置", diameter: 32) { closeSettings() }
                 }
@@ -574,8 +591,10 @@ struct PlaybackControlsView: View {
                     VStack(alignment: .leading, spacing: 18) {
                         switch page {
                         case .playback: playbackSettings
-                        case .subtitles: subtitleSettings
-                        case .audio: audioSettings
+                        case .subtitles, .audio:
+                            subtitleSettings
+                            Divider().overlay(.white.opacity(0.12))
+                            audioSettings
                         }
                     }
                     .padding(.bottom, 12)
@@ -589,6 +608,7 @@ struct PlaybackControlsView: View {
             .frame(maxWidth: landscape ? 420 : .infinity)
             .frame(maxHeight: landscape ? .infinity : 590)
             .playerPanelBackground(cornerRadius: landscape ? 0 : 26)
+            .designScreen(page == .playback ? "playback" : "tracks")
         }
         .transition(.opacity)
     }
@@ -763,7 +783,7 @@ struct PlaybackControlsView: View {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 8) {
                     Text("选集")
-                        .font(.headline)
+                        .font(.title2.bold())
                     Text("\(items.count)")
                         .font(.subheadline.monospacedDigit())
                         .foregroundStyle(.white.opacity(0.5))
@@ -774,8 +794,10 @@ struct PlaybackControlsView: View {
                 .padding(.top, 18)
                 .padding(.bottom, 10)
 
+                Text(title).font(.caption).foregroundStyle(.white.opacity(0.5))
+                    .padding(.horizontal, 18).padding(.bottom, 12)
                 ScrollView {
-                    LazyVStack(spacing: 2) {
+                    LazyVStack(spacing: 4) {
                         ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                             playlistRow(item, index: index)
                         }
@@ -791,6 +813,7 @@ struct PlaybackControlsView: View {
             .frame(maxWidth: landscape ? 420 : .infinity)
             .frame(maxHeight: landscape ? .infinity : 560)
             .playerPanelBackground(cornerRadius: landscape ? 0 : 26)
+            .designScreen("episodes")
         }
         .transition(.move(edge: .trailing).combined(with: .opacity))
     }
@@ -1095,6 +1118,7 @@ struct PlaybackControlsView: View {
         return PlaybackController.clock(value)
     }
     private func revealControls() {
+        if InterfacePreview.active { controlsVisible = true; return }
         if !controlsVisible {
             withAnimation(.easeOut(duration: 0.2)) { controlsVisible = true }
         }
@@ -1320,6 +1344,7 @@ struct PlaybackControlsView: View {
     }
     private func enterLandscapeByDefault() {
         guard onScreen, !initialLandscapeRequested else { return }
+        if InterfacePreview.active && InterfacePreview.screen != "landscape" { return }
         initialLandscapeRequested = true
         requestedLandscape = true
         requestOrientation(.landscape)

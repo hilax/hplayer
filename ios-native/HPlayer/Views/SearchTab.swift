@@ -1,9 +1,11 @@
 import SwiftUI
 
 struct SearchTab: View {
+    var initialQuery = ""
+    var initialResults: [P115File] = []
     var body: some View {
         NavigationStack {
-            SearchView()
+            SearchView(initialQuery: initialQuery, initialResults: initialResults)
         }
     }
 }
@@ -29,6 +31,7 @@ struct SearchView: View {
     @EnvironmentObject private var mediaLibrary: MediaLibraryStore
     @EnvironmentObject private var metadataStore: MediaMetadataStore
 
+    @FocusState private var searchFocused: Bool
     @State private var keyword = ""
     @State private var scope: Scope = .all
     @State private var results: [P115File] = []
@@ -37,6 +40,12 @@ struct SearchView: View {
     @State private var error = ""
     @State private var playing: PlaybackQueue?
     @State private var openSeriesID: String?
+
+    init(initialQuery: String = "", initialResults: [P115File] = []) {
+        _keyword = State(initialValue: initialQuery)
+        _results = State(initialValue: initialResults)
+        _searchedKeyword = State(initialValue: initialQuery)
+    }
 
     private var query: String {
         keyword.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -50,6 +59,18 @@ struct SearchView: View {
             PageIntroduction(eyebrow: "Find your next watch", title: "搜索")
                 .padding(.top, 12)
                 .searchRow(top: 0, bottom: 16)
+            HStack(spacing: 12) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("片名、文件名或演员", text: $keyword)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled().submitLabel(.search)
+                    .onSubmit { Task { await search() } }
+                    .focused($searchFocused)
+                    .accessibilityIdentifier("search.query")
+                if !keyword.isEmpty {
+                    Button { keyword = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                        .accessibilityLabel("清空搜索")
+                }
+            }.padding(15).surfaceCard().searchRow(top: 0, bottom: 12)
             Picker("搜索范围", selection: $scope) {
                 ForEach(Scope.allCases) { item in
                     Text(item.title).tag(item)
@@ -66,6 +87,9 @@ struct SearchView: View {
                 )
                 .frame(minHeight: 380)
                 .searchRow()
+            } else if hits.count == 0 && results.isEmpty && !loading && error.isEmpty && (scope == .library || searchedKeyword == query) {
+                EmptyStateView(icon: "magnifyingglass", title: "暂时没有找到", message: "试试更短的片名，或检查文件名。也可以切换搜索范围后再试。", actionTitle: "重新搜索", action: { searchFocused = true })
+                    .frame(minHeight: 380).searchRow()
             } else {
                 if scope != .cloud {
                     librarySection(hits, library: library)
@@ -81,7 +105,7 @@ struct SearchView: View {
         .background(Theme.pageBackground.ignoresSafeArea())
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
-        .searchable(text: $keyword, placement: .navigationBarDrawer(displayMode: .always), prompt: "片名、演员或文件名")
+        .designScreen(query.isEmpty ? "search" : hits.count == 0 && results.isEmpty && !loading && error.isEmpty ? "search-empty" : "search-results")
         .navigationDestination(for: PerformerRoute.self) { route in
             if let group = library.performers.first(where: { $0.id == route.id }) {
                 PerformerCollectionView(group: group)
@@ -93,9 +117,6 @@ struct SearchView: View {
                     Text("返回搜索页后重新进入演员合集。").foregroundStyle(.secondary)
                 }
             }
-        }
-        .onSubmit(of: .search) {
-            Task { await search() }
         }
         .onChange(of: keyword) { _ in
             if query.isEmpty {

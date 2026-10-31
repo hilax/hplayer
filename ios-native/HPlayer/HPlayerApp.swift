@@ -10,7 +10,9 @@ struct HPlayerApp: App {
         WindowGroup {
             Group {
                 #if DEBUG
-                if let mode = ProcessInfo.processInfo.environment["HPLAYER_PERFORMER_TEST"] {
+                if let screen = InterfacePreview.screen {
+                    InterfaceCatalogHost(screen: screen)
+                } else if let mode = ProcessInfo.processInfo.environment["HPLAYER_PERFORMER_TEST"] {
                     PerformerNavigationUITestHost(mode: mode)
                 } else if let style = ProcessInfo.processInfo.environment["HPLAYER_SCAN_TEST_STYLE"] {
                     ScanUITestHost()

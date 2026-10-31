@@ -14,11 +14,16 @@ final class LocalMediaStore: ObservableObject {
     @Published private(set) var files: [LocalMedia] = []
 
     private let fm = FileManager.default
+    private let directory: URL?
     private let videoExtensions: Set<String> = [
         "mp4", "mov", "m4v", "mkv", "avi", "ts", "flv", "webm", "wmv",
     ]
 
     var mediaDirectory: URL {
+        if let directory {
+            try? fm.createDirectory(at: directory, withIntermediateDirectories: true)
+            return directory
+        }
         let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let dir = docs.appendingPathComponent("Media", isDirectory: true)
         if !fm.fileExists(atPath: dir.path) {
@@ -27,7 +32,8 @@ final class LocalMediaStore: ObservableObject {
         return dir
     }
 
-    init() {
+    init(directory: URL? = nil) {
+        self.directory = directory
         refresh()
     }
 

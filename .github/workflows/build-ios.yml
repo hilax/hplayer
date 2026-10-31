@@ -159,10 +159,11 @@ jobs:
           retention-days: 30
 
       - name: Test playback and controls on iPhone simulator
+        id: native-tests
         # 公开仓库的构建机较慢，测试有时要 7～15 分钟
         timeout-minutes: 30
         run: |
-          device=$(xcrun simctl list devices available --json | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; devices=[x for group in d.values() for x in group if x.get("isAvailable") and x["name"].startswith("iPhone")]; preferred=next((x for x in devices if "Pro" in x["name"]), devices[0] if devices else None); print(preferred["udid"] if preferred else "")')
+          device=$(xcrun simctl list devices available --json | python3 -c 'import json,re,sys; d=json.load(sys.stdin)["devices"]; groups=sorted(d.items(),key=lambda pair:tuple(map(int,re.findall(r"[0-9]+",pair[0]))),reverse=True); devices=next(([x for x in group if x.get("isAvailable") and x["name"].startswith("iPhone")] for runtime,group in groups if any(x.get("isAvailable") and x["name"].startswith("iPhone") for x in group)),[]); preferred=next((x for x in devices if "Pro" in x["name"]), devices[0] if devices else None); print(preferred["udid"] if preferred else "")')
           test -n "$device"
           xcrun simctl boot "$device" || true
           python3 ios-native/scripts/player-test-server.py > "$RUNNER_TEMP/player-http.log" 2>&1 &
@@ -190,6 +191,14 @@ jobs:
             xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/player-tests.xcresult" > "$RUNNER_TEMP/player-ui/test-summary.json"
             cat "$RUNNER_TEMP/player-ui/test-summary.json"
           fi
+
+      - name: Verify all 41 prototype screenshots
+        if: always() && steps.native-tests.outcome != 'skipped'
+        run: |
+          python3 ios-native/scripts/verify-interface-coverage.py \
+            --manifest "$RUNNER_TEMP/player-ui/manifest.json" \
+            --coverage docs/prototype-coverage.json \
+            --output "$RUNNER_TEMP/player-ui/prototype41"
 
       - name: Report UI test failures as annotations
         if: always()

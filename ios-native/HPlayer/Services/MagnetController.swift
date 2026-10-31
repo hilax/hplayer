@@ -200,6 +200,20 @@ final class MagnetController: ObservableObject {
             .store(in: &cancellables)
     }
 
+    #if DEBUG
+    /// Exercises the real resolving/catalog views without starting a network swarm.
+    static func interfaceFixture(catalog: MagnetCatalog? = nil) -> MagnetController {
+        let value = MagnetController()
+        value.link = MagnetLink.parse("magnet:?xt=urn:btih:0123456789012345678901234567890123456789&dn=Severance.S01")
+        value.phase = catalog == nil ? .resolving : .ready
+        value.step = .metadata
+        value.elapsed = 8
+        value.swarm = Swarm(connected: 18, connecting: 3, known: 42, seeds: 8, downloadRate: 25_190)
+        value.catalog = catalog
+        return value
+    }
+    #endif
+
     // MARK: 页面生命周期
 
     /// 进入页面：占用并提前启动引擎，顺便在线更新 Tracker 列表

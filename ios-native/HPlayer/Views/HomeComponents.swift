@@ -443,8 +443,8 @@ struct SeriesPosterCard: View {
 /// 「继续观看」卡片：16:9 画面、玻璃角标和玻璃进度条
 struct ContinueCard: View {
     let entry: ContinueEntry
-    private let width: CGFloat = 238
-    private let height: CGFloat = 134
+    var width: CGFloat = 238
+    private var height: CGFloat { width * 9 / 16 }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -491,42 +491,39 @@ struct ContinueHistoryView: View {
     let onOpen: (ContinueEntry) -> Void
     let onRemove: (ContinueEntry) -> Void
 
+    @State private var confirmClear = false
     var body: some View {
-        List {
+        DesignPage(eyebrow: "Pick up where you left off", title: "继续观看", subtitle: "上次的故事，接着看。") {
+            if entries.isEmpty { EmptyStateView(icon: "clock", title: "还没有播放记录", message: "开始播放后，会在这里记住你的进度。") }
             ForEach(entries) { entry in
-                Button { onOpen(entry) } label: {
-                    HStack(spacing: 14) {
-                        ArtworkView(urlString: entry.artworkURL, title: entry.title)
-                            .scaledToFill().frame(width: 108, height: 61).clipped()
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                            .allowsHitTesting(false)
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(entry.title).font(.subheadline.weight(.semibold)).foregroundStyle(.primary).lineLimit(2)
-                            Text(entry.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                            if let progress = entry.progress { ProgressView(value: progress).tint(Theme.accent) }
-                        }
-                    }
-                    .padding(.vertical, 8)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .listRowBackground(Color.clear)
-                .swipeActions {
-                    Button("移除", role: .destructive) { onRemove(entry) }
-                }
+                GeometryReader { proxy in
+                    Button { onOpen(entry) } label: {
+                        ContinueCard(entry: entry, width: proxy.size.width - 24)
+                            .padding(12).surfaceCard()
+                    }.buttonStyle(.plain)
+                    .contextMenu { Button("移除记录", role: .destructive) { onRemove(entry) } }
+                }.frame(height: historyCardHeight)
             }
         }
-        .listStyle(.plain)
-        .libraryFormStyle()
         .navigationTitle("继续观看")
-        .toolbar(.visible, for: .navigationBar)
+        .designScreen("continue")
+        .toolbar { ToolbarItem(placement: .topBarTrailing) {
+            Button { confirmClear = true } label: { Image(systemName: "ellipsis") }.accessibilityLabel("历史选项")
+        } }
+        .confirmationDialog("清空继续观看记录？", isPresented: $confirmClear, titleVisibility: .visible) {
+            Button("清空记录", role: .destructive) { entries.forEach(onRemove) }
+        }
     }
+    private var historyCardHeight: CGFloat { (min(UIScreen.main.bounds.width - Theme.contentInset * 2, 680) - 24) * 9 / 16 + 78 }
+
 }
 
 /// 「全部」页面：三列海报网格
 struct PosterGridScreen<Item: Identifiable, Cell: View>: View {
     let title: String
     let items: [Item]
+    var eyebrow = "In your library"
+    var subtitle = ""
     let cell: (Item, CGFloat) -> Cell
 
     init(title: String, items: [Item], @ViewBuilder cell: @escaping (Item, CGFloat) -> Cell) {
@@ -542,6 +539,9 @@ struct PosterGridScreen<Item: Identifiable, Cell: View>: View {
             let columns = max(3, Int((available + spacing) / (130 + spacing)))
             let width = floor((available - spacing * CGFloat(columns - 1)) / CGFloat(columns))
             ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    PageIntroduction(eyebrow: title == "电影" ? "Movies" : title == "剧集" ? "Series" : eyebrow,
+                                     title: title, subtitle: subtitle.isEmpty ? "\(items.count) \(title == "剧集" ? "部剧集" : "部作品") · 来自你的片库" : subtitle)
                 LazyVGrid(
                     columns: Array(repeating: GridItem(.fixed(width), spacing: spacing, alignment: .top), count: columns),
                     alignment: .leading,
@@ -551,15 +551,18 @@ struct PosterGridScreen<Item: Identifiable, Cell: View>: View {
                         cell(item, width)
                     }
                 }
-                .padding(.horizontal, 18)
-                .padding(.vertical, 12)
+                }
+                .padding(.horizontal, Theme.contentInset)
+                .padding(.top, 18)
+                .padding(.bottom, 32)
             }
             .scrollIndicators(.hidden)
         }
         .background(Theme.pageBackground.ignoresSafeArea())
         .navigationTitle(title)
-        .navigationBarTitleDisplayMode(.large)
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
+        .designScreen(title == "电影" ? "movies" : title == "剧集" ? "series" : "person")
     }
 }
 

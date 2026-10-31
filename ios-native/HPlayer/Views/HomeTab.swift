@@ -11,6 +11,11 @@ struct HomeTab: View {
     @EnvironmentObject private var scanner: CloudLibraryScanner
     @ObservedObject private var magnetHistory = MagnetHistoryStore.shared
 
+    @State private var showAdd = false
+    @State private var addAction: AddMediaAction?
+    @State private var actionItem: HomeMediaItem?
+    @State private var pendingPlayback: PlaybackQueue?
+    @State private var pendingMatch: HomeMediaItem?
     @State private var showImporter = false
     @State private var playing: PlaybackQueue?
     @State private var importError = ""
@@ -138,6 +143,22 @@ struct HomeTab: View {
                 if heroState.selection >= count { heroState.selection = 0 }
             }
         }
+        .designScreen(library.featured.isEmpty ? "home-empty" : "home")
+        .sheet(isPresented: $showAdd, onDismiss: performAddAction) {
+            AddMediaSheet { action in addAction = action; showAdd = false }
+                .presentationDetents([.height(420)])
+                .presentationDragIndicator(.visible)
+        }
+        .sheet(item: $actionItem, onDismiss: {
+            if let queue = pendingPlayback { pendingPlayback = nil; playing = queue }
+            else if let item = pendingMatch { pendingMatch = nil; matching = MatchRequest(item: item) }
+        }) { item in
+            MediaActionSheet(item: item, position: recents.position(for: item.media.source), onPlay: {
+                pendingPlayback = HomeLibrary.queue(for: item, in: snapshot.items); actionItem = nil
+            }, onMatch: { pendingMatch = item; actionItem = nil }, onRemove: { delete(item); actionItem = nil })
+            .presentationDetents([.height(510)])
+            .presentationDragIndicator(.visible)
+        }
         .fullScreenCover(item: $playing) { queue in
             PlayerView(source: queue.source, playlist: queue.items)
                 .environmentObject(appState)
@@ -222,7 +243,7 @@ struct HomeTab: View {
                 HeroActions(hasMetadata: current.metadata != nil, title: recents.position(for: current.media.source) == nil ? "播放" : "继续播放") {
                     playing = HomeLibrary.queue(for: current, in: library.items)
                 } onMatch: {
-                    matching = MatchRequest(item: current)
+                    actionItem = current
                 }
                 .padding(.horizontal, Theme.contentInset)
                 .padding(.bottom, bottomInset + 6)
@@ -271,19 +292,22 @@ struct HomeTab: View {
     // MARK: 顶部按钮
 
     private var addMenu: some View {
-        Menu {
-            Button("导入本地视频", systemImage: "folder.badge.plus") { showImporter = true }
-            Button("添加 115 文件夹", systemImage: "icloud") { showCloudBrowser = true }
-            Button("磁力链接播放", systemImage: "link") { magnetLaunch = MagnetLaunch(value: "") }
-        } label: {
-            Image(systemName: "plus")
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(.primary)
-                .frame(width: 44, height: 44)
-                .glassCircle()
+        Button { showAdd = true } label: {
+            Image(systemName: "plus").font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(.primary).frame(width: 44, height: 44).glassCircle()
         }
         .accessibilityLabel("添加")
         .accessibilityIdentifier("home.sources")
+    }
+
+    private func performAddAction() {
+        defer { addAction = nil }
+        switch addAction {
+        case .local: showImporter = true
+        case .cloud: showCloudBrowser = true
+        case .magnet: magnetLaunch = MagnetLaunch(value: "")
+        case nil: break
+        }
     }
 
     // MARK: 内容区
@@ -515,14 +539,12 @@ struct HomeTab: View {
     private func performerShelf(_ library: HomeSnapshot) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             shelfHeader("演员合集", detail: "\(library.performers.count) 位") {
-                PosterGridScreen(title: "演员合集", items: library.performers) { group, width in
-                    performerLink(group, width: width)
-                }
+                PerformerGridView(groups: library.performers)
             }
             ScrollView(.horizontal) {
                 LazyHStack(alignment: .top, spacing: 14) {
                     ForEach(library.performers) { group in
-                        performerLink(group, width: 105)
+                        performerLink(group, width: 210)
                     }
                 }
                 .padding(.horizontal, Theme.contentInset)
@@ -535,15 +557,7 @@ struct HomeTab: View {
 
     private func performerLink(_ group: PerformerGroup, width: CGFloat) -> some View {
         PerformerNavigationLink(group: group) {
-            VStack(alignment: .leading, spacing: 9) {
-                PosterArtwork(urlString: group.posterURL, title: group.name, width: width, alignment: .trailing)
-                    .overlay(alignment: .topLeading) { EpisodeCountBadge(text: "\(group.collectionItems.count) 部").padding(7) }
-                Text(group.name)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .frame(width: width, alignment: .leading)
-            }
+            PerformerCollageCard(group: group, width: width)
         }
         .accessibilityIdentifier("home.performer.\(group.id)")
         .buttonStyle(PosterButtonStyle())
@@ -621,8 +635,8 @@ struct HomeTab: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .lineSpacing(5)
-            Button { showImporter = true } label: {
-                Label("添加本机视频", systemImage: "plus")
+            Button { showAdd = true } label: {
+                Label("添加影片", systemImage: "plus")
             }
             .buttonStyle(PrimaryActionStyle())
             .frame(maxWidth: 240)
@@ -794,9 +808,7 @@ private struct HeroActions: View {
             }
             .buttonStyle(PrimaryActionStyle(light: colorScheme == .dark))
             .accessibilityIdentifier("home.heroPlay")
-            Menu {
-                Button("匹配封面", systemImage: "photo", action: onMatch)
-            } label: {
+            Button(action: onMatch) {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 17, weight: .semibold))
                     .frame(width: Self.height, height: Self.height)

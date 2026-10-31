@@ -12,6 +12,11 @@ struct LibraryTab: View {
     @State private var connecting = false
     @State private var connectionError = ""
 
+    init(initialStatus: P115Status? = nil, initialQuota: QuotaResponse? = nil) {
+        _status = State(initialValue: initialStatus)
+        _quota = State(initialValue: initialQuota)
+    }
+
     var body: some View {
         NavigationStack(path: $path) {
             ScrollView {
@@ -55,6 +60,7 @@ struct LibraryTab: View {
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(.hidden, for: .navigationBar)
+            .designScreen(appState.isAuthenticated ? "library" : "library-empty")
             .navigationDestination(for: Crumb.self) { crumb in
                 DirectoryView(cid: crumb.cid, trail: trail(to: crumb), onJump: { jump(to: $0) },
                               onOpenDir: { path.append($0) }, onPlay: { file, files in
@@ -121,12 +127,14 @@ struct LibraryTab: View {
                     }
                 }
                 HStack {
-                    Text(primaryActionTitle).font(.subheadline.weight(.medium))
+                    Text(appState.isAuthenticated ? primaryActionTitle : "登录并连接").font(.subheadline.weight(.medium))
                     Spacer()
                     Image(systemName: "chevron.right").font(.caption)
                 }
-                .foregroundStyle(Theme.accent)
-                .frame(minHeight: 32)
+                .foregroundStyle(appState.isAuthenticated ? Theme.accent : .white)
+                .padding(.horizontal, appState.isAuthenticated ? 0 : 14)
+                .frame(minHeight: appState.isAuthenticated ? 32 : 46)
+                .background(appState.isAuthenticated ? Color.clear : Theme.primaryAction, in: RoundedRectangle(cornerRadius: 13))
             }
             .padding(21)
             .background(Theme.surface, in: RoundedRectangle(cornerRadius: 22))
@@ -192,6 +200,7 @@ struct LibraryTab: View {
     // MARK: 加载
 
     private func load() async {
+        guard !InterfacePreview.active else { return }
         guard appState.isAuthenticated else {
             status = nil
             quota = nil

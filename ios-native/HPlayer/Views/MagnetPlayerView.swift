@@ -16,19 +16,24 @@ struct MagnetPlayerView: View {
     @FocusState private var inputFocused: Bool
     @Environment(\.dismiss) private var dismiss
 
+    init(initialMagnet: String = "", controller: MagnetController? = nil) {
+        self.initialMagnet = initialMagnet
+        _controller = StateObject(wrappedValue: controller ?? MagnetController())
+        if InterfacePreview.active { _input = State(initialValue: initialMagnet) }
+    }
+
     private var detected: MagnetLink? { MagnetLink.parse(input) }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                if controller.phase == .idle {
+                if controller.phase == .idle || controller.phase == .failed {
                     PageIntroduction(eyebrow: "Link player", title: "粘贴，即刻开播", subtitle: "从链接回到影片本身。")
                 }
                 if controller.phase == .ready && controller.catalog != nil {
+                    PageIntroduction(eyebrow: "Ready to watch", title: "资源目录", subtitle: "选择一集，继续你的故事。")
                     linkBar
-                } else {
-                    inputCard
-                }
+                } else if controller.phase != .resolving { inputCard }
 
                 switch controller.phase {
                 case .idle:
@@ -47,7 +52,7 @@ struct MagnetPlayerView: View {
                     historySection
                 }
 
-                tips
+                if controller.phase == .idle || controller.phase == .failed { tips }
             }
             .padding(.horizontal, Theme.contentInset)
             .padding(.top, 8)
@@ -60,7 +65,8 @@ struct MagnetPlayerView: View {
         }
         .scrollDismissesKeyboard(.interactively)
         .background(Theme.pageBackground.ignoresSafeArea())
-        .navigationTitle("磁力在线播放")
+        .designScreen(controller.phase == .resolving ? "resolving" : controller.phase == .ready ? "magnet-files" : "magnet")
+        .navigationTitle(controller.phase == .resolving ? "正在解析" : controller.phase == .ready ? "资源目录" : "磁力在线播放")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
         .toolbar {
@@ -75,6 +81,7 @@ struct MagnetPlayerView: View {
             }
         }
         .task {
+            guard !InterfacePreview.active else { return }
             controller.activate()
             configureCloud()
             guard input.isEmpty, !initialMagnet.isEmpty else { return }
@@ -95,6 +102,7 @@ struct MagnetPlayerView: View {
 
     private var inputCard: some View {
         VStack(alignment: .leading, spacing: 12) {
+            Label("磁力链接或信息哈希", systemImage: "link").font(.caption.weight(.medium)).foregroundStyle(.secondary)
             TextField("粘贴磁力链接、信息哈希，或包含链接的整段文字", text: $input, axis: .vertical)
                 .font(.subheadline)
                 .lineLimit(3...6)
@@ -127,13 +135,7 @@ struct MagnetPlayerView: View {
 
                 Spacer(minLength: 0)
 
-                Button(action: submit) {
-                    capsuleLabel("解析", systemImage: "bolt.fill", prominent: true)
-                }
-                .buttonStyle(.plain)
-                .disabled(detected == nil)
-                .opacity(detected == nil ? 0.45 : 1)
-                .accessibilityIdentifier("magnet.resolve")
+
             }
 
             if cloudAvailable {
@@ -151,8 +153,11 @@ struct MagnetPlayerView: View {
                 }
                 .tint(Theme.accent)
             }
+            Button(action: submit) { Label("解析并播放", systemImage: "play.fill") }
+                .buttonStyle(PrimaryActionStyle()).disabled(detected == nil)
+                .opacity(detected == nil ? 0.45 : 1).accessibilityIdentifier("magnet.resolve")
         }
-        .padding(16)
+        .padding(18)
         .surfaceCard(cornerRadius: 22)
     }
 
@@ -244,18 +249,19 @@ struct MagnetPlayerView: View {
 
     private var resolvingCard: some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack(spacing: 12) {
-                ProgressView()
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(controller.link?.displayName ?? "正在解析磁力链接")
-                        .font(.headline)
-                        .lineLimit(2)
-                    Text("已用 \(controller.elapsed) 秒 · \(controller.link?.shortHash ?? "")")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 0)
-            }
+            VStack(spacing: 18) {
+                ZStack {
+                    Circle().stroke(Theme.accent.opacity(0.12), lineWidth: 1).frame(width: 132, height: 132)
+                    Circle().stroke(Theme.accent.opacity(0.25), lineWidth: 1).frame(width: 96, height: 96)
+                    Image(systemName: "link").font(.system(size: 32, weight: .light)).foregroundStyle(Theme.accent)
+                    ProgressView().scaleEffect(1.5).offset(y: 66)
+                }.frame(height: 158)
+                Text(controller.usesCloud ? "115 云下载" : "本机 BT 引擎")
+                    .font(.caption.weight(.semibold)).tracking(2).foregroundStyle(.secondary)
+                Text("正在获取影片目录").font(.title2.bold())
+                Text(controller.link?.displayName ?? "正在发现节点，读取资源信息。")
+                    .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center).lineLimit(2)
+            }.frame(maxWidth: .infinity).padding(.bottom, 18)
 
             if controller.usesCloud {
                 // 115 解析：只显示 115 离线的进度
@@ -275,10 +281,17 @@ struct MagnetPlayerView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            HStack {
+                resolveMetric("已用时间", value: playbackTimeText(Double(controller.elapsed)))
+                Spacer()
+                resolveMetric("已连接节点", value: "\(controller.swarm.connected)")
+                Spacer()
+                resolveMetric("接收速度", value: "\(formatSize(Int(clamping: controller.swarm.downloadRate)))/s")
+            }.padding(.vertical, 14)
             Button {
                 controller.reset()
             } label: {
-                Text("取消")
+                Text("取消解析")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.primary)
                     .frame(maxWidth: .infinity)
@@ -289,6 +302,13 @@ struct MagnetPlayerView: View {
         }
         .padding(18)
         .surfaceCard(cornerRadius: 22)
+    }
+
+    private func resolveMetric(_ label: String, value: String) -> some View {
+        VStack(spacing: 7) {
+            Text(value).font(.subheadline.weight(.semibold).monospacedDigit())
+            Text(label).font(.caption2).foregroundStyle(.secondary)
+        }
     }
 
     private var peersDetail: String {

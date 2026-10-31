@@ -7,10 +7,12 @@ final class RecentStore: ObservableObject {
 
     @Published private(set) var items: [RecentItem] = []
 
+    private let defaults: UserDefaults
     private let storageKey = "hplayer.recent"
     private let limit = 30
 
-    init() {
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         load()
     }
 
@@ -116,7 +118,7 @@ final class RecentStore: ObservableObject {
     }
 
     private func load() {
-        guard let data = UserDefaults.standard.data(forKey: storageKey),
+        guard let data = defaults.data(forKey: storageKey),
               let decoded = try? JSONDecoder().decode([RecentItem].self, from: data) else {
             return
         }
@@ -125,6 +127,6 @@ final class RecentStore: ObservableObject {
 
     private func save() {
         guard let data = try? JSONEncoder().encode(items) else { return }
-        UserDefaults.standard.set(data, forKey: storageKey)
+        defaults.set(data, forKey: storageKey)
     }
 }
