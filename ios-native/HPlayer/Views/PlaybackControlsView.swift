@@ -1271,7 +1271,8 @@ struct PlaybackControlsView: View {
             if revealing { revealControls() }
         }
     }
-    /// 让画面和界面一起完成横屏到竖屏的系统旋转，再关闭播放器。
+    /// 让画面和界面一起完成横屏到竖屏的系统旋转（画面跟着旋转实时缩放，见 PlayerVideoViewController），
+    /// 旋转一走完就直接换成上一页：不再等一段时间，也不再播放页面下滑的关闭动画。
     private func closePlayer() {
         guard !closing else { return }
         closing = true
@@ -1286,7 +1287,9 @@ struct PlaybackControlsView: View {
             controlsVisible = false
         }
         OrientationSupport.rotateToPortrait {
-            onClose()
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) { onClose() }
         }
     }
 

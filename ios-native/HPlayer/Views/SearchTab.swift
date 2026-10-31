@@ -321,6 +321,8 @@ private struct LibraryResultRow: View {
                 .scaledToFill()
                 .frame(width: 56, height: 84)
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                // 横版封面铺满后会伸出框外，clipShape 只裁画面不裁点击区域；整行的点击区域由最外层的 contentShape 决定
+                .allowsHitTesting(false)
                 .overlay {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .strokeBorder(Theme.hairline, lineWidth: 0.5)

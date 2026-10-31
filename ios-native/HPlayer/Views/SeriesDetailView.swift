@@ -266,6 +266,9 @@ struct SeriesDetailView: View {
                     .scaledToFill()
                     .frame(width: 112, height: 63)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    // 竖版缩略图铺满后会伸出框外，clipShape 只裁画面不裁点击区域，会抢上下相邻几集的点击；
+                    // 缩略图自己不接收点击，整行的点击区域由下面的 contentShape 决定
+                    .allowsHitTesting(false)
                     .overlay(alignment: .bottomLeading) {
                         if let number = episode.parsed.episode {
                             Text(String(format: "E%02d", number))

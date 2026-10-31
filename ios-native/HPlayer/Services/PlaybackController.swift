@@ -123,6 +123,10 @@ final class PlaybackController: ObservableObject {
     private var engine: MPVEngine?
     private weak var layer: CAMetalLayer?
     private var pendingOpen: (() -> Void)?
+    /// 内核正在后台创建
+    private var creatingEngine = false
+    /// 播放控制器创建的时间（点封面后播放页开始出现的时刻），诊断信息里用来对「出画面花了多久」
+    private let createdAt = Date()
 
     private var currentURL: URL?
     private var currentDirect115 = false
@@ -188,7 +192,8 @@ final class PlaybackController: ObservableObject {
                 Task { @MainActor [weak self] in self?.engine?.set("vid", "auto") }
             },
         ]
-        Self.clearDiskCache()
+        // 清理上次没清掉的缓存文件、量一下能用多少空间：都要访问磁盘，放到后台做，不挡着播放页出现
+        PlayerDiskCache.prepare()
     }
 
     deinit {
@@ -198,21 +203,63 @@ final class PlaybackController: ObservableObject {
 
     // MARK: 画面
 
-    /// 播放画面所在的图层准备好了；第一次时创建内核
+    /// 播放画面所在的图层准备好了。第一次时创建内核。
+    ///
+    /// 创建内核（mpv_create / mpv_initialize）要几十到上百毫秒。如果在这里同步做，
+    /// 点封面之后播放页要等它做完才出得来，所以放到后台线程去建，页面先出现；
+    /// 建好之后回到主线程接上，这期间要打开的视频先记在 pendingOpen 里，内核一就绪就接着打开。
     func attach(layer: CAMetalLayer) {
         self.layer = layer
         if let engine {
             engine.attach(layer: layer)
+            runPendingOpen()
         } else {
-            createEngine(layer: layer)
-        }
-        if let pendingOpen {
-            self.pendingOpen = nil
-            pendingOpen()
+            createEngineInBackground(layer: layer)
         }
     }
 
-    private func createEngine(layer: CAMetalLayer) {
+    private func runPendingOpen() {
+        guard let pendingOpen else { return }
+        self.pendingOpen = nil
+        pendingOpen()
+    }
+
+    private func createEngineInBackground(layer: CAMetalLayer) {
+        guard !creatingEngine else { return }
+        creatingEngine = true
+        let options = engineOptions()
+        let began = Date()
+        PlayerDiskCache.queue.async { [weak self] in
+            let created = MPVEngine(options: options, layer: layer)
+            Task { @MainActor [weak self] in
+                self?.engineDidCreate(created, layer: layer, began: began)
+            }
+        }
+    }
+
+    private func engineDidCreate(_ created: MPVEngine?, layer: CAMetalLayer, began: Date) {
+        creatingEngine = false
+        guard let created else {
+            error = "播放内核启动失败"
+            return
+        }
+        created.onEvent = { [weak self] event in self?.handle(event) }
+        for (name, format) in Self.observed {
+            created.observe(name, format)
+        }
+        engine = created
+        logEvent("播放内核就绪（创建用了 \(Self.milliseconds(since: began)) 毫秒，距播放页创建 \(Self.milliseconds(since: createdAt)) 毫秒）")
+        // 创建期间页面换了图层（很少见）：把现在的图层交给内核
+        if let current = self.layer, current !== layer { created.attach(layer: current) }
+        runPendingOpen()
+    }
+
+    private static func milliseconds(since date: Date) -> Int {
+        Int(Date().timeIntervalSince(date) * 1000)
+    }
+
+    /// 创建内核时的选项（要在主线程读屏幕信息，所以在这里先备好，再交给后台线程）
+    private func engineOptions() -> [(String, String)] {
         var options: [(String, String)] = [
             ("config", "no"),
             ("load-scripts", "no"),
@@ -245,21 +292,13 @@ final class PlaybackController: ObservableObject {
             // 续播和大跨度跳转只落到关键帧，4K 原画不用从关键帧一路解码到目标；小跳转单独要求精确
             ("hr-seek", "no"),
             ("cache-on-disk", "yes"),
-            ("demuxer-cache-dir", Self.cacheDirectory.path),
+            ("demuxer-cache-dir", PlayerDiskCache.directory.path),
             ("demuxer-max-back-bytes", "256MiB"),
         ]
         if UIScreen.main.potentialEDRHeadroom > 1 {
             options.append(("target-colorspace-hint", "yes"))
         }
-        guard let engine = MPVEngine(options: options, layer: layer) else {
-            error = "播放内核启动失败"
-            return
-        }
-        engine.onEvent = { [weak self] event in self?.handle(event) }
-        for (name, format) in Self.observed {
-            engine.observe(name, format)
-        }
-        self.engine = engine
+        return options
     }
 
     private static let observed: [(String, mpv_format)] = [
@@ -314,7 +353,7 @@ final class PlaybackController: ObservableObject {
 
     private func start(_ url: URL, direct115: Bool, cookie: String, position: Double, keepPlaying: Bool, keepDuration: Bool) {
         guard !closingPlayback else { return }
-        logEvent("打开 \(url.host ?? url.lastPathComponent)，从 \(Self.clock(position))")
+        logEvent("打开 \(url.host ?? url.lastPathComponent)，从 \(Self.clock(position))（距播放页创建 \(Self.milliseconds(since: createdAt)) 毫秒）")
         currentURL = url
         currentDirect115 = direct115
         currentCookie = cookie
@@ -337,8 +376,8 @@ final class PlaybackController: ObservableObject {
             }
             return
         }
-        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
-        try? AVAudioSession.sharedInstance().setActive(true)
+        // 激活音频会话要和系统音频服务通信，可能阻塞，放到后台做（内核自己打开音频输出时也会再确认一次）
+        PlayerAudioSession.activate()
 
         engine.set("hwdec", decoding == .hardware ? "videotoolbox" : "no")
         applyCacheOptions(engine)
@@ -414,7 +453,7 @@ final class PlaybackController: ObservableObject {
         let seconds = expensiveNetwork ? min(readahead.rawValue, ReadaheadLevel.oneMinute.rawValue) : readahead.rawValue
         engine.set("demuxer-readahead-secs", "\(seconds)")
         engine.set("cache-secs", "\(seconds)")
-        engine.set("demuxer-max-bytes", "\(Self.diskCacheLimitMiB())MiB")
+        engine.set("demuxer-max-bytes", "\(PlayerDiskCache.limitMiB())MiB")
     }
 
     // MARK: 播放控制
@@ -612,12 +651,15 @@ final class PlaybackController: ObservableObject {
         case .startFile:
             opening = true
         case .fileLoaded:
+            if !loaded { logEvent("文件已加载（距播放页创建 \(Self.milliseconds(since: createdAt)) 毫秒）") }
             loaded = true
             opening = false
             openTimeoutTask?.cancel()
             refreshTracks()
         case .playbackRestart:
-            logEvent("开始播放 \(Self.clock(engineTime))")
+            logEvent(hasPlayed
+                ? "开始播放 \(Self.clock(engineTime))"
+                : "开始播放 \(Self.clock(engineTime))（出画面，距播放页创建 \(Self.milliseconds(since: createdAt)) 毫秒）")
             hasPlayed = true
             playedThisSession = true
             if !statusNote.isEmpty, recoveryTask == nil { statusNote = "" }
@@ -923,30 +965,6 @@ final class PlaybackController: ObservableObject {
 
     // MARK: 工具
 
-    private static var cacheDirectory: URL {
-        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
-            ?? FileManager.default.temporaryDirectory
-        let directory = caches.appendingPathComponent("PlayerCache", isDirectory: true)
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        return directory
-    }
-
-    /// 上次没清掉的缓存文件（例如 App 被系统结束）
-    private static func clearDiskCache() {
-        let directory = cacheDirectory
-        let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
-        files.forEach { try? FileManager.default.removeItem(at: $0) }
-    }
-
-    /// 最多 2GB；手机剩余空间不多时只用剩余空间的一半
-    private static func diskCacheLimitMiB() -> Int {
-        let limit = 2048
-        let values = try? cacheDirectory.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
-        guard let free = values?.volumeAvailableCapacityForImportantUsage, free > 0 else { return limit }
-        let half = Int(free / 2 / 1_048_576)
-        return max(64, min(limit, half))
-    }
-
     private static func cookieHeader(_ header: String) -> String {
         header.split(separator: ";")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -987,54 +1005,99 @@ final class PlaybackController: ObservableObject {
 
 // MARK: - 播放画面
 
-/// mpv 把画面画在这个视图的 Metal 图层上
-struct PlayerVideoSurface: UIViewRepresentable {
+/// mpv 把画面画在这个视图的 Metal 图层上。
+/// 用一个视图控制器承载，是为了在系统旋转屏幕时拿到旋转动画：
+/// 画面的缩放和位置跟着旋转一起变化，而不是旋转开始的瞬间直接跳到竖屏的大小。
+struct PlayerVideoSurface: UIViewControllerRepresentable {
     @ObservedObject var playback: PlaybackController
 
-    func makeUIView(context: Context) -> PlayerLayerView {
-        let view = PlayerLayerView()
-        playback.attach(layer: view.metalLayer)
-        return view
+    func makeUIViewController(context: Context) -> PlayerVideoViewController {
+        let controller = PlayerVideoViewController()
+        playback.attach(layer: controller.metalLayer)
+        return controller
     }
 
-    func updateUIView(_ view: PlayerLayerView, context: Context) {}
+    func updateUIViewController(_ controller: PlayerVideoViewController, context: Context) {}
 }
 
-final class PlayerLayerView: UIView {
-    let metalLayer = MPVMetalLayer()
+extension Notification.Name {
+    /// 播放画面所在页面的尺寸过渡（屏幕旋转）走完时发出，关闭播放器时用它判断什么时候可以收起页面。
+    static let playerSizeTransitionDidFinish = Notification.Name("app.hplayer.playerSizeTransitionDidFinish")
+}
+
+final class PlayerVideoViewController: UIViewController {
+    private let canvas = PlayerCanvasView()
+    var metalLayer: MPVMetalLayer { canvas.metalLayer }
+
     /// 画面图层固定用横屏尺寸渲染。MPVKit 的 iOS 渲染上下文不会把图层尺寸的变化告诉 mpv，
     /// 转到竖屏后 mpv 还按横屏的大小算画面位置，画面会被挤到左上角、右边被裁掉。
     /// 所以图层本身的尺寸始终不变，竖屏时只是把整块横屏画面等比缩小放在中间。
     private var renderSize = CGSize.zero
+    /// 正在旋转：这段时间的画面位置和缩放只由旋转动画里的那一次设置决定，布局回调不插手，
+    /// 否则布局先把终点值设上去，旋转动画就没有变化可以动了。
+    private var transitioning = false
+
+    override func loadView() {
+        let container = UIView()
+        container.backgroundColor = .black
+        container.isUserInteractionEnabled = false
+        container.addSubview(canvas)
+        view = container
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        guard !transitioning else { return }
+        applyGeometry(in: view.bounds.size)
+    }
+
+    override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
+        super.viewWillTransition(to: size, with: coordinator)
+        transitioning = true
+        // 这个闭包由系统放进旋转动画里执行：center 和 transform 的变化会用和旋转一样的时长、曲线动起来，
+        // 画面于是跟着界面一起转过去、缩放到竖屏的大小。
+        coordinator.animate(alongsideTransition: { [weak self] _ in
+            self?.applyGeometry(in: size)
+        }, completion: { [weak self] _ in
+            guard let self else { return }
+            self.transitioning = false
+            self.applyGeometry(in: self.view.bounds.size)
+            NotificationCenter.default.post(name: .playerSizeTransitionDidFinish, object: nil)
+        })
+    }
+
+    /// 把横屏尺寸的画面等比缩放后放在容器正中。只改 center 和 transform，图层的 bounds 始终不变。
+    private func applyGeometry(in container: CGSize) {
+        guard container.width > 0, container.height > 0 else { return }
+        if renderSize == .zero {
+            let screen = view.window?.screen.bounds.size ?? UIScreen.main.bounds.size
+            let reference = screen.width > 0 && screen.height > 0 ? screen : container
+            renderSize = CGSize(width: max(reference.width, reference.height), height: min(reference.width, reference.height))
+            canvas.bounds = CGRect(origin: .zero, size: renderSize)
+        }
+        let nativeScale = view.window?.screen.nativeScale ?? UIScreen.main.nativeScale
+        if canvas.contentScaleFactor != nativeScale { canvas.contentScaleFactor = nativeScale }
+        let scale = min(container.width / renderSize.width, container.height / renderSize.height)
+        canvas.center = CGPoint(x: container.width / 2, y: container.height / 2)
+        canvas.transform = CGAffineTransform(scaleX: scale, y: scale)
+    }
+}
+
+/// 图层就是视图自己的 Metal 图层：视图的 center、transform 参与系统的动画，单独挂的子图层做不到。
+final class PlayerCanvasView: UIView {
+    override class var layerClass: AnyClass { MPVMetalLayer.self }
+    var metalLayer: MPVMetalLayer { layer as! MPVMetalLayer }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .black
+        isOpaque = true
         isUserInteractionEnabled = false
         metalLayer.framebufferOnly = true
         metalLayer.backgroundColor = UIColor.black.cgColor
-        layer.addSublayer(metalLayer)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        guard bounds.width > 0, bounds.height > 0 else { return }
-        if renderSize == .zero {
-            let screen = window?.screen.bounds.size ?? UIScreen.main.bounds.size
-            let reference = screen.width > 0 && screen.height > 0 ? screen : bounds.size
-            renderSize = CGSize(width: max(reference.width, reference.height), height: min(reference.width, reference.height))
-        }
-        let scale = min(bounds.width / renderSize.width, bounds.height / renderSize.height)
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        metalLayer.bounds = CGRect(origin: .zero, size: renderSize)
-        metalLayer.position = CGPoint(x: bounds.midX, y: bounds.midY)
-        metalLayer.setAffineTransform(CGAffineTransform(scaleX: scale, y: scale))
-        metalLayer.contentsScale = window?.screen.nativeScale ?? UIScreen.main.nativeScale
-        CATransaction.commit()
-    }
 }
 
 final class MPVMetalLayer: CAMetalLayer {

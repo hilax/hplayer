@@ -10,8 +10,8 @@ struct HPlayerApp: App {
         WindowGroup {
             Group {
                 #if DEBUG
-                if ProcessInfo.processInfo.environment["HPLAYER_PERFORMER_TEST"] == "1" {
-                    PerformerNavigationUITestHost()
+                if let mode = ProcessInfo.processInfo.environment["HPLAYER_PERFORMER_TEST"] {
+                    PerformerNavigationUITestHost(mode: mode)
                 } else if let style = ProcessInfo.processInfo.environment["HPLAYER_SCAN_TEST_STYLE"] {
                     ScanUITestHost()
                         .preferredColorScheme(style == "dark" ? .dark : .light)
@@ -36,24 +36,32 @@ struct HPlayerApp: App {
 }
 
 #if DEBUG
+/// mode：
+/// - 其他值（"1"）：文字卡片，只测导航本身。
+/// - "wide"：和首页「演员合集」一样的横版封面卡片（真实的 PosterArtwork 和 PosterButtonStyle）。
 private struct PerformerNavigationUITestHost: View {
-    private let groups = Self.makeGroups()
+    enum Style { case plain, wide }
+
+    private let style: Style
+    private let groups: [PerformerGroup]
+
+    init(mode: String) {
+        let style: Style = mode == "wide" ? .wide : .plain
+        self.style = style
+        if style != .plain { WideJacketFixture.seed() }
+        groups = Self.makeGroups(wide: style != .plain)
+    }
 
     var body: some View {
         NavigationStack {
             ScrollView(.horizontal) {
-                LazyHStack(spacing: 20) {
+                LazyHStack(alignment: .top, spacing: style == .plain ? 20 : 14) {
                     ForEach(groups) { group in
-                        PerformerNavigationLink(group: group) {
-                            Text(group.name)
-                                .font(.title2)
-                                .frame(width: 160, height: 220)
-                                .background(Theme.surface)
-                        }
-                        .accessibilityIdentifier("performerTest.\(group.id)")
+                        card(group)
                     }
                 }
-                .padding(20)
+                .padding(.horizontal, style == .plain ? 20 : 18)
+                .padding(.vertical, style == .plain ? 20 : 4)
             }
             .navigationTitle("演员合集")
             .navigationDestination(for: PerformerRoute.self) { route in
@@ -65,30 +73,79 @@ private struct PerformerNavigationUITestHost: View {
         }
     }
 
-    private static func makeGroups() -> [PerformerGroup] {
+    @ViewBuilder private func card(_ group: PerformerGroup) -> some View {
+        switch style {
+        case .plain:
+            PerformerNavigationLink(group: group) {
+                Text(group.name)
+                    .font(.title2)
+                    .frame(width: 160, height: 220)
+                    .background(Theme.surface)
+            }
+            .accessibilityIdentifier("performerTest.\(group.id)")
+        case .wide:
+            PerformerNavigationLink(group: group) {
+                VStack(alignment: .leading, spacing: 9) {
+                    PosterArtwork(urlString: group.posterURL, title: group.name, width: 118, alignment: .trailing)
+                    Text(group.name)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                        .frame(width: 118, alignment: .leading)
+                }
+            }
+            .accessibilityIdentifier("performerTest.\(group.id)")
+            .buttonStyle(PosterButtonStyle())
+        }
+    }
+
+    private static func makeGroups(wide: Bool) -> [PerformerGroup] {
         let actorA = PerformerName.key("演员甲")
         let actorB = PerformerName.key("演员乙")
-        let a1 = item("作品甲1", performers: ["演员甲"])
-        let a2 = item("作品甲2", performers: ["演员甲"])
-        let b1 = item("作品乙1", performers: ["演员乙"])
-        let b2 = item("作品乙2", performers: ["演员乙"])
+        let a1 = item("作品甲1", slug: "a1", wide: wide, performers: ["演员甲"])
+        let a2 = item("作品甲2", slug: "a2", wide: wide, performers: ["演员甲"])
+        let b1 = item("作品乙1", slug: "b1", wide: wide, performers: ["演员乙"])
+        let b2 = item("作品乙2", slug: "b2", wide: wide, performers: ["演员乙"])
         return [
             PerformerGroup(id: actorA, name: "演员甲", items: [a1, a2, b1]),
             PerformerGroup(id: actorB, name: "演员乙", items: [b1, b2]),
         ]
     }
 
-    private static func item(_ title: String, performers: [String]) -> HomeMediaItem {
+    private static func item(_ title: String, slug: String, wide: Bool, performers: [String]) -> HomeMediaItem {
         var metadata = MediaMetadata(
             imdbID: "fixture:\(title)", type: "movie", title: title, year: "2026",
-            posterURL: "https://images.example.org/\(title).jpg", backgroundURL: "", logoURL: "",
+            posterURL: wide ? WideJacketFixture.url(slug) : "https://images.example.org/\(title).jpg",
+            backgroundURL: "", logoURL: "",
             overview: "", rating: "", genres: [], country: "Japan", season: nil, episode: nil
         )
         metadata.performers = performers
+        if wide { metadata.source = MetadataSource.r18dev.rawValue }
         let media = LibraryMedia(local: LocalMedia(
             url: URL(fileURLWithPath: "/tmp/\(title).mp4"), size: 100, modified: .distantPast
         ))
         return HomeMediaItem(media: media, metadata: metadata)
+    }
+}
+
+/// 横版封面（和 R18.dev 的封面一样是 800×538）。写进图片的磁盘缓存，界面按真实流程加载，不访问网络。
+private enum WideJacketFixture {
+    static func url(_ slug: String) -> String { "https://images.example.org/wide-\(slug).jpg" }
+
+    static func seed() {
+        let store = ImageDiskStore(directory: ImageDiskStore.defaultDirectory)
+        let colors: [(String, UIColor)] = [("a1", .systemRed), ("a2", .systemBlue), ("b1", .systemGreen), ("b2", .systemOrange)]
+        for (slug, color) in colors {
+            guard let url = URL(string: url(slug)) else { continue }
+            store.write(jpeg(color), for: url)
+        }
+    }
+
+    private static func jpeg(_ color: UIColor) -> Data {
+        let size = CGSize(width: 800, height: 538)
+        return UIGraphicsImageRenderer(size: size).jpegData(withCompressionQuality: 0.7) { context in
+            color.setFill()
+            context.fill(CGRect(origin: .zero, size: size))
+        }
     }
 }
 

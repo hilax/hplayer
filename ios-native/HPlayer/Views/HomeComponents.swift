@@ -339,6 +339,10 @@ struct PosterArtwork: View {
                 .scaledToFill()
                 .frame(width: width, height: width * 1.5, alignment: alignment)
                 .clipped()
+                // 横版封面按高度铺满后，宽度是卡片的两倍多。clipped 只裁掉画面，不裁点击区域：
+                // 伸出卡片的那一截仍然接得住点击，会盖在左边相邻的卡片上，点左边那张打开的就是右边那张。
+                // 图片自己不接收点击，点击区域由卡片外框的 contentShape 决定。
+                .allowsHitTesting(false)
 
             if !caption.isEmpty {
                 LinearGradient(colors: [.clear, .black.opacity(0.7)], startPoint: .center, endPoint: .bottom)
@@ -350,6 +354,7 @@ struct PosterArtwork: View {
             }
         }
         .frame(width: width, height: width * 1.5)
+        .contentShape(Rectangle())
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -457,9 +462,12 @@ struct ContinueCard: View {
                     .scaledToFill()
                     .frame(width: width, height: height)
                     .clipped()
+                    // 封面比卡片大时，多出来的部分不能接住点击（见 PosterArtwork）
+                    .allowsHitTesting(false)
                 LinearGradient(colors: [.clear, .black.opacity(0.45)], startPoint: .center, endPoint: .bottom)
             }
             .frame(width: width, height: height)
+            .contentShape(Rectangle())
             .overlay(alignment: .topLeading) {
                 Text(entry.tag)
                     .font(.caption2.weight(.bold))
@@ -552,6 +560,9 @@ struct PosterGridScreen<Item: Identifiable, Cell: View>: View {
 struct PosterButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
+            // 整张卡片（含封面和标题之间的空隙）就是点击区域，且不会超出卡片：
+            // 铺满裁剪的图片伸出去的部分不能抢相邻卡片的点击。
+            .contentShape(Rectangle())
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
             .animation(.easeOut(duration: 0.18), value: configuration.isPressed)
     }
