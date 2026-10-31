@@ -4,7 +4,7 @@
     {
       "id": "home",
       "title": "首页 · 沉浸精选",
-      "state": "implemented_pending_cloud_verification",
+      "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/HomeTab.swift",
       "route": "首页",
       "screenshot": "prototype41/home-dark.png"
@@ -12,7 +12,7 @@
     {
       "id": "home-more",
       "title": "首页 · 片库货架",
-      "state": "implemented_pending_cloud_verification",
+      "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/HomeTab.swift",
       "route": "首页 → 下滑货架",
       "screenshot": "prototype41/home-more-dark.png"
@@ -20,7 +20,7 @@
     {
       "id": "home-empty",
       "title": "首页 · 空片库",
-      "state": "implemented_pending_cloud_verification",
+      "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/HomeTab.swift",
       "route": "首页 → 空片库",
       "screenshot": "prototype41/home-empty-dark.png"
@@ -28,7 +28,7 @@
     {
       "id": "movies",
       "title": "电影 · 海报网格",
-      "state": "implemented_pending_cloud_verification",
+      "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/HomeComponents.swift",
       "route": "首页 → 电影 → 全部",
       "screenshot": "prototype41/movies-dark.png"
@@ -36,7 +36,7 @@
     {
       "id": "series",
       "title": "剧集 · 海报网格",
-      "state": "implemented_pending_cloud_verification",
+      "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/HomeComponents.swift",
       "route": "首页 → 剧集 → 全部",
       "screenshot": "prototype41/series-dark.png"
@@ -44,7 +44,7 @@
     {
       "id": "people",
       "title": "演员合集",
-      "state": "implemented_pending_cloud_verification",
+      "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/MediaActionSheets.swift",
       "route": "首页 → 演员合集 → 全部",
       "screenshot": "prototype41/people-dark.png"
@@ -52,7 +52,7 @@
     {
       "id": "person",
       "title": "演员 · 作品列表",
-      "state": "implemented_pending_cloud_verification",
+      "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/PerformerCollectionView.swift",
       "route": "演员合集 → 演员",
       "screenshot": "prototype41/person-dark.png"
@@ -60,7 +60,7 @@
     {
       "id": "detail",
       "title": "剧集详情 · 分季选集",
-      "state": "implemented_pending_cloud_verification",
+      "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/SeriesDetailView.swift",
       "route": "首页 / 搜索 → 剧集",
       "screenshot": "prototype41/detail-dark.png"
@@ -68,7 +68,7 @@
     {
       "id": "continue",
       "title": "继续观看 · 历史",
-      "state": "implemented_pending_cloud_verification",
+      "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/HomeComponents.swift",
       "route": "首页 → 继续观看 → 全部",
       "screenshot": "prototype41/continue-dark.png"
@@ -76,7 +76,7 @@
     {
       "id": "add",
       "title": "添加影片 · 操作面板",
-      "state": "implemented_pending_cloud_verification",
+      "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/MediaActionSheets.swift",
       "route": "首页 → 添加",
       "screenshot": "prototype41/add-dark.png"
@@ -84,7 +84,7 @@
     {
       "id": "film-menu",
       "title": "影片 · 长按菜单",
-      "state": "implemented_pending_cloud_verification",
+      "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/MediaActionSheets.swift",
       "route": "首页 → 精选更多",
       "screenshot": "prototype41/film-menu-dark.png"
@@ -92,7 +92,7 @@
     {
       "id": "library",
       "title": "资源库 · 已连接",
-      "state": "implemented_pending_cloud_verification",
+      "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/LibraryTab.swift",
       "route": "资源库 → 已连接",
       "screenshot": "prototype41/library-dark.png"
@@ -100,7 +100,7 @@
     {
       "id": "library-empty",
       "title": "资源库 · 未连接",
-      "state": "implemented_pending_cloud_verification",
+      "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/LibraryTab.swift",
       "route": "资源库 → 未连接",
       "screenshot": "prototype41/library-empty-dark.png"
@@ -108,7 +108,7 @@
     {
       "id": "files",
       "title": "115 · 文件目录",
-      "state": "implemented_pending_cloud_verification",
+      "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/LibraryView.swift",
       "route": "资源库 → 115 → 目录",
       "screenshot": "prototype41/files-dark.png"
@@ -116,7 +116,7 @@
     {
       "id": "files-select",
       "title": "115 · 批量选择",
-      "state": "implemented_pending_cloud_verification",
+      "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/LibraryView.swift",
       "route": "115 目录 → 更多 → 选择",
       "screenshot": "prototype41/files-select-dark.png"
@@ -124,7 +124,7 @@
     {
       "id": "local",
       "title": "本机视频",
-      "state": "implemented_pending_cloud_verification",
+      "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/LocalVideosView.swift",
       "route": "资源库 → 本机视频",
       "screenshot": "prototype41/local-dark.png"
@@ -132,7 +132,7 @@
     {
       "id": "search",
       "title": "搜索 · 初始",
-      "state": "implemented_pending_cloud_verification",
+      "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/SearchTab.swift",
       "route": "搜索",
       "screenshot": "prototype41/search-dark.png"
@@ -140,7 +140,7 @@
     {
       "id": "search-results",
       "title": "搜索 · 聚合结果",
-      "state": "implemented_pending_cloud_verification",
+      "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/SearchTab.swift",
       "route": "搜索 → 输入关键词",
       "screenshot": "prototype41/search-results-dark.png"
@@ -148,7 +148,7 @@
     {
       "id": "search-empty",
       "title": "搜索 · 无结果",
-      "state": "implemented_pending_cloud_verification",
+      "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/SearchTab.swift",
       "route": "搜索 → 无匹配结果",
       "screenshot": "prototype41/search-empty-dark.png"
@@ -156,7 +156,7 @@
     {
       "id": "manage",
       "title": "媒体库管理",
-      "state": "implemented_pending_cloud_verification",
+      "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/HomeLibraryScanView.swift",
       "route": "资源库 → 媒体库管理",
       "screenshot": "prototype41/manage-dark.png"
@@ -164,7 +164,7 @@
     {
       "id": "folder-picker",
       "title": "选择扫描目录",
-      "state": "implemented_pending_cloud_verification",
+      "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/ScanFolderPicker.swift",
       "route": "媒体库管理 → 选择文件夹扫描",
       "screenshot": "prototype41/folder-picker-dark.png"
@@ -172,7 +172,7 @@
     {
       "id": "unmatched",
       "title": "未匹配影片",
-      "state": "implemented_pending_cloud_verification",
+      "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/HomeLibraryScanView.swift",
       "route": "媒体库管理 → 未匹配影片",
       "screenshot": "prototype41/unmatched-dark.png"
@@ -180,7 +180,7 @@
     {
       "id": "match",
       "title": "匹配封面与资料",
-      "state": "implemented_pending_cloud_verification",
+      "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/MetadataMatchView.swift",
       "route": "影片菜单 / 未匹配影片 → 匹配封面",
       "screenshot": "prototype41/match-dark.png"
@@ -188,7 +188,7 @@
     {
       "id": "metadata",
       "title": "资料来源",
-      "state": "implemented_pending_cloud_verification",
+      "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/MetadataSourcesView.swift",
       "route": "媒体库管理 / 匹配页 → 资料来源",
       "screenshot": "prototype41/metadata-dark.png"
@@ -196,7 +196,7 @@
     {
       "id": "credentials",
       "title": "资料接口凭证",
-      "state": "implemented_pending_cloud_verification",
+      "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/MetadataCredentialsView.swift",
       "route": "资料来源 → 管理接口凭证",
       "screenshot": "prototype41/credentials-dark.png"
@@ -204,7 +204,7 @@
     {
       "id": "settings",
       "title": "设置",
-      "state": "implemented_pending_cloud_verification",
+      "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/SettingsView.swift",
       "route": "设置",
       "screenshot": "prototype41/settings-dark.png"
@@ -212,7 +212,7 @@
     {
       "id": "appearance",
       "title": "外观",
-      "state": "implemented_pending_cloud_verification",
+      "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/SettingsView.swift",
       "route": "设置 → 显示方式",
       "screenshot": "prototype41/appearance-dark.png"
@@ -220,7 +220,7 @@
     {
       "id": "connect115",
       "title": "连接 115",
-      "state": "implemented_pending_cloud_verification",
+      "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/CookieWebLoginView.swift",
       "route": "资源库 / 设置 → 登录 115",
       "screenshot": "prototype41/connect115-dark.png"
@@ -228,7 +228,7 @@
     {
       "id": "official",
       "title": "115 官方授权",
-      "state": "implemented_pending_cloud_verification",
+      "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/Official115SettingsView.swift",
       "route": "BT 云下载 → 115 云下载授权",
       "screenshot": "prototype41/official-dark.png"
@@ -236,7 +236,7 @@
     {
       "id": "licenses",
       "title": "开源许可",
-      "state": "implemented_pending_cloud_verification",
+      "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/SettingsView.swift",
       "route": "设置 → 开源许可",
       "screenshot": "prototype41/licenses-dark.png"
@@ -244,7 +244,7 @@
     {
       "id": "magnet",
       "title": "磁力在线播放",
-      "state": "implemented_pending_cloud_verification",
+      "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/MagnetPlayerView.swift",
       "route": "资源库 / 添加 → 磁力播放",
       "screenshot": "prototype41/magnet-dark.png"
@@ -252,7 +252,7 @@
     {
       "id": "resolving",
       "title": "磁力解析中",
-      "state": "implemented_pending_cloud_verification",
+      "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/MagnetPlayerView.swift",
       "route": "磁力 → 解析中",
       "screenshot": "prototype41/resolving-dark.png"
@@ -260,7 +260,7 @@
     {
       "id": "magnet-files",
       "title": "磁力资源目录",
-      "state": "implemented_pending_cloud_verification",
+      "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/MagnetPlayerView.swift",
       "route": "磁力 → 解析完成",
       "screenshot": "prototype41/magnet-files-dark.png"
@@ -268,7 +268,7 @@
     {
       "id": "torrent",
       "title": "BT 种子与云下载",
-      "state": "implemented_pending_cloud_verification",
+      "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/TorrentView.swift",
       "route": "资源库 → BT 云下载",
       "screenshot": "prototype41/torrent-dark.png"
@@ -276,7 +276,7 @@
     {
       "id": "torrent-files",
       "title": "种子文件选择",
-      "state": "implemented_pending_cloud_verification",
+      "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/TorrentSelectionView.swift",
       "route": "BT → 导入种子 → 解析完成",
       "screenshot": "prototype41/torrent-files-dark.png"
@@ -284,7 +284,7 @@
     {
       "id": "portrait",
       "title": "竖屏播放器",
-      "state": "implemented_pending_cloud_verification",
+      "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/PlaybackControlsView.swift",
       "route": "播放器 → 切换竖屏",
       "screenshot": "prototype41/portrait-dark.png"
@@ -292,7 +292,7 @@
     {
       "id": "landscape",
       "title": "横屏播放器",
-      "state": "implemented_pending_cloud_verification",
+      "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/PlaybackControlsView.swift",
       "route": "播放器 → 横屏",
       "screenshot": "prototype41/landscape-dark.png"
@@ -300,7 +300,7 @@
     {
       "id": "playback",
       "title": "播放设置面板",
-      "state": "implemented_pending_cloud_verification",
+      "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/PlaybackControlsView.swift",
       "route": "播放器 → 播放设置",
       "screenshot": "prototype41/playback-dark.png"
@@ -308,7 +308,7 @@
     {
       "id": "tracks",
       "title": "字幕与音轨面板",
-      "state": "implemented_pending_cloud_verification",
+      "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/PlaybackControlsView.swift",
       "route": "播放器 → 字幕 / 音轨",
       "screenshot": "prototype41/tracks-dark.png"
@@ -316,7 +316,7 @@
     {
       "id": "episodes",
       "title": "播放器选集面板",
-      "state": "implemented_pending_cloud_verification",
+      "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/PlaybackControlsView.swift",
       "route": "播放器 → 选集",
       "screenshot": "prototype41/episodes-dark.png"
@@ -324,7 +324,7 @@
     {
       "id": "aspect",
       "title": "画面比例面板",
-      "state": "implemented_pending_cloud_verification",
+      "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/PlaybackControlsView.swift",
       "route": "播放器 → 画面比例",
       "screenshot": "prototype41/aspect-dark.png"

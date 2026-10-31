@@ -168,10 +168,15 @@ struct PlaybackControlsView: View {
                         transportControls(spacing: landscape ? 44 : 34)
                             .offset(y: landscape ? -8 : -geometry.size.height * 0.1)
                     }
-                    .overlay(alignment: .trailing) {
-                        // 截图：右侧中间一个小玻璃圆钮
-                        GlassIconButton(systemImage: "camera", label: "截图", diameter: 40) { takeScreenshot() }
-                            .padding(.trailing, max(insets.trailing, landscape ? 28 : 16))
+                    .overlay {
+                        HStack {
+                            GlassIconButton(systemImage: "lock.open", label: "锁定", diameter: 40, action: lock)
+                                .accessibilityIdentifier("playback.lock")
+                            Spacer()
+                            GlassIconButton(systemImage: "camera", label: "截图", diameter: 40) { takeScreenshot() }
+                        }
+                        .padding(.horizontal, landscape ? 28 : 16)
+                        .offset(y: landscape ? 0 : geometry.size.height * 0.13)
                     }
                     .transition(.opacity)
                     .zIndex(2)
@@ -355,7 +360,7 @@ struct PlaybackControlsView: View {
     }
 
     private var statusLine: String {
-        var parts: [String] = [playback.decoding == .hardware ? "硬解" : "软解"]
+        var parts: [String] = []
         if abs(playback.rate - 1) > 0.01 { parts.append("\(String(format: "%g", playback.rate))×") }
         if sleepTimer != .off { parts.append("定时 \(sleepTimer.title)") }
         if !networkStatus.isEmpty { parts.append(networkStatus) }
@@ -367,12 +372,7 @@ struct PlaybackControlsView: View {
     /// 进度条在上，两头是当前时间和总时长；下面一行：锁定和倍速在左，上一集、暂停、下一集在正中，选集和横竖屏在右。
     private func bottomBar(landscape: Bool) -> some View {
         VStack(spacing: landscape ? 4 : 10) {
-            HStack(spacing: 12) {
-                Text(timeText(dragging ? dragTime : playback.currentTime))
-                    .font(.caption.weight(.semibold).monospacedDigit())
-                    .frame(minWidth: 44, alignment: .leading)
-                    .accessibilityIdentifier("playback.elapsed")
-
+            VStack(spacing: 0) {
                 PlayerScrubber(
                     // 还不知道总时长时圆点停在最左边，不按当前时间乱放
                     value: dragging ? dragTime : (playback.duration > 0 ? min(playback.currentTime, playback.duration) : 0),
@@ -400,10 +400,15 @@ struct PlaybackControlsView: View {
                 )
                 .frame(height: 32)
 
-                Text(timeText(playback.duration))
-                    .font(.caption.weight(.semibold).monospacedDigit())
-                    .foregroundStyle(.white.opacity(0.7))
-                    .frame(minWidth: 44, alignment: .trailing)
+                HStack {
+                    Text(timeText(dragging ? dragTime : playback.currentTime))
+                        .font(.caption.weight(.medium).monospacedDigit())
+                        .accessibilityIdentifier("playback.elapsed")
+                    Spacer()
+                    Text(playback.duration > 0 ? "−" + timeText(max(0, playback.duration - (dragging ? dragTime : playback.currentTime))) : "00:00")
+                        .font(.caption.monospacedDigit()).foregroundStyle(.white.opacity(0.6))
+                        .accessibilityLabel("剩余播放时间")
+                }.padding(.bottom, 7)
             }
 
             sideControls(landscape: landscape)
@@ -432,9 +437,11 @@ struct PlaybackControlsView: View {
     /// 锁定、倍速在左，选集、横竖屏在右
     private func sideControls(landscape: Bool) -> some View {
         HStack(spacing: 8) {
-            Button(action: lock) { controlIcon("lock.open", label: "锁定") }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("playback.lock")
+            Button { openSettings(.playback) } label: {
+                Label(selectedQuality.isEmpty ? "原画" : selectedQuality, systemImage: "play.rectangle")
+                    .font(.caption.weight(.medium)).frame(minHeight: 44)
+            }.buttonStyle(.plain).disabled(qualities.isEmpty)
+                .accessibilityLabel("播放画质")
             GlassTextButton(title: "\(String(format: "%g", playback.rate))×", label: "播放速度") { openSettings(.playback) }
             Spacer(minLength: 0)
             GlassTextButton(title: "选集", label: "选集") { openList() }
@@ -450,15 +457,20 @@ struct PlaybackControlsView: View {
 
     private func transportControls(spacing: CGFloat) -> some View {
         HStack(spacing: spacing) {
-            Button { move(-1) } label: { controlIcon("backward.end.fill", label: "上一个", size: 20) }
+            Button { move(-1) } label: {
+                controlIcon("backward.end.fill", label: "上一个", size: 18).background(.black.opacity(0.3), in: Circle()).glassCircle()
+            }
                 .disabled(previousID == nil)
                 .opacity(previousID == nil ? 0.35 : 1)
             Button { playback.toggle(); revealControls() } label: {
-                controlIcon(playback.playing ? "pause.fill" : "play.fill", label: playback.playing ? "暂停" : "播放", size: 34, frame: 64)
+                controlIcon(playback.playing ? "pause.fill" : "play.fill", label: playback.playing ? "暂停" : "播放", size: 29, frame: 64)
+                    .frame(height: 64).background(.black.opacity(0.3), in: Circle()).glassCircle()
             }
             .accessibilityIdentifier("playback.playPause")
             .accessibilityValue(playback.playing ? "playing" : "paused")
-            Button { move(1) } label: { controlIcon("forward.end.fill", label: "下一个", size: 20) }
+            Button { move(1) } label: {
+                controlIcon("forward.end.fill", label: "下一个", size: 18).background(.black.opacity(0.3), in: Circle()).glassCircle()
+            }
                 .disabled(nextID == nil)
                 .opacity(nextID == nil ? 0.35 : 1)
         }
