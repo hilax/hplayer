@@ -411,7 +411,7 @@ struct HomeUnmatchedMediaView: View {
             ForEach(items) { item in
                 VStack(alignment: .leading, spacing: 16) {
                     HStack(spacing: 14) {
-                        Image(systemName: "doc.video").font(.title).foregroundStyle(Theme.accent)
+                        Image(systemName: "film").font(.title).foregroundStyle(Theme.accent)
                             .frame(width: 52, height: 68).background(Theme.tileTint, in: RoundedRectangle(cornerRadius: 12))
                         VStack(alignment: .leading, spacing: 6) {
                             Text(item.media.name).font(.subheadline.weight(.medium)).lineLimit(2)

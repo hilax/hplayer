@@ -93,10 +93,11 @@ struct HomeTab: View {
                 }
                 .coordinateSpace(name: Self.scrollSpace)
                 .scrollIndicators(.hidden)
+                .trackHomeShelfHeader(state: heroState, threshold: heroHeight - 90)
                 .ignoresSafeArea(edges: .top)
-                .overlay(alignment: .top) {
-                    HomeScrolledBar(state: heroState, onAdd: { showAdd = true })
-                }
+            }
+            .overlay(alignment: .top) {
+                HomeScrolledBar(state: heroState, onAdd: { showAdd = true })
             }
             .background(Theme.pageBackground.ignoresSafeArea())
             .navigationDestination(for: PerformerRoute.self) { route in
@@ -221,8 +222,10 @@ struct HomeTab: View {
         .onPreferenceChange(HeroMinYKey.self) { minY in
             let stretch = max(minY, 0)
             if stretch != heroState.stretch { heroState.stretch = stretch }
-            let scrolled = minY < -heroHeight + 90
-            if scrolled != heroState.scrolled { heroState.scrolled = scrolled }
+            if #unavailable(iOS 18.0) {
+                let scrolled = minY < -heroHeight + 90
+                if scrolled != heroState.scrolled { heroState.scrolled = scrolled }
+            }
         }
     }
 
@@ -664,6 +667,17 @@ final class HeroState: ObservableObject {
     @Published var selection = 0
     @Published var stretch: CGFloat = 0
     @Published var scrolled = false
+}
+
+private extension View {
+    @ViewBuilder
+    func trackHomeShelfHeader(state: HeroState, threshold: CGFloat) -> some View {
+        if #available(iOS 18.0, *) {
+            self.onScrollGeometryChange(for: Bool.self, of: { geometry in
+                geometry.contentOffset.y + geometry.contentInsets.top > threshold
+            }, action: { _, scrolled in state.scrolled = scrolled })
+        } else { self }
+    }
 }
 
 private struct HomeScrolledBar: View {

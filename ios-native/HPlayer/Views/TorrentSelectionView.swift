@@ -36,7 +36,7 @@ struct TorrentSelectionView: View {
                         HStack(spacing: 13) {
                             Image(systemName: selected.contains(file.index) ? "checkmark.circle.fill" : "circle")
                                 .font(.title3).foregroundStyle(selected.contains(file.index) ? Theme.accent : Color.secondary)
-                            Image(systemName: "doc.video").font(.title2).foregroundStyle(.secondary)
+                            Image(systemName: "doc").font(.title2).foregroundStyle(.secondary)
                             VStack(alignment: .leading, spacing: 6) {
                                 Text(file.path).font(.subheadline.weight(.medium)).foregroundStyle(.primary).lineLimit(2).multilineTextAlignment(.leading)
                                 Text(formatSize(file.size)).font(.caption).foregroundStyle(.secondary)

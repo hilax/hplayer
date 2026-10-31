@@ -31,7 +31,7 @@ struct MetadataMatchView: View {
         NavigationStack {
             DesignPage(eyebrow: "Find the right story", title: "匹配封面", subtitle: "为这份文件，找到正确的影片资料。") {
                 HStack(spacing: 12) {
-                    Image(systemName: "doc.video").font(.title2).foregroundStyle(Theme.accent)
+                    Image(systemName: "film").font(.title2).foregroundStyle(Theme.accent)
                     VStack(alignment: .leading, spacing: 5) {
                         Text("源文件").font(.caption).foregroundStyle(.secondary)
                         Text(file.name).font(.subheadline.weight(.medium)).lineLimit(2).textSelection(.enabled)

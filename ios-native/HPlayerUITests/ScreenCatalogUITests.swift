@@ -81,6 +81,10 @@ final class ScreenCatalogUITests: XCTestCase {
                 start.press(forDuration: 0.05, thenDragTo: end)
             }
         }
+        if screen == "home-more" {
+            XCTAssertTrue(app.buttons["home.scrolledAdd"].waitForExistence(timeout: 5))
+            XCTAssertTrue(app.buttons["home.scrolledAdd"].isHittable, "Scrolled navigation must remain within the safe area")
+        }
         if screen == "add" { app.buttons["home.sources"].tap() }
         if screen == "film-menu" { app.buttons["影片选项"].tap() }
         if screen != "portrait" && screen != "landscape" {
