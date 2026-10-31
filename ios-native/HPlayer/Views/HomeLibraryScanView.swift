@@ -253,7 +253,7 @@ struct HomeLibraryScanView: View {
         Label(title, systemImage: icon)
             .font(.headline).foregroundStyle(.white)
             .frame(maxWidth: .infinity, minHeight: 50)
-            .background(Theme.accentGradient, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .background(Theme.primaryAction, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
     private var coverCard: some View {

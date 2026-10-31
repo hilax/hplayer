@@ -380,7 +380,7 @@ struct PosterCard: View {
     var body: some View {
         Button(action: onPlay) {
             VStack(alignment: .leading, spacing: 9) {
-                PosterArtwork(urlString: item.posterURL, title: item.title, width: width, caption: item.caption,
+                PosterArtwork(urlString: item.posterURL, title: item.title, width: width,
                               alignment: item.metadata?.isWideJacket == true ? .trailing : .center)
 
                 VStack(alignment: .leading, spacing: 3) {

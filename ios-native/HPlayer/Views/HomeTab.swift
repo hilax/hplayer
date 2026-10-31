@@ -254,7 +254,7 @@ struct HomeTab: View {
         HStack(spacing: 6) {
             ForEach(0..<count, id: \.self) { index in
                 Capsule()
-                    .fill(index == selection ? Color.white : Color.white.opacity(0.45))
+                    .fill(index == selection ? Color.primary : Color.primary.opacity(0.25))
                     .frame(width: index == selection ? 18 : 6, height: 6)
                     .contentShape(Rectangle().inset(by: -6))
                     .onTapGesture {
@@ -264,7 +264,6 @@ struct HomeTab: View {
         }
         .padding(.horizontal, 10)
         .frame(height: 24)
-        .environment(\.colorScheme, .dark)
         .animation(.spring(response: 0.35, dampingFraction: 0.8), value: selection)
         .accessibilityHidden(true)
     }
@@ -781,6 +780,7 @@ private struct HeroPage: View {
 
 /// 精选播放优先；更正影片资料收在主动打开的更多菜单中。
 private struct HeroActions: View {
+    @Environment(\.colorScheme) private var colorScheme
     static let height: CGFloat = 48
     let hasMetadata: Bool
     var title = "播放"
@@ -792,7 +792,7 @@ private struct HeroActions: View {
             Button(action: onPlay) {
                 Label(title, systemImage: "play.fill")
             }
-            .buttonStyle(PrimaryActionStyle(light: true))
+            .buttonStyle(PrimaryActionStyle(light: colorScheme == .dark))
             .accessibilityIdentifier("home.heroPlay")
             Menu {
                 Button("匹配封面", systemImage: "photo", action: onMatch)
