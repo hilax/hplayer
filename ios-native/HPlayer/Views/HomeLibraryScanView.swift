@@ -7,6 +7,8 @@ struct HomeLibraryScanView: View {
     @EnvironmentObject private var library: MediaLibraryStore
     @EnvironmentObject private var local: LocalMediaStore
     @EnvironmentObject private var appState: AppState
+    @ObservedObject private var recents = RecentStore.shared
+    @ObservedObject private var magnetHistory = MagnetHistoryStore.shared
     @Environment(\.dismiss) private var dismiss
     @AppStorage(AdultMetadataSettings.enabledKey) private var adultMatching = false
 
@@ -324,6 +326,17 @@ struct HomeLibraryScanView: View {
             }
             .disabled(library.files(for: appState).isEmpty && local.files.isEmpty)
             Divider()
+            Button {
+                local.refresh()
+                metadata.resumeAutomatic()
+                metadata.sync(files: HomeLibrary.media(local: local, cloud: library, appState: appState))
+            } label: { toolRow("刷新媒体库", icon: "arrow.clockwise") }
+            Divider()
+            Button(role: .destructive) {
+                recents.clear()
+                magnetHistory.removeAll()
+            } label: { toolRow("清空继续观看", icon: "clock.arrow.circlepath") }
+            Divider()
             Button { copyDiagnostics() } label: {
                 toolRow(copiedDiagnostics ? "已复制" : "复制匹配诊断信息", icon: "doc.on.doc")
             }
@@ -397,6 +410,7 @@ private struct HomeUnmatchedMediaView: View {
                 }
             }
         }
+        .libraryFormStyle()
         .navigationTitle("未匹配影片")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(item: $matching) { request in

@@ -12,6 +12,10 @@ final class SettingsUITests: XCTestCase {
         XCTAssertTrue(settings.waitForExistence(timeout: 20))
         settings.tap()
 
+        let settingsShot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        settingsShot.name = "Settings - redesign"
+        settingsShot.lifetime = .keepAlways
+        add(settingsShot)
         let appearance = app.buttons["settings.appearance"]
         XCTAssertTrue(appearance.waitForExistence(timeout: 10))
         appearance.tap()

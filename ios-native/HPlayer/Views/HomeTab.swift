@@ -219,7 +219,7 @@ struct HomeTab: View {
         }
         .overlay(alignment: .bottomLeading) {
             if let current {
-                HeroActions(hasMetadata: current.metadata != nil) {
+                HeroActions(hasMetadata: current.metadata != nil, title: recents.position(for: current.media.source) == nil ? "播放" : "继续播放") {
                     playing = HomeLibrary.queue(for: current, in: library.items)
                 } onMatch: {
                     matching = MatchRequest(item: current)
@@ -347,11 +347,21 @@ struct HomeTab: View {
 
     private func continueShelf(_ entries: [ContinueEntry]) -> some View {
         VStack(alignment: .leading, spacing: 14) {
-            shelfTitle("继续观看", detail: "\(entries.count)")
+            HStack {
+                shelfTitle("继续观看", detail: "\(entries.count)")
+                Spacer()
+                NavigationLink {
+                    ContinueHistoryView(entries: entries, onOpen: openEntry, onRemove: remove)
+                } label: {
+                    HStack(spacing: 3) { Text("全部"); Image(systemName: "chevron.right") }
+                        .font(.caption).foregroundStyle(.secondary)
+                        .frame(minWidth: 44, minHeight: 44)
+                }
+            }
 
             ScrollView(.horizontal) {
                 LazyHStack(alignment: .top, spacing: 12) {
-                    ForEach(entries) { entry in
+                    ForEach(Array(entries.prefix(12))) { entry in
                         Button {
                             openEntry(entry)
                         } label: {
@@ -441,7 +451,7 @@ struct HomeTab: View {
             ))
         }
 
-        return Array(entries.sorted { $0.date > $1.date }.prefix(12))
+        return entries.sorted { $0.date > $1.date }
     }
 
     private func openEntry(_ entry: ContinueEntry) {
@@ -773,13 +783,14 @@ private struct HeroPage: View {
 private struct HeroActions: View {
     static let height: CGFloat = 48
     let hasMetadata: Bool
+    var title = "播放"
     let onPlay: () -> Void
     let onMatch: () -> Void
 
     var body: some View {
         HStack(spacing: 10) {
             Button(action: onPlay) {
-                Label("播放", systemImage: "play.fill")
+                Label(title, systemImage: "play.fill")
             }
             .buttonStyle(PrimaryActionStyle(light: true))
             .accessibilityIdentifier("home.heroPlay")

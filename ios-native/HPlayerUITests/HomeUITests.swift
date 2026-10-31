@@ -40,13 +40,22 @@ final class HomeUITests: XCTestCase {
         XCTAssertFalse(app.buttons["home.scanStatus"].exists, "Home never shows scan or matching maintenance")
         XCTAssertFalse(app.otherElements["home.matchingState"].exists)
         app.tabBars.buttons["资源库"].tap()
+        capture("Resources - redesign", in: app)
         let manage = app.buttons["library.manage"]
         if !manage.isHittable { app.swipeUp() }
         XCTAssertTrue(manage.waitForExistence(timeout: 5))
         manage.tap()
         XCTAssertTrue(app.navigationBars["媒体库管理"].waitForExistence(timeout: 5))
+        capture("Library management - redesign", in: app)
         let unmatched = app.buttons["scan.unmatched"]
         if !unmatched.isHittable { app.swipeUp() }
         XCTAssertTrue(unmatched.waitForExistence(timeout: 5), "Unmatched media is managed from Resources")
     }
+    private func capture(_ name: String, in app: XCUIApplication) {
+        let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        screenshot.name = name
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+    }
+
 }

@@ -486,6 +486,43 @@ struct ContinueCard: View {
     }
 }
 
+struct ContinueHistoryView: View {
+    let entries: [ContinueEntry]
+    let onOpen: (ContinueEntry) -> Void
+    let onRemove: (ContinueEntry) -> Void
+
+    var body: some View {
+        List {
+            ForEach(entries) { entry in
+                Button { onOpen(entry) } label: {
+                    HStack(spacing: 14) {
+                        ArtworkView(urlString: entry.artworkURL, title: entry.title)
+                            .scaledToFill().frame(width: 108, height: 61).clipped()
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                            .allowsHitTesting(false)
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(entry.title).font(.subheadline.weight(.semibold)).foregroundStyle(.primary).lineLimit(2)
+                            Text(entry.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                            if let progress = entry.progress { ProgressView(value: progress).tint(Theme.accent) }
+                        }
+                    }
+                    .padding(.vertical, 8)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .listRowBackground(Color.clear)
+                .swipeActions {
+                    Button("移除", role: .destructive) { onRemove(entry) }
+                }
+            }
+        }
+        .listStyle(.plain)
+        .libraryFormStyle()
+        .navigationTitle("继续观看")
+        .toolbar(.visible, for: .navigationBar)
+    }
+}
+
 /// 「全部」页面：三列海报网格
 struct PosterGridScreen<Item: Identifiable, Cell: View>: View {
     let title: String

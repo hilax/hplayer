@@ -105,16 +105,16 @@ struct HomeView: View {
                         Label("资源库", systemImage: "square.stack.3d.up.fill")
                     }
 
-                SearchTab()
-                    .tag(HomeSection.search)
-                    .tabItem {
-                        Label("搜索", systemImage: "magnifyingglass")
-                    }
-
                 SettingsTab()
                     .tag(HomeSection.settings)
                     .tabItem {
                         Label("设置", systemImage: "gearshape.fill")
+                    }
+
+                SearchTab()
+                    .tag(HomeSection.search)
+                    .tabItem {
+                        Label("搜索", systemImage: "magnifyingglass")
                     }
             }
         }
