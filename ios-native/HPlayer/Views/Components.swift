@@ -81,10 +81,10 @@ struct EmptyStateView: View {
             Image(systemName: icon)
                 .font(.system(size: 28, weight: .semibold))
                 .foregroundStyle(Theme.accent)
-                .frame(width: 68, height: 68)
-                .background(Theme.tileTint, in: Circle())
+                .frame(width: 76, height: 76)
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 24))
             Text(title)
-                .font(.headline)
+                .font(.title2.weight(.semibold))
             Text(message)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
@@ -92,8 +92,9 @@ struct EmptyStateView: View {
                 .frame(maxWidth: 300)
             if let actionTitle, let action {
                 Button(actionTitle, action: action)
-                    .font(.subheadline.weight(.semibold))
-                    .padding(.top, 4)
+                    .buttonStyle(PrimaryActionStyle())
+                    .frame(maxWidth: 240)
+                    .padding(.top, 8)
             }
         }
         .padding(32)

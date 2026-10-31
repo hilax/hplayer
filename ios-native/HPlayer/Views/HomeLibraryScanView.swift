@@ -15,9 +15,8 @@ struct HomeLibraryScanView: View {
     let onStart: (Bool) -> Void
     let onStartFolder: (String, String) -> Void
     @State private var pickingFolder = false
-    @State private var showDMMKey = false
     @State private var copiedDiagnostics = false
-    @State private var hasDMMKey = DMMClient.storedCredentials() != nil
+    private var hasDMMKey: Bool { DMMClient.storedCredentials() != nil }
     let onRetryMatching: () -> Void
 
     @State private var matchedVideos = 0
@@ -153,9 +152,6 @@ struct HomeLibraryScanView: View {
             }
         }
         .tint(Theme.accent)
-        .sheet(isPresented: $showDMMKey, onDismiss: { hasDMMKey = DMMClient.storedCredentials() != nil }) {
-            DMMKeyView()
-        }
         .sheet(isPresented: $pickingFolder) {
             ScanFolderPicker(onSelect: onStartFolder).environmentObject(appState)
         }

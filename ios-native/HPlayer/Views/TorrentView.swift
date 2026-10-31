@@ -82,6 +82,10 @@ struct TorrentView: View {
 
     var body: some View {
         List {
+            PageIntroduction(eyebrow: "Cloud download", title: "BT 云下载", subtitle: "解析种子，交给 115 保存。")
+                .padding(.vertical, 12)
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
             Section {
                 NavigationLink {
                     Official115SettingsView(onSourceChanged: { Task { await loadTasks(page: 1) } })
@@ -191,7 +195,6 @@ struct TorrentView: View {
         .navigationTitle("BT 云下载")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
-        .navigationBarTitleDisplayMode(.inline)
         .task { await loadTasks(page: 1) }
         .sheet(isPresented: $browsing) {
             TorrentBrowser { seed in

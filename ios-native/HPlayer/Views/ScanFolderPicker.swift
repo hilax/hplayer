@@ -11,12 +11,12 @@ struct ScanFolderPicker: View {
         NavigationStack(path: $path) {
             FolderList(cid: "0", name: "115 网盘", onOpen: { path.append($0) }, onSelect: choose)
                 .libraryFormStyle()
-        .navigationTitle("选择要扫描的文件夹")
+                .navigationTitle("选择要扫描的文件夹")
                 .navigationBarTitleDisplayMode(.inline)
                 .navigationDestination(for: Crumb.self) { crumb in
                     FolderList(cid: crumb.cid, name: crumb.name, onOpen: { path.append($0) }, onSelect: choose)
                         .libraryFormStyle()
-        .navigationTitle(crumb.name)
+                        .navigationTitle(crumb.name)
                         .navigationBarTitleDisplayMode(.inline)
                 }
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } } }

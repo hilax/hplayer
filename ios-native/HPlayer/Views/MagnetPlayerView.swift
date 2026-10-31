@@ -63,7 +63,6 @@ struct MagnetPlayerView: View {
         .navigationTitle("磁力在线播放")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
-        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItemGroup(placement: .keyboard) {
                 Spacer()
