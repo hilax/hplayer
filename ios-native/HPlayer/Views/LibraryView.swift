@@ -359,7 +359,7 @@ struct DirectoryView: View {
     }
 
     private func toggleSelectAll() {
-        selection = allSelected ? [] : Set(items.map { $0.id })
+        selection = allSelected ? [] : Set(items.filter { $0.isVideo && !$0.pickCode.isEmpty }.map(\.id))
     }
 
     private func playSelected() {

@@ -78,7 +78,8 @@ extension View {
     }
 
     func designScreen(_ identifier: String) -> some View {
-        self.accessibilityIdentifier("screen.\(identifier)")
+        // Contain the page's children so its identifier cannot replace controls' identifiers.
+        self.accessibilityElement(children: .contain).accessibilityIdentifier("screen.\(identifier)")
     }
 }
 
