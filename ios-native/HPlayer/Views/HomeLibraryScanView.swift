@@ -19,12 +19,16 @@ struct HomeLibraryScanView: View {
     private var hasDMMKey: Bool { DMMClient.storedCredentials() != nil }
     let onRetryMatching: () -> Void
 
+    @State private var totalVideos = 0
+    @State private var confirmClearHistory = false
     @State private var matchedVideos = 0
     @State private var performerStats = (have: 0, total: 0)
 
     private func refreshMatched() {
         // 只在匹配结果变化时数一次，不在每次扫描进度刷新时重算。
-        matchedVideos = library.media(for: appState).filter { metadata.metadataByMediaID[$0.id]?.hasUsablePoster == true }.count
+        let files = HomeLibrary.media(local: local, cloud: library, appState: appState)
+        totalVideos = files.count
+        matchedVideos = files.filter { metadata.metadataByMediaID[$0.id]?.hasUsablePoster == true }.count
         let coverage = metadata.performerCoverage()
         performerStats = (coverage.withPerformers, coverage.total)
     }
@@ -117,13 +121,24 @@ struct HomeLibraryScanView: View {
 
                     scanCard
                     scanActions
+                    if !appState.isAuthenticated {
+                        NavigationLink { CookieWebLoginView(onConnected: {}) } label: {
+                            Label("连接 115 后可扫描云端目录", systemImage: "lock.icloud")
+                                .font(.subheadline).frame(maxWidth: .infinity, alignment: .leading)
+                        }.buttonStyle(.plain)
+                    }
+                    HStack(spacing: 10) {
+                        libraryMetric("片库视频", value: totalVideos)
+                        libraryMetric("已匹配", value: matchedVideos)
+                        libraryMetric("未匹配", value: max(0, totalVideos - matchedVideos))
+                    }
                     NavigationLink { HomeUnmatchedMediaView() } label: {
-                        LibraryActionRow(symbol: "photo", title: "未匹配影片", subtitle: "查看、播放或手动校正")
+                        LibraryActionRow(symbol: "photo", title: "未匹配影片", subtitle: "查看、播放或手动校正", value: "\(max(0, totalVideos - matchedVideos))")
                             .surfaceCard()
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("scan.unmatched")
-                    coverCard
+                    if metadata.isMatching { coverCard }
                     sourceCard
                     if adultMatching { performerCard }
                     toolsCard
@@ -139,7 +154,7 @@ struct HomeLibraryScanView: View {
                 .frame(maxWidth: .infinity)
             }
             .background(Theme.pageBackground.ignoresSafeArea())
-            .task(id: metadata.revision) { refreshMatched() }
+            .task(id: "\(metadata.revision)|\(library.revision)|\(local.files.count)|\(appState.libraryAccountID ?? "local")") { refreshMatched() }
             .navigationTitle("媒体库管理")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -148,6 +163,9 @@ struct HomeLibraryScanView: View {
         }
         .tint(Theme.accent)
         .designScreen("manage")
+        .confirmationDialog("清空继续观看记录？", isPresented: $confirmClearHistory, titleVisibility: .visible) {
+            Button("清空记录", role: .destructive) { recents.clear(); magnetHistory.removeAll() }
+        }
         .sheet(isPresented: $pickingFolder) {
             ScanFolderPicker(onSelect: onStartFolder).environmentObject(appState)
         }
@@ -167,20 +185,24 @@ struct HomeLibraryScanView: View {
                 Spacer(minLength: 0)
                 if scanner.phase == .running { ProgressView().accessibilityLabel("正在扫描") }
             }
-            Divider()
-            LabeledContent("扫描范围", value: scanner.scopeName ?? "整个网盘")
-                .font(.subheadline)
-            if scanner.phase == .running, !scanner.currentFolderName.isEmpty {
-                LabeledContent("正在扫描", value: scanner.currentFolderName)
-                    .font(.subheadline)
+            HStack {
+                Text("扫描范围").foregroundStyle(.secondary)
+                Spacer()
+                Text(scanner.scopeName ?? "整个网盘")
+            }.font(.caption)
+            if scanner.phase != .idle {
+                Divider()
+                HStack {
+                    scanMetric("已扫描", value: "\(scanner.progress.scannedFolders)", unit: "文件夹")
+                    Spacer()
+                    scanMetric("已发现", value: "\(scanner.progress.discoveredFolders)", unit: "文件夹")
+                    Spacer()
+                    scanMetric("发现视频", value: "\(scanner.progress.discoveredVideos)", unit: "本次")
+                }
+                if scanner.phase == .running, !scanner.currentFolderName.isEmpty {
+                    Label(scanner.currentFolderName, systemImage: "folder").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
             }
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 100), alignment: .leading)], alignment: .leading, spacing: 14) {
-                scanMetric("已扫描", value: "\(scanner.progress.scannedFolders)", unit: "文件夹")
-                scanMetric("已发现", value: "\(scanner.progress.discoveredFolders)", unit: "文件夹")
-                scanMetric("发现视频", value: "\(scanner.progress.discoveredVideos)", unit: "本次")
-            }
-            Text("文件夹总数会在扫描过程中持续发现。")
-                .font(.caption).foregroundStyle(.secondary)
             if !scanner.lastError.isEmpty {
                 Label(scanner.lastError, systemImage: "exclamationmark.circle")
                     .font(.subheadline).foregroundStyle(Theme.warning)
@@ -189,6 +211,13 @@ struct HomeLibraryScanView: View {
             }
         }
         .scanCard()
+    }
+
+    private func libraryMetric(_ title: String, value: Int) -> some View {
+        VStack(spacing: 8) {
+            Text("\(value)").font(.title2.bold().monospacedDigit())
+            Text(title).font(.caption).foregroundStyle(.secondary)
+        }.frame(maxWidth: .infinity).padding(.vertical, 18).surfaceCard()
     }
 
     private var scanDescription: String {
@@ -243,6 +272,7 @@ struct HomeLibraryScanView: View {
             }
         }
         .buttonStyle(.plain)
+        .disabled(!appState.isAuthenticated)
     }
 
     private func primaryAction(_ title: String, icon: String) -> some View {
@@ -324,10 +354,7 @@ struct HomeLibraryScanView: View {
                 metadata.sync(files: HomeLibrary.media(local: local, cloud: library, appState: appState))
             } label: { toolRow("刷新媒体库", icon: "arrow.clockwise") }
             Divider()
-            Button(role: .destructive) {
-                recents.clear()
-                magnetHistory.removeAll()
-            } label: { toolRow("清空继续观看", icon: "clock.arrow.circlepath") }
+            Button(role: .destructive) { confirmClearHistory = true } label: { toolRow("清空继续观看", icon: "clock.arrow.circlepath") }
             Divider()
             Button { copyDiagnostics() } label: {
                 toolRow(copiedDiagnostics ? "已复制" : "复制匹配诊断信息", icon: "doc.on.doc")

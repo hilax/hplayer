@@ -146,7 +146,7 @@ struct HomeTab: View {
         .designScreen(library.featured.isEmpty ? "home-empty" : "home")
         .sheet(isPresented: $showAdd, onDismiss: performAddAction) {
             AddMediaSheet { action in addAction = action; showAdd = false }
-                .presentationDetents([.height(420)])
+                .presentationDetents([.height(460)])
                 .presentationDragIndicator(.visible)
         }
         .sheet(item: $actionItem, onDismiss: {
@@ -156,7 +156,7 @@ struct HomeTab: View {
             MediaActionSheet(item: item, position: recents.position(for: item.media.source), onPlay: {
                 pendingPlayback = HomeLibrary.queue(for: item, in: snapshot.items); actionItem = nil
             }, onMatch: { pendingMatch = item; actionItem = nil }, onRemove: { delete(item); actionItem = nil })
-            .presentationDetents([.height(510)])
+            .presentationDetents([.height(590)])
             .presentationDragIndicator(.visible)
         }
         .fullScreenCover(item: $playing) { queue in
