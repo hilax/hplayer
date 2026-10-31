@@ -112,15 +112,21 @@ struct HomeLibraryScanView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("全盘扫描")
+                        Text("媒体库管理")
                             .font(.largeTitle.bold())
-                        Text("将 115 视频整理到首页媒体库")
+                        Text("整理你的文件、封面与影片资料")
                             .font(.subheadline).foregroundStyle(.secondary)
                     }
                     .accessibilityElement(children: .combine)
 
                     scanCard
                     scanActions
+                    NavigationLink { HomeUnmatchedMediaView() } label: {
+                        LibraryActionRow(symbol: "photo", title: "未匹配影片", subtitle: "查看、播放或手动校正")
+                            .surfaceCard()
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("scan.unmatched")
                     coverCard
                     sourceCard
                     if adultMatching { performerCard }
@@ -130,7 +136,7 @@ struct HomeLibraryScanView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .padding(.horizontal, 18)
+                .padding(.horizontal, Theme.contentInset)
                 .padding(.top, 14)
                 .padding(.bottom, 36)
                 .frame(maxWidth: 680)
@@ -138,7 +144,7 @@ struct HomeLibraryScanView: View {
             }
             .background(Theme.pageBackground.ignoresSafeArea())
             .task(id: metadata.revision) { refreshMatched() }
-            .navigationTitle("115 全盘扫描")
+            .navigationTitle("媒体库管理")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } }
@@ -278,30 +284,12 @@ struct HomeLibraryScanView: View {
     }
 
     private var sourceCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Label("资料来源", systemImage: "text.magnifyingglass")
-                .font(.headline)
-            Toggle("按番号匹配成人影片", isOn: $adultMatching)
-                .accessibilityIdentifier("scan.adultMatching")
-            if adultMatching {
-                Divider()
-                Button { showDMMKey = true } label: {
-                    HStack {
-                        Label("FANZA（DMM）官方接口", systemImage: "key")
-                        Spacer(minLength: 8)
-                        Text(hasDMMKey ? "已开启" : "未开启（可选）")
-                            .font(.subheadline).foregroundStyle(.secondary)
-                        Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
-                    }
-                    .frame(minHeight: 44)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-            Text("开启后优先通过 R18.dev、可选的 FANZA（DMM）按番号查找，查不到再尝试番组计划和 IMDb。只发送番号，不发送 115 Cookie、路径或视频内容；封面由第三方图片服务提供。关闭后已有资料仍会保留。")
-                .font(.footnote).foregroundStyle(.secondary)
+        NavigationLink { MetadataSourcesView() } label: {
+            LibraryActionRow(symbol: "slider.horizontal.3", title: "资料来源", subtitle: "番组计划、IMDb、TMDB 与番号资料")
+                .surfaceCard()
         }
-        .scanCard()
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("scan.sources")
     }
 
     private var performerCard: some View {
@@ -335,10 +323,6 @@ struct HomeLibraryScanView: View {
                 toolRow("重新匹配未识别封面", icon: "photo.badge.magnifyingglass")
             }
             .disabled(library.files(for: appState).isEmpty && local.files.isEmpty)
-            Divider()
-            NavigationLink { HomeUnmatchedMediaView() } label: {
-                toolRow("管理未匹配影片", icon: "rectangle.stack")
-            }
             Divider()
             Button { copyDiagnostics() } label: {
                 toolRow(copiedDiagnostics ? "已复制" : "复制匹配诊断信息", icon: "doc.on.doc")

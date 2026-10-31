@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct HomeView: View {
+    @Environment(\.scenePhase) private var scenePhase
+    @AppStorage(AdultMetadataSettings.enabledKey) private var adultMatching = false
     @StateObject private var recents = RecentStore.shared
     @StateObject private var mediaLibrary = MediaLibraryStore()
     @StateObject private var localStore = LocalMediaStore()
@@ -30,6 +32,27 @@ struct HomeView: View {
     var body: some View {
         tabs
             .onAppear(perform: restoreOnce)
+            .task(id: syncInput) {
+                if scanner.accountID != appState.libraryAccountID {
+                    metadataStore.pause()
+                    scanner.selectAccount(appState.libraryAccountID)
+                    mediaLibrary.add(scanner.discoveredFiles, for: appState)
+                }
+                metadataStore.hydrate(files: libraryFiles)
+                if scenePhase == .background {
+                    scanner.pause()
+                    metadataStore.pause()
+                    mediaLibrary.flush()
+                } else {
+                    metadataStore.sync(files: libraryFiles)
+                }
+            }
+            .onChange(of: adultMatching) { enabled in
+                metadataStore.pause()
+                guard scenePhase != .background else { return }
+                if enabled { metadataStore.retryFailed(files: libraryFiles) }
+                else { metadataStore.sync(files: libraryFiles) }
+            }
             .environmentObject(recents)
             .environmentObject(mediaLibrary)
             .environmentObject(localStore)
@@ -38,13 +61,25 @@ struct HomeView: View {
             .tint(Theme.accent)
     }
 
+    private var libraryFiles: [LibraryMedia] {
+        HomeLibrary.media(local: localStore, cloud: mediaLibrary, appState: appState)
+    }
+
+    /// Keep scanning/matching alive when moving between tabs; coalesce scan batches.
+    private var syncInput: LibrarySyncInput {
+        let count = localStore.files.count + mediaLibrary.files(for: appState).count
+        return LibrarySyncInput(count: scanner.phase == .running ? count / 300 : count,
+                                accountID: appState.libraryAccountID,
+                                background: scenePhase == .background, scanning: scanner.phase == .running)
+    }
+
     /// iOS 18 起用新的 Tab 写法，搜索标签带上 search 角色：iOS 26 上它会变成标签栏右侧单独的玻璃圆钮。
     @ViewBuilder
     private var tabs: some View {
         if #available(iOS 18.0, *) {
             TabView(selection: $selection) {
                 Tab("首页", systemImage: "play.rectangle.on.rectangle.fill", value: HomeSection.home) {
-                    HomeTab()
+                    HomeTab(onBrowseLibrary: { selection = .library })
                 }
                 Tab("资源库", systemImage: "square.stack.3d.up.fill", value: HomeSection.library) {
                     LibraryTab()
@@ -57,23 +92,27 @@ struct HomeView: View {
                 }
             }
         } else {
-            TabView {
-                HomeTab()
+            TabView(selection: $selection) {
+                HomeTab(onBrowseLibrary: { selection = .library })
+                    .tag(HomeSection.home)
                     .tabItem {
                         Label("首页", systemImage: "play.rectangle.on.rectangle.fill")
                     }
 
                 LibraryTab()
+                    .tag(HomeSection.library)
                     .tabItem {
                         Label("资源库", systemImage: "square.stack.3d.up.fill")
                     }
 
                 SearchTab()
+                    .tag(HomeSection.search)
                     .tabItem {
                         Label("搜索", systemImage: "magnifyingglass")
                     }
 
                 SettingsTab()
+                    .tag(HomeSection.settings)
                     .tabItem {
                         Label("设置", systemImage: "gearshape.fill")
                     }
@@ -85,4 +124,11 @@ struct HomeView: View {
 /// 底部标签
 enum HomeSection: Hashable {
     case home, library, settings, search
+}
+
+private struct LibrarySyncInput: Equatable {
+    let count: Int
+    let accountID: String?
+    let background: Bool
+    let scanning: Bool
 }

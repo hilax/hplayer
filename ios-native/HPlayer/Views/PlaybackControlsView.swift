@@ -128,8 +128,9 @@ struct PlaybackControlsView: View {
             let landscape = geometry.size.width > geometry.size.height
             let insets = geometry.safeAreaInsets
             ZStack {
-                Color.black
+                Theme.playerBackground
                 PlayerVideoSurface(playback: playback)
+                    .offset(y: landscape ? 0 : -geometry.size.height * 0.1)
                     .allowsHitTesting(false)
                 PlaybackGestureSurface(
                     status: gestureStatus,
@@ -162,6 +163,10 @@ struct PlaybackControlsView: View {
                         LinearGradient(colors: [.clear, .black.opacity(0.7)], startPoint: .top, endPoint: .bottom)
                             .frame(height: insets.bottom + (landscape ? 150 : 190))
                             .allowsHitTesting(false)
+                    }
+                    .overlay {
+                        transportControls(spacing: landscape ? 44 : 34)
+                            .offset(y: landscape ? -8 : -geometry.size.height * 0.1)
                     }
                     .overlay(alignment: .trailing) {
                         // 截图：右侧中间一个小玻璃圆钮
@@ -294,12 +299,14 @@ struct PlaybackControlsView: View {
             Spacer(minLength: 8)
 
             GlassButtonGroup {
+                if landscape {
                 GlassIconButton(systemImage: "aspectratio", label: "画面比例") {
                     settingsPage = nil
                     withAnimation(.easeOut(duration: 0.22)) { showAspect.toggle() }
                     hideTask?.cancel()
                 }
                 GlassIconButton(systemImage: "captions.bubble", label: "字幕和音轨") { openSettings(.subtitles) }
+                }
                 GlassIconButton(systemImage: "ellipsis", label: "更多设置") { openSettings(.playback) }
                     .accessibilityIdentifier("playback.more")
             }
@@ -389,18 +396,25 @@ struct PlaybackControlsView: View {
                     .frame(minWidth: 44, alignment: .trailing)
             }
 
-            if landscape {
-                ZStack {
-                    sideControls(landscape: true)
-                    // 快进快退靠左右拖动画面，这里只留上一集、暂停、下一集，暂停键固定在屏幕正中
-                    transportControls(spacing: 44)
+            sideControls(landscape: landscape)
+            if !landscape {
+                HStack(spacing: 18) {
+                    Button {
+                        settingsPage = nil
+                        withAnimation(.easeOut(duration: 0.22)) { showAspect.toggle() }
+                        hideTask?.cancel()
+                    } label: { Label("画面", systemImage: "aspectratio") }
+                    Spacer(minLength: 0)
+                    Button { openSettings(.subtitles) } label: { Label("字幕音轨", systemImage: "captions.bubble") }
+                    Spacer(minLength: 0)
+                    Button { openSettings(.playback) } label: { Label("设置", systemImage: "gearshape") }
                 }
-            } else {
-                // 竖屏宽度不够把五组按钮排成一行：上一集、暂停、下一集单独一行，其余放到下面
-                VStack(spacing: 6) {
-                    transportControls(spacing: 36)
-                    sideControls(landscape: false)
-                }
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.75))
+                .buttonStyle(.plain)
+                .frame(minHeight: 44)
+                .padding(.top, 10)
+                .overlay(alignment: .top) { Rectangle().fill(.white.opacity(0.07)).frame(height: 0.5) }
             }
         }
     }
@@ -538,19 +552,24 @@ struct PlaybackControlsView: View {
     // MARK: 设置面板
 
     private func settingsPanel(page: SettingsPage, landscape: Bool, insets: EdgeInsets) -> some View {
-        HStack(spacing: 0) {
-            Color.black.opacity(0.3)
+        ZStack(alignment: landscape ? .trailing : .bottom) {
+            Color.black.opacity(0.4)
                 .contentShape(Rectangle())
                 .onTapGesture { closeSettings() }
-
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 18) {
+                if !landscape {
+                    Capsule().fill(.white.opacity(0.25)).frame(width: 34, height: 4)
+                        .frame(maxWidth: .infinity).accessibilityHidden(true)
+                }
+                HStack {
+                    Text(page.title).font(.title2.weight(.bold))
+                    Spacer()
+                    GlassIconButton(systemImage: "xmark", label: "关闭设置", diameter: 32) { closeSettings() }
+                }
                 Picker("设置", selection: Binding(get: { page }, set: { settingsPage = $0 })) {
-                    ForEach(SettingsPage.allCases) { item in
-                        Text(item.title).tag(item)
-                    }
+                    ForEach(SettingsPage.allCases) { item in Text(item.title).tag(item) }
                 }
                 .pickerStyle(.segmented)
-
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
                         switch page {
@@ -563,15 +582,15 @@ struct PlaybackControlsView: View {
                 }
                 .scrollIndicators(.hidden)
             }
-            .padding(.top, max(insets.top, 16))
-            .padding(.leading, 18)
-            .padding(.trailing, max(insets.trailing, 18))
-            .padding(.bottom, max(insets.bottom, 12))
-            .frame(width: (landscape ? 360 : 320) + insets.trailing)
-            .frame(maxHeight: .infinity)
-            .playerPanelBackground(cornerRadius: 0)
+            .padding(.top, landscape ? max(insets.top, 18) : 12)
+            .padding(.horizontal, 22)
+            .padding(.bottom, max(insets.bottom, 18))
+            .frame(width: landscape ? 360 + insets.trailing : nil)
+            .frame(maxWidth: landscape ? 420 : .infinity)
+            .frame(maxHeight: landscape ? .infinity : 590)
+            .playerPanelBackground(cornerRadius: landscape ? 0 : 26)
         }
-        .transition(.move(edge: .trailing).combined(with: .opacity))
+        .transition(.opacity)
     }
 
     @ViewBuilder
@@ -736,7 +755,7 @@ struct PlaybackControlsView: View {
     // MARK: 播放列表
 
     private func playlistPanel(landscape: Bool, insets: EdgeInsets) -> some View {
-        HStack(spacing: 0) {
+        ZStack(alignment: landscape ? .trailing : .bottom) {
             Color.black.opacity(0.3)
                 .contentShape(Rectangle())
                 .onTapGesture { closeList() }
@@ -765,12 +784,13 @@ struct PlaybackControlsView: View {
                     .padding(.bottom, 18)
                 }
             }
-            .padding(.top, insets.top)
-            .padding(.trailing, insets.trailing)
+            .padding(.top, landscape ? insets.top : 6)
+            .padding(.trailing, landscape ? insets.trailing : 0)
             .padding(.bottom, insets.bottom)
-            .frame(width: (landscape ? 340 : 290) + insets.trailing)
-            .frame(maxHeight: .infinity)
-            .playerPanelBackground(cornerRadius: 0)
+            .frame(width: landscape ? 340 + insets.trailing : nil)
+            .frame(maxWidth: landscape ? 420 : .infinity)
+            .frame(maxHeight: landscape ? .infinity : 560)
+            .playerPanelBackground(cornerRadius: landscape ? 0 : 26)
         }
         .transition(.move(edge: .trailing).combined(with: .opacity))
     }
@@ -1399,17 +1419,9 @@ private struct GlassButtonGroup<Content: View>: View {
 }
 
 private extension View {
-    /// 播放页里浮层面板的底：iOS 26 用深色液态玻璃，低版本用深色毛玻璃
-    @ViewBuilder
+    /// Opaque surfaces keep settings readable over bright HDR footage.
     func playerPanelBackground(cornerRadius: CGFloat) -> some View {
-        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        if #available(iOS 26.0, *) {
-            self.background(Color.black.opacity(0.35), in: shape)
-                .glassEffect(.regular, in: shape)
-        } else {
-            self.background(.ultraThinMaterial, in: shape)
-                .background(Color.black.opacity(0.5), in: shape)
-        }
+        self.background(Theme.playerSurface, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
     }
 
     @ViewBuilder

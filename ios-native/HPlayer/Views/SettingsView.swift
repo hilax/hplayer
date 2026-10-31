@@ -18,9 +18,16 @@ struct SettingsView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 26) {
-                    Text("让 HPlayer 更适合你")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                    PageIntroduction(eyebrow: "Make it yours", title: "设置")
+                    HStack(spacing: 15) {
+                        BrandLogo(size: 58)
+                        VStack(alignment: .leading, spacing: 7) {
+                            Text("HPlayer").font(.title2.weight(.bold))
+                            Text("让每一次播放，更简单。")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.vertical, 8)
 
                     accountSection
                     appearanceSection
@@ -28,12 +35,14 @@ struct SettingsView: View {
                 }
                 .frame(maxWidth: 620)
                 .frame(maxWidth: .infinity)
-                .padding(.horizontal, 20)
+                .padding(.horizontal, Theme.contentInset)
                 .padding(.top, 8)
                 .padding(.bottom, 40)
             }
             .background(Theme.pageBackground.ignoresSafeArea())
-            .navigationTitle("设置")
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar(.hidden, for: .navigationBar)
             .task { await loadStatus() }
             .onChange(of: appState.isAuthenticated) { _ in
                 Task { await loadStatus() }
@@ -72,6 +81,7 @@ struct SettingsView: View {
                 Divider().padding(.horizontal, 16)
                 NavigationLink {
                     CookieWebLoginView(onConnected: { Task { await loadStatus() } })
+                        .toolbar(.visible, for: .navigationBar)
                 } label: {
                     settingsRow(title: appState.isAuthenticated ? "重新登录 115" : "登录 115",
                                 systemImage: "person.crop.circle", tint: Theme.accent)
@@ -100,20 +110,19 @@ struct SettingsView: View {
                         .padding(16)
                 }
             }
-            .surfaceCard(cornerRadius: 20)
+            .surfaceCard()
         }
     }
 
     private var appearanceSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             GroupLabel(title: "外观")
-            Text("选择应用的显示方式")
-                .font(.caption).foregroundStyle(.secondary)
-                .padding(.leading, 6)
-            AppearancePicker(selection: $appearance)
-            Text("播放页面始终使用深色外观。")
-                .font(.caption).foregroundStyle(.secondary)
-                .padding(.leading, 6)
+            NavigationLink { AppearanceSettingsView() } label: {
+                LibraryActionRow(symbol: "moon", title: "显示方式", value: appearance.title)
+                    .surfaceCard()
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("settings.appearance")
         }
     }
 
@@ -133,13 +142,14 @@ struct SettingsView: View {
                 Divider().padding(.horizontal, 16)
                 NavigationLink {
                     LicensesView()
+                        .toolbar(.visible, for: .navigationBar)
                 } label: {
                     settingsRow(title: "开源许可", systemImage: "doc.text", tint: Theme.accent)
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("settings.licenses")
             }
-            .surfaceCard(cornerRadius: 20)
+            .surfaceCard()
             Text("播放内核使用 mpv / MPVKit，磁力播放使用 Nuvio Engine。")
                 .font(.caption).foregroundStyle(.secondary)
                 .padding(.leading, 6)
@@ -198,6 +208,40 @@ struct SettingsView: View {
         } catch let err {
             error = err.localizedDescription
         }
+    }
+}
+
+struct AppearanceSettingsView: View {
+    @AppStorage(AppearanceMode.storageKey) private var appearance: AppearanceMode = .system
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 26) {
+                PageIntroduction(eyebrow: "Appearance", title: "你喜欢的观看氛围", subtitle: "选择 HPlayer 的显示方式。")
+                AppearancePicker(selection: $appearance)
+                VStack(alignment: .leading, spacing: 14) {
+                    GroupLabel(title: "界面预览")
+                    HStack(spacing: 12) {
+                        Image(systemName: "play.rectangle.fill")
+                            .font(.largeTitle).foregroundStyle(Theme.accent)
+                        VStack(alignment: .leading, spacing: 7) {
+                            Text("继续观看").font(.headline)
+                            Text("回到上次的故事").font(.caption).foregroundStyle(.secondary)
+                            ProgressView(value: 0.42).tint(Theme.accent)
+                        }
+                    }
+                    .padding(18).surfaceCard()
+                }
+                Label("播放页面始终使用深色外观，避免观看时受到亮色界面干扰。", systemImage: "moon")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: 620).frame(maxWidth: .infinity)
+            .padding(Theme.contentInset)
+        }
+        .background(Theme.pageBackground.ignoresSafeArea())
+        .navigationTitle("外观")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
     }
 }
 
@@ -294,7 +338,7 @@ private struct AppearancePicker: View {
         } label: {
             VStack(spacing: 9) {
                 AppearancePreview(mode: mode)
-                    .frame(height: 64)
+                    .frame(height: 116)
                     .overlay(alignment: .topTrailing) {
                         if selected {
                             Image(systemName: "checkmark.circle.fill")

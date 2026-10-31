@@ -21,6 +21,9 @@ struct MagnetPlayerView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
+                if controller.phase == .idle {
+                    PageIntroduction(eyebrow: "Link player", title: "粘贴，即刻开播", subtitle: "从链接回到影片本身。")
+                }
                 if controller.phase == .ready && controller.catalog != nil {
                     linkBar
                 } else {
@@ -46,7 +49,7 @@ struct MagnetPlayerView: View {
 
                 tips
             }
-            .padding(.horizontal, 18)
+            .padding(.horizontal, Theme.contentInset)
             .padding(.top, 8)
             .padding(.bottom, 40)
             .animation(.easeOut(duration: 0.2), value: controller.phase)
@@ -58,6 +61,8 @@ struct MagnetPlayerView: View {
         .scrollDismissesKeyboard(.interactively)
         .background(Theme.pageBackground.ignoresSafeArea())
         .navigationTitle("磁力在线播放")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItemGroup(placement: .keyboard) {
@@ -868,7 +873,7 @@ struct MagnetPlayerView: View {
         let label = Label(title, systemImage: systemImage)
             .font(.subheadline.weight(.semibold))
             .foregroundStyle(prominent ? Color.white : Color.primary)
-            .padding(.horizontal, 18)
+            .padding(.horizontal, Theme.contentInset)
             .padding(.vertical, 10)
         if prominent {
             label.glassProminentCapsule()

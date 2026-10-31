@@ -329,7 +329,7 @@ struct EpisodeCountBadge: View {
 struct PosterArtwork: View {
     let urlString: String
     let title: String
-    var width: CGFloat = 118
+    var width: CGFloat = 105
     var caption = ""
     var alignment: Alignment = .center
 
@@ -355,14 +355,14 @@ struct PosterArtwork: View {
         }
         .frame(width: width, height: width * 1.5)
         .contentShape(Rectangle())
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(Theme.hairline, lineWidth: 0.5)
         }
         .background {
             // 阴影画在纯色形状上，滚动时不用对整张海报图重新取阴影
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(Color.black)
                 .shadow(color: Theme.shadow, radius: 10, x: 0, y: 6)
         }
@@ -372,7 +372,7 @@ struct PosterArtwork: View {
 /// 电影或单个视频的海报，点一下直接播放
 struct PosterCard: View {
     let item: HomeMediaItem
-    var width: CGFloat = 118
+    var width: CGFloat = 105
     let onPlay: () -> Void
     let onDelete: () -> Void
     let onMatch: () -> Void
@@ -382,14 +382,6 @@ struct PosterCard: View {
             VStack(alignment: .leading, spacing: 9) {
                 PosterArtwork(urlString: item.posterURL, title: item.title, width: width, caption: item.caption,
                               alignment: item.metadata?.isWideJacket == true ? .trailing : .center)
-                    .overlay(alignment: .topTrailing) {
-                        if !item.rating.isEmpty {
-                            RatingBadge(rating: item.rating).padding(7)
-                        }
-                    }
-                    .overlay(alignment: .topLeading) {
-                        SourceBadge(isCloud: item.isCloud).padding(7)
-                    }
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(item.title)
@@ -417,7 +409,7 @@ struct PosterCard: View {
 /// 一部剧的海报，角标显示集数
 struct SeriesPosterCard: View {
     let group: SeriesGroup
-    var width: CGFloat = 118
+    var width: CGFloat = 105
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
@@ -451,68 +443,46 @@ struct SeriesPosterCard: View {
 /// 「继续观看」卡片：16:9 画面、玻璃角标和玻璃进度条
 struct ContinueCard: View {
     let entry: ContinueEntry
-
-    private let width: CGFloat = 220
-    private let height: CGFloat = 124
+    private let width: CGFloat = 238
+    private let height: CGFloat = 134
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ZStack {
-                ArtworkView(urlString: entry.artworkURL, title: entry.title)
-                    .scaledToFill()
-                    .frame(width: width, height: height)
-                    .clipped()
-                    // 封面比卡片大时，多出来的部分不能接住点击（见 PosterArtwork）
-                    .allowsHitTesting(false)
-                LinearGradient(colors: [.clear, .black.opacity(0.45)], startPoint: .center, endPoint: .bottom)
-            }
-            .frame(width: width, height: height)
-            .contentShape(Rectangle())
-            .overlay(alignment: .topLeading) {
-                Text(entry.tag)
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 9)
-                    .frame(height: 22)
-                    .glassBadge()
-                    .padding(10)
-            }
-            .overlay(alignment: .topTrailing) {
-                Image(systemName: "play.fill")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 34, height: 34)
-                    .glassCircle()
-                    .environment(\.colorScheme, .dark)
-                    .padding(10)
-                    .accessibilityHidden(true)
-            }
-            .overlay(alignment: .bottom) {
-                if let progress = entry.progress {
-                    GlassProgressBar(value: progress)
+        VStack(alignment: .leading, spacing: 10) {
+            ArtworkView(urlString: entry.artworkURL, title: entry.title)
+                .scaledToFill()
+                .frame(width: width, height: height)
+                .clipped()
+                .allowsHitTesting(false)
+                .overlay(alignment: .bottomLeading) {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 30, height: 30)
+                        .background(.ultraThinMaterial, in: Circle())
                         .environment(\.colorScheme, .dark)
-                        .padding(10)
+                        .padding(12)
                 }
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .strokeBorder(Theme.hairline, lineWidth: 0.5)
-            }
-            .shadow(color: Theme.shadow, radius: 10, x: 0, y: 6)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(entry.title)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                Text(entry.subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                .overlay(alignment: .bottomLeading) {
+                    if let progress = entry.progress {
+                        GeometryReader { proxy in
+                            Rectangle().fill(.white.opacity(0.3))
+                                .overlay(alignment: .leading) {
+                                    Rectangle().fill(Theme.accent)
+                                        .frame(width: proxy.size.width * min(max(progress, 0), 1))
+                                }
+                        }
+                        .frame(height: 3)
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+            VStack(alignment: .leading, spacing: 5) {
+                Text(entry.title).font(.subheadline.weight(.medium)).lineLimit(1)
+                Text(entry.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             .frame(width: width, alignment: .leading)
         }
+        .frame(width: width)
+        .contentShape(Rectangle())
     }
 }
 
@@ -737,7 +707,7 @@ extension View {
     func translucentCard(cornerRadius: CGFloat = 22) -> some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
         return self
-            .background(.ultraThinMaterial, in: shape)
+            .background(Theme.surface, in: shape)
             .overlay { shape.strokeBorder(Theme.hairline, lineWidth: 0.5) }
     }
 }

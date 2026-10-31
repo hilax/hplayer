@@ -72,7 +72,7 @@ extension UIColor {
 /// 颜色取自 App 图标：青蓝和紫色两笔组成的 H，中间是播放键。
 /// 页面底色沿用 iOS 分组背景，表单页和自绘页面在两种模式下保持一致。
 enum Theme {
-    static let accentUIColor = UIColor.adaptive(light: UIColor(hex: 0x2F5BFF), dark: UIColor(hex: 0x5B8CFF))
+    static let accentUIColor = UIColor.adaptive(light: UIColor(hex: 0x3569EF), dark: UIColor(hex: 0x93B1FF))
     static let accentAltUIColor = UIColor.adaptive(light: UIColor(hex: 0x6A47F5), dark: UIColor(hex: 0x8F72FF))
 
     static let accent = Color(uiColor: accentUIColor)
@@ -84,20 +84,24 @@ enum Theme {
     static let brandViolet = Color(uiColor: UIColor(hex: 0x7C5CFF))
     static let brandNavy = Color(uiColor: UIColor(hex: 0x0B0F45))
 
-    static let pageBackground = Color(uiColor: .systemGroupedBackground)
-    static let surface = Color(uiColor: .secondarySystemGroupedBackground)
-    static let surfaceRaised = Color(uiColor: .tertiarySystemGroupedBackground)
+    static let pageBackground = Color(uiColor: .adaptive(light: UIColor(hex: 0xF3F4F7), dark: UIColor(hex: 0x0D0F14)))
+    static let surface = Color(uiColor: .adaptive(light: .white, dark: UIColor(hex: 0x191C23)))
+    static let surfaceRaised = Color(uiColor: .adaptive(light: UIColor(hex: 0xE8EBF2), dark: UIColor(hex: 0x242831)))
+    static let primaryAction = Color(uiColor: UIColor(hex: 0x3C6CFF))
+    static let playerBackground = Color(uiColor: UIColor(hex: 0x050608))
+    static let playerSurface = Color(uiColor: UIColor(hex: 0x191C23))
+    static let contentInset: CGFloat = 22
 
     static let hairline = Color(uiColor: .adaptive(
         light: UIColor(hex: 0x0B0F45, alpha: 0.08),
-        dark: UIColor(white: 1, alpha: 0.08)
+        dark: UIColor(white: 1, alpha: 0.05)
     ))
     static let track = Color(uiColor: .adaptive(
         light: UIColor(hex: 0x0B0F45, alpha: 0.10),
         dark: UIColor(white: 1, alpha: 0.14)
     ))
     static let shadow = Color(uiColor: .adaptive(
-        light: UIColor(hex: 0x141A5C, alpha: 0.10),
+        light: UIColor(hex: 0x141A5C, alpha: 0.04),
         dark: UIColor(white: 0, alpha: 0)
     ))
     static let tileTint = Color(uiColor: .adaptive(
@@ -177,7 +181,7 @@ extension View {
 
     /// 带品牌色的玻璃胶囊，用在播放这类主操作上。
     @ViewBuilder
-    func glassProminentCapsule(tint: Color = Theme.accent) -> some View {
+    func glassProminentCapsule(tint: Color = Theme.primaryAction) -> some View {
         if #available(iOS 26.0, *) {
             self.glassEffect(.regular.tint(tint).interactive(), in: Capsule())
         } else {
@@ -188,7 +192,7 @@ extension View {
 
     /// 带品牌色的玻璃圆钮
     @ViewBuilder
-    func glassProminentCircle(tint: Color = Theme.accent) -> some View {
+    func glassProminentCircle(tint: Color = Theme.primaryAction) -> some View {
         if #available(iOS 26.0, *) {
             self.glassEffect(.regular.tint(tint).interactive(), in: Circle())
         } else {
@@ -198,14 +202,14 @@ extension View {
     }
 
     /// 内容卡片：浅色模式是白底加柔和投影，深色模式是抬高一层的灰底。
-    func surfaceCard(cornerRadius: CGFloat = 22) -> some View {
+    func surfaceCard(cornerRadius: CGFloat = 18) -> some View {
         self
             .background(Theme.surface, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .strokeBorder(Theme.hairline, lineWidth: 0.5)
             }
-            .shadow(color: Theme.shadow, radius: 16, x: 0, y: 6)
+            .shadow(color: Theme.shadow, radius: 10, x: 0, y: 4)
     }
 }
 

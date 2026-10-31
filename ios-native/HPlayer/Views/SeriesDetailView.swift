@@ -17,7 +17,7 @@ struct SeriesDetailView: View {
     @State private var overviewExpanded = false
 
     private static let scrollSpace = "series.scroll"
-    private let backdropHeight: CGFloat = 320
+    private let backdropHeight: CGFloat = 265
 
     var body: some View {
         let snapshot = HomeLibrary.snapshot(local: localStore, cloud: mediaLibrary, metadata: metadataStore, appState: appState)
@@ -39,6 +39,16 @@ struct SeriesDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
         .toolbarBackground(.hidden, for: .navigationBar)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    if let group {
+                        Button("匹配封面", systemImage: "photo") { matching = MatchRequest(group: group) }
+                    }
+                } label: { Image(systemName: "ellipsis") }
+                .accessibilityLabel("剧集选项")
+            }
+        }
         .fullScreenCover(item: $playing) { queue in
             PlayerView(source: queue.source, playlist: queue.items)
                 .environmentObject(appState)
@@ -71,12 +81,12 @@ struct SeriesDetailView: View {
 
                 VStack(alignment: .leading, spacing: 22) {
                     header(group)
-                    actions(group)
                     overview(group)
+                    actions(group)
                     episodesSection(group, episodes: episodes, seasons: seasons, currentSeason: currentSeason)
                 }
-                .padding(.horizontal, 18)
-                .padding(.top, -150)
+                .padding(.horizontal, Theme.contentInset)
+                .padding(.top, -55)
                 .padding(.bottom, 40)
             }
         }
@@ -115,11 +125,11 @@ struct SeriesDetailView: View {
 
     private func header(_ group: SeriesGroup) -> some View {
         HStack(alignment: .bottom, spacing: 16) {
-            PosterArtwork(urlString: group.posterURL, title: group.title, width: 112)
+            PosterArtwork(urlString: group.posterURL, title: group.title, width: 97)
 
             VStack(alignment: .leading, spacing: 6) {
                 Text(group.title)
-                    .font(.title2.weight(.heavy))
+                    .font(.title.weight(.bold))
                     .lineLimit(2)
                     .minimumScaleFactor(0.8)
 
@@ -146,8 +156,7 @@ struct SeriesDetailView: View {
                 }
 
                 HStack(spacing: 6) {
-                    chip(group.sourceLabel)
-                    chip(group.metadata.matchedByHash ? "SHA-1 识别" : "已匹配")
+                    Text(group.sourceLabel).font(.caption).foregroundStyle(.secondary)
                 }
                 .padding(.top, 2)
             }
@@ -176,24 +185,14 @@ struct SeriesDetailView: View {
                         .foregroundStyle(.white)
                         .lineLimit(1)
                         .frame(maxWidth: .infinity)
-                        .frame(height: 50)
-                        .glassProminentCapsule()
+                        .frame(height: 48)
+                        .background(Theme.primaryAction, in: RoundedRectangle(cornerRadius: 14))
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("series.play")
             }
 
-            Button {
-                matching = MatchRequest(group: group)
-            } label: {
-                Image(systemName: "photo")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .frame(width: 50, height: 50)
-                    .glassCircle()
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("匹配封面")
+
         }
     }
 
@@ -252,7 +251,6 @@ struct SeriesDetailView: View {
                 }
             }
             .padding(.vertical, 6)
-            .surfaceCard(cornerRadius: 22)
         }
     }
 
@@ -262,24 +260,10 @@ struct SeriesDetailView: View {
             play(episode, in: group)
         } label: {
             HStack(spacing: 12) {
-                ArtworkView(urlString: episode.media.thumbnail, title: group.title, letterSize: 22)
-                    .scaledToFill()
-                    .frame(width: 112, height: 63)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    // 竖版缩略图铺满后会伸出框外，clipShape 只裁画面不裁点击区域，会抢上下相邻几集的点击；
-                    // 缩略图自己不接收点击，整行的点击区域由下面的 contentShape 决定
-                    .allowsHitTesting(false)
-                    .overlay(alignment: .bottomLeading) {
-                        if let number = episode.parsed.episode {
-                            Text(String(format: "E%02d", number))
-                                .font(.caption2.weight(.bold))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 6)
-                                .frame(height: 18)
-                                .glassBadge()
-                                .padding(6)
-                        }
-                    }
+                Text(episode.parsed.episode.map { String(format: "%02d", $0) } ?? "—")
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 28)
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(episode.episodeTitle)
@@ -300,9 +284,10 @@ struct SeriesDetailView: View {
                 }
 
                 Spacer(minLength: 0)
+                Image(systemName: "play").font(.caption).foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 16)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

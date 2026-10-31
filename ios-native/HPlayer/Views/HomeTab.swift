@@ -2,14 +2,13 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct HomeTab: View {
+    var onBrowseLibrary: () -> Void = {}
     @EnvironmentObject private var recents: RecentStore
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var mediaLibrary: MediaLibraryStore
     @EnvironmentObject private var localStore: LocalMediaStore
     @EnvironmentObject private var metadataStore: MediaMetadataStore
     @EnvironmentObject private var scanner: CloudLibraryScanner
-    @Environment(\.scenePhase) private var scenePhase
-    @AppStorage(AdultMetadataSettings.enabledKey) private var adultMatching = false
     @ObservedObject private var magnetHistory = MagnetHistoryStore.shared
 
     @State private var showImporter = false
@@ -21,7 +20,6 @@ struct HomeTab: View {
     @State private var showCloudBrowser = false
     @State private var matching: MatchRequest?
     @State private var magnetLaunch: MagnetLaunch?
-    @State private var showScan = false
     /// 首页的分组结果。在后台线程算好再换上，匹配、扫描期间界面不会被整页重算拖住。
     @State private var snapshot = HomeSnapshot(items: [])
 
@@ -57,12 +55,7 @@ struct HomeTab: View {
     }
 
     private static let scrollSpace = "home.scroll"
-    private let heroHeight: CGFloat = 540
-
-    private var matchingBucket: Int {
-        let count = localStore.files.count + mediaLibrary.files(for: appState).count
-        return scanner.phase == .running ? count / 300 : count
-    }
+    private let heroHeight: CGFloat = 500
 
     private var libraryFiles: [LibraryMedia] {
         HomeLibrary.media(local: localStore, cloud: mediaLibrary, appState: appState)
@@ -80,16 +73,12 @@ struct HomeTab: View {
                         if library.featured.isEmpty {
                             emptyHeader(topInset: topInset)
                             VStack(alignment: .leading, spacing: 28) {
-                                if libraryFiles.isEmpty && scanner.phase != .running {
-                                    emptyState
-                                } else {
-                                    matchingState
-                                }
+                                emptyState
                                 if !continueItems.isEmpty {
                                     continueShelf(continueItems)
                                 }
                             }
-                            .padding(.horizontal, 18)
+                            .padding(.horizontal, Theme.contentInset)
                             .padding(.bottom, 40)
                         } else {
                             hero(library, topInset: topInset)
@@ -101,16 +90,7 @@ struct HomeTab: View {
                 .scrollIndicators(.hidden)
                 .ignoresSafeArea(edges: .top)
             }
-            // 整页底色取当前精选图的颜色：横幅往下渐渐透明，融进这层底色，下面的列表也压在它上面
-            .background {
-                HeroObserver(state: heroState) { state in
-                    let heroItem = currentHero(library, selection: state.selection)
-                    AmbientBackdrop(
-                        urlString: heroItem.map(HomeArtwork.heroURL) ?? "",
-                        fallbackURLString: heroItem?.posterURL ?? ""
-                    )
-                }
-            }
+            .background(Theme.pageBackground.ignoresSafeArea())
             .navigationDestination(for: PerformerRoute.self) { route in
                 if let group = library.performers.first(where: { $0.id == route.id }) {
                     PerformerCollectionView(group: group)
@@ -154,31 +134,6 @@ struct HomeTab: View {
             }
             .task { localStore.refresh() }
             .task(id: snapshotKey) { await rebuildSnapshot() }
-            .task(id: HomeMatchingInput(count: matchingBucket, accountID: appState.libraryAccountID, background: scenePhase == .background, scanning: scanner.phase == .running)) {
-                if scanner.accountID != appState.libraryAccountID {
-                    metadataStore.pause()
-                    scanner.selectAccount(appState.libraryAccountID)
-                    mediaLibrary.add(scanner.discoveredFiles, for: appState)
-                }
-                metadataStore.hydrate(files: libraryFiles)
-                if scenePhase == .background {
-                    scanner.pause()
-                    metadataStore.pause()
-                    mediaLibrary.flush()
-                } else {
-                    // 初始视图可能在 inactive 阶段挂载；无需等一次可能已错过的 active 变化。
-                    metadataStore.sync(files: libraryFiles)
-                }
-            }
-            .onChange(of: adultMatching) { enabled in
-                metadataStore.pause()
-                guard scenePhase != .background else { return }
-                if enabled {
-                    metadataStore.retryFailed(files: libraryFiles)
-                } else {
-                    metadataStore.sync(files: libraryFiles)
-                }
-            }
             .onChange(of: library.featured.count) { count in
                 if heroState.selection >= count { heroState.selection = 0 }
             }
@@ -191,14 +146,6 @@ struct HomeTab: View {
             HomeCloudBrowser()
                 .environmentObject(appState)
                 .environmentObject(mediaLibrary)
-        }
-        .sheet(isPresented: $showScan) {
-            HomeLibraryScanView(onStart: { startScan($0) }, onStartFolder: { startScan(true, root: ($0, $1)) }, onRetryMatching: retryMatching)
-                .environmentObject(scanner)
-                .environmentObject(metadataStore)
-                .environmentObject(mediaLibrary)
-                .environmentObject(localStore)
-                .environmentObject(appState)
         }
         .sheet(item: $matching) { request in
             MetadataMatchView(file: request.file, current: request.current, onMatch: { metadata in
@@ -277,33 +224,29 @@ struct HomeTab: View {
                 } onMatch: {
                     matching = MatchRequest(item: current)
                 }
-                .padding(.leading, 20)
+                .padding(.horizontal, Theme.contentInset)
                 .padding(.bottom, bottomInset + 6)
             }
         }
         .overlay(alignment: .bottom) {
             if featured.count > 1 {
                 heroIndicator(count: featured.count, selection: selection)
-                    .padding(.bottom, 2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.leading, Theme.contentInset)
+                    .padding(.bottom, 4)
             }
         }
     }
 
     private func heroTopBar(_ current: HomeMediaItem?, topInset: CGFloat) -> some View {
         HStack(spacing: 10) {
-            if let current {
-                Text(current.isSeries ? "剧集精选" : "电影精选")
-                    .font(.footnote.weight(.bold))
-                    .foregroundStyle(.primary)
-                    .padding(.horizontal, 13)
-                    .frame(height: 32)
-                    .glassCapsule()
-            }
+            Text("首页")
+                .font(.title2.weight(.bold))
+                .accessibilityAddTraits(.isHeader)
             Spacer(minLength: 8)
             addMenu
-            moreMenu
         }
-        .padding(.horizontal, 18)
+        .padding(.horizontal, Theme.contentInset)
         .padding(.top, topInset + 6)
     }
 
@@ -321,7 +264,6 @@ struct HomeTab: View {
         }
         .padding(.horizontal, 10)
         .frame(height: 24)
-        .glassCapsule()
         .environment(\.colorScheme, .dark)
         .animation(.spring(response: 0.35, dampingFraction: 0.8), value: selection)
         .accessibilityHidden(true)
@@ -345,80 +287,24 @@ struct HomeTab: View {
         .accessibilityIdentifier("home.sources")
     }
 
-    private var moreMenu: some View {
-        Menu {
-            Button("扫描 115 全盘并匹配封面", systemImage: "sparkle.magnifyingglass") {
-                guard appState.isAuthenticated, appState.libraryAccountID != nil else {
-                    showCloudBrowser = true
-                    return
-                }
-                showScan = true
-            }
-            .accessibilityIdentifier("home.scan115")
-            Button("重新自动匹配封面", systemImage: "photo.badge.magnifyingglass") {
-                retryMatching()
-            }
-            .disabled(libraryFiles.isEmpty)
-            Button("刷新媒体库", systemImage: "arrow.clockwise") {
-                localStore.refresh()
-                metadataStore.resumeAutomatic()
-                metadataStore.sync(files: libraryFiles)
-            }
-            if !recents.items.isEmpty || !magnetHistory.items.isEmpty {
-                Button("清空继续观看", systemImage: "clock.arrow.circlepath", role: .destructive) {
-                    recents.clear()
-                    magnetHistory.removeAll()
-                }
-            }
-        } label: {
-            Image(systemName: "ellipsis")
-                .font(.system(size: 16, weight: .bold))
-                .foregroundStyle(.primary)
-                .frame(width: 44, height: 44)
-                .glassCircle()
-        }
-        .accessibilityLabel("更多")
-        .accessibilityIdentifier("home.more")
-    }
-
-    private func startScan(_ restart: Bool, root: (id: String, name: String)? = nil) {
-        guard let accountID = appState.libraryAccountID, appState.isAuthenticated,
-              let client = appState.directClient() else { return }
-        // 不清空「已失败」记录：继续扫描时重新查询全部未匹配影片会重复请求并拖慢界面。
-        metadataStore.resumeAutomatic()
-        scanner.start(accountID: accountID, root: root, fetchPage: { cid, offset in
-            try await client.filesPage(cid: cid, offset: offset)
-        }, onBatch: { files in
-            guard appState.isAuthenticated, appState.libraryAccountID == accountID else { return }
-            mediaLibrary.add(files, for: appState)
-        }, restart: restart, replayInventory: false)
-    }
-
-    private func retryMatching() {
-        metadataStore.retryFailed(files: libraryFiles)
-    }
-
     // MARK: 内容区
 
     private func sections(_ library: HomeSnapshot, continueItems: [ContinueEntry]) -> some View {
         VStack(alignment: .leading, spacing: 30) {
-            if scanner.phase == .running || scanner.canResume || metadataStore.isMatching {
-                scanStatus
-            }
             if !continueItems.isEmpty {
                 continueShelf(continueItems)
             }
             if !library.movies.isEmpty {
                 movieShelf(library)
             }
-            if !library.performers.isEmpty {
-                performerShelf(library)
-            }
             if !library.series.isEmpty {
                 seriesShelf(library)
             }
+            if !library.performers.isEmpty {
+                performerShelf(library)
+            }
         }
-        .padding(.horizontal, 18)
+        .padding(.horizontal, Theme.contentInset)
         .padding(.top, 22)
         .padding(.bottom, 40)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -445,12 +331,13 @@ struct HomeTab: View {
             NavigationLink {
                 destination()
             } label: {
-                Text("全部")
-                    .font(.footnote.weight(.bold))
-                    .foregroundStyle(Theme.accent)
-                    .padding(.horizontal, 13)
-                    .frame(height: 30)
-                    .glassCapsule()
+                HStack(spacing: 3) {
+                    Text("全部")
+                    Image(systemName: "chevron.right")
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(minWidth: 44, minHeight: 44)
             }
             .buttonStyle(.plain)
         }
@@ -478,10 +365,10 @@ struct HomeTab: View {
                         }
                     }
                 }
-                .padding(.horizontal, 18)
+                .padding(.horizontal, Theme.contentInset)
                 .padding(.vertical, 4)
             }
-            .padding(.horizontal, -18)
+            .padding(.horizontal, -Theme.contentInset)
             .scrollIndicators(.hidden)
         }
     }
@@ -595,13 +482,13 @@ struct HomeTab: View {
             ScrollView(.horizontal) {
                 LazyHStack(alignment: .top, spacing: 14) {
                     ForEach(library.movies) { item in
-                        posterCard(item, library: library, width: 118)
+                        posterCard(item, library: library, width: 105)
                     }
                 }
-                .padding(.horizontal, 18)
+                .padding(.horizontal, Theme.contentInset)
                 .padding(.vertical, 4)
             }
-            .padding(.horizontal, -18)
+            .padding(.horizontal, -Theme.contentInset)
             .scrollIndicators(.hidden)
         }
     }
@@ -626,13 +513,13 @@ struct HomeTab: View {
             ScrollView(.horizontal) {
                 LazyHStack(alignment: .top, spacing: 14) {
                     ForEach(library.performers) { group in
-                        performerLink(group, width: 118)
+                        performerLink(group, width: 105)
                     }
                 }
-                .padding(.horizontal, 18)
+                .padding(.horizontal, Theme.contentInset)
                 .padding(.vertical, 4)
             }
-            .padding(.horizontal, -18)
+            .padding(.horizontal, -Theme.contentInset)
             .scrollIndicators(.hidden)
         }
     }
@@ -665,13 +552,13 @@ struct HomeTab: View {
             ScrollView(.horizontal) {
                 LazyHStack(alignment: .top, spacing: 14) {
                     ForEach(library.series) { group in
-                        seriesLink(group, width: 118)
+                        seriesLink(group, width: 105)
                     }
                 }
-                .padding(.horizontal, 18)
+                .padding(.horizontal, Theme.contentInset)
                 .padding(.vertical, 4)
             }
-            .padding(.horizontal, -18)
+            .padding(.horizontal, -Theme.contentInset)
             .scrollIndicators(.hidden)
         }
     }
@@ -690,73 +577,6 @@ struct HomeTab: View {
         }
     }
 
-    // MARK: 待匹配
-
-    private func pendingSection(_ library: HomeSnapshot) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            shelfTitle("待匹配封面", detail: "\(library.unmatched.count) 个文件")
-
-            VStack(spacing: 0) {
-                ForEach(library.unmatched) { item in
-                    pendingRow(item, library: library)
-                }
-            }
-            .padding(.vertical, 6)
-            .translucentCard(cornerRadius: 22)
-        }
-    }
-
-    private func pendingRow(_ item: HomeMediaItem, library: HomeSnapshot) -> some View {
-        HStack(spacing: 12) {
-            ArtworkView(urlString: item.media.thumbnail, title: item.title, letterSize: 20)
-                .scaledToFill()
-                .frame(width: 46, height: 46)
-                .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
-                // 封面铺满后会伸出框外，clipShape 只裁画面不裁点击区域；整行的点击区域由下面的 contentShape 决定
-                .allowsHitTesting(false)
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(item.media.name)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                Text([item.sourceLabel, formatSize(item.media.size)].filter { !$0.isEmpty }.joined(separator: " · "))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-
-            Spacer(minLength: 8)
-
-            Button {
-                matching = MatchRequest(item: item)
-            } label: {
-                Text("匹配")
-                    .font(.footnote.weight(.bold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 15)
-                    .frame(height: 34)
-                    .glassProminentCapsule()
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 9)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            playing = HomeLibrary.queue(for: item, in: library.items)
-        }
-        .contextMenu {
-            Button("播放", systemImage: "play.fill") {
-                playing = HomeLibrary.queue(for: item, in: library.items)
-            }
-            Button("匹配封面", systemImage: "photo") { matching = MatchRequest(item: item) }
-            Button(item.isCloud ? "从媒体库移除" : "删除本地文件", systemImage: "trash", role: .destructive) {
-                delete(item)
-            }
-        }
-    }
-
     private func delete(_ item: HomeMediaItem) {
         if let local = localStore.files.first(where: { $0.id == item.id }) {
             localStore.delete(local)
@@ -767,108 +587,47 @@ struct HomeTab: View {
 
     // MARK: 空状态
 
-    private var scanStatus: some View {
-        Button { showScan = true } label: {
-            HStack(spacing: 12) {
-                if scanner.phase == .running || metadataStore.isMatching {
-                    ProgressView().tint(Theme.accent)
-                } else {
-                    Image(systemName: "pause.circle").foregroundStyle(Theme.accent)
-                }
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(scanner.phase == .running ? "正在扫描 115 全盘" : (metadataStore.isMatching ? "正在自动匹配封面" : "全盘扫描尚未完成"))
-                        .font(.subheadline.weight(.semibold))
-                    Text("已发现 \(scanner.progress.discoveredVideos) 个视频 · 已扫描 \(scanner.progress.scannedFolders) 个文件夹")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 4)
-                Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
-            }
-            .padding(16)
-            .translucentCard(cornerRadius: 18)
-        }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("home.scanStatus")
-    }
-
-    private var matchingState: some View {
-        VStack(spacing: 18) {
-            if scanner.phase == .running || metadataStore.isMatching {
-                ProgressView().controlSize(.large).tint(Theme.accent)
-                Text(scanner.phase == .running ? "正在整理你的 115 片库" : "正在自动匹配封面")
-                    .font(.title3.weight(.semibold))
-            } else {
-                Image(systemName: "photo.on.rectangle.angled")
-                    .font(.system(size: 40)).foregroundStyle(Theme.accent)
-                Text("暂未匹配到封面").font(.title3.weight(.semibold))
-            }
-            Text("匹配成功的影片会自动显示在这里。没有匹配到的文件仍可在资源库中浏览和播放。")
-                .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
-            if scanner.phase == .running || scanner.canResume {
-                scanStatus
-            }
-            if !metadataStore.isMatching {
-                GlassCapsuleButton(title: "重新自动匹配", systemImage: "arrow.clockwise", prominent: true) { retryMatching() }
-            }
-        }
-        .padding(.horizontal, 22).padding(.vertical, 48)
-        .frame(maxWidth: .infinity)
-        .accessibilityIdentifier("home.matchingState")
-    }
-
     private func emptyHeader(topInset: CGFloat) -> some View {
         HStack(spacing: 10) {
+            Text("首页").font(.largeTitle.bold())
             Spacer(minLength: 0)
             addMenu
-            moreMenu
         }
-        .padding(.horizontal, 18)
+        .padding(.horizontal, Theme.contentInset)
         .padding(.top, topInset + 6)
         .padding(.bottom, 10)
     }
 
     private var emptyState: some View {
         VStack(spacing: 18) {
-            ZStack {
-                Circle()
-                    .fill(Theme.accentGradient)
-                    .frame(width: 150, height: 150)
-                    .blur(radius: 45)
-                    .opacity(0.45)
-                BrandLogo(size: 92)
-                    .shadow(color: Theme.brandBlue.opacity(0.35), radius: 18, x: 0, y: 10)
+            Image(systemName: "play.rectangle")
+                .font(.system(size: 32, weight: .medium))
+                .foregroundStyle(Theme.accent)
+                .frame(width: 80, height: 80)
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 24))
+            Text("让好内容，在这里相遇")
+                .font(.title2.weight(.semibold))
+            Text("连接你的 115 网盘，或导入本机视频。\n把喜欢的影片，变成随时可看的片库。")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .lineSpacing(5)
+            Button { showImporter = true } label: {
+                Label("添加本机视频", systemImage: "plus")
             }
-            .padding(.top, 12)
-
-            VStack(spacing: 8) {
-                Text("把片库变成海报墙")
-                    .font(.title2.weight(.bold))
-                Text("导入手机里的视频，或者添加 115 文件夹。HPlayer 会自动配上海报、年份和评分，按电影和剧集整理好。")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 320)
-            }
-
-            VStack(spacing: 12) {
-                GlassCapsuleButton(title: "从文件 App 导入", systemImage: "folder.badge.plus", prominent: true) {
-                    showImporter = true
-                }
-                GlassCapsuleButton(title: "添加 115 文件夹", systemImage: "icloud") {
-                    showCloudBrowser = true
-                }
-                GlassCapsuleButton(title: "磁力链接播放", systemImage: "link") {
-                    magnetLaunch = MagnetLaunch(value: "")
-                }
-            }
-            .padding(.top, 4)
+            .buttonStyle(PrimaryActionStyle())
+            .frame(maxWidth: 240)
+            Button("浏览资源库", action: onBrowseLibrary)
+                .font(.subheadline.weight(.medium))
+                .frame(minHeight: 44)
+                .accessibilityIdentifier("home.browseLibrary")
         }
-        .padding(.vertical, 34)
-        .padding(.horizontal, 20)
+        .padding(.horizontal, 22)
+        .padding(.vertical, 70)
         .frame(maxWidth: .infinity)
-        .surfaceCard(cornerRadius: 30)
         .accessibilityIdentifier("home.emptyLibrary")
     }
+
 }
 
 /// 只比较数量和状态，不比较整份片库。扫描中每新增 300 个视频才重新匹配一次，
@@ -899,13 +658,6 @@ private struct HomeSnapshotKey: Equatable {
     let cloudRevision: Int
     let metadataRevision: Int
     let account: String?
-}
-
-private struct HomeMatchingInput: Equatable {
-    let count: Int
-    let accountID: String?
-    let background: Bool
-    let scanning: Bool
 }
 
 // MARK: - 横幅单页
@@ -968,7 +720,11 @@ private struct HeroPage: View {
     }
 
     private var content: some View {
-        VStack(alignment: .leading, spacing: 9) {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("来自你的片库")
+                .font(.caption2.weight(.medium))
+                .tracking(1.5)
+                .foregroundStyle(.secondary)
             if let logoURL = item.metadata?.logoURL, !logoURL.isEmpty {
                 ArtworkView(urlString: logoURL, title: item.title)
                     .scaledToFit()
@@ -976,7 +732,7 @@ private struct HeroPage: View {
             } else {
                 Text(item.title)
                     .accessibilityIdentifier("home.heroTitle")
-                    .font(.system(size: 34, weight: .heavy, design: .rounded))
+                    .font(.system(size: 38, weight: .bold))
                     .foregroundStyle(.primary)
                     .lineLimit(2)
                     .minimumScaleFactor(0.8)
@@ -1013,10 +769,9 @@ private struct HeroPage: View {
     }
 }
 
-/// 横幅底部固定的两个按钮：播放、换封面；翻页时不动
+/// 精选播放优先；更正影片资料收在主动打开的更多菜单中。
 private struct HeroActions: View {
     static let height: CGFloat = 48
-
     let hasMetadata: Bool
     let onPlay: () -> Void
     let onMatch: () -> Void
@@ -1025,25 +780,18 @@ private struct HeroActions: View {
         HStack(spacing: 10) {
             Button(action: onPlay) {
                 Label("播放", systemImage: "play.fill")
-                    .font(.subheadline.weight(.bold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 26)
-                    .frame(height: Self.height)
-                    .glassProminentCapsule()
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PrimaryActionStyle(light: true))
             .accessibilityIdentifier("home.heroPlay")
-
-            Button(action: onMatch) {
-                Image(systemName: hasMetadata ? "photo" : "photo.badge.plus")
+            Menu {
+                Button("匹配封面", systemImage: "photo", action: onMatch)
+            } label: {
+                Image(systemName: "ellipsis")
                     .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(.primary)
                     .frame(width: Self.height, height: Self.height)
                     .glassCircle()
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("更换封面")
-            .accessibilityIdentifier("home.heroMatch")
+            .accessibilityLabel("影片选项")
         }
     }
 }

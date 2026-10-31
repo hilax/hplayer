@@ -71,6 +71,8 @@ struct DirectoryView: View {
             }
         }
         .background(Theme.pageBackground.ignoresSafeArea())
+        .toolbar(.visible, for: .navigationBar)
+        .navigationBarTitleDisplayMode(.inline)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if selecting { selectionBar }
         }
@@ -109,8 +111,9 @@ struct DirectoryView: View {
                 }
                 .buttonStyle(.plain)
                 .listRowBackground(Color.clear)
-                .listRowSeparator(.hidden)
-                .listRowInsets(EdgeInsets(top: 7, leading: 16, bottom: 7, trailing: 16))
+                .listRowSeparator(.visible)
+                .listRowSeparatorTint(Theme.hairline)
+                .listRowInsets(EdgeInsets(top: 8, leading: 22, bottom: 8, trailing: 22))
                 .accessibilityAddTraits(selection.contains(file.id) ? AccessibilityTraits.isSelected : AccessibilityTraits())
             }
         }

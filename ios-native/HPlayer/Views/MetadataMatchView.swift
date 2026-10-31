@@ -123,6 +123,7 @@ struct MetadataMatchView: View {
                     Text(file.name).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                 }
             }
+            .libraryFormStyle()
             .navigationTitle("匹配封面")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("完成") { dismiss() } } }
@@ -241,7 +242,7 @@ private struct MetadataRow: View {
 }
 
 /// 填写 TMDB API Key：v3 的 API Key 或 v4 的「API 读访问令牌」都可以，存在钥匙串里
-private struct TMDBKeyView: View {
+struct TMDBKeyView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var key = TMDBClient.storedKey
 
@@ -264,6 +265,7 @@ private struct TMDBKeyView: View {
                     }
                 }
             }
+            .libraryFormStyle()
             .navigationTitle("TMDB")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

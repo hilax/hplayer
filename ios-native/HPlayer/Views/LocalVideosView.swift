@@ -22,6 +22,10 @@ struct LocalVideosView: View {
                 )
             } else {
                 List {
+                    PageIntroduction(eyebrow: "On this iPhone", title: "本机视频", subtitle: "\(localStore.files.count) 个视频")
+                        .padding(.vertical, 16)
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
                     ForEach(localStore.files) { file in
                         Button {
                             play(file)
@@ -53,6 +57,8 @@ struct LocalVideosView: View {
         }
         .background(Theme.pageBackground.ignoresSafeArea())
         .navigationTitle("本机视频")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {

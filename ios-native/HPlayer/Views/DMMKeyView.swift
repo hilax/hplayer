@@ -31,7 +31,8 @@ struct DMMKeyView: View {
                     }
                 }
             }
-            .navigationTitle("FANZA（DMM）")
+            .libraryFormStyle()
+        .navigationTitle("FANZA（DMM）")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }

@@ -47,6 +47,9 @@ struct SearchView: View {
         let hits = libraryMatches(library)
 
         List {
+            PageIntroduction(eyebrow: "Find your next watch", title: "搜索")
+                .padding(.top, 12)
+                .searchRow(top: 0, bottom: 16)
             Picker("搜索范围", selection: $scope) {
                 ForEach(Scope.allCases) { item in
                     Text(item.title).tag(item)
@@ -58,7 +61,7 @@ struct SearchView: View {
             if query.isEmpty {
                 EmptyStateView(
                     icon: "magnifyingglass",
-                    title: "搜索片库和 115 网盘",
+                    title: "找到你想看的",
                     message: "输入片名、演员或文件名里的关键词。片库里的影片会边输入边显示，按搜索键再查 115 网盘。"
                 )
                 .frame(minHeight: 380)
@@ -76,8 +79,9 @@ struct SearchView: View {
         .scrollContentBackground(.hidden)
         .scrollDismissesKeyboard(.interactively)
         .background(Theme.pageBackground.ignoresSafeArea())
-        .navigationTitle("搜索")
-        .searchable(text: $keyword, prompt: "片名、演员或文件名")
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $keyword, placement: .navigationBarDrawer(displayMode: .always), prompt: "片名、演员或文件名")
         .navigationDestination(for: PerformerRoute.self) { route in
             if let group = library.performers.first(where: { $0.id == route.id }) {
                 PerformerCollectionView(group: group)

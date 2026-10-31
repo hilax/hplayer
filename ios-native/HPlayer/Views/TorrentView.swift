@@ -187,7 +187,10 @@ struct TorrentView: View {
                 Button("完成") { focusedField = nil }
             }
         }
+        .libraryFormStyle()
         .navigationTitle("BT 云下载")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
         .navigationBarTitleDisplayMode(.inline)
         .task { await loadTasks(page: 1) }
         .sheet(isPresented: $browsing) {
@@ -311,6 +314,7 @@ private struct TorrentFolder: View {
             if !loading && files.isEmpty && error.isEmpty && !hasMore { Text("此目录没有种子或文件夹").foregroundStyle(.secondary) }
         }
         .listRowSeparator(.hidden)
+        .libraryFormStyle()
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .task { await load() }

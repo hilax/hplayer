@@ -37,8 +37,16 @@ final class HomeUITests: XCTestCase {
         app.launch()
         XCTAssertTrue(app.buttons["home.poster.tt1160419"].firstMatch.waitForExistence(timeout: 5), "Cold launch should restore cached posters without metadata network access")
         XCTAssertFalse(app.otherElements["home.emptyLibrary"].exists, "A saved library must not render the empty onboarding state")
-        app.buttons["home.more"].tap()
-        XCTAssertTrue(app.buttons["扫描 115 全盘并匹配封面"].waitForExistence(timeout: 3))
-        app.tap()
+        XCTAssertFalse(app.buttons["home.scanStatus"].exists, "Home never shows scan or matching maintenance")
+        XCTAssertFalse(app.otherElements["home.matchingState"].exists)
+        app.tabBars.buttons["资源库"].tap()
+        let manage = app.buttons["library.manage"]
+        if !manage.isHittable { app.swipeUp() }
+        XCTAssertTrue(manage.waitForExistence(timeout: 5))
+        manage.tap()
+        XCTAssertTrue(app.navigationBars["媒体库管理"].waitForExistence(timeout: 5))
+        let unmatched = app.buttons["scan.unmatched"]
+        if !unmatched.isHittable { app.swipeUp() }
+        XCTAssertTrue(unmatched.waitForExistence(timeout: 5), "Unmatched media is managed from Resources")
     }
 }

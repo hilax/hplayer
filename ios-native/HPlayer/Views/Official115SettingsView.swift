@@ -155,6 +155,7 @@ struct Official115SettingsView: View {
                 Button("完成") { focusedField = nil }
             }
         }
+        .libraryFormStyle()
         .navigationTitle("115 官方授权")
         .navigationBarTitleDisplayMode(.inline)
         .task {

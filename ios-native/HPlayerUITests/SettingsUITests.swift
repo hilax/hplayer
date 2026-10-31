@@ -12,6 +12,9 @@ final class SettingsUITests: XCTestCase {
         XCTAssertTrue(settings.waitForExistence(timeout: 20))
         settings.tap()
 
+        let appearance = app.buttons["settings.appearance"]
+        XCTAssertTrue(appearance.waitForExistence(timeout: 10))
+        appearance.tap()
         let light = app.buttons["settings.appearance.light"]
         let dark = app.buttons["settings.appearance.dark"]
         let system = app.buttons["settings.appearance.system"]
@@ -23,6 +26,7 @@ final class SettingsUITests: XCTestCase {
         system.tap()
         XCTAssertTrue(wait { system.isSelected }, "System appearance should become selected")
 
+        app.navigationBars.buttons.element(boundBy: 0).tap()
         let licenses = app.buttons["settings.licenses"]
         if !licenses.isHittable { app.swipeUp() }
         XCTAssertTrue(licenses.waitForExistence(timeout: 5))
