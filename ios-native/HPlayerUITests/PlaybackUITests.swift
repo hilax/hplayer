@@ -57,6 +57,10 @@ final class PlaybackUITests: XCTestCase {
         let elapsed = app.staticTexts["playback.elapsed"]
         XCTAssertTrue(wait { surface.exists && orientation.exists && app.windows.firstMatch.frame.width > app.windows.firstMatch.frame.height }, "Player should open in landscape")
         XCTAssertFalse(app.alerts.firstMatch.exists)
+        let frame = app.windows.firstMatch.frame
+        XCTAssertGreaterThan(pause.frame.midY, frame.height * 0.72, "Landscape transport belongs below the timeline")
+        XCTAssertGreaterThan(app.buttons["playback.lock"].frame.midX, frame.width * 0.09, "Lock control should sit inward from the edge")
+        XCTAssertLessThan(app.buttons["playback.screenshot"].frame.midX, frame.width * 0.91, "Screenshot control should sit inward from the edge")
         XCTAssertTrue(wait { (pause.value as? String) == "playing" && self.seconds(elapsed.label) > 0 && app.sliders.firstMatch.isEnabled }, "HLS should play with working seeking")
 
         pause.tap()

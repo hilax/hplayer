@@ -65,8 +65,6 @@ struct TorrentTasks: Decodable {
 private struct TorrentOK: Decodable { let ok: Bool }
 
 struct TorrentView: View {
-    private enum Field: Hashable { case savePath, folderId }
-    @FocusState private var focusedField: Field?
     @EnvironmentObject private var appState: AppState
     @State private var importing = false
     @State private var browsing = false

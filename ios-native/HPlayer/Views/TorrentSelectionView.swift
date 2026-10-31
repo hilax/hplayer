@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct TorrentSelectionView: View {
+    private enum Field: Hashable { case path, folder }
+    @FocusState private var focusedField: Field?
     let info: TorrentInfo
     @Binding var selected: Set<Int>
     @Binding var savePath: String
@@ -50,7 +52,8 @@ struct TorrentSelectionView: View {
             VStack(alignment: .leading, spacing: 16) {
                 Label("保存位置", systemImage: "folder").font(.headline)
                 DesignField(label: "相对于目标文件夹的路径", placeholder: "HPlayer", text: $savePath)
-                DesignField(label: "目标文件夹 ID（根目录为 0）", placeholder: "0", text: $folderId).keyboardType(.numberPad)
+                    .focused($focusedField, equals: .path).submitLabel(.done).onSubmit { focusedField = nil }
+                DesignField(label: "目标文件夹 ID（根目录为 0）", placeholder: "0", text: $folderId).keyboardType(.numberPad).focused($focusedField, equals: .folder)
             }.padding(18).surfaceCard()
             if !error.isEmpty { DesignNotice(symbol: "exclamationmark.circle", text: error, warning: true) }
         }
@@ -63,6 +66,7 @@ struct TorrentSelectionView: View {
                     .buttonStyle(PrimaryActionStyle()).disabled(!canSubmit)
             }.padding(Theme.contentInset).background(Theme.pageBackground)
         }
+        .toolbar { ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("完成") { focusedField = nil } } }
         .navigationTitle("选择下载文件")
         .designScreen("torrent-files")
     }

@@ -19,7 +19,7 @@ jobs:
     # Select an installed stable Xcode 26 toolchain on either supported architecture.
     runs-on: ${{ inputs.runner || 'macos-15' }}
     # 公开仓库的构建机速度差异很大（同一套测试 5～15 分钟都出现过），整体留足时间，免得跑到一半被取消
-    timeout-minutes: 45
+    timeout-minutes: 65
     steps:
       - uses: actions/checkout@v4
 
@@ -163,7 +163,7 @@ jobs:
       - name: Test playback and controls on iPhone simulator
         id: native-tests
         # 公开仓库的构建机较慢，测试有时要 7～15 分钟
-        timeout-minutes: 30
+        timeout-minutes: 45
         run: |
           device=$(xcrun simctl list devices available --json | python3 -c 'import json,re,sys; d=json.load(sys.stdin)["devices"]; groups=sorted(d.items(),key=lambda pair:tuple(map(int,re.findall(r"[0-9]+",pair[0]))),reverse=True); devices=next(([x for x in group if x.get("isAvailable") and x["name"].startswith("iPhone")] for runtime,group in groups if any(x.get("isAvailable") and x["name"].startswith("iPhone") for x in group)),[]); preferred=next((x for x in devices if "Pro" in x["name"]), devices[0] if devices else None); print(preferred["udid"] if preferred else "")')
           test -n "$device"

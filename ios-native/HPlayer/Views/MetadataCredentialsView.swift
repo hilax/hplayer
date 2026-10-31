@@ -2,6 +2,8 @@ import SwiftUI
 
 /// One credential editor shared by the source list and manual matching.
 struct MetadataCredentialsView: View {
+    private enum Field: Hashable { case tmdb, api, affiliate }
+    @FocusState private var focusedField: Field?
     @Environment(\.dismiss) private var dismiss
     @State private var tmdb = TMDBClient.storedKey
     @State private var apiID = DMMClient.storedCredentials()?.apiID ?? ""
@@ -17,14 +19,17 @@ struct MetadataCredentialsView: View {
             VStack(alignment: .leading, spacing: 17) {
                 Label("TMDB", systemImage: "key").font(.headline)
                 DesignField(label: "API Key / API 读访问令牌", placeholder: "输入 TMDB 凭证", text: $tmdb, secure: true)
+                    .focused($focusedField, equals: .tmdb)
                     .accessibilityIdentifier("credentials.tmdb")
                 DesignNotice(text: "用于获取影片资料与中文海报。留空时继续使用番组计划和 IMDb。")
             }.padding(18).surfaceCard()
             VStack(alignment: .leading, spacing: 17) {
                 Label("FANZA（DMM）", systemImage: "key").font(.headline)
                 DesignField(label: "API ID", placeholder: "DMM Web API ID", text: $apiID, secure: true)
+                    .focused($focusedField, equals: .api)
                     .accessibilityIdentifier("credentials.dmm.api")
                 DesignField(label: "Affiliate ID", placeholder: "以 990–999 结尾", text: $affiliateID)
+                    .focused($focusedField, equals: .affiliate)
                     .accessibilityIdentifier("credentials.dmm.affiliate")
                 DesignNotice(text: "从 affiliate.dmm.com 申请。仅向 api.dmm.com 发送番号，两个字段需同时填写。")
             }.padding(18).surfaceCard()
@@ -40,7 +45,10 @@ struct MetadataCredentialsView: View {
             DesignNotice(symbol: "lock.shield", text: "凭证仅保存在本机钥匙串，不上传到 HPlayer 或 115。")
         }
         .navigationTitle("接口凭证")
-        .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } }
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } }
+            ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("完成") { focusedField = nil } }
+        }
         .confirmationDialog("删除这台设备上的资料接口凭证？", isPresented: $deleting, titleVisibility: .visible) {
             Button("删除凭证", role: .destructive) {
                 TMDBClient.saveKey("")

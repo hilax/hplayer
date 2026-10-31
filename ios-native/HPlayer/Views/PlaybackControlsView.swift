@@ -155,8 +155,10 @@ struct PlaybackControlsView: View {
                             .allowsHitTesting(false)
                     }
                     .overlay {
-                        transportControls(spacing: landscape ? 44 : 34)
-                            .offset(y: landscape ? -8 : -geometry.size.height * 0.1)
+                        if !landscape {
+                            transportControls(spacing: 34)
+                                .offset(y: -geometry.size.height * 0.1)
+                        }
                     }
                     .overlay {
                         HStack {
@@ -164,19 +166,22 @@ struct PlaybackControlsView: View {
                                 .accessibilityIdentifier("playback.lock")
                             Spacer()
                             GlassIconButton(systemImage: "camera", label: "截图", diameter: 40) { takeScreenshot() }
+                                .accessibilityIdentifier("playback.screenshot")
                         }
-                        .padding(.horizontal, landscape ? 28 : 16)
+                        .padding(.leading, landscape ? edgeControlInset(safe: insets.leading, width: geometry.size.width) : 16)
+                        .padding(.trailing, landscape ? edgeControlInset(safe: insets.trailing, width: geometry.size.width) : 16)
                         .offset(y: landscape ? 0 : geometry.size.height * 0.13)
                     }
                     .transition(.opacity)
                     .zIndex(2)
                 } else if controlsVisible && locked {
                     HStack {
-                        GlassIconButton(systemImage: "lock.fill", label: "解锁", diameter: 46, action: unlock)
+                        GlassIconButton(systemImage: "lock.fill", label: "解锁", diameter: 40, action: unlock)
                             .accessibilityIdentifier("playback.unlock")
                         Spacer()
                     }
-                    .padding(.leading, max(insets.leading, 24))
+                    .padding(.leading, landscape ? edgeControlInset(safe: insets.leading, width: geometry.size.width) : 16)
+                    .offset(y: landscape ? 0 : geometry.size.height * 0.13)
                     .transition(.opacity)
                     .zIndex(3)
                 }
@@ -284,6 +289,10 @@ struct PlaybackControlsView: View {
         .alert("无法切换屏幕方向", isPresented: Binding(get: { !rotateError.isEmpty }, set: { if !$0 { rotateError = "" } })) {
             Button("好", role: .cancel) { rotateError = "" }
         } message: { Text(rotateError) }
+    }
+
+    private func edgeControlInset(safe: CGFloat, width: CGFloat) -> CGFloat {
+        max(safe + 12, width * 0.11 - 20)
     }
 
     // MARK: 顶部
@@ -426,7 +435,7 @@ struct PlaybackControlsView: View {
         }
     }
 
-    /// 锁定、倍速在左，选集、横竖屏在右
+    /// 横屏：画质和倍速在左、播放控制居中、选集和方向在右。
     private func sideControls(landscape: Bool) -> some View {
         HStack(spacing: 8) {
             Button { openSettings(.playback) } label: {
@@ -445,24 +454,30 @@ struct PlaybackControlsView: View {
             .buttonStyle(.plain)
             .accessibilityIdentifier("playback.orientation")
         }
+        .frame(minHeight: landscape ? 56 : 44)
+        .overlay {
+            if landscape { transportControls(spacing: 24, compact: true) }
+        }
     }
 
-    private func transportControls(spacing: CGFloat) -> some View {
+    private func transportControls(spacing: CGFloat, compact: Bool = false) -> some View {
         HStack(spacing: spacing) {
             Button { move(-1) } label: {
                 controlIcon("backward.end.fill", label: "上一个", size: 18).background(.black.opacity(0.3), in: Circle()).glassCircle()
             }
+                .accessibilityIdentifier("playback.previous")
                 .disabled(previousID == nil)
                 .opacity(previousID == nil ? 0.35 : 1)
             Button { playback.toggle(); revealControls() } label: {
-                controlIcon(playback.playing ? "pause.fill" : "play.fill", label: playback.playing ? "暂停" : "播放", size: 29, frame: 64)
-                    .frame(height: 64).background(.black.opacity(0.3), in: Circle()).glassCircle()
+                controlIcon(playback.playing ? "pause.fill" : "play.fill", label: playback.playing ? "暂停" : "播放", size: compact ? 25 : 29, frame: compact ? 56 : 64)
+                    .frame(height: compact ? 56 : 64).background(.black.opacity(0.3), in: Circle()).glassCircle()
             }
             .accessibilityIdentifier("playback.playPause")
             .accessibilityValue(playback.playing ? "playing" : "paused")
             Button { move(1) } label: {
                 controlIcon("forward.end.fill", label: "下一个", size: 18).background(.black.opacity(0.3), in: Circle()).glassCircle()
             }
+                .accessibilityIdentifier("playback.next")
                 .disabled(nextID == nil)
                 .opacity(nextID == nil ? 0.35 : 1)
         }
