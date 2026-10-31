@@ -155,7 +155,7 @@ struct MagnetPlayerView: View {
             }
             Button(action: submit) { Label("解析并播放", systemImage: "play.fill") }
                 .buttonStyle(PrimaryActionStyle()).disabled(detected == nil)
-                .opacity(detected == nil ? 0.45 : 1).accessibilityIdentifier("magnet.resolve")
+                .accessibilityIdentifier("magnet.resolve")
         }
         .padding(18)
         .surfaceCard(cornerRadius: 22)

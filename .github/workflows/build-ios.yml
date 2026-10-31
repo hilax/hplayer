@@ -124,6 +124,8 @@ jobs:
         with:
           path: ${{ github.workspace }}/.spm
           key: hplayer-spm-${{ hashFiles('ios-native/project.yml') }}
+          restore-keys: |
+            hplayer-spm-
 
       - name: Build unsigned .app
         working-directory: ios-native

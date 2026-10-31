@@ -117,7 +117,7 @@ struct MetadataMatchView: View {
                     startSearch()
                 }
             }) {
-                NavigationStack { MetadataSourcesView() }
+                NavigationStack { MetadataSourcesView(showsCloseButton: true) }
             }
         }
     }

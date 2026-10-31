@@ -30,17 +30,7 @@ private struct PlaybackAdjustment {
 }
 
 /// 右侧设置面板的分页
-private enum SettingsPage: String, CaseIterable, Identifiable {
-    case playback, subtitles, audio
-    var id: String { rawValue }
-    var title: String {
-        switch self {
-        case .playback: return "播放"
-        case .subtitles: return "字幕"
-        case .audio: return "音轨"
-        }
-    }
-}
+private enum SettingsPage: Equatable { case playback, tracks }
 
 /// 定时关闭
 private enum SleepTimer: Equatable, Identifiable {
@@ -242,7 +232,7 @@ struct PlaybackControlsView: View {
             #if DEBUG
             switch InterfacePreview.screen {
             case "playback": settingsPage = .playback
-            case "tracks": settingsPage = .subtitles
+            case "tracks": settingsPage = .tracks
             case "episodes": showList = true
             case "aspect": showAspect = true
             default: break
@@ -320,7 +310,8 @@ struct PlaybackControlsView: View {
                     withAnimation(.easeOut(duration: 0.22)) { showAspect.toggle() }
                     hideTask?.cancel()
                 }
-                GlassIconButton(systemImage: "captions.bubble", label: "字幕和音轨") { openSettings(.subtitles) }
+                GlassIconButton(systemImage: "captions.bubble", label: "字幕和音轨") { openSettings(.tracks) }
+                    .accessibilityIdentifier("playback.tracks")
                 }
                 GlassIconButton(systemImage: "ellipsis", label: "更多设置") { openSettings(.playback) }
                     .accessibilityIdentifier("playback.more")
@@ -420,7 +411,8 @@ struct PlaybackControlsView: View {
                         hideTask?.cancel()
                     } label: { Label("画面", systemImage: "aspectratio") }
                     Spacer(minLength: 0)
-                    Button { openSettings(.subtitles) } label: { Label("字幕音轨", systemImage: "captions.bubble") }
+                    Button { openSettings(.tracks) } label: { Label("字幕音轨", systemImage: "captions.bubble") }
+                        .accessibilityIdentifier("playback.tracks")
                     Spacer(minLength: 0)
                     Button { openSettings(.playback) } label: { Label("设置", systemImage: "gearshape") }
                 }
@@ -595,15 +587,11 @@ struct PlaybackControlsView: View {
                     Spacer()
                     GlassIconButton(systemImage: "xmark", label: "关闭设置", diameter: 32) { closeSettings() }
                 }
-                Picker("设置", selection: Binding(get: { page }, set: { settingsPage = $0 })) {
-                    ForEach(SettingsPage.allCases) { item in Text(item.title).tag(item) }
-                }
-                .pickerStyle(.segmented)
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
                         switch page {
                         case .playback: playbackSettings
-                        case .subtitles, .audio:
+                        case .tracks:
                             subtitleSettings
                             Divider().overlay(.white.opacity(0.12))
                             audioSettings

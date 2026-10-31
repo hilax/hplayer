@@ -15,6 +15,7 @@ struct InterfaceCatalogHost: View {
         Group {
             if ready {
                 destination
+                    .accessibilityElement(children: .contain)
                     .accessibilityIdentifier("catalog.\(screen)")
             } else { ProgressView("准备界面数据") }
         }

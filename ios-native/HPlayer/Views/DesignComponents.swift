@@ -29,6 +29,7 @@ struct LibraryActionRow: View {
     let title: String
     var subtitle: String = ""
     var value: String = ""
+    var showsChevron = true
 
     var body: some View {
         HStack(spacing: 13) {
@@ -45,7 +46,7 @@ struct LibraryActionRow: View {
             }
             Spacer(minLength: 8)
             if !value.isEmpty { Text(value).font(.caption).foregroundStyle(.secondary) }
-            Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
+            if showsChevron { Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary) }
         }
         .padding(16)
         .frame(minHeight: 68)
@@ -54,6 +55,7 @@ struct LibraryActionRow: View {
 }
 
 struct PrimaryActionStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
     var light = false
 
     func makeBody(configuration: Configuration) -> some View {
@@ -63,7 +65,7 @@ struct PrimaryActionStyle: ButtonStyle {
             .frame(maxWidth: .infinity, minHeight: 48)
             .background(light ? Color(uiColor: UIColor(hex: 0xF4F6FB)) : Theme.primaryAction,
                         in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .opacity(configuration.isPressed ? 0.78 : 1)
+            .opacity(isEnabled ? (configuration.isPressed ? 0.78 : 1) : 0.4)
     }
 }
 
@@ -152,11 +154,12 @@ struct DesignNotice: View {
 }
 
 struct SecondaryActionStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
     func makeBody(configuration: Configuration) -> some View {
         configuration.label.font(.subheadline.weight(.semibold))
             .frame(maxWidth: .infinity, minHeight: 46)
             .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: 14))
-            .opacity(configuration.isPressed ? 0.7 : 1)
+            .opacity(isEnabled ? (configuration.isPressed ? 0.7 : 1) : 0.4)
     }
 }
 
