@@ -37,6 +37,7 @@ struct SettingsView: View {
             .designScreen("settings")
             .confirmationDialog("退出后将断开 115 网盘连接", isPresented: $confirmLogout, titleVisibility: .visible) {
                 Button("退出 115", role: .destructive) { appState.logout() }
+                    .accessibilityIdentifier("settings.account.confirmLogout")
                 Button("取消", role: .cancel) {}
             }
         }
