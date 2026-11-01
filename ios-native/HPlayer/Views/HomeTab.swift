@@ -64,7 +64,6 @@ struct HomeTab: View {
         ImagePipeline.shared.prefetch(HomeArtwork.prefetchRequests(library, selection: heroState.selection))
     }
 
-    private let heroHeight: CGFloat = 214
 
     private var libraryFiles: [LibraryMedia] {
         HomeLibrary.media(local: localStore, cloud: mediaLibrary, appState: appState)
@@ -76,11 +75,10 @@ struct HomeTab: View {
 
         NavigationStack {
             GeometryReader { viewport in
-                let viewportTop = viewport.frame(in: .global).minY
-                ScrollView {
+                                ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
-                        topBar(continueItems)
                         if library.featured.isEmpty {
+                            topBar(continueItems)
                             VStack(alignment: .leading, spacing: 28) {
                                 emptyState
                                 if !continueItems.isEmpty {
@@ -89,14 +87,15 @@ struct HomeTab: View {
                             }
                             .padding(.bottom, 40)
                         } else {
-                            categoryNav
-                            heroCard(library, viewportTop: viewportTop)
+                            heroCard(library, continueItems: continueItems,
+                                     width: viewport.size.width, safeTop: viewport.safeAreaInsets.top)
                             sections(library, continueItems: continueItems)
                         }
                     }
                 }
                 .scrollIndicators(.hidden)
-                .trackHomeShelfHeader(state: heroState, threshold: 60)
+                .ignoresSafeArea(edges: .top)
+                .trackHomeShelfHeader(state: heroState, threshold: 150)
             }
             .overlay(alignment: .top) {
                 HomeScrolledBar(state: heroState, onSearch: onSearch, onAdd: { showAdd = true })
@@ -255,34 +254,6 @@ struct HomeTab: View {
         .accessibilityIdentifier("home.heroBar")
     }
 
-    /// 推荐（当前页）和几个分类入口；分类跳到片库并带上对应的筛选。
-    private var categoryNav: some View {
-        ScrollView(.horizontal) {
-            HStack(alignment: .bottom, spacing: 22) {
-                VStack(spacing: 5) {
-                    Text("推荐").font(.system(size: 19, weight: .bold))
-                    Capsule().fill(Theme.gold).frame(width: 16, height: 3)
-                }
-                .accessibilityElement(children: .combine)
-                .accessibilityAddTraits(.isSelected)
-                ForEach(HomeCategory.all) { item in
-                    Button { onOpenCatalog(item.kind, item.sort) } label: {
-                        Text(item.title)
-                            .font(.system(size: 15))
-                            .foregroundStyle(Theme.textSecondary)
-                            .frame(minHeight: 34, alignment: .bottom)
-                            .padding(.bottom, 2)
-                    }
-                    .buttonStyle(.pressable(scale: 0.92))
-                    .accessibilityIdentifier("home.category.\(item.id)")
-                }
-            }
-            .padding(.horizontal, Theme.contentInset)
-            .padding(.top, 8)
-        }
-        .scrollIndicators(.hidden)
-    }
-
     // MARK: 精选横幅
 
     private func currentHero(_ library: HomeSnapshot, selection: Int) -> HomeMediaItem? {
@@ -290,26 +261,58 @@ struct HomeTab: View {
         return featured.indices.contains(selection) ? featured[selection] : featured.first
     }
 
-    /// 圆角横幅卡片。滚动位置通过偏好值上报，用来决定是否显示吸顶的搜索栏（iOS 18 以下）。
-    private func heroCard(_ library: HomeSnapshot, viewportTop: CGFloat) -> some View {
-        GeometryReader { proxy in
-            let minY = proxy.frame(in: .global).minY - viewportTop
+    /// 铺满屏幕上方的精选轮播：图片延伸到状态栏下面，搜索、历史、添加三个入口悬浮在左上角之上。
+    private func heroCard(_ library: HomeSnapshot, continueItems: [ContinueEntry],
+                          width: CGFloat, safeTop: CGFloat) -> some View {
+        let height = min(width * 1.18, 520) + safeTop * 0.4
+        return GeometryReader { proxy in
+            let minY = proxy.frame(in: .global).minY
             HeroObserver(state: heroState) { state in
                 heroPager(library, selection: state.selection)
             }
-            .frame(width: proxy.size.width, height: heroHeight)
+            .frame(width: proxy.size.width, height: height)
             .preference(key: HeroMinYKey.self, value: minY)
         }
-        .frame(height: heroHeight)
-        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
-        .padding(.horizontal, Theme.contentInset)
-        .padding(.top, 12)
+        .frame(height: height)
+        .overlay(alignment: .topTrailing) { floatingButtons(continueItems).padding(.top, safeTop + 4) }
         .onPreferenceChange(HeroMinYKey.self) { minY in
             if #unavailable(iOS 18.0) {
-                let scrolled = minY < 40
+                let scrolled = minY < -150
                 if scrolled != heroState.scrolled { heroState.scrolled = scrolled }
             }
         }
+    }
+
+    private func floatingButton(_ icon: AppIcon) -> some View {
+        Image(systemName: icon.name)
+            .font(.system(size: 17, weight: Theme.iconWeight))
+            .foregroundStyle(.white)
+            .frame(width: 38, height: 38)
+            .background(Color.black.opacity(0.38), in: Circle())
+            .background(.ultraThinMaterial, in: Circle())
+            .contentShape(Circle())
+    }
+
+    private func floatingButtons(_ continueItems: [ContinueEntry]) -> some View {
+        HStack(spacing: 10) {
+            Button(action: onSearch) { floatingButton(.search) }
+                .buttonStyle(.pressable(scale: 0.88))
+                .accessibilityLabel("搜索")
+                .accessibilityIdentifier("home.search")
+            NavigationLink {
+                ContinueHistoryView(entries: continueItems, onOpen: openEntry, onRemove: remove)
+            } label: { floatingButton(.history) }
+                .buttonStyle(.pressable(scale: 0.88))
+                .accessibilityLabel("观看历史")
+                .accessibilityIdentifier("home.history")
+            Button { showAdd = true } label: { floatingButton(.addCircle) }
+                .buttonStyle(.pressable(scale: 0.88))
+                .accessibilityLabel("添加")
+                .accessibilityIdentifier("home.sources")
+        }
+        .padding(.horizontal, Theme.contentInset)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("home.heroBar")
     }
 
     /// 翻页时只有图片和片名跟着滑，播放和更多两个按钮固定在原处，作用于当前这一页
@@ -733,22 +736,6 @@ struct HomeTab: View {
 
 }
 
-/// 首页顶部的分类入口：点一下跳到片库并带上对应的筛选。
-private struct HomeCategory: Identifiable {
-    let id: String
-    let title: String
-    let kind: CatalogKind
-    let sort: CatalogSort
-
-    static let all: [HomeCategory] = [
-        HomeCategory(id: "movie", title: "电影", kind: .movie, sort: .recentlyAdded),
-        HomeCategory(id: "series", title: "剧集", kind: .series, sort: .recentlyAdded),
-        HomeCategory(id: "anime", title: "动画", kind: .anime, sort: .recentlyAdded),
-        HomeCategory(id: "performer", title: "演员", kind: .performer, sort: .recentlyAdded),
-        HomeCategory(id: "recent", title: "最近添加", kind: .all, sort: .recentlyAdded),
-    ]
-}
-
 /// 只比较数量和状态，不比较整份片库。扫描中每新增 300 个视频才重新匹配一次，
 /// 否则每扫一页就把整个片库重新过一遍，界面会卡死。
 final class HeroState: ObservableObject {
@@ -844,11 +831,15 @@ private struct HomeSnapshotKey: Equatable {
 /// 卡片上的文字固定用白色，浅色和深色模式下都一样清楚。
 private struct HeroPage: View {
     let item: HomeMediaItem
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private static let scrim = Color(red: 11 / 255, green: 12 / 255, blue: 16 / 255)
 
     var body: some View {
         GeometryReader { geometry in
+            let width = max(geometry.size.width, 1)
+            let rawX = reduceMotion ? 0 : geometry.frame(in: .global).minX
+            let pageX = max(-width, min(width, rawX))
             ZStack(alignment: .bottomLeading) {
                 // 滑到这一页时图通常已经预取好；还没到就先露出底色，不画默认图。
                 ArtworkView(
@@ -859,7 +850,10 @@ private struct HeroPage: View {
                     loading: .clear
                 )
                 .scaledToFill()
-                .frame(width: geometry.size.width, height: geometry.size.height)
+                .frame(width: width * 1.4, height: geometry.size.height)
+                .clipped()
+                .offset(x: -pageX * 0.2)
+                .frame(width: width, height: geometry.size.height)
                 .clipped()
 
                 LinearGradient(
@@ -875,6 +869,8 @@ private struct HeroPage: View {
                 content
                     .padding(.horizontal, 16)
                     .padding(.bottom, 62)
+                    .offset(x: pageX * 0.35)
+                    .opacity(1 - min(1, abs(pageX) / width * 1.5))
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
             .clipped()
