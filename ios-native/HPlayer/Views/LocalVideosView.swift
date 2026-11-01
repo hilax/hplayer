@@ -63,8 +63,11 @@ struct LocalVideosView: View {
         .background(Theme.pageBackground.ignoresSafeArea())
         .designScreen("local")
         .safeAreaInset(edge: .bottom) {
-            Button { showImporter = true } label: { Label("导入视频", systemImage: "plus") }
-                .buttonStyle(PrimaryActionStyle()).padding(Theme.contentInset).background(Theme.pageBackground)
+            VStack(spacing: 10) {
+                if localStore.isImporting { ProgressView("正在导入视频…").font(.caption) }
+                Button { showImporter = true } label: { Label("导入视频", systemImage: "plus") }
+                    .buttonStyle(PrimaryActionStyle()).disabled(localStore.isImporting)
+            }.padding(Theme.contentInset).background(Theme.pageBackground)
         }
         .navigationTitle("本机视频")
         .navigationBarTitleDisplayMode(.inline)
@@ -77,6 +80,7 @@ struct LocalVideosView: View {
                     Image(systemName: "plus")
                 }
                 .accessibilityLabel("导入视频")
+                .disabled(localStore.isImporting)
             }
         }
         .fileImporter(
@@ -86,7 +90,7 @@ struct LocalVideosView: View {
         ) { result in
             switch result {
             case .success(let urls):
-                localStore.importFiles(urls)
+                Task { importError = await localStore.importFiles(urls).joined(separator: "\n") }
             case .failure(let error):
                 importError = error.localizedDescription
             }

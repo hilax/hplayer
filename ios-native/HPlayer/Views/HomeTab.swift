@@ -99,6 +99,12 @@ struct HomeTab: View {
             .overlay(alignment: .top) {
                 HomeScrolledBar(state: heroState, onAdd: { showAdd = true })
             }
+            .overlay(alignment: .bottom) {
+                if localStore.isImporting {
+                    ProgressView("正在导入视频…").font(.subheadline)
+                        .padding(16).background(Theme.surface, in: Capsule()).padding(.bottom, 12)
+                }
+            }
             .background(Theme.pageBackground.ignoresSafeArea())
             .navigationDestination(for: PerformerRoute.self) { route in
                 if let group = library.performers.first(where: { $0.id == route.id }) {
@@ -120,7 +126,7 @@ struct HomeTab: View {
             ) { result in
                 switch result {
                 case .success(let urls):
-                    localStore.importFiles(urls)
+                    Task { importError = await localStore.importFiles(urls).joined(separator: "\n") }
                 case .failure(let error):
                     importError = error.localizedDescription
                 }
@@ -311,7 +317,9 @@ struct HomeTab: View {
     private func performAddAction() {
         defer { addAction = nil }
         switch addAction {
-        case .local: showImporter = true
+        case .local:
+            if localStore.isImporting { importError = "已有视频正在导入，请稍后再试。" }
+            else { showImporter = true }
         case .cloud: showCloudBrowser = true
         case .magnet: magnetLaunch = MagnetLaunch(value: "")
         case nil: break

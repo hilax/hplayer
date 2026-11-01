@@ -34,17 +34,18 @@ struct SearchView: View {
     @FocusState private var searchFocused: Bool
     @State private var keyword = ""
     @State private var scope: Scope = .all
-    @State private var results: [P115File] = []
-    @State private var searchedKeyword = ""
-    @State private var loading = false
-    @State private var error = ""
+    @StateObject private var cloudSearch = CloudSearchStore()
+    @State private var searchTask: Task<Void, Never>?
+    private var results: [P115File] { cloudSearch.results }
+    private var searchedKeyword: String { cloudSearch.searchedKeyword }
+    private var loading: Bool { cloudSearch.loading }
+    private var error: String { cloudSearch.error }
     @State private var playing: PlaybackQueue?
     @State private var openSeriesID: String?
 
     init(initialQuery: String = "", initialResults: [P115File] = []) {
         _keyword = State(initialValue: initialQuery)
-        _results = State(initialValue: initialResults)
-        _searchedKeyword = State(initialValue: initialQuery)
+        _cloudSearch = StateObject(wrappedValue: CloudSearchStore(initialQuery: initialQuery, initialResults: initialResults))
     }
 
     private var query: String {
@@ -63,7 +64,7 @@ struct SearchView: View {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField("片名、文件名或演员", text: $keyword)
                     .textInputAutocapitalization(.never).autocorrectionDisabled().submitLabel(.search)
-                    .onSubmit { Task { await search() } }
+                    .onSubmit { startSearch() }
                     .focused($searchFocused)
                     .accessibilityIdentifier("search.query")
                 if !keyword.isEmpty {
@@ -87,7 +88,7 @@ struct SearchView: View {
                 )
                 .frame(minHeight: 380)
                 .searchRow()
-            } else if hits.count == 0 && results.isEmpty && !loading && error.isEmpty && (scope == .library || searchedKeyword == query) {
+            } else if (scope == .cloud || hits.count == 0) && (scope == .library || results.isEmpty) && !loading && error.isEmpty && (scope == .library || searchedKeyword == query) {
                 EmptyStateView(icon: "magnifyingglass", title: "暂时没有找到", message: "试试更短的片名，或检查文件名。也可以切换搜索范围后再试。", actionTitle: "重新搜索", action: { searchFocused = true })
                     .frame(minHeight: 380).searchRow()
             } else {
@@ -119,17 +120,19 @@ struct SearchView: View {
             }
         }
         .onChange(of: keyword) { _ in
-            if query.isEmpty {
-                results = []
-                error = ""
-                searchedKeyword = ""
-            }
+            searchTask?.cancel()
+            cloudSearch.invalidate(clearResults: query.isEmpty)
         }
         .onChange(of: scope) { value in
-            if value != .library, !query.isEmpty, searchedKeyword != query, !loading {
-                Task { await search() }
-            }
+            searchTask?.cancel()
+            cloudSearch.invalidate()
+            if value != .library, !query.isEmpty, searchedKeyword != query { startSearch() }
         }
+        .onChange(of: appState.sessionID) { _ in
+            searchTask?.cancel()
+            cloudSearch.invalidate(clearResults: true)
+        }
+        .onDisappear { searchTask?.cancel(); cloudSearch.invalidate() }
         .navigationDestination(isPresented: Binding(
             get: { openSeriesID != nil },
             set: { if !$0 { openSeriesID = nil } }
@@ -271,7 +274,7 @@ struct SearchView: View {
                 Label(error, systemImage: "exclamationmark.triangle")
                     .font(.subheadline)
                     .foregroundStyle(Theme.warning)
-                Button("重试") { Task { await search() } }
+                Button("重试") { startSearch() }
                     .font(.subheadline.weight(.semibold))
                     .buttonStyle(.borderless)
             }
@@ -313,23 +316,14 @@ struct SearchView: View {
 
     // MARK: 请求
 
-    private func search() async {
+    private func startSearch() {
+        searchTask?.cancel()
         let text = query
-        guard !text.isEmpty, scope != .library, appState.isAuthenticated else { return }
-
-        loading = true
-        error = ""
-        do {
-            let files: [P115File]
-            guard let direct = appState.directClient() else { throw APIError.server("请先登录 115") }
-            files = try await direct.search(text)
-            results = files.filter { !$0.isDir && $0.isVideo }
-            searchedKeyword = text
-        } catch let err {
-            error = err.localizedDescription
-        }
-        loading = false
+        guard !text.isEmpty, scope != .library, appState.isAuthenticated,
+              let direct = appState.directClient() else { return }
+        searchTask = Task { await cloudSearch.search(text) { try await direct.search($0) } }
     }
+
 }
 
 /// 片库搜索结果：小海报、片名和资料

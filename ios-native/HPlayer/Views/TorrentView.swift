@@ -78,6 +78,9 @@ struct TorrentView: View {
     @State private var tasks: TorrentTasks?
     @State private var error = ""
     @State private var message = ""
+    @State private var operationID = UUID()
+    @State private var tasksRequestID = UUID()
+    @State private var loadedSessionID: UUID?
 
     init(initialTasks: TorrentTasks? = nil) { _tasks = State(initialValue: initialTasks) }
 
@@ -150,7 +153,16 @@ struct TorrentView: View {
                 }
             }
         }
-        .task { if !InterfacePreview.active { await loadTasks(page: 1) } }
+        .task(id: appState.sessionID) {
+            guard !InterfacePreview.active, !Task.isCancelled else { return }
+            if loadedSessionID != appState.sessionID {
+                loadedSessionID = appState.sessionID
+                operationID = UUID(); tasksRequestID = UUID()
+                busy = false; showingFiles = false; browsing = false
+                info = nil; selected = []; tasks = nil; error = ""; message = ""
+            }
+            await loadTasks(page: 1)
+        }
         .sheet(isPresented: $browsing) {
             TorrentBrowser { seed in
                 browsing = false
@@ -170,9 +182,12 @@ struct TorrentView: View {
     }
 
     private func importTorrent(_ url: URL) async {
+        guard !busy, !Task.isCancelled else { return }
         guard let client = appState.client(), appState.isAuthenticated else { error = "请先登录 115"; return }
+        let request = UUID(), session = appState.sessionID
+        operationID = request
         busy = true; busyText = "正在上传种子…"; error = ""; message = ""; info = nil
-        defer { busy = false }
+        defer { if operationID == request { busy = false } }
         do {
             let bytes = try await Task.detached(priority: .userInitiated) {
                 let granted = url.startAccessingSecurityScopedResource()
@@ -182,22 +197,34 @@ struct TorrentView: View {
                 guard size > 0 && size <= 4 * 1024 * 1024 else { throw APIError.server("种子文件必须小于 4 MB") }
                 return try Data(contentsOf: url)
             }.value
+            try validateOperation(request, session: session)
             let uploaded: TorrentUpload = try await client.post("/api/115/torrent/upload", body: ["name": url.lastPathComponent, "data": bytes.base64EncodedString()])
+            try validateOperation(request, session: session)
             busyText = "正在解析种子…"
-            try await parseWithClient(client, sha1: uploaded.sha1, pickCode: uploaded.pickCode)
-        } catch { self.error = error.localizedDescription }
+            try await parseWithClient(client, sha1: uploaded.sha1, pickCode: uploaded.pickCode, request: request, session: session)
+        } catch {
+            guard isCurrentOperation(request, session: session), !(error is CancellationError) else { return }
+            self.error = error.localizedDescription
+        }
     }
 
     private func parse(sha1: String, pickCode: String) async {
+        guard !busy, !Task.isCancelled else { return }
         guard let client = appState.client(), appState.isAuthenticated else { error = "请先登录 115"; return }
+        let request = UUID(), session = appState.sessionID
+        operationID = request
         busy = true; busyText = "正在解析种子…"; error = ""; message = ""; info = nil
-        defer { busy = false }
-        do { try await parseWithClient(client, sha1: sha1, pickCode: pickCode) }
-        catch { self.error = error.localizedDescription }
+        defer { if operationID == request { busy = false } }
+        do { try await parseWithClient(client, sha1: sha1, pickCode: pickCode, request: request, session: session) }
+        catch {
+            guard isCurrentOperation(request, session: session), !(error is CancellationError) else { return }
+            self.error = error.localizedDescription
+        }
     }
 
-    private func parseWithClient(_ client: APIClient, sha1: String, pickCode: String) async throws {
+    private func parseWithClient(_ client: APIClient, sha1: String, pickCode: String, request: UUID, session: UUID) async throws {
         let parsed: TorrentInfo = try await client.post("/api/115/torrent/parse", body: ["sha1": sha1, "pickCode": pickCode])
+        try validateOperation(request, session: session)
         info = parsed
         let defaults = parsed.files.filter(\.wanted).map(\.index)
         selected = Set(defaults.isEmpty ? parsed.files.map(\.index) : defaults)
@@ -206,26 +233,50 @@ struct TorrentView: View {
     }
 
     private func submit(_ info: TorrentInfo) async {
-        guard let client = appState.client(), !selected.isEmpty else { return }
+        guard !busy, !selected.isEmpty, !Task.isCancelled else { return }
+        guard appState.isAuthenticated, let client = appState.client() else { error = "请先登录 115"; return }
+        guard loadedSessionID == appState.sessionID else { error = "登录状态已变化，请重新选择种子。"; return }
+        let request = UUID(), session = appState.sessionID
+        operationID = request
         busy = true; busyText = "正在创建任务…"; error = ""; message = ""
-        defer { busy = false }
+        defer { if operationID == request { busy = false } }
         do {
             let _: TorrentOK = try await client.post("/api/115/torrent/tasks", body: [
                 "sha1": info.sha1, "pickCode": info.pickCode, "infoHash": info.infoHash,
                 "wanted": selected.sorted().map(String.init).joined(separator: ","),
                 "savePath": savePath.trimmingCharacters(in: .whitespacesAndNewlines), "folderId": folderId
             ])
+            try validateOperation(request, session: session)
             message = "已提交云下载任务，可在下方查看进度。"
             showingFiles = false
             self.info = nil; selected.removeAll()
             await loadTasks(page: 1)
-        } catch { self.error = error.localizedDescription }
+        } catch {
+            guard isCurrentOperation(request, session: session), !(error is CancellationError) else { return }
+            self.error = error.localizedDescription
+        }
     }
 
     private func loadTasks(page: Int) async {
-        guard let client = appState.client(), appState.isAuthenticated else { return }
-        do { tasks = try await client.get("/api/115/torrent/tasks?page=\(page)") }
-        catch { self.error = error.localizedDescription }
+        guard !Task.isCancelled, let client = appState.client(), appState.isAuthenticated else { return }
+        let request = UUID(), session = appState.sessionID
+        tasksRequestID = request
+        do {
+            let result: TorrentTasks = try await client.get("/api/115/torrent/tasks?page=\(page)")
+            guard !Task.isCancelled, tasksRequestID == request, appState.sessionID == session, appState.isAuthenticated else { return }
+            tasks = result
+        } catch {
+            guard !Task.isCancelled, tasksRequestID == request, appState.sessionID == session, appState.isAuthenticated else { return }
+            self.error = error.localizedDescription
+        }
+    }
+
+    private func isCurrentOperation(_ request: UUID, session: UUID) -> Bool {
+        !Task.isCancelled && operationID == request && appState.sessionID == session && appState.isAuthenticated
+    }
+
+    private func validateOperation(_ request: UUID, session: UUID) throws {
+        guard isCurrentOperation(request, session: session) else { throw CancellationError() }
     }
 }
 
@@ -250,6 +301,8 @@ private struct TorrentFolder: View {
     @State private var hasMore = false
     @State private var loading = false
     @State private var error = ""
+    @State private var requestID = UUID()
+    @State private var loadedSessionID: UUID?
 
     var body: some View {
         List {
@@ -277,17 +330,32 @@ private struct TorrentFolder: View {
         .libraryFormStyle()
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
-        .task { await load() }
+        .task(id: appState.sessionID) {
+            guard !Task.isCancelled else { return }
+            if loadedSessionID != appState.sessionID {
+                loadedSessionID = appState.sessionID
+                requestID = UUID(); loading = false
+                files = []; offset = 0; hasMore = false; error = ""
+            }
+            await load()
+        }
     }
 
     private func load() async {
-        guard !loading, let client = appState.client() else { error = "请先登录 115"; return }
+        guard !loading, !Task.isCancelled else { return }
+        guard appState.isAuthenticated, let client = appState.client() else { error = "请先登录 115"; return }
+        let request = UUID(), session = appState.sessionID
+        requestID = request
         loading = true; error = ""
-        defer { loading = false }
+        defer { if requestID == request { loading = false } }
         do {
             let page: TorrentDirectoryPage = try await client.get("/api/115/torrent/files?cid=\(cid)&offset=\(offset)")
+            guard !Task.isCancelled, requestID == request, appState.sessionID == session, appState.isAuthenticated else { return }
             files.append(contentsOf: page.files)
             offset = page.nextOffset; hasMore = page.hasMore
-        } catch { self.error = error.localizedDescription }
+        } catch {
+            guard !Task.isCancelled, requestID == request, appState.sessionID == session, appState.isAuthenticated else { return }
+            self.error = error.localizedDescription
+        }
     }
 }

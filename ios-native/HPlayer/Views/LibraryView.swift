@@ -46,6 +46,8 @@ struct DirectoryView: View {
     @State private var addedToHome = false
     @State private var selecting = false
     @State private var selection: Set<String> = []
+    @State private var loadRequestID = UUID()
+    @State private var loadedSessionID: UUID?
 
     init(cid: String, trail: [Crumb] = [], onJump: ((Int) -> Void)? = nil,
          onOpenDir: @escaping (Crumb) -> Void, onPlay: @escaping (P115File, [P115File]) -> Void,
@@ -99,7 +101,7 @@ struct DirectoryView: View {
                     .background(Theme.pageBackground)
             }
         }
-        .task(id: cid) {
+        .task(id: "\(cid)|\(appState.sessionID.uuidString)") {
             if !InterfacePreview.active { await load() }
         }
         .toolbar {
@@ -250,6 +252,7 @@ struct DirectoryView: View {
     }
 
     private func tap(_ file: P115File) {
+        guard currentAccountOwnsFiles else { return }
         if selecting {
             toggleSelection(file)
         } else if file.isDir {
@@ -363,6 +366,7 @@ struct DirectoryView: View {
     }
 
     private func playSelected() {
+        guard currentAccountOwnsFiles else { return }
         let videos = selectedVideos
         guard let first = videos.first else { return }
         exitSelection()
@@ -370,6 +374,7 @@ struct DirectoryView: View {
     }
 
     private func addSelectedToHome() {
+        guard currentAccountOwnsFiles else { return }
         let videos = selectedVideos
         guard !videos.isEmpty else { return }
         mediaLibrary.add(videos, for: appState)
@@ -378,6 +383,7 @@ struct DirectoryView: View {
     }
 
     private func addAllToHome() {
+        guard currentAccountOwnsFiles else { return }
         mediaLibrary.add(files, for: appState)
         finishImport()
     }
@@ -438,26 +444,40 @@ struct DirectoryView: View {
 
     // MARK: 加载
 
+    private var currentAccountOwnsFiles: Bool {
+        InterfacePreview.active || (appState.isAuthenticated && loadedSessionID == appState.sessionID)
+    }
+
     private func load() async {
-        guard appState.isAuthenticated else {
+        let sessionID = appState.sessionID
+        let requestID = UUID()
+        loadRequestID = requestID
+        if loadedSessionID != sessionID {
+            files = []; items = []; selection = []; selecting = false
+            loadedSessionID = nil
+        }
+        guard appState.isAuthenticated, let direct = appState.directClient() else {
             loading = false
             error = "请先登录 115"
             return
         }
         loading = true
         error = ""
+        defer {
+            if loadRequestID == requestID { loading = false }
+        }
         do {
-            let listed: [P115File]
-            guard let direct = appState.directClient() else { throw APIError.server("未连接 115") }
-            listed = try await direct.files(cid: cid)
+            let listed = try await direct.files(cid: cid)
+            guard !Task.isCancelled, sessionID == appState.sessionID, requestID == loadRequestID else { return }
             files = listed.filter { $0.isDir || $0.isVideo }
             items = sortedFiles(files)
+            loadedSessionID = sessionID
             selection = []
             selecting = false
-        } catch let err {
-            error = err.localizedDescription
+        } catch {
+            guard !Task.isCancelled, sessionID == appState.sessionID, requestID == loadRequestID else { return }
+            self.error = error.localizedDescription
         }
-        loading = false
     }
 }
 

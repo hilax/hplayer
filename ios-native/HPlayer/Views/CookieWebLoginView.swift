@@ -3,6 +3,7 @@ import WebKit
 
 /// 在独立的网页会话内登录 115。
 struct CookieWebLoginView: View {
+    var dismissOnConnected = true
     let onConnected: () -> Void
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
@@ -12,6 +13,9 @@ struct CookieWebLoginView: View {
     @State private var checking = false
     @State private var pageLoading = true
     @State private var error = ""
+    @State private var connectionTask: Task<Void, Never>?
+    @State private var connectionID = UUID()
+    @State private var pendingConnected = false
 
     var body: some View {
         DesignPage(eyebrow: "Connect your collection", title: "连接 115 网盘", subtitle: "让云端收藏，成为随时可看的片库。") {
@@ -22,7 +26,10 @@ struct CookieWebLoginView: View {
                 Text("使用 115 官方网页登录").font(.headline)
                 Text("完成登录后自动验证并连接，无需手动复制 Cookie。")
                     .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                Button { error = ""; showingWeb = true } label: { Label("打开官方登录页面", systemImage: "arrow.up.right.square") }
+                Button {
+                    error = ""; candidate = ""; lastAttempt = ""; pageLoading = true
+                    pendingConnected = false; showingWeb = true
+                } label: { Label("打开官方登录页面", systemImage: "arrow.up.right.square") }
                     .buttonStyle(PrimaryActionStyle()).accessibilityIdentifier("connect115.openWeb")
             }.padding(24).surfaceCard()
             DesignGroup {
@@ -37,7 +44,7 @@ struct CookieWebLoginView: View {
         }
         .navigationTitle("连接 115")
         .designScreen("connect115")
-        .sheet(isPresented: $showingWeb) {
+        .sheet(isPresented: $showingWeb, onDismiss: finishWebSession) {
             NavigationStack {
                 VStack(spacing: 0) {
                     HStack(spacing: 8) {
@@ -48,7 +55,7 @@ struct CookieWebLoginView: View {
                     if !error.isEmpty {
                         VStack(spacing: 8) {
                             Text(error).font(.caption).foregroundStyle(Theme.warning)
-                            if !candidate.isEmpty { Button("重新验证") { Task { await connect(candidate) } }.disabled(checking) }
+                            if !candidate.isEmpty { Button("重新验证") { connect(candidate) }.disabled(checking) }
                         }.padding(.horizontal)
                     }
                     OfficialLoginWebView(onCookie: received, onLoading: { pageLoading = $0 }, onError: { error = $0 })
@@ -57,31 +64,57 @@ struct CookieWebLoginView: View {
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { showingWeb = false } } }
             }
         }
-        .onDisappear { candidate = ""; lastAttempt = "" }
+        .onChange(of: showingWeb) { visible in
+            if !visible { cancelConnection() }
+        }
+        .onDisappear { cancelConnection() }
     }
 
     private func received(_ cookie: String) {
+        guard showingWeb else { return }
         candidate = cookie
         guard !checking, cookie != lastAttempt else { return }
-        Task { await connect(cookie) }
+        connect(cookie)
     }
 
-    private func connect(_ cookie: String) async {
-        guard !checking else { return }
+    private func connect(_ cookie: String) {
+        guard showingWeb, !checking else { return }
+        let request = UUID()
+        connectionID = request
         checking = true
         lastAttempt = cookie
         error = ""
-        defer { checking = false }
-        do {
-            try await appState.connectDirect(cookie: cookie)
-            candidate = ""
-            lastAttempt = ""
-            showingWeb = false
-            onConnected()
-            dismiss()
-        } catch {
-            self.error = "暂时无法验证登录状态，请确认已登录后重试：\(error.localizedDescription)"
+        connectionTask = Task {
+            defer {
+                if connectionID == request { checking = false; connectionTask = nil }
+            }
+            do {
+                try await appState.connectDirect(cookie: cookie)
+                guard !Task.isCancelled, connectionID == request else { return }
+                pendingConnected = true
+                showingWeb = false
+            } catch {
+                guard !Task.isCancelled, connectionID == request, !(error is CancellationError) else { return }
+                self.error = "暂时无法验证登录状态，请确认已登录后重试：\(error.localizedDescription)"
+            }
         }
+    }
+
+    private func cancelConnection() {
+        connectionTask?.cancel()
+        connectionTask = nil
+        connectionID = UUID()
+        checking = false
+    }
+
+    private func finishWebSession() {
+        cancelConnection()
+        candidate = ""; lastAttempt = ""
+        guard pendingConnected else { return }
+        pendingConnected = false
+        // 等网页子 sheet 关闭后再切换父级，避免同时关闭两层呈现。
+        onConnected()
+        if dismissOnConnected { dismiss() }
     }
 }
 

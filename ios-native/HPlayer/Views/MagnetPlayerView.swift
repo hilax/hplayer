@@ -89,7 +89,7 @@ struct MagnetPlayerView: View {
             submit()
         }
         .onChange(of: cloudRelay) { _ in configureCloud() }
-        .onChange(of: appState.isAuthenticated) { _ in configureCloud() }
+        .onChange(of: appState.sessionID) { _ in configureCloud() }
         .onDisappear {
             if !controller.playerVisible && controller.cloudQueue == nil { controller.deactivate() }
         }

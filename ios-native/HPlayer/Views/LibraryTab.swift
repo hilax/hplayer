@@ -11,6 +11,8 @@ struct LibraryTab: View {
     @State private var showManagement = false
     @State private var connecting = false
     @State private var connectionError = ""
+    @State private var loadRequestID = UUID()
+    @State private var openRequestID = UUID()
 
     init(initialStatus: P115Status? = nil, initialQuota: QuotaResponse? = nil) {
         _status = State(initialValue: initialStatus)
@@ -88,8 +90,16 @@ struct LibraryTab: View {
             Button("重新登录 115") { connectionError = ""; showDirectLogin = true }
             Button("关闭", role: .cancel) { connectionError = "" }
         } message: { Text(connectionError) }
-        .task { await load() }
-        .onChange(of: appState.isAuthenticated) { _ in Task { await load() } }
+        .task(id: appState.sessionID) { await load() }
+        .onChange(of: appState.sessionID) { _ in
+            openRequestID = UUID()
+            path = []; playing = nil
+            connecting = false; connectionError = ""
+        }
+        .onDisappear {
+            openRequestID = UUID()
+            connecting = false
+        }
     }
 
     private var accountCard: some View {
@@ -201,26 +211,39 @@ struct LibraryTab: View {
 
     private func load() async {
         guard !InterfacePreview.active else { return }
-        guard appState.isAuthenticated else {
-            status = nil
-            quota = nil
-            return
-        }
-
-        guard let direct = appState.directClient() else { return }
-        status = try? await direct.user()
-        quota = try? await direct.quota()
+        let sessionID = appState.sessionID
+        let requestID = UUID()
+        loadRequestID = requestID
+        status = nil
+        quota = nil
+        guard appState.isAuthenticated, let direct = appState.directClient() else { return }
+        async let loadedStatus = try? direct.user()
+        async let loadedQuota = try? direct.quota()
+        let result = await (loadedStatus, loadedQuota)
+        guard !Task.isCancelled, sessionID == appState.sessionID, requestID == loadRequestID else { return }
+        status = result.0
+        quota = result.1
     }
 
     private func open115() async {
         guard !connecting else { return }
         guard let direct = appState.directClient() else { showDirectLogin = true; return }
+        let sessionID = appState.sessionID
+        let requestID = UUID()
+        openRequestID = requestID
         connecting = true
-        defer { connecting = false }
+        defer {
+            if openRequestID == requestID { connecting = false }
+        }
         do {
-            status = try await direct.user()
+            let loadedStatus = try await direct.user()
+            guard !Task.isCancelled, sessionID == appState.sessionID, requestID == openRequestID else { return }
+            status = loadedStatus
             path.append(Crumb(cid: "0", name: "115 网盘"))
-        } catch { connectionError = error.localizedDescription }
+        } catch {
+            guard !Task.isCancelled, sessionID == appState.sessionID, requestID == openRequestID else { return }
+            connectionError = error.localizedDescription
+        }
     }
 }
 

@@ -38,6 +38,9 @@ struct Official115SettingsView: View {
     @State private var busy = false
     @State private var message = ""
     @State private var error = ""
+    @State private var onScreen = true
+    @State private var operationID = UUID()
+    @State private var statusRequestID = UUID()
 
     init(onSourceChanged: @escaping () -> Void, initialStatus: Open115Status? = nil, initialAuthorization: Open115Start? = nil) {
         self.onSourceChanged = onSourceChanged
@@ -97,8 +100,13 @@ struct Official115SettingsView: View {
         .navigationTitle("115 官方授权")
         .designScreen("official")
         .toolbar { ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("完成") { focusedField = nil } } }
-        .task { if !InterfacePreview.active { await loadStatus() } }
-        .onDisappear { pollTask?.cancel() }
+        .task { onScreen = true; if !InterfacePreview.active { await loadStatus() } }
+        .onDisappear {
+            onScreen = false
+            operationID = UUID(); statusRequestID = UUID()
+            busy = false
+            pollTask?.cancel()
+        }
     }
 
     private var statusTitle: String {
@@ -125,47 +133,60 @@ struct Official115SettingsView: View {
 
     private func loadStatus() async {
         guard let client = appState.client() else { return }
+        let request = UUID()
+        statusRequestID = request
         do {
-            status = try await client.get("/api/115/open/status")
+            let result: Open115Status = try await client.get("/api/115/open/status")
+            guard onScreen, !Task.isCancelled, statusRequestID == request else { return }
+            status = result
         } catch {
+            guard onScreen, !Task.isCancelled, statusRequestID == request else { return }
             self.error = error.localizedDescription
         }
     }
 
     private func saveConfiguration() async {
-        guard let client = appState.client() else { return }
+        guard onScreen, !busy, let client = appState.client() else { return }
+        let request = UUID()
+        operationID = request; statusRequestID = UUID()
         busy = true
         error = ""
         message = ""
-        defer { busy = false }
+        defer { if operationID == request { busy = false } }
         do {
             let _: Open115ConfigResponse = try await client.post(
                 "/api/115/open/config",
                 body: ["clientId": clientId.trimmingCharacters(in: .whitespacesAndNewlines)]
             )
+            guard onScreen, !Task.isCancelled, operationID == request else { return }
             clientId = ""
             pollTask?.cancel()
             authorization = nil
             message = "应用凭证已保存，请继续授权账号"
             await loadStatus()
         } catch {
+            guard onScreen, !Task.isCancelled, operationID == request else { return }
             self.error = error.localizedDescription
         }
     }
 
     private func startAuthorization() async {
-        guard let client = appState.client() else { return }
+        guard onScreen, !busy, let client = appState.client() else { return }
+        let request = UUID()
+        operationID = request
         busy = true
         error = ""
         message = ""
         pollTask?.cancel()
         authorization = nil
-        defer { busy = false }
+        defer { if operationID == request { busy = false } }
         do {
             let result: Open115Start = try await client.post("/api/115/open/auth/start", body: [:])
+            guard onScreen, !Task.isCancelled, operationID == request else { return }
             authorization = result
             pollTask = Task { await pollAuthorization(client: client, expiresIn: result.expiresIn) }
         } catch {
+            guard onScreen, !Task.isCancelled, operationID == request else { return }
             self.error = error.localizedDescription
         }
     }
@@ -183,6 +204,7 @@ struct Official115SettingsView: View {
                     authorization = nil
                     message = result.message ?? "115 账号授权成功"
                     await loadStatus()
+                    guard onScreen, !Task.isCancelled else { return }
                     onSourceChanged()
                     return
                 case "expired":

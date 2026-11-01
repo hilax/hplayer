@@ -12,6 +12,7 @@ struct SettingsView: View {
     @State private var status: P115Status?
     @State private var loadingStatus = false
     @State private var error = ""
+    @State private var statusRequestID = UUID()
     @AppStorage(AppearanceMode.storageKey) private var appearance: AppearanceMode = .system
 
     var body: some View {
@@ -44,10 +45,7 @@ struct SettingsView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(.hidden, for: .navigationBar)
             .designScreen("settings")
-            .task { await loadStatus() }
-            .onChange(of: appState.isAuthenticated) { _ in
-                Task { await loadStatus() }
-            }
+            .task(id: appState.sessionID) { await loadStatus() }
         }
     }
 
@@ -195,20 +193,29 @@ struct SettingsView: View {
 
     private func loadStatus() async {
         guard !InterfacePreview.active else { return }
-        guard appState.isAuthenticated else {
+        let sessionID = appState.sessionID
+        let requestID = UUID()
+        statusRequestID = requestID
+        status = nil
+        error = ""
+        guard appState.isAuthenticated, let direct = appState.directClient() else {
             status = nil
             error = ""
+            loadingStatus = false
             return
         }
         loadingStatus = true
-        defer { loadingStatus = false }
+        defer {
+            if statusRequestID == requestID { loadingStatus = false }
+        }
         do {
-            if let direct = appState.directClient() {
-                status = try await direct.user()
-            }
+            let loadedStatus = try await direct.user()
+            guard !Task.isCancelled, sessionID == appState.sessionID, requestID == statusRequestID else { return }
+            status = loadedStatus
             error = ""
-        } catch let err {
-            error = err.localizedDescription
+        } catch {
+            guard !Task.isCancelled, sessionID == appState.sessionID, requestID == statusRequestID else { return }
+            self.error = error.localizedDescription
         }
     }
 }

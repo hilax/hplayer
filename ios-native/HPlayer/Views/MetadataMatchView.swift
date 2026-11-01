@@ -227,7 +227,7 @@ struct HomeCloudBrowser: View {
                             directory(crumb.cid).navigationTitle(crumb.name)
                         }
                 } else {
-                    CookieWebLoginView(onConnected: { })
+                    CookieWebLoginView(dismissOnConnected: false, onConnected: { })
                 }
             }
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } }

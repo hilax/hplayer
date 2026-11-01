@@ -202,7 +202,7 @@ final class MagnetController: ObservableObject {
 
     #if DEBUG
     /// Exercises the real resolving/catalog views without starting a network swarm.
-    static func interfaceFixture(catalog: MagnetCatalog? = nil) -> MagnetController {
+    static func interfaceFixture(catalog: MagnetCatalog? = nil, cloudClient: Direct115Client? = nil) -> MagnetController {
         let value = MagnetController()
         value.link = MagnetLink.parse("magnet:?xt=urn:btih:0123456789012345678901234567890123456789&dn=Severance.S01")
         value.phase = catalog == nil ? .resolving : .ready
@@ -210,6 +210,12 @@ final class MagnetController: ObservableObject {
         value.elapsed = 8
         value.swarm = Swarm(connected: 18, connecting: 3, known: 42, seeds: 8, downloadRate: 25_190)
         value.catalog = catalog
+        value.cloudClient = cloudClient
+        value.cloudEnabled = cloudClient != nil
+        if cloudClient != nil, catalog?.source == .cloud {
+            value.cloudCatalog = catalog
+            value.cloud = .ready
+        }
         return value
     }
     #endif
@@ -583,7 +589,24 @@ final class MagnetController: ObservableObject {
 
     /// 手机直连登录了 115 且开关打开时，解析的同时把磁力交给 115 离线下载
     func configureCloud(client: Direct115Client?, enabled: Bool) {
-        if client?.cookie != cloudClient?.cookie { cloudUserID = 0 }
+        let clientChanged = client?.cookie != cloudClient?.cookie
+        if clientChanged {
+            cloudUserID = 0
+            cloudTask?.cancel()
+            cloudTask = nil
+            cloudCatalog = nil
+            cloudQueue = nil
+            cloud = .off
+            // 已完成的网盘文件也属于旧会话；不能用新账号继续播放或复用这些 pickCode。
+            if catalog?.source == .cloud {
+                closePlayer()
+                catalog = nil
+                phase = .idle
+                error = ""
+                resolveStarted = nil
+                elapsed = 0
+            }
+        }
         cloudClient = client
         let nowEnabled = enabled && client != nil
         let wasEnabled = cloudEnabled
@@ -594,7 +617,8 @@ final class MagnetController: ObservableObject {
             if cloud != .ready { cloud = .off }
         }
         // 解析中途切换了方式：按新的方式重新解析这个链接
-        if nowEnabled != wasEnabled, let link, phase == .resolving || phase == .failed {
+        if (nowEnabled != wasEnabled || (clientChanged && nowEnabled)),
+           let link, phase == .resolving || phase == .failed {
             resolveTask?.cancel()
             resolveTask = nil
             if case .failed = cloud { cloud = .off }
@@ -651,7 +675,11 @@ final class MagnetController: ObservableObject {
 
     private func runCloud(_ link: MagnetLink, client: Direct115Client) async {
         do {
-            if cloudUserID == 0 { cloudUserID = try await client.user().userId ?? 0 }
+            if cloudUserID == 0 {
+                let userID = try await client.user().userId ?? 0
+                guard !Task.isCancelled, cloudClient?.cookie == client.cookie else { return }
+                cloudUserID = userID
+            }
             guard !Task.isCancelled else { return }
             try await client.addOfflineTask(link.uri, userID: cloudUserID)
             guard !Task.isCancelled else { return }

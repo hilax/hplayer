@@ -60,7 +60,11 @@ final class RedesignFlowUITests: XCTestCase {
         XCTAssertTrue(app.buttons["关闭字幕"].exists)
         XCTAssertTrue(app.staticTexts["音轨"].firstMatch.exists)
         app.buttons["关闭设置"].tap()
-        app.buttons["画面"].tap()
+        let aspect = app.buttons["playback.aspect"]
+        XCTAssertTrue(aspect.waitForExistence(timeout: 5))
+        XCTAssertTrue(aspect.isHittable)
+        XCTAssertGreaterThanOrEqual(aspect.frame.height, 44)
+        aspect.tap()
         XCTAssertTrue(app.staticTexts["画面比例"].waitForExistence(timeout: 5))
         app.buttons["关闭画面比例"].tap()
         app.buttons["playback.playlist"].tap()

@@ -314,11 +314,8 @@ struct PlaybackControlsView: View {
 
             GlassButtonGroup {
                 if landscape {
-                GlassIconButton(systemImage: "aspectratio", label: "画面比例") {
-                    settingsPage = nil
-                    withAnimation(.easeOut(duration: 0.22)) { showAspect.toggle() }
-                    hideTask?.cancel()
-                }
+                GlassIconButton(systemImage: "aspectratio", label: "画面比例", action: openAspect)
+                    .accessibilityIdentifier("playback.aspect")
                 GlassIconButton(systemImage: "captions.bubble", label: "字幕和音轨") { openSettings(.tracks) }
                     .accessibilityIdentifier("playback.tracks")
                 }
@@ -414,16 +411,23 @@ struct PlaybackControlsView: View {
             sideControls(landscape: landscape)
             if !landscape {
                 HStack(spacing: 18) {
-                    Button {
-                        settingsPage = nil
-                        withAnimation(.easeOut(duration: 0.22)) { showAspect.toggle() }
-                        hideTask?.cancel()
-                    } label: { Label("画面", systemImage: "aspectratio") }
-                    Spacer(minLength: 0)
-                    Button { openSettings(.tracks) } label: { Label("字幕音轨", systemImage: "captions.bubble") }
+                    Button(action: openAspect) {
+                        Label("画面", systemImage: "aspectratio")
+                            .frame(maxWidth: .infinity, minHeight: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .accessibilityIdentifier("playback.aspect")
+                    Button { openSettings(.tracks) } label: {
+                        Label("字幕音轨", systemImage: "captions.bubble")
+                            .frame(maxWidth: .infinity, minHeight: 44)
+                            .contentShape(Rectangle())
+                    }
                         .accessibilityIdentifier("playback.tracks")
-                    Spacer(minLength: 0)
-                    Button { openSettings(.playback) } label: { Label("设置", systemImage: "gearshape") }
+                    Button { openSettings(.playback) } label: {
+                        Label("设置", systemImage: "gearshape")
+                            .frame(maxWidth: .infinity, minHeight: 44)
+                            .contentShape(Rectangle())
+                    }
                 }
                 .font(.caption)
                 .foregroundStyle(.white.opacity(0.75))
@@ -1099,6 +1103,12 @@ struct PlaybackControlsView: View {
     private func closeSettings() {
         withAnimation(.easeOut(duration: 0.22)) { settingsPage = nil }
         revealControls()
+    }
+    private func openAspect() {
+        hideTask?.cancel()
+        settingsPage = nil
+        showList = false
+        withAnimation(.easeOut(duration: 0.22)) { showAspect = true }
     }
     private func closeAspect() {
         withAnimation(.easeOut(duration: 0.22)) { showAspect = false }

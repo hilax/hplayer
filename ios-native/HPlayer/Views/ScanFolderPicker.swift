@@ -22,6 +22,7 @@ struct ScanFolderPicker: View {
                 }
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } } }
         }
+        .onChange(of: appState.sessionID) { _ in path = [] }
     }
 
     private func choose(_ cid: String, _ name: String) {
@@ -39,6 +40,7 @@ private struct FolderList: View {
     @State private var folders: [P115File] = []
     @State private var loading = true
     @State private var error = ""
+    @State private var requestID = UUID()
 
     init(cid: String, name: String, onOpen: @escaping (Crumb) -> Void, onSelect: @escaping (String, String) -> Void, initialFolders: [P115File]? = nil) {
         self.cid = cid; self.name = name; self.onOpen = onOpen; self.onSelect = onSelect
@@ -76,19 +78,28 @@ private struct FolderList: View {
             Button { onSelect(cid, name) } label: {
                 Label(cid == "0" ? "扫描整个网盘" : "扫描此文件夹", systemImage: "viewfinder")
             }.buttonStyle(PrimaryActionStyle()).accessibilityIdentifier("scan.pickFolder")
+                .disabled(!appState.isAuthenticated)
                 .padding(Theme.contentInset).background(Theme.pageBackground)
         }
         .designScreen("folder-picker")
-        .task { if !InterfacePreview.active { await load() } }
+        .task(id: appState.sessionID) {
+            if !InterfacePreview.active { folders = []; await load() }
+        }
     }
 
     private func load() async {
+        let request = UUID(), session = appState.sessionID
+        requestID = request
+        loading = true
+        error = ""
+        defer { if requestID == request && session == appState.sessionID { loading = false } }
         guard let client = appState.directClient() else { loading = false; error = "请先登录 115"; return }
         var offset = 0
         var result: [P115File] = []
         do {
             for _ in 0..<20 {
                 let page = try await client.filesPage(cid: cid, offset: offset)
+                guard !Task.isCancelled, requestID == request, session == appState.sessionID else { return }
                 result += page.files.filter { $0.isDir && !$0.id.isEmpty }
                 guard let next = page.nextOffset, next > offset else { break }
                 offset = next
@@ -97,8 +108,8 @@ private struct FolderList: View {
             folders = result
         } catch is CancellationError {
         } catch {
+            guard !Task.isCancelled, requestID == request, session == appState.sessionID else { return }
             self.error = "读取文件夹失败：\(error.localizedDescription)"
         }
-        loading = false
     }
 }
