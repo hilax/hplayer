@@ -48,7 +48,7 @@ struct ScreenTitleBar<Trailing: View>: View {
             HStack(spacing: 0, content: trailing)
         }
         .padding(.horizontal, Theme.contentInset)
-        .frame(minHeight: 44)
+        .frame(height: 44)
     }
 }
 

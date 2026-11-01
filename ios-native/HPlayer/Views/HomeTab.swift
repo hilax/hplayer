@@ -261,16 +261,22 @@ struct HomeTab: View {
         return featured.indices.contains(selection) ? featured[selection] : featured.first
     }
 
+    /// 轮播图底部渐隐进页面背景的高度；按钮和指示点整体上移这么多，避开渐隐区。
+    private static let heroFade: CGFloat = 72
+
     /// 铺满屏幕上方的精选轮播：图片延伸到状态栏下面，搜索、历史、添加三个入口悬浮在左上角之上。
     private func heroCard(_ library: HomeSnapshot, continueItems: [ContinueEntry],
                           width: CGFloat, safeTop: CGFloat) -> some View {
-        let height = min(width * 1.18, 520) + safeTop * 0.4
+        let height = min(width * 1.18, 520) + safeTop * 0.4 + Self.heroFade
         return GeometryReader { proxy in
             let minY = proxy.frame(in: .global).minY
+            // 下拉时图片向上拉伸，顶部不会露出空白
+            let stretch = max(0, minY)
             HeroObserver(state: heroState) { state in
                 heroPager(library, selection: state.selection)
             }
-            .frame(width: proxy.size.width, height: height)
+            .frame(width: proxy.size.width, height: height + stretch)
+            .offset(y: -stretch)
             .preference(key: HeroMinYKey.self, value: minY)
         }
         .frame(height: height)
@@ -327,6 +333,13 @@ struct HomeTab: View {
             }
         }
         .tabViewStyle(.page(indexDisplayMode: .never))
+        .mask(
+            VStack(spacing: 0) {
+                Rectangle().fill(Color.black)
+                LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
+                    .frame(height: Self.heroFade)
+            }
+        )
         .overlay(alignment: .bottomLeading) {
             if let current {
                 HeroActions(hasMetadata: current.metadata != nil, title: heroPlayTitle(current)) {
@@ -335,14 +348,14 @@ struct HomeTab: View {
                     actionItem = current
                 }
                 .padding(.leading, 18)
-                .padding(.bottom, 16)
+                .padding(.bottom, 16 + Self.heroFade)
             }
         }
         .overlay(alignment: .bottomTrailing) {
             if featured.count > 1 {
                 heroIndicator(count: featured.count, selection: selection)
                     .padding(.trailing, 8)
-                    .padding(.bottom, 16)
+                    .padding(.bottom, 16 + Self.heroFade)
             }
         }
     }
@@ -868,7 +881,7 @@ private struct HeroPage: View {
 
                 content
                     .padding(.horizontal, 16)
-                    .padding(.bottom, 62)
+                    .padding(.bottom, 62 + 72)
                     .offset(x: pageX * 0.35)
                     .opacity(1 - min(1, abs(pageX) / width * 1.5))
             }

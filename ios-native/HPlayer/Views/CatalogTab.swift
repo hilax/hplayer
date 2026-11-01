@@ -177,6 +177,7 @@ struct CatalogTab: View {
                         if !snapshot.unmatched.isEmpty { unmatchedBanner }
                         grid(width: proxy.size.width)
                     }
+                    .padding(.top, 6)
                     .padding(.bottom, 32)
                 }
                 .scrollIndicators(.hidden)
