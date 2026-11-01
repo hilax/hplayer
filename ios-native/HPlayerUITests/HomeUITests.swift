@@ -1,6 +1,53 @@
 import XCTest
 
 final class HomeUITests: XCTestCase {
+    func testAccountInformationStaysVisibleWhenSwitchingTabs() {
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchEnvironment["HPLAYER_ACCOUNT_TEST"] = "1"
+        app.launch()
+        defer { app.terminate() }
+
+        let library = app.tabBars.buttons["资源库"]
+        let settings = app.tabBars.buttons["设置"]
+        XCTAssertTrue(library.waitForExistence(timeout: 20))
+        library.tap()
+        let account = app.buttons["library.account"]
+        XCTAssertTrue(account.waitForExistence(timeout: 10))
+        XCTAssertTrue(wait {
+            (account.label.contains("测试账号 1") || app.staticTexts["测试账号 1"].exists) &&
+            (account.label.contains("1 GB") || app.staticTexts["已使用 1 GB"].exists)
+        },
+                      "The shared account and capacity should load once")
+
+        settings.tap()
+        XCTAssertTrue(app.staticTexts["测试账号 1"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["检查中"].exists)
+        library.tap()
+        XCTAssertTrue(wait {
+            (account.label.contains("测试账号 1") || app.staticTexts["测试账号 1"].exists) &&
+            (account.label.contains("1 GB") || app.staticTexts["已使用 1 GB"].exists)
+        })
+        XCTAssertFalse(app.staticTexts["检查中"].exists)
+        settings.tap()
+        Thread.sleep(forTimeInterval: 1.2)
+        XCTAssertTrue(app.staticTexts["测试账号 1"].exists, "Switching tabs should not start another account request")
+        XCTAssertFalse(app.staticTexts["测试账号 2"].exists)
+        library.tap()
+        XCTAssertTrue(account.label.contains("1 GB") || app.staticTexts["已使用 1 GB"].exists,
+                      "Switching tabs should not repeat the capacity request")
+        XCTAssertFalse(account.label.contains("2 GB"))
+        settings.tap()
+
+        app.buttons["settings.account.logout"].tap()
+        XCTAssertTrue(app.staticTexts["尚未登录 115"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["测试账号 1"].exists, "Signing out must hide the previous account")
+        library.tap()
+        XCTAssertTrue(wait { account.label.contains("连接 115 网盘") })
+        XCTAssertFalse(account.label.contains("测试账号 1"))
+    }
+
     func testPosterLibraryAndManualMatching() {
         continueAfterFailure = false
         let app = XCUIApplication()
@@ -51,6 +98,10 @@ final class HomeUITests: XCTestCase {
         if !unmatched.isHittable { app.swipeUp() }
         XCTAssertTrue(unmatched.waitForExistence(timeout: 5), "Unmatched media is managed from Resources")
     }
+    private func wait(timeout: TimeInterval = 10, _ predicate: @escaping () -> Bool) -> Bool {
+        XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in predicate() }, object: nil)], timeout: timeout) == .completed
+    }
+
     private func capture(_ name: String, in app: XCUIApplication) {
         let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         screenshot.name = name
