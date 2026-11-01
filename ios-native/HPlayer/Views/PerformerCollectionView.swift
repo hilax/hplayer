@@ -1,5 +1,8 @@
 import SwiftUI
 
+/// 「演员合集 · 全部」列表页。用值导航，避免闭包式链接和演员链接混用后重复入栈。
+struct PerformerListRoute: Hashable {}
+
 struct PerformerRoute: Hashable {
     let id: String
     let name: String

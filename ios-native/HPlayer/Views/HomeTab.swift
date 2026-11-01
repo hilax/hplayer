@@ -111,6 +111,9 @@ struct HomeTab: View {
                     }
                 }
             }
+            .navigationDestination(for: PerformerListRoute.self) { _ in
+                PerformerGridView(groups: library.performers)
+            }
             .navigationDestination(for: PerformerRoute.self) { route in
                 if let group = library.performers.first(where: { $0.id == route.id }) {
                     PerformerCollectionView(group: group)
@@ -465,6 +468,27 @@ struct HomeTab: View {
         }
     }
 
+    /// 同上，但用值导航：目的页由 NavigationStack 统一解析。
+    private func shelfHeader<Value: Hashable>(
+        _ title: String,
+        detail: String,
+        identifier: String = "",
+        value: Value
+    ) -> some View {
+        ShelfHeader(title: title, identifier: identifier, inset: 0) {
+            HStack(spacing: 10) {
+                Text(detail)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.textTertiary)
+                NavigationLink(value: value) {
+                    ShelfLinkLabel(text: "全部")
+                        .frame(minWidth: 44, minHeight: 44, alignment: .trailing)
+                }
+                .buttonStyle(.pressable(scale: 0.92))
+            }
+        }
+    }
+
     // MARK: 继续观看
 
     private func continueShelf(_ entries: [ContinueEntry]) -> some View {
@@ -631,9 +655,8 @@ struct HomeTab: View {
 
     private func performerShelf(_ library: HomeSnapshot) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            shelfHeader("演员合集", detail: "\(library.performers.count) 位", identifier: "home.shelf.performers") {
-                PerformerGridView(groups: library.performers)
-            }
+            shelfHeader("演员合集", detail: "\(library.performers.count) 位", identifier: "home.shelf.performers",
+                        value: PerformerListRoute())
             ScrollView(.horizontal) {
                 LazyHStack(alignment: .top, spacing: 14) {
                     ForEach(Array(library.performers.enumerated()), id: \.element.id) { index, group in
