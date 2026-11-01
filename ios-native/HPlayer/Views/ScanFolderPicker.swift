@@ -51,7 +51,7 @@ private struct FolderList: View {
     var body: some View {
         DesignPage(eyebrow: "Choose a folder", title: "选择扫描目录", subtitle: "只整理需要的文件夹，保留目录中的原文件。") {
             HStack(spacing: 8) {
-                Image(systemName: AppIcon.cloud.name).foregroundStyle(Theme.accent)
+                Image(systemName: AppIcon.cloud.name).font(.system(size: 15, weight: Theme.iconWeight)).foregroundStyle(Theme.accent)
                 Text(name).font(.subheadline.weight(.medium))
             }.padding(16).frame(maxWidth: .infinity, alignment: .leading).surfaceCard()
             GroupLabel(title: "子文件夹")
@@ -68,7 +68,7 @@ private struct FolderList: View {
                 ForEach(folders) { folder in
                     Button { onOpen(Crumb(cid: folder.id, name: folder.name)) } label: {
                         LibraryActionRow(symbol: AppIcon.folder.name, title: folder.name, subtitle: "进入文件夹")
-                    }.buttonStyle(.plain)
+                    }.buttonStyle(.pressable(scale: 0.985))
                     if folder.id != folders.last?.id { Divider().padding(.leading, 62) }
                 }
             }

@@ -17,7 +17,7 @@ struct TorrentSelectionView: View {
     var body: some View {
         DesignPage(eyebrow: "Choose what to save", title: "选择下载文件", subtitle: "只保存你需要的内容。") {
             HStack(spacing: 14) {
-                Image(systemName: AppIcon.archive.name).font(.largeTitle).foregroundStyle(Theme.accent)
+                IconTile(icon: .archive, size: 52)
                 VStack(alignment: .leading, spacing: 6) {
                     Text(info.name.isEmpty ? "BT 种子" : info.name).font(.headline).lineLimit(2)
                     Text("\(info.files.count) 个文件 · \(formatSize(info.size))").font(.caption).foregroundStyle(.secondary)
@@ -34,16 +34,16 @@ struct TorrentSelectionView: View {
                 ForEach(info.files) { file in
                     Button { if selected.contains(file.index) { selected.remove(file.index) } else { selected.insert(file.index) } } label: {
                         HStack(spacing: 13) {
-                            Image(systemName: selected.contains(file.index) ? AppIcon.selected.name : AppIcon.unselected.name)
-                                .font(.title3).foregroundStyle(selected.contains(file.index) ? Theme.accent : Color.secondary)
-                            Image(systemName: AppIcon.file.name).font(.title2).foregroundStyle(.secondary)
+                            CheckBadge(selected: selected.contains(file.index), size: 22)
+                            Image(systemName: AppIcon.file.name)
+                                .font(.system(size: 18, weight: Theme.iconWeight)).foregroundStyle(Theme.textSecondary)
                             VStack(alignment: .leading, spacing: 6) {
                                 Text(file.path).font(.subheadline.weight(.medium)).foregroundStyle(.primary).lineLimit(2).multilineTextAlignment(.leading)
                                 Text(formatSize(file.size)).font(.caption).foregroundStyle(.secondary)
                             }
                             Spacer(minLength: 0)
                         }.padding(16).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-                    }.buttonStyle(.plain)
+                    }.buttonStyle(.pressable(scale: 0.99))
                     .accessibilityIdentifier("torrent.file.\(file.index)")
                     .accessibilityAddTraits(selected.contains(file.index) ? .isSelected : [])
                     if file.index != info.files.last?.index { Divider().padding(.leading, 52) }
