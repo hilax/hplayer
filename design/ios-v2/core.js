@@ -4,7 +4,7 @@ function icon(n){return `<svg class="icon" viewBox="0 0 24 24" fill="none" strok
 function art(n,t='poster'){return `assets/${n}-${t}.jpg`}
 function ib(n,target='',extra=''){return `<button class="icon-button" ${target?`data-go="${target}"`:''} ${extra}>${icon(n)}</button>`}
 function navTop(title,back='library',right=''){return `<div class="topbar">${ib('back',back)}<b>${title}</b><div class="top-right">${right||'<span class="icon-space"></span>'}</div></div>`}
-function head(k,t,s=''){return `<div class="page-heading"><div class="eyebrow">${k}</div><h1>${t}</h1>${s?`<p>${s}</p>`:''}</div>`}
+function head(k,t,s=''){return `<div class="page-heading"><h1>${t}</h1>${s?`<p>${s}</p>`:''}</div>`}
 function row(i,t,s='',v='',target='',extra=''){return `<div class="row" ${target?`data-go="${target}"`:''} ${extra}><span class="row-icon">${icon(i)}</span><div class="row-text"><b>${t}</b>${s?`<small>${s}</small>`:''}</div><div class="row-value">${v}</div>${target?icon('chevron'):''}</div>`}
 function group(h){return `<div class="group">${h}</div>`}
 function button(t,target='',kind='primary',i=''){return `<button class="button ${kind}" ${target?`data-go="${target}"`:''}>${i?icon(i):''}${t}</button>`}
@@ -15,6 +15,6 @@ function field(l,v,p=''){return `<label class="field"><span>${l}</span><input va
 function pill(t,k=''){return `<span class="pill ${k}">${t}</span>`}
 function section(t,target='',extra=''){return `<div class="section-heading"><h2>${t}</h2>${extra}${target?`<button data-go="${target}">全部 ${icon('chevron')}</button>`:''}</div>`}
 function empty(i,t,s,a=''){return `<div class="empty"><div class="empty-icon">${icon(i)}</div><h2>${t}</h2><p>${s}</p>${a}</div>`}
-function poster(n,t,m='',target='portrait'){return `<button class="poster" data-go="${target}"><div class="poster-image"><img src="${art(n)}" alt="${t}"></div><b>${t}</b><small>${m}</small></button>`}
+function poster(n,t,m='',target='portrait',badges=null){return `<button class="poster" data-go="${target}"><div class="poster-image"><img src="${art(n)}" alt="${t}">${badges?`<span class="poster-count">${badges[0]}</span><span class="poster-rating">&#9733; ${badges[1]}</span>`:''}</div><b>${t}</b><small>${m}</small></button>`}
 function tabs(active='home'){return `<div class="tab-dock"><div class="tab-group">${[['home','home','首页'],['library','grid','资源库'],['settings','settings','设置']].map(([id,i,t])=>`<button class="tab ${id===active?'active':''}" data-go="${id}">${icon(i)}<span>${t}</span></button>`).join('')}</div><button class="search-tab ${active==='search'?'active':''}" data-go="search" aria-label="搜索">${icon('search')}</button></div>`}
 function resume(n,t,m,p=42,target='portrait'){return `<button class="resume" data-go="${target}"><div class="resume-image"><img src="${art(n,'background')}" alt=""><span class="resume-play">${icon('play')}</span>${progress(p)}</div><b>${t}</b><small>${m}</small></button>`}

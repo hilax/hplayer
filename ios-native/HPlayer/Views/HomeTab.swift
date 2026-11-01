@@ -20,7 +20,7 @@ struct HomeTab: View {
     @State private var playing: PlaybackQueue?
     @State private var importError = ""
     @State private var playError = ""
-    /// 横幅的翻页位置和下拉拉伸量。放在独立对象里，翻页、滚动时只重算横幅，不重算整个首页。
+    /// 横幅翻页和滚动状态独立保存，避免翻页时重算整个首页。
     @State private var heroState = HeroState()
     @State private var showCloudBrowser = false
     @State private var matching: MatchRequest?
@@ -59,7 +59,6 @@ struct HomeTab: View {
         ImagePipeline.shared.prefetch(HomeArtwork.prefetchRequests(library, selection: heroState.selection))
     }
 
-    private static let scrollSpace = "home.scroll"
     private let heroHeight: CGFloat = 500
 
     private var libraryFiles: [LibraryMedia] {
@@ -73,27 +72,29 @@ struct HomeTab: View {
         NavigationStack {
             GeometryReader { outer in
                 let topInset = outer.safeAreaInsets.top
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 0) {
-                        if library.featured.isEmpty {
-                            emptyHeader(topInset: topInset)
-                            VStack(alignment: .leading, spacing: 28) {
-                                emptyState
-                                if !continueItems.isEmpty {
-                                    continueShelf(continueItems)
+                GeometryReader { viewport in
+                    let viewportTop = viewport.frame(in: .global).minY
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 0) {
+                            if library.featured.isEmpty {
+                                emptyHeader(topInset: topInset)
+                                VStack(alignment: .leading, spacing: 28) {
+                                    emptyState
+                                    if !continueItems.isEmpty {
+                                        continueShelf(continueItems)
+                                    }
                                 }
+                                .padding(.horizontal, Theme.contentInset)
+                                .padding(.bottom, 40)
+                            } else {
+                                hero(library, topInset: topInset, viewportTop: viewportTop)
+                                sections(library, continueItems: continueItems)
                             }
-                            .padding(.horizontal, Theme.contentInset)
-                            .padding(.bottom, 40)
-                        } else {
-                            hero(library, topInset: topInset)
-                            sections(library, continueItems: continueItems)
                         }
                     }
+                    .scrollIndicators(.hidden)
+                    .trackHomeShelfHeader(state: heroState, threshold: heroHeight - 90)
                 }
-                .coordinateSpace(name: Self.scrollSpace)
-                .scrollIndicators(.hidden)
-                .trackHomeShelfHeader(state: heroState, threshold: heroHeight - 90)
                 .ignoresSafeArea(edges: .top)
             }
             .overlay(alignment: .top) {
@@ -105,7 +106,15 @@ struct HomeTab: View {
                         .padding(16).background(Theme.surface, in: Capsule()).padding(.bottom, 12)
                 }
             }
-            .background(Theme.pageBackground.ignoresSafeArea())
+            .background {
+                HeroObserver(state: heroState) { state in
+                    if let current = currentHero(library, selection: state.selection) {
+                        AmbientBackdrop(urlString: HomeArtwork.heroURL(current), fallbackURLString: current.posterURL)
+                    } else {
+                        Theme.pageBackground.ignoresSafeArea()
+                    }
+                }
+            }
             .navigationDestination(for: PerformerRoute.self) { route in
                 if let group = library.performers.first(where: { $0.id == route.id }) {
                     PerformerCollectionView(group: group)
@@ -211,23 +220,21 @@ struct HomeTab: View {
         return featured.indices.contains(selection) ? featured[selection] : featured.first
     }
 
-    /// 横幅铺到屏幕最上面；往下拉时从底边向上放大，松手跟着滚动视图的弹性一起回弹。
-    /// 正常滚动时拉伸量恒为 0，不会触发任何重算。
-    private func hero(_ library: HomeSnapshot, topInset: CGFloat) -> some View {
-        HeroObserver(state: heroState) { state in
-            heroPager(library, topInset: topInset, selection: state.selection)
-                .frame(height: heroHeight + state.stretch)
-                .offset(y: -state.stretch)
+    /// 直接用横幅与滚动视口的位置计算拉伸，避免下拉时顶部露出空白。
+    private func hero(_ library: HomeSnapshot, topInset: CGFloat, viewportTop: CGFloat) -> some View {
+        GeometryReader { proxy in
+            let minY = proxy.frame(in: .global).minY - viewportTop
+            let stretch = max(minY, 0)
+            HeroObserver(state: heroState) { state in
+                heroPager(library, topInset: topInset, selection: state.selection)
+                    .frame(width: proxy.size.width, height: heroHeight + stretch, alignment: .top)
+                    .offset(y: -stretch)
+            }
+            .frame(width: proxy.size.width, height: heroHeight, alignment: .top)
+            .preference(key: HeroMinYKey.self, value: minY)
         }
         .frame(height: heroHeight)
-        .background {
-            GeometryReader { proxy in
-                Color.clear.preference(key: HeroMinYKey.self, value: proxy.frame(in: .named(Self.scrollSpace)).minY)
-            }
-        }
         .onPreferenceChange(HeroMinYKey.self) { minY in
-            let stretch = max(minY, 0)
-            if stretch != heroState.stretch { heroState.stretch = stretch }
             if #unavailable(iOS 18.0) {
                 let scrolled = minY < -heroHeight + 90
                 if scrolled != heroState.scrolled { heroState.scrolled = scrolled }
@@ -299,7 +306,17 @@ struct HomeTab: View {
         .padding(.horizontal, 10)
         .frame(height: 24)
         .animation(.spring(response: 0.35, dampingFraction: 0.8), value: selection)
-        .accessibilityHidden(true)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("精选影片")
+        .accessibilityValue("第 \(selection + 1) 张，共 \(count) 张")
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .increment: heroState.selection = min(selection + 1, count - 1)
+            case .decrement: heroState.selection = max(selection - 1, 0)
+            @unknown default: break
+            }
+        }
+        .accessibilityIdentifier("home.carouselPosition")
     }
 
     // MARK: 顶部按钮
@@ -672,7 +689,6 @@ struct HomeTab: View {
 /// 否则每扫一页就把整个片库重新过一遍，界面会卡死。
 final class HeroState: ObservableObject {
     @Published var selection = 0
-    @Published var stretch: CGFloat = 0
     @Published var scrolled = false
 }
 
@@ -700,7 +716,7 @@ private struct HomeScrolledBar: View {
                 }.accessibilityLabel("添加影片").accessibilityIdentifier("home.scrolledAdd")
             }
             .padding(.horizontal, Theme.contentInset).padding(.top, 4).padding(.bottom, 10)
-            .background(Theme.pageBackground.ignoresSafeArea(edges: .top))
+            .background { Rectangle().fill(.regularMaterial).ignoresSafeArea(edges: .top) }
             .overlay(alignment: .bottom) { Rectangle().fill(Theme.hairline).frame(height: 0.5) }
         }
     }

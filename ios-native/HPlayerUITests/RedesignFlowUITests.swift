@@ -1,11 +1,60 @@
 import XCTest
+import UIKit
 
 final class RedesignFlowUITests: XCTestCase {
+    func testHomeCarouselChangesTheAmbientBackground() throws {
+        let app = launch("home")
+        defer { app.terminate() }
+        let position = app.descendants(matching: .any)["home.carouselPosition"].firstMatch
+        XCTAssertTrue(position.waitForExistence(timeout: 25))
+        XCTAssertTrue(app.buttons["home.heroPlay"].waitForExistence(timeout: 10))
+        Thread.sleep(forTimeInterval: 2)
+        let before = XCUIScreen.main.screenshot()
+        let firstPosition = try XCTUnwrap(position.value as? String)
+
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.28))
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.28))
+        start.press(forDuration: 0.05, thenDragTo: end)
+        let changed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            guard let current = position.value as? String else { return false }
+            return current != firstPosition
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [changed], timeout: 10), .completed)
+        Thread.sleep(forTimeInterval: 2)
+        let after = XCUIScreen.main.screenshot()
+        let firstColor = try backgroundSample(before)
+        let secondColor = try backgroundSample(after)
+        let difference = zip(firstColor, secondColor).reduce(0) { $0 + abs($1.0 - $1.1) }
+        XCTAssertGreaterThan(difference, 10, "The frosted background should follow the selected artwork")
+
+        for (name, screenshot) in [("Home ambient first cover", before), ("Home ambient next cover", after)] {
+            let attachment = XCTAttachment(screenshot: screenshot)
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+    }
+
+    private func backgroundSample(_ screenshot: XCUIScreenshot) throws -> [Int] {
+        let image = try XCTUnwrap(screenshot.image.cgImage)
+        // The narrow left margin below the hero is clear of cards and text.
+        let rect = CGRect(x: CGFloat(image.width / 100), y: CGFloat(image.height * 7 / 10),
+                          width: CGFloat(max(1, image.width / 100)), height: CGFloat(max(1, image.height / 100)))
+        let sample = try XCTUnwrap(image.cropping(to: rect))
+        var pixel = [UInt8](repeating: 0, count: 4)
+        let context = try XCTUnwrap(CGContext(data: &pixel, width: 1, height: 1, bitsPerComponent: 8,
+                                              bytesPerRow: 4, space: CGColorSpaceCreateDeviceRGB(),
+                                              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.interpolationQuality = .high
+        context.draw(sample, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+        return pixel.prefix(3).map(Int.init)
+    }
+
     func testNavigationTitleDoesNotRepeatInContent() {
         let app = launch("metadata")
         defer { app.terminate() }
         XCTAssertTrue(app.navigationBars["资料来源"].waitForExistence(timeout: 20))
-        let page = app.otherElements["screen.metadata"]
+        let page = app.scrollViews.firstMatch
         XCTAssertTrue(page.waitForExistence(timeout: 5))
         XCTAssertFalse(page.staticTexts["资料来源"].exists)
         XCTAssertFalse(app.staticTexts["METADATA SOURCES"].exists)

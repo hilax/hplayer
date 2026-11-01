@@ -417,7 +417,7 @@ struct SeriesPosterCard: View {
                 .overlay(alignment: .topLeading) {
                     EpisodeCountBadge(text: group.countLabel).padding(7)
                 }
-                .overlay(alignment: .topTrailing) {
+                .overlay(alignment: .bottomTrailing) {
                     if !group.rating.isEmpty {
                         RatingBadge(rating: group.rating).padding(7)
                     }
@@ -716,7 +716,7 @@ struct AmbientBackdrop: View {
                         .scaledToFill()
                         .frame(width: proxy.size.width / 8, height: proxy.size.height / 8)
                         .clipped()
-                        .blur(radius: 7.5, opaque: true)
+                        .blur(radius: 7.5)
                         .scaleEffect(8)
                         .frame(width: proxy.size.width, height: proxy.size.height)
                         .clipped()
