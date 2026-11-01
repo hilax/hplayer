@@ -25,7 +25,7 @@ final class MotionUITests: XCTestCase {
         let changed = NSPredicate { _, _ in (carousel.value as? String) != before }
         XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: changed, object: nil)], timeout: 8), .completed)
 
-        let series = app.buttons["home.series.link.shelf.tt11280740"]
+        let series = app.buttons.matching(identifier: "home.series.tt11280740").firstMatch
         for _ in 0..<5 where !series.isHittable { app.swipeUp() }
         XCTAssertTrue(series.waitForExistence(timeout: 5))
         series.tap()

@@ -632,7 +632,7 @@ struct HomeTab: View {
                 .modifier(SeriesTransitionSource(id: sourceID, namespace: seriesTransition, reduceMotion: reduceMotion))
         }
         .buttonStyle(PosterButtonStyle())
-        .accessibilityIdentifier("home.series.link.\(scope).\(group.id)")
+        .accessibilityIdentifier("home.series.\(group.id)")
         .contextMenu {
             Button("匹配封面", systemImage: "photo") {
                 matching = MatchRequest(group: group)
