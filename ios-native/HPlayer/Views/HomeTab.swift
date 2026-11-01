@@ -943,10 +943,10 @@ private struct HeroActions: View {
             Button(action: onPlay) {
                 Label(title, systemImage: AppIcon.play.name)
                     .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Theme.onPrimary)
                     .padding(.horizontal, 18)
                     .frame(height: Self.height)
-                    .background(Color.white.opacity(0.2), in: Capsule())
+                    .background(Theme.gold, in: Capsule())
                     .contentShape(Capsule())
                     .contentTransition(.opacity)
                     .animation(reduceMotion ? nil : Motion.fade, value: title)
