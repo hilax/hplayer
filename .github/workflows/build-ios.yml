@@ -181,8 +181,7 @@ jobs:
             -derivedDataPath "$RUNNER_TEMP/hplayer-simulator" \
             -clonedSourcePackagesDirPath "$GITHUB_WORKSPACE/.spm" \
             -resultBundlePath "$RUNNER_TEMP/player-tests.xcresult" \
-            CODE_SIGNING_ALLOWED=NO \
-            -quiet
+            CODE_SIGNING_ALLOWED=NO
 
       - name: Export player UI screenshots
         if: always()

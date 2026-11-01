@@ -6,17 +6,24 @@ import Security
 actor Direct115Open {
     static let shared = Direct115Open()
     typealias JSONTransport = (URLRequest, Bool) async throws -> [String: Any]
+    struct CredentialStorage {
+        let load: (String) -> String?
+        let save: (String, String) -> Void
+        let delete: (String) -> Void
+        static let keychain = CredentialStorage(load: Keychain.load, save: { Keychain.save($0, for: $1) }, delete: Keychain.delete)
+    }
     private let clientKey: String
     private let tokenKey: String
     private let transport: JSONTransport?
+    private let storage: CredentialStorage
     private var pending: Pending?
     private var refreshTask: Task<TokenPair, Error>?
     private var refreshRequestID = UUID()
     private var pendingRequestID = UUID()
     private var authorizationID = UUID()
 
-    init(clientKey: String = "hplayer.open.clientId", tokenKey: String = "hplayer.open.tokens", transport: JSONTransport? = nil) {
-        self.clientKey = clientKey; self.tokenKey = tokenKey; self.transport = transport
+    init(clientKey: String = "hplayer.open.clientId", tokenKey: String = "hplayer.open.tokens", transport: JSONTransport? = nil, storage: CredentialStorage = .keychain) {
+        self.clientKey = clientKey; self.tokenKey = tokenKey; self.transport = transport; self.storage = storage
     }
 
     private struct TokenPair: Codable {
@@ -44,15 +51,15 @@ actor Direct115Open {
         let result: [String: Any]
         switch (method, components.path) {
         case ("GET", "/api/115/open/status"):
-            let configured = !(Keychain.load(clientKey) ?? "").isEmpty
+            let configured = !(storage.load(clientKey) ?? "").isEmpty
             let authorized = loadTokens() != nil
             if authorized { result = ["configured": configured, "authorized": true] }
             else { result = ["configured": configured, "authorized": false, "message": configured ? "请扫码授权 115" : "请先填写 AppID"] }
         case ("POST", "/api/115/open/config"):
             let id = (payload["clientId"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             guard !id.isEmpty && id.count <= 200 else { throw APIError.server("请输入有效的 AppID") }
-            if Keychain.load(clientKey) != id { Keychain.delete(tokenKey); invalidateAuthorization() }
-            Keychain.save(id, for: clientKey)
+            if storage.load(clientKey) != id { storage.delete(tokenKey); invalidateAuthorization() }
+            storage.save(id, clientKey)
             pending = nil
             pendingRequestID = UUID()
             result = ["ok": true]
@@ -82,7 +89,7 @@ actor Direct115Open {
 
     private func startAuth() async throws -> [String: Any] {
         try Task.checkCancellation()
-        guard let clientId = Keychain.load(clientKey), !clientId.isEmpty else { throw APIError.server("请先填写 AppID") }
+        guard let clientId = storage.load(clientKey), !clientId.isEmpty else { throw APIError.server("请先填写 AppID") }
         let request = UUID()
         pendingRequestID = request
         pending = nil
@@ -92,7 +99,7 @@ actor Direct115Open {
         let challenge = Self.base64URL(Data(SHA256.hash(data: Data(verifier.utf8))))
         let response = try await formRequest("https://passportapi.115.com/open/authDeviceCode", fields: ["client_id": clientId, "code_challenge": challenge, "code_challenge_method": "sha256"])
         try Task.checkCancellation()
-        guard pendingRequestID == request, Keychain.load(clientKey) == clientId else { throw APIError.server("授权请求已变更，请重新开始") }
+        guard pendingRequestID == request, storage.load(clientKey) == clientId else { throw APIError.server("授权请求已变更，请重新开始") }
         let data = response["data"] as? [String: Any] ?? [:]
         let uid = Self.string(data["uid"]), time = Self.string(data["time"]), sign = Self.string(data["sign"]), qr = Self.string(data["qrcode"])
         guard !uid.isEmpty && !time.isEmpty && !sign.isEmpty && !qr.isEmpty else { throw APIError.server("115 未返回完整的扫码授权信息") }
@@ -122,12 +129,12 @@ actor Direct115Open {
     }
 
     private func loadTokens() -> TokenPair? {
-        guard let raw = Keychain.load(tokenKey), let data = raw.data(using: .utf8) else { return nil }
+        guard let raw = storage.load(tokenKey), let data = raw.data(using: .utf8) else { return nil }
         return try? JSONDecoder().decode(TokenPair.self, from: data)
     }
     private func saveTokens(_ tokens: TokenPair) throws {
         guard let value = String(data: try JSONEncoder().encode(tokens), encoding: .utf8) else { throw APIError.server("无法保存授权") }
-        Keychain.save(value, for: tokenKey)
+        storage.save(value, tokenKey)
     }
     private static func tokens(_ response: [String: Any]) throws -> TokenPair {
         let data = response["data"] as? [String: Any] ?? [:]
