@@ -149,7 +149,6 @@ struct HomeView: View {
                 if visited.contains(section) || selection == section {
                     page(for: section)
                         .opacity(selection == section ? 1 : 0)
-                        .scaleEffect(selection == section || reduceMotion ? 1 : 0.985)
                         .allowsHitTesting(selection == section)
                         .accessibilityHidden(selection != section)
                         .zIndex(selection == section ? 1 : 0)

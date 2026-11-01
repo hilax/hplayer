@@ -75,13 +75,13 @@ private struct RevealOnAppear: ViewModifier {
     @State private var shown = false
 
     func body(content: Content) -> some View {
-        let visible = shown || reduceMotion || index > 14
+        let visible = shown || reduceMotion || index > 5
         content
             .opacity(visible ? 1 : 0)
-            .offset(y: visible ? 0 : 14)
+            .scaleEffect(visible ? 1 : 0.97)
             .onAppear {
                 guard !shown else { return }
-                if reduceMotion || index > 14 {
+                if reduceMotion || index > 5 {
                     shown = true
                 } else {
                     withAnimation(Motion.stagger(index)) { shown = true }
