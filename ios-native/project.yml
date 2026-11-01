@@ -7,6 +7,9 @@ options:
   createIntermediateGroups: true
 
 packages:
+  Pow:
+    url: https://github.com/EmergeTools/Pow
+    exactVersion: 1.0.5
   MPVKit:
     url: https://github.com/mpvkit/MPVKit
     exactVersion: 1.1.0-n9.0.2
@@ -15,7 +18,7 @@ settings:
   base:
     SWIFT_VERSION: "5.9"
     MARKETING_VERSION: "1.4"
-    CURRENT_PROJECT_VERSION: "12"
+    CURRENT_PROJECT_VERSION: "13"
     IPHONEOS_DEPLOYMENT_TARGET: "16.1"
 
 targets:
@@ -30,6 +33,8 @@ targets:
         embed: false
       - package: MPVKit
         product: MPVKit
+      - package: Pow
+        product: Pow
       - sdk: libc++.tbd
       - sdk: Security.framework
       - sdk: SystemConfiguration.framework
@@ -53,7 +58,7 @@ targets:
       properties:
         CFBundleDisplayName: HPlayer
         CFBundleShortVersionString: "1.4"
-        CFBundleVersion: "12"
+        CFBundleVersion: "13"
         UILaunchScreen: {}
         UIApplicationSupportsIndirectInputEvents: true
         UISupportedInterfaceOrientations:

@@ -1,8 +1,11 @@
 import SwiftUI
+import Pow
 import UniformTypeIdentifiers
 
 struct HomeTab: View {
     var onBrowseLibrary: () -> Void = {}
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Namespace private var seriesTransition
     @EnvironmentObject private var recents: RecentStore
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var mediaLibrary: MediaLibraryStore
@@ -299,13 +302,14 @@ struct HomeTab: View {
                     .frame(width: index == selection ? 18 : 6, height: 6)
                     .contentShape(Rectangle().inset(by: -6))
                     .onTapGesture {
-                        withAnimation(.easeInOut(duration: 0.3)) { heroState.selection = index }
+                        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.3)) { heroState.selection = index }
                     }
             }
         }
         .padding(.horizontal, 10)
         .frame(height: 24)
-        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: selection)
+        .animation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.8), value: selection)
+        .changeEffect(.shine(duration: 0.45), value: selection, isEnabled: !reduceMotion)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("精选影片")
         .accessibilityValue("第 \(selection + 1) 张，共 \(count) 张")
@@ -600,14 +604,14 @@ struct HomeTab: View {
         return VStack(alignment: .leading, spacing: 14) {
             shelfHeader("剧集", detail: "\(library.series.count) 部 · \(episodeCount) 集") {
                 PosterGridScreen(title: "剧集", items: library.series) { group, width in
-                    seriesLink(group, width: width)
+                    seriesLink(group, width: width, scope: "grid")
                 }
             }
 
             ScrollView(.horizontal) {
                 LazyHStack(alignment: .top, spacing: 14) {
                     ForEach(library.series) { group in
-                        seriesLink(group, width: 105)
+                        seriesLink(group, width: 105, scope: "shelf")
                     }
                 }
                 .padding(.horizontal, Theme.contentInset)
@@ -618,13 +622,17 @@ struct HomeTab: View {
         }
     }
 
-    private func seriesLink(_ group: SeriesGroup, width: CGFloat) -> some View {
-        NavigationLink {
+    private func seriesLink(_ group: SeriesGroup, width: CGFloat, scope: String) -> some View {
+        let sourceID = "\(scope)|\(group.id)"
+        return NavigationLink {
             SeriesDetailView(seriesID: group.id)
+                .modifier(SeriesTransitionDestination(id: sourceID, namespace: seriesTransition, reduceMotion: reduceMotion))
         } label: {
             SeriesPosterCard(group: group, width: width)
+                .modifier(SeriesTransitionSource(id: sourceID, namespace: seriesTransition, reduceMotion: reduceMotion))
         }
         .buttonStyle(PosterButtonStyle())
+        .accessibilityIdentifier("home.series.link.\(scope).\(group.id)")
         .contextMenu {
             Button("匹配封面", systemImage: "photo") {
                 matching = MatchRequest(group: group)
@@ -857,6 +865,7 @@ private struct HeroPage: View {
 /// 精选播放优先；更正影片资料收在主动打开的更多菜单中。
 private struct HeroActions: View {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     static let height: CGFloat = 48
     let hasMetadata: Bool
     var title = "播放"
@@ -867,6 +876,8 @@ private struct HeroActions: View {
         HStack(spacing: 10) {
             Button(action: onPlay) {
                 Label(title, systemImage: "play.fill")
+                    .contentTransition(.opacity)
+                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: title)
             }
             .buttonStyle(PrimaryActionStyle(light: colorScheme == .dark))
             .accessibilityIdentifier("home.heroPlay")

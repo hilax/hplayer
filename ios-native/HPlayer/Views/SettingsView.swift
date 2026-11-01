@@ -229,6 +229,7 @@ struct LicensesView: View {
     private var entries: [Entry] {
         let files: [(name: String, ext: String, title: String)] = [
             ("MPVKit-LICENSE", "txt", "mpv / MPVKit"),
+            ("POW-LICENSE", "txt", "Pow"),
             ("NUVIO-ENGINE-LICENSE", "txt", "Nuvio Engine"),
             ("THIRD_PARTY_NOTICES", "md", "Nuvio 第三方声明"),
             ("LIBTORRENT-LICENSE", "txt", "libtorrent"),
@@ -265,6 +266,7 @@ struct LicensesView: View {
     private func entryDetail(_ id: String) -> String {
         switch id {
         case "MPVKit-LICENSE": return "视频播放内核"
+        case "POW-LICENSE": return "界面动画"
         case "NUVIO-ENGINE-LICENSE": return "磁力播放引擎"
         case "THIRD_PARTY_NOTICES": return "第三方许可与版权声明"
         case "LIBTORRENT-LICENSE": return "BitTorrent 库"

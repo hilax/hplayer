@@ -1,0 +1,60 @@
+import XCTest
+
+final class MotionUITests: XCTestCase {
+    func testHistoryUpdatesAndRemovesRecordsWithReducedMotion() {
+        exerciseHistory(reduceMotion: true)
+    }
+
+    func testHistoryUpdatesAndRemovesRecordsWithMotion() {
+        exerciseHistory(reduceMotion: false)
+    }
+
+    func testCarouselAndSeriesNavigationRemainUsable() {
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchEnvironment["HPLAYER_DESIGN_SCREEN"] = "home"
+        app.launch()
+        defer { app.terminate() }
+        let carousel = app.descendants(matching: .any)["home.carouselPosition"].firstMatch
+        XCTAssertTrue(carousel.waitForExistence(timeout: 20))
+        let before = carousel.value as? String
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.3))
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.3))
+        start.press(forDuration: 0.05, thenDragTo: end)
+        let changed = NSPredicate { _, _ in (carousel.value as? String) != before }
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: changed, object: nil)], timeout: 8), .completed)
+
+        let series = app.buttons["home.series.link.shelf.tt11280740"]
+        for _ in 0..<5 where !series.isHittable { app.swipeUp() }
+        XCTAssertTrue(series.waitForExistence(timeout: 5))
+        series.tap()
+        XCTAssertTrue(app.staticTexts["人生切割术"].firstMatch.waitForExistence(timeout: 10))
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(series.waitForExistence(timeout: 5), "Returning from detail should keep the shelf usable")
+    }
+
+    private func exerciseHistory(reduceMotion: Bool) {
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchEnvironment["HPLAYER_DESIGN_SCREEN"] = "continue"
+        app.launchEnvironment["HPLAYER_HISTORY_MOTION_TEST"] = "1"
+        if reduceMotion { app.launchEnvironment["HPLAYER_REDUCE_MOTION_TEST"] = "1" }
+        app.launch()
+        defer { app.terminate() }
+
+        XCTAssertTrue(app.staticTexts["3 条记录"].waitForExistence(timeout: 20))
+        app.buttons["history.testProgress"].tap()
+        XCTAssertTrue(app.staticTexts["80%"].waitForExistence(timeout: 5), "Progress must update in place")
+        let more = app.buttons.matching(NSPredicate(format: "label == %@", "沙丘 2 的更多选项")).firstMatch
+        XCTAssertTrue(more.waitForExistence(timeout: 5))
+        more.tap()
+        app.buttons.matching(NSPredicate(format: "label == %@", "从继续观看移除")).firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["2 条记录"].waitForExistence(timeout: 5))
+        XCTAssertFalse(more.exists, "Removed records must not return after the transition")
+        app.buttons["历史选项"].tap()
+        app.buttons.matching(NSPredicate(format: "label == %@", "清空记录")).firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["还没有播放记录"].waitForExistence(timeout: 5))
+    }
+}

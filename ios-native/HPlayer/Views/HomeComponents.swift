@@ -487,6 +487,17 @@ struct ContinueCard: View {
 }
 
 struct ContinueHistoryView: View {
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    #if DEBUG
+    @Environment(\.testReducedMotion) private var testReducedMotion
+    #endif
+    private var reduceMotion: Bool {
+        #if DEBUG
+        return systemReduceMotion || testReducedMotion
+        #else
+        return systemReduceMotion
+        #endif
+    }
     let entries: [ContinueEntry]
     let onOpen: (ContinueEntry) -> Void
     let onRemove: (ContinueEntry) -> Void
@@ -506,15 +517,20 @@ struct ContinueHistoryView: View {
                 } else {
                     LazyVStack(spacing: 0) {
                         ForEach(entries) { entry in
-                            if entry.id != entries.first?.id { Divider().padding(.horizontal, 12) }
-                            historyRow(entry)
+                            VStack(spacing: 0) {
+                                if entry.id != entries.first?.id { Divider().padding(.horizontal, 12) }
+                                historyRow(entry)
+                            }
+                            .transition(reduceMotion ? .identity : .asymmetric(insertion: .opacity, removal: .opacity.combined(with: .move(edge: .trailing))))
                         }
                     }
                     .surfaceCard()
+                    .transition(reduceMotion ? .identity : .opacity)
                 }
             }
             .frame(maxWidth: 680).frame(maxWidth: .infinity)
             .padding(.horizontal, Theme.contentInset).padding(.vertical, 18)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: entries.map(\.id))
         }
         .background(Theme.pageBackground.ignoresSafeArea())
         .navigationTitle("继续观看")
@@ -543,6 +559,7 @@ struct ContinueHistoryView: View {
                                         .overlay(alignment: .leading) {
                                             Rectangle().fill(Theme.primaryAction)
                                                 .frame(width: proxy.size.width * progress)
+                                                .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: progress)
                                         }
                                 }.frame(height: 4)
                             }
@@ -567,6 +584,7 @@ struct ContinueHistoryView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("继续播放 \(entry.title)，\(entry.subtitle)")
+            .accessibilityValue(validProgress(entry.progress).map { "观看进度 \(Int(($0 * 100).rounded()))%" } ?? "暂无进度")
             Menu {
                 Button("从继续观看移除", systemImage: "xmark.circle", role: .destructive) { onRemove(entry) }
             } label: {
@@ -574,6 +592,7 @@ struct ContinueHistoryView: View {
                     .frame(width: 44, height: 44).contentShape(Rectangle())
             }
             .accessibilityLabel("\(entry.title) 的更多选项")
+            .accessibilityIdentifier("history.more.\(entry.id)")
         }
         .padding(.leading, 12).padding(.trailing, 3).padding(.vertical, 14)
     }
@@ -634,13 +653,15 @@ struct PosterGridScreen<Item: Identifiable, Cell: View>: View {
 
 /// 按下海报时轻微缩小，松手回弹。
 struct PosterButtonStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             // 整张卡片（含封面和标题之间的空隙）就是点击区域，且不会超出卡片：
             // 铺满裁剪的图片伸出去的部分不能抢相邻卡片的点击。
             .contentShape(Rectangle())
-            .scaleEffect(configuration.isPressed ? 0.97 : 1)
-            .animation(.easeOut(duration: 0.18), value: configuration.isPressed)
+            .scaleEffect(!reduceMotion && configuration.isPressed ? 0.97 : 1)
+            .animation(reduceMotion ? nil : .spring(response: 0.26, dampingFraction: 0.82), value: configuration.isPressed)
     }
 }
 
@@ -765,6 +786,7 @@ enum HomeArtwork {
 /// 首页整页的底色：把当前精选图放大模糊铺满全屏，再盖一层半透明的浅色或深色，
 /// 横幅和下面的电影、剧集列表都压在这层取自精选图的颜色上；切换精选时淡入淡出。
 struct AmbientBackdrop: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let urlString: String
     var fallbackURLString = ""
 
@@ -796,7 +818,7 @@ struct AmbientBackdrop: View {
             .frame(width: proxy.size.width, height: proxy.size.height)
             .clipped()
         }
-        .animation(.easeInOut(duration: 0.6), value: urlString)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.5), value: urlString)
         .ignoresSafeArea()
         .allowsHitTesting(false)
         .accessibilityHidden(true)

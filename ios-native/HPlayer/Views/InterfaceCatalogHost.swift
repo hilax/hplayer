@@ -60,7 +60,7 @@ struct InterfaceCatalogHost: View {
             }
         case "person": NavigationStack { PerformerCollectionView(group: fixture.snapshot.performers[0]) }
         case "detail": NavigationStack { SeriesDetailView(seriesID: "tt11280740") }
-        case "continue": NavigationStack { ContinueHistoryView(entries: fixture.history, onOpen: { _ in }, onRemove: { _ in }) }
+        case "continue": NavigationStack { ContinueHistoryFixture(entries: fixture.history) }
         case "files", "files-select":
             NavigationStack {
                 DirectoryView(cid: "100", trail: [Crumb(cid: "0", name: "根目录"), Crumb(cid: "100", name: "影视收藏")],
@@ -102,6 +102,42 @@ struct InterfaceCatalogHost: View {
                  sourceQuota: screen == "library-empty" ? nil : QuotaResponse(usedText: "2.4 TB", totalText: "5 TB", usedBytes: 2_640_000_000_000, totalBytes: 5_500_000_000_000),
                  initialSearch: screen == "search-results" ? "沙丘" : screen == "search-empty" ? "未找到的影片" : "",
                  searchFiles: screen == "search-results" ? Array(fixture.directory.filter { !$0.isDir }.prefix(2)) : [])
+    }
+}
+
+/// Mutable fixture for exercising list updates without touching real history.
+private struct ContinueHistoryFixture: View {
+    @State private var entries: [ContinueEntry]
+    private let motionTest = ProcessInfo.processInfo.environment["HPLAYER_HISTORY_MOTION_TEST"] == "1"
+    private let reduced = ProcessInfo.processInfo.environment["HPLAYER_REDUCE_MOTION_TEST"] == "1"
+
+    init(entries: [ContinueEntry]) { _entries = State(initialValue: entries) }
+
+    var body: some View {
+        Group {
+            if reduced { history.environment(\.testReducedMotion, true) }
+            else { history }
+        }
+    }
+
+    private var history: some View {
+        ContinueHistoryView(entries: entries, onOpen: { _ in }, onRemove: { entry in
+            entries.removeAll { $0.id == entry.id }
+        })
+        .toolbar {
+            if motionTest {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("更新进度") { updateProgress() }.accessibilityIdentifier("history.testProgress")
+                }
+            }
+        }
+    }
+
+    private func updateProgress() {
+        guard let first = entries.first else { return }
+        entries[0] = ContinueEntry(id: first.id, target: first.target, title: first.title,
+                                   subtitle: first.subtitle, tag: first.tag, artworkURL: first.artworkURL,
+                                   progress: 0.8, date: first.date, libraryItem: first.libraryItem)
     }
 }
 

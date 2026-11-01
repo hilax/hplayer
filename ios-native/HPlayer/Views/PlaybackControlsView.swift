@@ -54,6 +54,7 @@ private enum SleepTimer: Equatable, Identifiable {
 
 /// 横竖屏共享的播放器控制层，视频画面由 mpv 绘制。
 struct PlaybackControlsView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var playback: PlaybackController
     let title: String
     var loading = false
@@ -219,7 +220,7 @@ struct PlaybackControlsView: View {
             .foregroundColor(.white)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .ignoresSafeArea()
-            .animation(.easeOut(duration: 0.18), value: boosting)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: boosting)
         }
         .background(SystemVolumeHost(controller: systemVolume).frame(width: 1, height: 1).allowsHitTesting(false))
         .background(DarkPresentationStyle().frame(width: 0, height: 0))
@@ -473,7 +474,7 @@ struct PlaybackControlsView: View {
                 .disabled(previousID == nil)
                 .opacity(previousID == nil ? 0.35 : 1)
             Button { playback.toggle(); revealControls() } label: {
-                controlIcon(playback.playing ? "pause.fill" : "play.fill", label: playback.playing ? "暂停" : "播放", size: compact ? 25 : 29, frame: compact ? 56 : 64)
+                playPauseIcon(compact: compact)
                     .frame(height: compact ? 56 : 64).background(.black.opacity(0.3), in: Circle()).glassCircle()
             }
             .accessibilityIdentifier("playback.playPause")
@@ -486,6 +487,19 @@ struct PlaybackControlsView: View {
                 .opacity(nextID == nil ? 0.35 : 1)
         }
         .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private func playPauseIcon(compact: Bool) -> some View {
+        let name = playback.playing ? "pause.fill" : "play.fill"
+        let label = playback.playing ? "暂停" : "播放"
+        if #available(iOS 17.0, *), !reduceMotion {
+            controlIcon(name, label: label, size: compact ? 25 : 29, frame: compact ? 56 : 64)
+                .contentTransition(.symbolEffect(.replace))
+                .animation(.easeInOut(duration: 0.18), value: playback.playing)
+        } else {
+            controlIcon(name, label: label, size: compact ? 25 : 29, frame: compact ? 56 : 64)
+        }
     }
 
     /// 拖进度条时，画面中间显示和左右滑动一样的跳转提示
@@ -961,7 +975,7 @@ struct PlaybackControlsView: View {
         busyTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: delay)
             guard !Task.isCancelled else { return }
-            withAnimation(.easeOut(duration: 0.2)) { showBusy = true }
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) { showBusy = true }
         }
     }
 
@@ -1024,7 +1038,7 @@ struct PlaybackControlsView: View {
             }
         }
         .allowsHitTesting(false)
-        .animation(.easeOut(duration: 0.16), value: adjustment?.kind)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: adjustment?.kind)
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("playback.adjustmentHUD")
     }
@@ -1088,30 +1102,30 @@ struct PlaybackControlsView: View {
         hideTask?.cancel()
         settingsPage = nil
         showAspect = false
-        withAnimation(.easeOut(duration: 0.25)) { showList = true }
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.25)) { showList = true }
     }
     private func closeList() {
-        withAnimation(.easeOut(duration: 0.22)) { showList = false }
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.22)) { showList = false }
         revealControls()
     }
     private func openSettings(_ page: SettingsPage) {
         hideTask?.cancel()
         showAspect = false
         showList = false
-        withAnimation(.easeOut(duration: 0.25)) { settingsPage = page }
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.25)) { settingsPage = page }
     }
     private func closeSettings() {
-        withAnimation(.easeOut(duration: 0.22)) { settingsPage = nil }
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.22)) { settingsPage = nil }
         revealControls()
     }
     private func openAspect() {
         hideTask?.cancel()
         settingsPage = nil
         showList = false
-        withAnimation(.easeOut(duration: 0.22)) { showAspect = true }
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.22)) { showAspect = true }
     }
     private func closeAspect() {
-        withAnimation(.easeOut(duration: 0.22)) { showAspect = false }
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.22)) { showAspect = false }
         revealControls()
     }
     private func setSleepTimer(_ option: SleepTimer) {
@@ -1145,7 +1159,7 @@ struct PlaybackControlsView: View {
     private func revealControls() {
         if InterfacePreview.active { controlsVisible = true; return }
         if !controlsVisible {
-            withAnimation(.easeOut(duration: 0.2)) { controlsVisible = true }
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) { controlsVisible = true }
         }
         hideTask?.cancel()
 #if DEBUG
@@ -1156,7 +1170,7 @@ struct PlaybackControlsView: View {
         hideTask = Task {
             try? await Task.sleep(nanoseconds: 5_000_000_000)
             if !Task.isCancelled && !showList && settingsPage == nil && !showAspect && !dragging && !boosting && adjustment == nil && !playback.buffering {
-                withAnimation(.easeOut(duration: 0.25)) { controlsVisible = false }
+                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.25)) { controlsVisible = false }
             }
         }
     }
@@ -1169,7 +1183,7 @@ struct PlaybackControlsView: View {
         if showAspect { closeAspect(); return }
         if controlsVisible {
             hideTask?.cancel()
-            withAnimation(.easeOut(duration: 0.2)) { controlsVisible = false }
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) { controlsVisible = false }
         } else {
             revealControls()
         }
@@ -1352,7 +1366,7 @@ struct PlaybackControlsView: View {
         showList = false
         settingsPage = nil
         showAspect = false
-        withAnimation(.easeOut(duration: 0.16)) {
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) {
             controlsVisible = false
         }
         OrientationSupport.rotateToPortrait {
