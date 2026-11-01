@@ -262,7 +262,9 @@ struct HomeTab: View {
     }
 
     /// 轮播图底部渐隐进页面背景的高度；按钮和指示点整体上移这么多，避开渐隐区。
-    private static let heroFade: CGFloat = 72
+    private static let heroFade: CGFloat = 190
+    /// 按钮和页码点上移的高度：停在渐隐区的上半段，背后还有足够的暗色
+    private static let heroControlsLift: CGFloat = 110
 
     /// 铺满屏幕上方的精选轮播：图片延伸到状态栏下面，搜索、历史、添加三个入口悬浮在左上角之上。
     private func heroCard(_ library: HomeSnapshot, continueItems: [ContinueEntry],
@@ -335,8 +337,17 @@ struct HomeTab: View {
         .mask(
             VStack(spacing: 0) {
                 Rectangle().fill(Color.black)
-                LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
-                    .frame(height: Self.heroFade)
+                LinearGradient(
+                    stops: [
+                        .init(color: .black, location: 0),
+                        .init(color: .black.opacity(0.92), location: 0.25),
+                        .init(color: .black.opacity(0.62), location: 0.5),
+                        .init(color: .black.opacity(0.26), location: 0.75),
+                        .init(color: .black.opacity(0), location: 1),
+                    ],
+                    startPoint: .top, endPoint: .bottom
+                )
+                .frame(height: Self.heroFade)
             }
         )
         .overlay(alignment: .bottomLeading) {
@@ -347,14 +358,14 @@ struct HomeTab: View {
                     actionItem = current
                 }
                 .padding(.leading, 18)
-                .padding(.bottom, 16 + Self.heroFade)
+                .padding(.bottom, 16 + Self.heroControlsLift)
             }
         }
         .overlay(alignment: .bottomTrailing) {
             if featured.count > 1 {
                 heroIndicator(count: featured.count, selection: selection)
                     .padding(.trailing, 8)
-                    .padding(.bottom, 16 + Self.heroFade)
+                    .padding(.bottom, 16 + Self.heroControlsLift)
             }
         }
     }
@@ -880,7 +891,7 @@ private struct HeroPage: View {
 
                 content
                     .padding(.horizontal, 16)
-                    .padding(.bottom, 62 + 72)
+                    .padding(.bottom, 62 + 110)
                     .offset(x: pageX * 0.35)
                     .opacity(1 - min(1, abs(pageX) / width * 1.5))
             }
