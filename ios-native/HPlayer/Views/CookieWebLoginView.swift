@@ -24,7 +24,7 @@ struct CookieWebLoginView: View {
                     .foregroundStyle(.white).frame(width: 88, height: 88)
                     .background(Theme.primaryAction, in: RoundedRectangle(cornerRadius: 24))
                 Text("使用 115 官方网页登录").font(.headline)
-                Text("完成登录后自动验证并连接，无需手动复制 Cookie。")
+                Text("完成登录后自动验证并连接，无需手动复制登录信息。")
                     .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 Button {
                     error = ""; candidate = ""; lastAttempt = ""; pageLoading = true
@@ -42,7 +42,7 @@ struct CookieWebLoginView: View {
             DesignNotice(symbol: "lock.shield", text: "登录凭证仅保存在本机钥匙串。退出账号会移除本机凭证，不会删除你的网盘文件。")
             if !error.isEmpty { DesignNotice(symbol: "exclamationmark.circle", text: error, warning: true) }
         }
-        .navigationTitle("连接 115")
+        .navigationTitle("连接 115 网盘")
         .designScreen("connect115")
         .sheet(isPresented: $showingWeb, onDismiss: finishWebSession) {
             NavigationStack {

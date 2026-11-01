@@ -44,7 +44,7 @@ struct MetadataCredentialsView: View {
                 .font(.subheadline).frame(maxWidth: .infinity, minHeight: 44)
             DesignNotice(symbol: "lock.shield", text: "凭证仅保存在本机钥匙串，不上传到 HPlayer 或 115。")
         }
-        .navigationTitle("接口凭证")
+        .navigationTitle("资料接口凭证")
         .toolbar {
             ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } }
             ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("完成") { focusedField = nil } }

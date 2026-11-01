@@ -226,7 +226,7 @@ struct AppearanceSettingsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 26) {
-                PageIntroduction(eyebrow: "Appearance", title: "你喜欢的观看氛围", subtitle: "选择 HPlayer 的显示方式。")
+                PageIntroduction(eyebrow: "Appearance", title: "你喜欢的观看氛围", subtitle: "选择 HPlayer 的显示方式。", showsTitle: false)
                 AppearancePicker(selection: $appearance)
                 VStack(alignment: .leading, spacing: 14) {
                     GroupLabel(title: "界面预览")

@@ -2,7 +2,7 @@ import XCTest
 
 /// Every reviewed artboard is exercised through a real native view or state.
 final class ScreenCatalogUITests: XCTestCase {
-    func test01Home() { capture("home", expected: "首页") }
+    func test01Home() { capture("home", expected: "播放") }
     func test02HomeMore() { capture("home-more", expected: "电影") }
     func test03HomeEmpty() { capture("home-empty", expected: "让好内容，在这里相遇") }
     func test04Movies() { capture("movies", expected: "电影") }
@@ -22,17 +22,17 @@ final class ScreenCatalogUITests: XCTestCase {
     func test18SearchResults() { capture("search-results", expected: "沙丘 2") }
     func test19SearchEmpty() { capture("search-empty", expected: "暂时没有找到") }
     func test20Manage() { capture("manage", expected: "媒体库管理") }
-    func test21FolderPicker() { capture("folder-picker", expected: "选择扫描目录") }
+    func test21FolderPicker() { capture("folder-picker", expected: "选择要扫描的文件夹") }
     func test22Unmatched() { capture("unmatched", expected: "未匹配影片") }
     func test23Match() { capture("match", expected: "匹配封面") }
     func test24Metadata() { capture("metadata", expected: "资料来源") }
     func test25Credentials() { capture("credentials", expected: "资料接口凭证") }
     func test26Settings() { capture("settings", expected: "设置") }
-    func test27Appearance() { capture("appearance", expected: "你喜欢的观看氛围") }
+    func test27Appearance() { capture("appearance", expected: "外观") }
     func test28Connect115() { capture("connect115", expected: "连接 115 网盘") }
     func test29Official() { capture("official", expected: "115 官方授权") }
-    func test30Licenses() { capture("licenses", expected: "致谢开源社区") }
-    func test31Magnet() { capture("magnet", expected: "粘贴，即刻开播") }
+    func test30Licenses() { capture("licenses", expected: "开源许可") }
+    func test31Magnet() { capture("magnet", expected: "磁力在线播放") }
     func test32Resolving() { capture("resolving", expected: "正在获取影片目录") }
     func test33MagnetFiles() { capture("magnet-files", expected: "资源目录") }
     func test34Torrent() { capture("torrent", expected: "BT 云下载") }
@@ -43,7 +43,7 @@ final class ScreenCatalogUITests: XCTestCase {
     func test39Tracks() { capture("tracks", expected: "字幕与音轨") }
     func test40Episodes() { capture("episodes", expected: "选集") }
     func test41Aspect() { capture("aspect", expected: "画面比例") }
-    func test42HomeLight() { capture("home", expected: "首页", style: "light") }
+    func test42HomeLight() { capture("home", expected: "播放", style: "light") }
     func test43LibraryLight() { capture("library", expected: "资源库", style: "light") }
     func test44FilesLight() { capture("files", expected: "影视收藏", style: "light") }
     func test45SearchLight() { capture("search-results", expected: "沙丘 2", style: "light") }
@@ -88,12 +88,20 @@ final class ScreenCatalogUITests: XCTestCase {
         if screen == "add" { app.buttons["home.sources"].tap() }
         if screen == "film-menu" { app.buttons["影片选项"].tap() }
         if screen != "portrait" && screen != "landscape" {
-            XCTAssertTrue(app.staticTexts[expected].firstMatch.waitForExistence(timeout: 10), "Missing native state: \(screen)")
+            XCTAssertTrue(wait {
+                if screen == "home" { return app.buttons["home.heroPlay"].exists }
+                return app.staticTexts[expected].firstMatch.exists || app.navigationBars[expected].exists
+            }, "Missing native state: \(screen)")
         }
         if screen.hasPrefix("home") {
             XCTAssertFalse(app.buttons["home.scanStatus"].exists)
             XCTAssertFalse(app.otherElements["home.matchingState"].exists)
             XCTAssertFalse(app.staticTexts["待匹配"].exists)
+        }
+        if screen == "home" {
+            let bar = app.otherElements["home.heroBar"]
+            XCTAssertTrue(bar.exists)
+            XCTAssertFalse(bar.staticTexts["首页"].exists)
         }
         // Allow the native presentation transition and localhost artwork requests to finish.
         Thread.sleep(forTimeInterval: 1.2)

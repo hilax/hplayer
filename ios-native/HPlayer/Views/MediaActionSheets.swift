@@ -45,7 +45,7 @@ struct MediaActionSheet: View {
     @State private var confirmRemove = false
 
     var body: some View {
-        DesignPage(eyebrow: "Movie actions", title: "影片选项") {
+        DesignPage(eyebrow: "Movie actions", title: "影片选项", showsTitle: true) {
             HStack(spacing: 18) {
                 PosterArtwork(urlString: item.posterURL, title: item.title, width: 82)
                 VStack(alignment: .leading, spacing: 8) {

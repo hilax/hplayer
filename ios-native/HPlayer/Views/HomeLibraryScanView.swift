@@ -116,7 +116,7 @@ struct HomeLibraryScanView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
-                    PageIntroduction(eyebrow: "Keep your library in shape", title: "媒体库管理", subtitle: "整理你的文件、封面与影片资料。")
+                    PageIntroduction(eyebrow: "Keep your library in shape", title: "媒体库管理", subtitle: "整理你的文件、封面与影片资料。", showsTitle: false)
                     .accessibilityElement(children: .combine)
 
                     scanCard

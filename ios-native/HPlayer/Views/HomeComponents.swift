@@ -541,7 +541,7 @@ struct PosterGridScreen<Item: Identifiable, Cell: View>: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
                     PageIntroduction(eyebrow: title == "电影" ? "Movies" : title == "剧集" ? "Series" : eyebrow,
-                                     title: title, subtitle: subtitle.isEmpty ? "\(items.count) \(title == "剧集" ? "部剧集" : "部作品") · 来自你的片库" : subtitle)
+                                     title: title, subtitle: subtitle.isEmpty ? "\(items.count) \(title == "剧集" ? "部剧集" : "部作品") · 来自你的片库" : subtitle, showsTitle: false)
                 LazyVGrid(
                     columns: Array(repeating: GridItem(.fixed(width), spacing: spacing, alignment: .top), count: columns),
                     alignment: .leading,

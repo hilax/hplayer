@@ -1,6 +1,16 @@
 import XCTest
 
 final class RedesignFlowUITests: XCTestCase {
+    func testNavigationTitleDoesNotRepeatInContent() {
+        let app = launch("metadata")
+        defer { app.terminate() }
+        XCTAssertTrue(app.navigationBars["资料来源"].waitForExistence(timeout: 20))
+        let page = app.otherElements["screen.metadata"]
+        XCTAssertTrue(page.waitForExistence(timeout: 5))
+        XCTAssertFalse(page.staticTexts["资料来源"].exists)
+        XCTAssertFalse(app.staticTexts["METADATA SOURCES"].exists)
+    }
+
     func testSourcePanelAndFilmMatchingRoute() {
         let app = launch("home")
         defer { app.terminate() }

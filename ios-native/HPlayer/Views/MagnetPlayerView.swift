@@ -28,10 +28,10 @@ struct MagnetPlayerView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 if controller.phase == .idle || controller.phase == .failed {
-                    PageIntroduction(eyebrow: "Link player", title: "粘贴，即刻开播", subtitle: "从链接回到影片本身。")
+                    PageIntroduction(eyebrow: "Link player", title: "粘贴，即刻开播", subtitle: "从链接回到影片本身。", showsTitle: false)
                 }
                 if controller.phase == .ready && controller.catalog != nil {
-                    PageIntroduction(eyebrow: "Ready to watch", title: "资源目录", subtitle: "选择一集，继续你的故事。")
+                    PageIntroduction(eyebrow: "Ready to watch", title: "资源目录", subtitle: "选择一集，继续你的故事。", showsTitle: false)
                     linkBar
                 } else if controller.phase != .resolving { inputCard }
 

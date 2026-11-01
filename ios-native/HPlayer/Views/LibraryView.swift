@@ -105,6 +105,9 @@ struct DirectoryView: View {
             if !InterfacePreview.active { await load() }
         }
         .toolbar {
+            if selecting {
+                ToolbarItem(placement: .principal) { Text("选择视频").font(.headline) }
+            }
             ToolbarItem(placement: .primaryAction) {
                 toolbarControls
             }
@@ -154,7 +157,7 @@ struct DirectoryView: View {
             if trail.count > 1 { breadcrumb }
             PageIntroduction(eyebrow: selecting ? "Select files" : "Your cloud library",
                              title: selecting ? "选择视频" : trail.last?.name ?? "115 网盘",
-                             subtitle: "\(items.filter(\.isDir).count) 个文件夹 · \(items.filter { $0.isVideo }.count) 个视频")
+                             subtitle: "\(items.filter(\.isDir).count) 个文件夹 · \(items.filter { $0.isVideo }.count) 个视频", showsTitle: false)
                 .padding(.vertical, 10)
             sortBar
         }

@@ -23,7 +23,7 @@ struct LocalVideosView: View {
                 )
             } else {
                 List {
-                    PageIntroduction(eyebrow: "On this iPhone", title: "本机视频", subtitle: "\(localStore.files.count) 个视频")
+                    PageIntroduction(eyebrow: "On this iPhone", title: "本机视频", subtitle: "\(localStore.files.count) 个视频", showsTitle: false)
                         .padding(.vertical, 16)
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)

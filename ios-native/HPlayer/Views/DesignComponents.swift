@@ -5,17 +5,16 @@ struct PageIntroduction: View {
     let eyebrow: String
     let title: String
     var subtitle: String = ""
+    var showsTitle = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
-            Text(eyebrow.uppercased())
-                .font(.caption2.weight(.semibold))
-                .tracking(1.6)
-                .foregroundStyle(.secondary)
-            Text(title)
-                .font(.largeTitle.weight(.bold))
-                .tracking(-0.8)
-                .accessibilityAddTraits(.isHeader)
+            if showsTitle {
+                Text(title)
+                    .font(.largeTitle.weight(.bold))
+                    .tracking(-0.8)
+                    .accessibilityAddTraits(.isHeader)
+            }
             if !subtitle.isEmpty {
                 Text(subtitle).font(.subheadline).foregroundStyle(.secondary)
             }
@@ -87,12 +86,15 @@ struct DesignPage<Content: View>: View {
     let eyebrow: String
     let title: String
     var subtitle = ""
+    var showsTitle = false
     @ViewBuilder var content: () -> Content
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                PageIntroduction(eyebrow: eyebrow, title: title, subtitle: subtitle)
+                if showsTitle || !subtitle.isEmpty {
+                    PageIntroduction(eyebrow: eyebrow, title: title, subtitle: subtitle, showsTitle: showsTitle)
+                }
                 content()
             }
             .frame(maxWidth: 680)

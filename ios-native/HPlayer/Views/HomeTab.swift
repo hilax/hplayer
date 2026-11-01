@@ -275,14 +275,13 @@ struct HomeTab: View {
 
     private func heroTopBar(_ current: HomeMediaItem?, topInset: CGFloat) -> some View {
         HStack(spacing: 10) {
-            Text("首页")
-                .font(.title2.weight(.bold))
-                .accessibilityAddTraits(.isHeader)
             Spacer(minLength: 8)
             addMenu
         }
         .padding(.horizontal, Theme.contentInset)
         .padding(.top, topInset + 6)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("home.heroBar")
     }
 
     private func heroIndicator(count: Int, selection: Int) -> some View {
