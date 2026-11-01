@@ -7,3 +7,8 @@
 
 /* Diffuse the featured artwork behind the home shelves. */
 .screen:has(.home-content)::before{content:"";position:absolute;inset:-15%;background:linear-gradient(#0d0f14aa,#0d0f14b8),url("assets/dune-background.jpg") center/cover;filter:blur(30px);pointer-events:none}.screen.light:has(.home-content)::before{background:linear-gradient(#ffffff88,#ffffff88),url("assets/dune-background.jpg") center/cover}.home-content{position:relative}.home-content .hero{background:transparent}.home-content .hero:after{background:linear-gradient(180deg,#03080c40 0%,#080d1020 25%,#0d0f1415 45%,#0d0f1488 75%,transparent 100%)}.screen.light .home-content .hero:after{background:linear-gradient(180deg,#f3f4f799,transparent 35%,#f3f4f788 72%,transparent)}.screen.light .hero-copy{color:#171c27}.screen.light .hero-copy .eyebrow,.screen.light .hero-meta,.screen.light .hero-copy p{color:#343b4a}.poster-image{position:relative}.poster-count,.poster-rating{position:absolute;padding:5px 7px;border-radius:20px;font-size:9px;font-weight:700;color:#fff;backdrop-filter:blur(12px)}.poster-count{top:7px;left:7px;background:#3569efbb}.poster-rating{right:7px;bottom:7px;background:#111a}.poster-rating:first-letter{color:#ffc94a}
+
+/* The cover fades into the matching frosted backdrop instead of ending at a hard edge. */
+.home-content .hero>img{mask-image:linear-gradient(to bottom,#000 0%,#000 42%,#0009 66%,transparent 90%)}
+.home-content .hero:after{background:linear-gradient(to bottom,#03080c70,transparent 35%)}
+.screen.light .home-content .hero:after{background:linear-gradient(to bottom,#f3f4f799,transparent 35%)}

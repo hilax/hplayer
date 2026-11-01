@@ -165,7 +165,18 @@ jobs:
         # 公开仓库的构建机较慢，测试有时要 7～15 分钟
         timeout-minutes: 45
         run: |
-          device=$(xcrun simctl list devices available --json | python3 -c 'import json,re,sys; d=json.load(sys.stdin)["devices"]; groups=sorted(d.items(),key=lambda pair:tuple(map(int,re.findall(r"[0-9]+",pair[0]))),reverse=True); devices=next(([x for x in group if x.get("isAvailable") and x["name"].startswith("iPhone")] for runtime,group in groups if any(x.get("isAvailable") and x["name"].startswith("iPhone") for x in group)),[]); preferred=next((x for x in devices if "Pro" in x["name"]), devices[0] if devices else None); print(preferred["udid"] if preferred else "")')
+          # Match the iPhone 15 Pro's 393-point screen when the runner supports it.
+          runtime=$(xcrun simctl list runtimes --json | python3 -c 'import json,re,sys; runtimes=[x for x in json.load(sys.stdin)["runtimes"] if x.get("isAvailable") and x["name"].startswith("iOS ")]; runtimes.sort(key=lambda x:tuple(map(int,re.findall(r"[0-9]+",x["version"]))),reverse=True); print(runtimes[0]["identifier"] if runtimes else "")')
+          device=""
+          if [[ -n "$runtime" ]]; then
+            device=$(xcrun simctl create "HPlayer iPhone 15 Pro" "com.apple.CoreSimulator.SimDeviceType.iPhone-15-Pro" "$runtime" 2>/dev/null || true)
+          fi
+          if [[ -z "$device" ]]; then
+            echo "iPhone 15 Pro is unavailable; using an installed iPhone simulator."
+            device=$(xcrun simctl list devices available --json | python3 -c 'import json,re,sys; d=json.load(sys.stdin)["devices"]; groups=sorted(d.items(),key=lambda pair:tuple(map(int,re.findall(r"[0-9]+",pair[0]))),reverse=True); devices=next(([x for x in group if x.get("isAvailable") and x["name"].startswith("iPhone")] for runtime,group in groups if any(x.get("isAvailable") and x["name"].startswith("iPhone") for x in group)),[]); preferred=next((x for x in devices if "Pro" in x["name"]), devices[0] if devices else None); print(preferred["udid"] if preferred else "")')
+          else
+            echo "Using iPhone 15 Pro ($device)."
+          fi
           test -n "$device"
           xcrun simctl boot "$device" || true
           python3 ios-native/scripts/player-test-server.py > "$RUNNER_TEMP/player-http.log" 2>&1 &
