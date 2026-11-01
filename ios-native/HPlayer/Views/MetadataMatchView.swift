@@ -169,18 +169,15 @@ struct MetadataRow: View {
                 if let image = phase.image {
                     image.resizable().scaledToFill()
                 } else {
-                    ZStack {
-                        Color.gray.opacity(0.18)
-                        Image(systemName: metadata.isSeries ? AppIcon.tv.name : AppIcon.video.name).foregroundStyle(.secondary)
-                    }
+                    PosterPlaceholder(title: metadata.title, letterSize: 22)
                 }
             }
             .frame(width: 63, height: 94)
-            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(metadata.title)
-                    .font(.headline)
+                    .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(2)
                 if let original = metadata.originalTitle, !original.isEmpty {
@@ -193,7 +190,9 @@ struct MetadataRow: View {
             }
             Spacer(minLength: 0)
             if selected {
-                Image(systemName: AppIcon.selected.name).foregroundStyle(Color.accentColor)
+                Image(systemName: AppIcon.selected.name)
+                    .foregroundStyle(Theme.gold)
+                    .transition(.scale.combined(with: .opacity))
             }
         }
         .padding(.vertical, 2)

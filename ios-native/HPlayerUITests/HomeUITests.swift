@@ -72,6 +72,8 @@ final class HomeUITests: XCTestCase {
         let chineseSeries = app.descendants(matching: .any)["home.series.bgm:400602"].firstMatch
         XCTAssertTrue(chineseSeries.waitForExistence(timeout: 30), "Chinese title should match through Bangumi")
 
+        // 首页布局变了：先滑回顶部，保证要长按的那张海报在屏幕里。
+        for _ in 0..<3 where !dune.isHittable { app.swipeDown() }
         dune.press(forDuration: 1)
         app.buttons["匹配封面"].tap()
         let result = app.buttons["metadata.result.tt1160419"]

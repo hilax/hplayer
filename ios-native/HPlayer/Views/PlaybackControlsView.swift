@@ -496,7 +496,7 @@ struct PlaybackControlsView: View {
         if #available(iOS 17.0, *), !reduceMotion {
             controlIcon(name, label: label, size: compact ? 25 : 29, frame: compact ? 56 : 64)
                 .contentTransition(.symbolEffect(.replace))
-                .animation(.easeInOut(duration: 0.18), value: playback.playing)
+                .animation(Motion.snappy, value: playback.playing)
         } else {
             controlIcon(name, label: label, size: compact ? 25 : 29, frame: compact ? 56 : 64)
         }
@@ -1102,30 +1102,30 @@ struct PlaybackControlsView: View {
         hideTask?.cancel()
         settingsPage = nil
         showAspect = false
-        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.25)) { showList = true }
+        withAnimation(reduceMotion ? nil : Motion.smooth) { showList = true }
     }
     private func closeList() {
-        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.22)) { showList = false }
+        withAnimation(reduceMotion ? nil : Motion.smooth) { showList = false }
         revealControls()
     }
     private func openSettings(_ page: SettingsPage) {
         hideTask?.cancel()
         showAspect = false
         showList = false
-        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.25)) { settingsPage = page }
+        withAnimation(reduceMotion ? nil : Motion.smooth) { settingsPage = page }
     }
     private func closeSettings() {
-        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.22)) { settingsPage = nil }
+        withAnimation(reduceMotion ? nil : Motion.smooth) { settingsPage = nil }
         revealControls()
     }
     private func openAspect() {
         hideTask?.cancel()
         settingsPage = nil
         showList = false
-        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.22)) { showAspect = true }
+        withAnimation(reduceMotion ? nil : Motion.smooth) { showAspect = true }
     }
     private func closeAspect() {
-        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.22)) { showAspect = false }
+        withAnimation(reduceMotion ? nil : Motion.smooth) { showAspect = false }
         revealControls()
     }
     private func setSleepTimer(_ option: SleepTimer) {
@@ -1744,7 +1744,7 @@ private final class ScrubberSlider: UISlider {
 
     /// 轨道图片和轨道一样高，两头是半圆，拉伸时只拉中间
     private func applyTrackImages() {
-        setMinimumTrackImage(Self.capsule(.white, height: trackHeight), for: .normal)
+        setMinimumTrackImage(Self.capsule(UIColor(red: 0.914, green: 0.690, blue: 0.380, alpha: 1), height: trackHeight), for: .normal)
         setMaximumTrackImage(Self.capsule(UIColor.white.withAlphaComponent(0.22), height: trackHeight), for: .normal)
     }
 

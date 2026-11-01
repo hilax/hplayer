@@ -741,7 +741,7 @@ struct PosterPlaceholder: View {
 
     private var palette: (UInt32, UInt32, UInt32) {
         let seed = title.unicodeScalars.reduce(5381) { ($0 &* 33) &+ Int($1.value) }
-        return Self.palettes[abs(seed) % Self.palettes.count]
+        return Self.palettes[Int(seed.magnitude % UInt(Self.palettes.count))]
     }
 
     var body: some View {

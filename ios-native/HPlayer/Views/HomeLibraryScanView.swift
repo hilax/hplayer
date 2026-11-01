@@ -176,16 +176,20 @@ struct HomeLibraryScanView: View {
     private var scanCard: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack(alignment: .top, spacing: 12) {
-                Image(systemName: scanner.phase == .completed ? AppIcon.selected.name : AppIcon.autoMatch.name)
-                    .font(.title2.weight(.semibold)).foregroundStyle(Theme.accent)
-                    .frame(width: 44, height: 44)
-                    .background(Theme.tileTint, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                ProgressRing(value: scanRingValue, lineWidth: 5) {
+                    Image(systemName: scanner.phase == .completed ? AppIcon.success.name : AppIcon.autoMatch.name)
+                        .font(.system(size: 20, weight: Theme.iconWeight))
+                        .foregroundStyle(Theme.accent)
+                        .morphSymbol()
+                }
+                .frame(width: 56, height: 56)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(scanner.phase == .running ? "正在扫描" : status)
                 VStack(alignment: .leading, spacing: 5) {
-                    Text(status).font(.headline)
-                    Text(scanDescription).font(.subheadline).foregroundStyle(.secondary)
+                    Text(status).font(.system(size: 17, weight: .bold))
+                    Text(scanDescription).font(.system(size: 13)).foregroundStyle(Theme.textSecondary)
                 }
                 Spacer(minLength: 0)
-                if scanner.phase == .running { ProgressView().accessibilityLabel("正在扫描") }
             }
             HStack {
                 Text("扫描范围").foregroundStyle(.secondary)
@@ -215,10 +219,22 @@ struct HomeLibraryScanView: View {
         .scanCard()
     }
 
+    /// 圆环进度：已扫描的文件夹占已发现文件夹的比例；扫完是满环，没开始是空环。
+    private var scanRingValue: Double {
+        switch scanner.phase {
+        case .idle: return 0
+        case .completed: return 1
+        default:
+            let found = max(scanner.progress.discoveredFolders, 1)
+            return min(Double(scanner.progress.scannedFolders) / Double(found), 1)
+        }
+    }
+
     private func libraryMetric(_ title: String, value: Int) -> some View {
         VStack(spacing: 8) {
-            Text("\(value)").font(.title2.bold().monospacedDigit())
-            Text(title).font(.caption).foregroundStyle(.secondary)
+            Text("\(value)").font(.display(22).monospacedDigit()).rollingNumber()
+                .animation(Motion.smooth, value: value)
+            Text(title).font(.caption).foregroundStyle(Theme.textSecondary)
         }.frame(maxWidth: .infinity).padding(.vertical, 18).surfaceCard()
     }
 
@@ -235,7 +251,8 @@ struct HomeLibraryScanView: View {
     private func scanMetric(_ title: String, value: String, unit: String) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(title).font(.caption).foregroundStyle(.secondary)
-            Text(value).font(.title2.bold()).monospacedDigit()
+            Text(value).font(.display(22)).monospacedDigit().rollingNumber()
+                .animation(Motion.smooth, value: value)
             Text(unit).font(.caption).foregroundStyle(.secondary)
         }
         .accessibilityElement(children: .ignore)

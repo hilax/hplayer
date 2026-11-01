@@ -171,7 +171,7 @@ struct SettingsView: View {
 
     // MARK: 设置分组
 
-    private func group<Content: View>(_ title: String, @ViewBuilder _ content: () -> Content) -> some View {
+    private func group<Content: View>(_ title: String, @ViewBuilder _ content: @escaping () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             GroupLabel(title: title)
             DesignGroup { content() }

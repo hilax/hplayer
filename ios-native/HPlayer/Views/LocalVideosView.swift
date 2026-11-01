@@ -30,14 +30,15 @@ struct LocalVideosView: View {
                     Button { showImporter = true } label: {
                         LibraryActionRow(symbol: AppIcon.folder.name, title: "从「文件」导入", subtitle: "导入后，可直接在本机播放。")
                             .surfaceCard()
-                    }.buttonStyle(.plain).listRowBackground(Color.clear).listRowSeparator(.hidden)
-                    ForEach(localStore.files) { file in
+                    }.buttonStyle(.pressable(scale: 0.985)).listRowBackground(Color.clear).listRowSeparator(.hidden)
+                    ForEach(Array(localStore.files.enumerated()), id: \.element.id) { index, file in
                         Button {
                             play(file)
                         } label: {
                             LocalVideoRow(file: file, artwork: metadataStore.metadataByMediaID[LibraryMedia(local: file).id]?.posterURL ?? "")
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.pressable(scale: 0.98))
+                        .reveal(index)
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
                         .listRowInsets(EdgeInsets(top: 7, leading: 16, bottom: 7, trailing: 16))
@@ -124,11 +125,11 @@ private struct LocalVideoRow: View {
         HStack(spacing: 14) {
             ArtworkView(urlString: artwork, title: file.name)
                 .scaledToFill().frame(width: 56, height: 78).clipped()
-                .clipShape(RoundedRectangle(cornerRadius: 10)).allowsHitTesting(false)
+                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous)).allowsHitTesting(false)
 
             VStack(alignment: .leading, spacing: 5) {
                 Text(file.name)
-                    .font(.system(size: 16, weight: .medium))
+                    .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
@@ -139,7 +140,12 @@ private struct LocalVideoRow: View {
             }
 
             Spacer(minLength: 0)
-            Image(systemName: AppIcon.play.name).font(.title3).foregroundStyle(Theme.accent)
+            Image(systemName: AppIcon.play.name)
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(Theme.onPrimary)
+                .frame(width: 34, height: 34)
+                .background(Theme.gold, in: Circle())
+                .accessibilityHidden(true)
         }
         .contentShape(Rectangle())
     }

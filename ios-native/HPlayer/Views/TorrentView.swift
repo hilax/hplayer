@@ -307,22 +307,30 @@ private struct TorrentFolder: View {
     var body: some View {
         List {
             ForEach(files) { file in
-                if file.isDir {
-                    NavigationLink { TorrentFolder(cid: file.id, title: file.name, select: select) } label: {
-                        Label(file.name, systemImage: AppIcon.folder.name)
-                    }
-                } else {
-                    Button { select(file) } label: {
-                        HStack {
-                            Label(file.name, systemImage: AppIcon.file.name)
-                            Spacer()
-                            Text(formatSize(file.size)).font(.caption).foregroundStyle(.secondary)
+                Group {
+                    if file.isDir {
+                        NavigationLink { TorrentFolder(cid: file.id, title: file.name, select: select) } label: {
+                            HStack(spacing: 12) {
+                                IconTile(icon: .folder, size: 32)
+                                Text(file.name).font(.system(size: 14, weight: .medium)).lineLimit(2)
+                            }
                         }
+                    } else {
+                        Button { select(file) } label: {
+                            HStack(spacing: 12) {
+                                IconTile(icon: .torrentFile, size: 32)
+                                Text(file.name).font(.system(size: 14, weight: .medium)).lineLimit(2)
+                                Spacer(minLength: 8)
+                                Text(formatSize(file.size)).font(.caption).foregroundStyle(Theme.textSecondary)
+                            }
+                        }
+                        .buttonStyle(.pressable(scale: 0.98))
                     }
                 }
+                .listRowBackground(Theme.surface)
             }
             if loading { ProgressView() }
-            if !error.isEmpty { Text(error).foregroundStyle(.red) }
+            if !error.isEmpty { Text(error).foregroundStyle(Theme.danger) }
             if hasMore { Button("加载更多") { Task { await load() } }.disabled(loading) }
             if !loading && files.isEmpty && error.isEmpty && !hasMore { Text("此目录没有种子或文件夹").foregroundStyle(.secondary) }
         }

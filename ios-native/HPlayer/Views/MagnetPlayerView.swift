@@ -57,7 +57,7 @@ struct MagnetPlayerView: View {
             .padding(.horizontal, Theme.contentInset)
             .padding(.top, 8)
             .padding(.bottom, 40)
-            .animation(.easeOut(duration: 0.2), value: controller.phase)
+            .animation(Motion.smooth, value: controller.phase)
             .fullScreenCover(item: $controller.cloudQueue) { queue in
                 PlayerView(source: queue.source, playlist: queue.items)
                     .environmentObject(appState)
@@ -725,7 +725,7 @@ struct MagnetPlayerView: View {
         let rows = content()
         return VStack(alignment: .leading, spacing: 10) {
             Button {
-                withAnimation(.easeOut(duration: 0.2)) { expanded.wrappedValue.toggle() }
+                withAnimation(Motion.snappy) { expanded.wrappedValue.toggle() }
             } label: {
                 HStack {
                     Text(title)
@@ -848,7 +848,7 @@ struct MagnetPlayerView: View {
     private var tips: some View {
         VStack(alignment: .leading, spacing: 12) {
             Button {
-                withAnimation(.easeOut(duration: 0.2)) { showTips.toggle() }
+                withAnimation(Motion.snappy) { showTips.toggle() }
             } label: {
                 HStack(spacing: 10) {
                     Image(systemName: AppIcon.info.name)
