@@ -6,6 +6,14 @@ struct HPlayerApp: App {
     @StateObject private var appState = AppState()
     @AppStorage(AppearanceMode.storageKey) private var appearance: AppearanceMode = .system
 
+    init() {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["HPLAYER_RESET_AUTOMATCH_TEST"] == "1" {
+            UserDefaults.standard.removeObject(forKey: CoverMatchingSettings.automaticKey)
+        }
+        #endif
+    }
+
     var body: some Scene {
         WindowGroup {
             Group {
@@ -195,12 +203,6 @@ private enum WideJacketFixture {
 /// A real, idle scanner and empty stores let UI tests exercise the scan page
 /// without a 115 session or any network requests.
 private struct ScanUITestHost: View {
-    init() {
-        if ProcessInfo.processInfo.environment["HPLAYER_RESET_AUTOMATCH_TEST"] == "1" {
-            UserDefaults.standard.removeObject(forKey: CoverMatchingSettings.automaticKey)
-        }
-    }
-
     @StateObject private var scanner = CloudLibraryScanner()
     @StateObject private var metadata = MediaMetadataStore()
     @StateObject private var library = MediaLibraryStore()
