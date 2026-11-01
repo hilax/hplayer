@@ -60,6 +60,25 @@ final class CloudSearchStoreTests: XCTestCase {
         XCTAssertFalse(store.loading)
         XCTAssertEqual(store.error, "")
     }
+
+    func testAlreadyCancelledSearchCannotInvalidateTheCurrentRequest() async {
+        let gate = SearchResponseGate(), store = CloudSearchStore()
+        let current = Task { await store.search("current", lookup: gate.lookup) }
+        await gate.waitForRequest("current")
+        var lookedUp = false
+        let cancelled = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            await store.search("cancelled") { _ in lookedUp = true; return [] }
+        }
+        await cancelled.value
+        XCTAssertFalse(lookedUp)
+        XCTAssertTrue(store.loading)
+        await gate.finish("current", with: .success([file("current")]))
+        await current.value
+        XCTAssertEqual(store.searchedKeyword, "current")
+        XCTAssertEqual(store.results.map(\.id), ["current"])
+        XCTAssertFalse(store.loading)
+    }
 }
 
 private actor SearchResponseGate {

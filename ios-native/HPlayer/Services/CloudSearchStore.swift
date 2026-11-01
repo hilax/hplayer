@@ -22,6 +22,7 @@ final class CloudSearchStore: ObservableObject {
     }
 
     func search(_ query: String, lookup: (String) async throws -> [P115File]) async {
+        guard !Task.isCancelled else { return }
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { invalidate(clearResults: true); return }
         let current = UUID()
