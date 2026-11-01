@@ -41,7 +41,7 @@ final class HomeUITests: XCTestCase {
         settings.tap()
 
         app.buttons["settings.account.logout"].tap()
-        app.buttons["settings.account.confirmLogout"].tap()
+        app.buttons.matching(identifier: "settings.account.confirmLogout").firstMatch.tap()
         XCTAssertTrue(app.staticTexts["尚未登录 115"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.staticTexts["测试账号 1"].exists, "Signing out must hide the previous account")
         library.tap()

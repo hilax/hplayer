@@ -54,15 +54,22 @@ final class ScanPageUITests: XCTestCase {
         if !toggle.isHittable { app.swipeUp() }
         XCTAssertTrue(toggle.waitForExistence(timeout: 10))
         XCTAssertEqual(toggle.value as? String, "0")
-        setSwitch(toggle, enabled: true)
+        toggle.tap()
+        XCTAssertTrue(waitForSwitch(toggle, value: "1"))
         app.terminate()
         app.launchEnvironment.removeValue(forKey: "HPLAYER_RESET_AUTOMATCH_TEST")
         app.launch()
         if !toggle.isHittable { app.swipeUp() }
         XCTAssertTrue(toggle.waitForExistence(timeout: 10))
         XCTAssertEqual(toggle.value as? String, "1")
-        setSwitch(toggle, enabled: false)
+        toggle.tap()
+        XCTAssertTrue(waitForSwitch(toggle, value: "0"))
         app.terminate()
+    }
+
+    private func waitForSwitch(_ control: XCUIElement, value: String) -> Bool {
+        let predicate = NSPredicate { _, _ in control.value as? String == value }
+        return XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: nil)], timeout: 5) == .completed
     }
 
     private func setSwitch(_ control: XCUIElement, enabled: Bool) {
