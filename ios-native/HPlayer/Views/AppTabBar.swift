@@ -102,8 +102,8 @@ struct TabBarHost: View {
     }
 }
 
-/// 首页 / 片库 / 网盘 / 我的。悬浮的液态玻璃胶囊，选中的标签（图标 + 文字）整个落在一块
-/// 会滑动的玻璃滑块里；手指按住滑块可以左右拖到别的标签，松手后切换过去。
+/// 首页 / 片库 / 网盘 / 我的。悬浮的液态玻璃胶囊，用滑动的琥珀高光标示选中的标签。
+/// 手指可以左右拖到别的标签，松手后切换过去。
 struct AppTabBar: View {
     @Binding var selection: HomeSection
     @State private var dragX: CGFloat?
@@ -132,7 +132,7 @@ struct AppTabBar: View {
             let pillX = dragX.map { min(max($0 - itemWidth / 2, 0), width - itemWidth) } ?? CGFloat(selected) * itemWidth
 
             ZStack(alignment: .leading) {
-                TabGlassPill()
+                TabSelectionHighlight()
                     .frame(width: itemWidth, height: geo.size.height)
                     .offset(x: pillX)
                     .animation(reduceMotion || dragX != nil ? nil : Motion.snappy, value: pillX)
@@ -165,21 +165,26 @@ struct AppTabBar: View {
     }
 }
 
-/// 选中标签下面的玻璃滑块。
-private struct TabGlassPill: View {
+/// 选中标签的琥珀高光，与外壳共用一层玻璃，避免嵌套折射让材质发灰。
+private struct TabSelectionHighlight: View {
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
-        if #available(iOS 26.0, *) {
-            Capsule()
-                .fill(Color.clear)
-                .glassEffect(.regular.tint(Theme.accent.opacity(0.28)).interactive(), in: Capsule())
-                .padding(2)
-        } else {
-            Capsule()
-                .fill(Theme.accent.opacity(0.2))
-                .overlay(Capsule().stroke(Color.white.opacity(0.35), lineWidth: 0.6))
-                .shadow(color: Color.black.opacity(0.12), radius: 6, y: 2)
-                .padding(2)
-        }
+        Capsule()
+            .fill(Theme.accent.opacity(colorScheme == .dark ? 0.18 : 0.12))
+            .overlay {
+                Capsule().strokeBorder(
+                    LinearGradient(
+                        colors: [Theme.goldLight.opacity(0.32), Theme.accent.opacity(0.06), Theme.goldLight.opacity(0.18)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 0.6
+                )
+            }
+            .padding(2)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }
 

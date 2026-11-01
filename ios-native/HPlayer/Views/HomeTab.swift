@@ -332,10 +332,14 @@ struct HomeTab: View {
                 LinearGradient(
                     stops: [
                         .init(color: .black, location: 0),
+                        .init(color: .black.opacity(0.98), location: 0.125),
                         .init(color: .black.opacity(0.92), location: 0.25),
-                        .init(color: .black.opacity(0.62), location: 0.5),
-                        .init(color: .black.opacity(0.26), location: 0.75),
-                        .init(color: .black.opacity(0), location: 1),
+                        .init(color: .black.opacity(0.79), location: 0.375),
+                        .init(color: .black.opacity(0.61), location: 0.5),
+                        .init(color: .black.opacity(0.4), location: 0.625),
+                        .init(color: .black.opacity(0.2), location: 0.75),
+                        .init(color: .black.opacity(0.055), location: 0.875),
+                        .init(color: .clear, location: 1),
                     ],
                     startPoint: .top, endPoint: .bottom
                 )
@@ -797,13 +801,13 @@ private struct HomeSnapshotKey: Equatable {
 
 // MARK: - 横幅单页
 
-/// 精选横幅的一页：图片铺满圆角卡片，底部压一层深色渐变，片名和信息放在渐变上。
+/// 精选横幅的一页：下半部逐渐柔化，配合整张轮播末端的透明度融进页面底色。
 /// 卡片上的文字固定用白色，浅色和深色模式下都一样清楚。
 private struct HeroPage: View {
     let item: HomeMediaItem
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private static let scrim = Color(red: 11 / 255, green: 12 / 255, blue: 16 / 255)
+    private static let scrim = Theme.brandNight
 
     var body: some View {
         GeometryReader { geometry in
@@ -826,11 +830,17 @@ private struct HeroPage: View {
                 .frame(width: width, height: geometry.size.height)
                 .clipped()
 
+                softenedArtwork(size: geometry.size, pageX: pageX)
+
                 LinearGradient(
                     stops: [
                         .init(color: Self.scrim.opacity(0), location: 0.1),
-                        .init(color: Self.scrim.opacity(0.55), location: 0.55),
-                        .init(color: Self.scrim.opacity(0.94), location: 1),
+                        .init(color: Self.scrim.opacity(0.16), location: 0.3),
+                        .init(color: Self.scrim.opacity(0.43), location: 0.48),
+                        .init(color: Self.scrim.opacity(0.63), location: 0.62),
+                        .init(color: Self.scrim.opacity(0.78), location: 0.76),
+                        .init(color: Self.scrim.opacity(0.83), location: 0.9),
+                        .init(color: Self.scrim.opacity(0.84), location: 1),
                     ],
                     startPoint: .top,
                     endPoint: .bottom
@@ -846,6 +856,33 @@ private struct HeroPage: View {
             .clipped()
         }
         .background(Theme.surface)
+    }
+
+    /// 同一张图先失去细节再淡出；小尺寸模糊后放大，避免对每页做全尺寸模糊。
+    /// 裁切比例与视差偏移和清晰图保持一致，柔化时不会出现第二个轮廓。
+    private func softenedArtwork(size: CGSize, pageX: CGFloat) -> some View {
+        let width = max(size.width, 1)
+        return ArtworkView(urlString: HomeArtwork.heroURL(item), fallbackURLString: item.posterURL,
+                           title: "", maxPixel: ArtworkSize.backdrop, loading: .clear, drawsFallback: false)
+            .scaledToFill()
+            .frame(width: width * 1.4 / 4, height: size.height / 4)
+            .clipped()
+            .blur(radius: 7)
+            .scaleEffect(4)
+            .frame(width: width * 1.4, height: size.height)
+            .offset(x: -pageX * 0.2)
+            .frame(width: width, height: size.height)
+            .clipped()
+            .mask {
+                LinearGradient(stops: [
+                    .init(color: .clear, location: 0.55),
+                    .init(color: .black.opacity(0.08), location: 0.68),
+                    .init(color: .black.opacity(0.4), location: 0.8),
+                    .init(color: .black.opacity(0.84), location: 0.92),
+                    .init(color: .black, location: 1),
+                ], startPoint: .top, endPoint: .bottom)
+            }
+            .accessibilityHidden(true)
     }
 
     private var content: some View {

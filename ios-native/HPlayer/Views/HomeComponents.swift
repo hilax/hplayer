@@ -829,7 +829,7 @@ struct AmbientBackdrop: View {
                         .scaleEffect(8)
                         .frame(width: proxy.size.width, height: proxy.size.height)
                         .clipped()
-                        .saturation(1.4)
+                        .saturation(1.15)
                         .opacity(colorScheme == .dark ? 0.7 : 0.75)
                         .id(urlString)
                         .transition(.opacity)
@@ -839,7 +839,7 @@ struct AmbientBackdrop: View {
             .frame(width: proxy.size.width, height: proxy.size.height)
             .clipped()
         }
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.5), value: urlString)
+        .animation(reduceMotion ? nil : Motion.artworkFade, value: urlString)
         .ignoresSafeArea()
         .allowsHitTesting(false)
         .accessibilityHidden(true)
