@@ -8,12 +8,13 @@ struct SettingsTab: View {
 
 struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var accountInfo: P115AccountInfoStore
 
-    @State private var status: P115Status?
-    @State private var loadingStatus = false
-    @State private var error = ""
-    @State private var statusRequestID = UUID()
     @AppStorage(AppearanceMode.storageKey) private var appearance: AppearanceMode = .system
+
+    private var status: P115Status? { appState.isAuthenticated ? accountInfo.status(for: appState.sessionID) : nil }
+    private var loadingStatus: Bool { appState.isAuthenticated && accountInfo.isLoading(for: appState.sessionID) }
+    private var error: String { appState.isAuthenticated ? accountInfo.error(for: appState.sessionID) : "" }
 
     var body: some View {
         NavigationStack {
@@ -45,7 +46,6 @@ struct SettingsView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(.hidden, for: .navigationBar)
             .designScreen("settings")
-            .task(id: appState.sessionID) { await loadStatus() }
         }
     }
 
@@ -73,13 +73,13 @@ struct SettingsView: View {
                         }
                     }
                     Spacer(minLength: 0)
-                    if loadingStatus { ProgressView() }
+                    if loadingStatus && status == nil { ProgressView() }
                 }
                 .padding(16)
 
                 Divider().padding(.horizontal, 16)
                 NavigationLink {
-                    CookieWebLoginView(onConnected: { Task { await loadStatus() } })
+                    CookieWebLoginView(onConnected: {})
                         .toolbar(.visible, for: .navigationBar)
                 } label: {
                     settingsRow(title: appState.isAuthenticated ? "重新登录 115" : "登录 115",
@@ -92,8 +92,6 @@ struct SettingsView: View {
                     Divider().padding(.horizontal, 16)
                     Button(role: .destructive) {
                         appState.logout()
-                        status = nil
-                        error = ""
                     } label: {
                         settingsRow(title: "退出 115", systemImage: "rectangle.portrait.and.arrow.right", tint: .red, chevron: false)
                     }
@@ -176,7 +174,7 @@ struct SettingsView: View {
     private var accountState: (text: String, color: Color) {
         let idle = Color(uiColor: .systemGray3)
         guard appState.isAuthenticated else { return ("尚未登录 115", idle) }
-        if loadingStatus { return ("检查中", idle) }
+        if loadingStatus && status == nil { return ("检查中", idle) }
         if !error.isEmpty { return ("连接状态待确认", Theme.warning) }
         guard let status else { return ("已登录", idle) }
         if !status.configured { return (status.message ?? "等待授权", Theme.warning) }
@@ -191,33 +189,6 @@ struct SettingsView: View {
         return build.isEmpty ? version : "\(version)（\(build)）"
     }
 
-    private func loadStatus() async {
-        guard !InterfacePreview.active else { return }
-        let sessionID = appState.sessionID
-        let requestID = UUID()
-        statusRequestID = requestID
-        status = nil
-        error = ""
-        guard appState.isAuthenticated, let direct = appState.directClient() else {
-            status = nil
-            error = ""
-            loadingStatus = false
-            return
-        }
-        loadingStatus = true
-        defer {
-            if statusRequestID == requestID { loadingStatus = false }
-        }
-        do {
-            let loadedStatus = try await direct.user()
-            guard !Task.isCancelled, sessionID == appState.sessionID, requestID == statusRequestID else { return }
-            status = loadedStatus
-            error = ""
-        } catch {
-            guard !Task.isCancelled, sessionID == appState.sessionID, requestID == statusRequestID else { return }
-            self.error = error.localizedDescription
-        }
-    }
 }
 
 struct AppearanceSettingsView: View {

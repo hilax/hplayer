@@ -12,6 +12,8 @@ struct HPlayerApp: App {
                 #if DEBUG
                 if let screen = InterfacePreview.screen {
                     InterfaceCatalogHost(screen: screen)
+                } else if ProcessInfo.processInfo.environment["HPLAYER_ACCOUNT_TEST"] == "1" {
+                    AccountInfoUITestHost()
                 } else if let mode = ProcessInfo.processInfo.environment["HPLAYER_PERFORMER_TEST"] {
                     PerformerNavigationUITestHost(mode: mode)
                 } else if let style = ProcessInfo.processInfo.environment["HPLAYER_SCAN_TEST_STYLE"] {
@@ -38,6 +40,45 @@ struct HPlayerApp: App {
 }
 
 #if DEBUG
+/// The real tabs with a deterministic account service, independent of the user's 115 account.
+private struct AccountInfoUITestHost: View {
+    @StateObject private var account = AppState(cookieLoader: { "UID=123_fixture; CID=fixture" },
+                                                cookieValidator: { _ in }, cookieSaver: { _ in }, cookieRemover: {})
+    @StateObject private var info: P115AccountInfoStore
+
+    init() {
+        let service = AccountInfoUITestService()
+        _info = StateObject(wrappedValue: P115AccountInfoStore(
+            fetchStatus: { _ in try await service.status() },
+            fetchQuota: { _ in try await service.quota() }
+        ))
+    }
+
+    var body: some View {
+        HomeView(appState: account, accountInfo: info)
+            .environmentObject(account)
+    }
+}
+
+private actor AccountInfoUITestService {
+    private var statusCount = 0
+    private var quotaCount = 0
+
+    func status() async throws -> P115Status {
+        statusCount += 1
+        let count = statusCount
+        try await Task.sleep(nanoseconds: 600_000_000)
+        return P115Status(configured: true, userId: 123, userName: "测试账号 \(count)", vip: 1, error: nil, message: nil)
+    }
+
+    func quota() async throws -> QuotaResponse {
+        quotaCount += 1
+        let count = quotaCount
+        try await Task.sleep(nanoseconds: 800_000_000)
+        return QuotaResponse(usedText: "\(count) GB", totalText: "5 GB", usedBytes: count, totalBytes: 5)
+    }
+}
+
 /// mode：
 /// - 其他值（"1"）：文字卡片，只测导航本身。
 /// - "wide"：和首页「演员合集」一样的横版封面卡片（真实的 PosterArtwork 和 PosterButtonStyle）。

@@ -10,9 +10,10 @@ struct HomeView: View {
         await MetadataSearch.shared.performers(for: code, contentID: contentID)
     })
     @StateObject private var scanner = CloudLibraryScanner()
+    @StateObject private var accountInfo = P115AccountInfoStore()
     @State private var selection: HomeSection = .home
     @State private var restored = false
-    private let appState: AppState
+    @ObservedObject private var appState: AppState
 
     /// init 会在上层页面每次刷新时被重新调用，这里不做任何读盘或联网，
     /// 恢复工作放到 restoreOnce，只执行一次。
@@ -24,14 +25,16 @@ struct HomeView: View {
     init(appState: AppState, initialSection: HomeSection = .home,
          library: MediaLibraryStore? = nil, local: LocalMediaStore? = nil,
          metadata: MediaMetadataStore? = nil, recents: RecentStore? = nil,
+         accountInfo: P115AccountInfoStore? = nil,
          sourceStatus: P115Status? = nil, sourceQuota: QuotaResponse? = nil,
          initialSearch: String = "", searchFiles: [P115File] = []) {
-        self.appState = appState
+        _appState = ObservedObject(wrappedValue: appState)
         _selection = State(initialValue: initialSection)
         if let library { _mediaLibrary = StateObject(wrappedValue: library) }
         if let local { _localStore = StateObject(wrappedValue: local) }
         if let metadata { _metadataStore = StateObject(wrappedValue: metadata) }
         if let recents { _recents = StateObject(wrappedValue: recents) }
+        if let accountInfo { _accountInfo = StateObject(wrappedValue: accountInfo) }
         self.sourceStatus = sourceStatus; self.sourceQuota = sourceQuota
         self.initialSearch = initialSearch; self.searchFiles = searchFiles
     }
@@ -48,6 +51,13 @@ struct HomeView: View {
     var body: some View {
         tabs
             .onAppear(perform: restoreOnce)
+            .task(id: appState.sessionID) { await refreshAccountInfo() }
+            .onChange(of: selection) { section in
+                if section == .library || section == .settings { Task { await refreshAccountInfo() } }
+            }
+            .onChange(of: scenePhase) { phase in
+                if phase == .active { Task { await refreshAccountInfo() } }
+            }
             .task(id: syncInput) {
                 guard !InterfacePreview.active else { return }
                 if scanner.accountID != appState.libraryAccountID {
@@ -75,7 +85,16 @@ struct HomeView: View {
             .environmentObject(localStore)
             .environmentObject(metadataStore)
             .environmentObject(scanner)
+            .environmentObject(accountInfo)
             .tint(Theme.accent)
+    }
+
+    private func refreshAccountInfo() async {
+        if InterfacePreview.active {
+            accountInfo.seed(session: appState.sessionID, status: sourceStatus, quota: sourceQuota)
+            return
+        }
+        await accountInfo.refreshIfNeeded(session: appState.sessionID, client: appState.directClient())
     }
 
     private var libraryFiles: [LibraryMedia] {
@@ -99,7 +118,7 @@ struct HomeView: View {
                     HomeTab(onBrowseLibrary: { selection = .library })
                 }
                 Tab("资源库", systemImage: "square.stack.3d.up.fill", value: HomeSection.library) {
-                    LibraryTab(initialStatus: sourceStatus, initialQuota: sourceQuota)
+                    LibraryTab()
                 }
                 Tab("设置", systemImage: "gearshape.fill", value: HomeSection.settings) {
                     SettingsTab()
@@ -116,7 +135,7 @@ struct HomeView: View {
                         Label("首页", systemImage: "play.rectangle.on.rectangle.fill")
                     }
 
-                LibraryTab(initialStatus: sourceStatus, initialQuota: sourceQuota)
+                LibraryTab()
                     .tag(HomeSection.library)
                     .tabItem {
                         Label("资源库", systemImage: "square.stack.3d.up.fill")

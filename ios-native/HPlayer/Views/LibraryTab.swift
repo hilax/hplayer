@@ -3,21 +3,17 @@ import SwiftUI
 struct LibraryTab: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var localStore: LocalMediaStore
-    @State private var status: P115Status?
-    @State private var quota: QuotaResponse?
+    @EnvironmentObject private var accountInfo: P115AccountInfoStore
     @State private var path: [Crumb] = []
     @State private var playing: PlaybackQueue?
     @State private var showDirectLogin = false
     @State private var showManagement = false
     @State private var connecting = false
     @State private var connectionError = ""
-    @State private var loadRequestID = UUID()
     @State private var openRequestID = UUID()
 
-    init(initialStatus: P115Status? = nil, initialQuota: QuotaResponse? = nil) {
-        _status = State(initialValue: initialStatus)
-        _quota = State(initialValue: initialQuota)
-    }
+    private var status: P115Status? { appState.isAuthenticated ? accountInfo.status(for: appState.sessionID) : nil }
+    private var quota: QuotaResponse? { appState.isAuthenticated ? accountInfo.quota(for: appState.sessionID) : nil }
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -90,7 +86,6 @@ struct LibraryTab: View {
             Button("重新登录 115") { connectionError = ""; showDirectLogin = true }
             Button("关闭", role: .cancel) { connectionError = "" }
         } message: { Text(connectionError) }
-        .task(id: appState.sessionID) { await load() }
         .onChange(of: appState.sessionID) { _ in
             openRequestID = UUID()
             path = []; playing = nil
@@ -192,12 +187,14 @@ struct LibraryTab: View {
 
     private var syncText: String {
         guard appState.isAuthenticated else { return "未连接" }
+        if !accountInfo.error(for: appState.sessionID).isEmpty { return "状态待确认" }
         guard let status else { return "检查中" }
         return status.configured && status.error == nil ? "已连接" : "待授权"
     }
 
     private var statusColor: Color {
         guard appState.isAuthenticated else { return Color(uiColor: .systemGray3) }
+        if !accountInfo.error(for: appState.sessionID).isEmpty { return Theme.warning }
         guard let status else { return Color(uiColor: .systemGray3) }
         return status.configured && status.error == nil ? Theme.success : Theme.warning
     }
@@ -205,24 +202,6 @@ struct LibraryTab: View {
     private func quotaRatio(_ quota: QuotaResponse) -> Double {
         guard quota.totalBytes > 0 else { return 0 }
         return min(max(Double(quota.usedBytes) / Double(quota.totalBytes), 0), 1)
-    }
-
-    // MARK: 加载
-
-    private func load() async {
-        guard !InterfacePreview.active else { return }
-        let sessionID = appState.sessionID
-        let requestID = UUID()
-        loadRequestID = requestID
-        status = nil
-        quota = nil
-        guard appState.isAuthenticated, let direct = appState.directClient() else { return }
-        async let loadedStatus = try? direct.user()
-        async let loadedQuota = try? direct.quota()
-        let result = await (loadedStatus, loadedQuota)
-        guard !Task.isCancelled, sessionID == appState.sessionID, requestID == loadRequestID else { return }
-        status = result.0
-        quota = result.1
     }
 
     private func open115() async {
@@ -238,7 +217,7 @@ struct LibraryTab: View {
         do {
             let loadedStatus = try await direct.user()
             guard !Task.isCancelled, sessionID == appState.sessionID, requestID == openRequestID else { return }
-            status = loadedStatus
+            accountInfo.record(loadedStatus, for: sessionID)
             path.append(Crumb(cid: "0", name: "115 网盘"))
         } catch {
             guard !Task.isCancelled, sessionID == appState.sessionID, requestID == openRequestID else { return }
