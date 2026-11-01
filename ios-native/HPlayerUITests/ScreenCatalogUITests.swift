@@ -83,8 +83,7 @@ final class ScreenCatalogUITests: XCTestCase {
             }
         }
         if screen == "home-more" {
-            XCTAssertTrue(app.buttons["home.scrolledAdd"].waitForExistence(timeout: 5))
-            XCTAssertTrue(app.buttons["home.scrolledAdd"].isHittable, "Scrolled navigation must remain within the safe area")
+            XCTAssertTrue(app.staticTexts["home.shelf.movies"].firstMatch.waitForExistence(timeout: 5))
         }
         if screen == "add" { app.buttons["home.sources"].tap() }
         if screen == "film-menu" { app.buttons["影片选项"].tap() }

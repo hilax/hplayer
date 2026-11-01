@@ -95,10 +95,6 @@ struct HomeTab: View {
                 }
                 .scrollIndicators(.hidden)
                 .ignoresSafeArea(edges: .top)
-                .trackHomeShelfHeader(state: heroState, threshold: 150)
-            }
-            .overlay(alignment: .top) {
-                HomeScrolledBar(state: heroState, onSearch: onSearch, onAdd: { showAdd = true })
             }
             .overlay(alignment: .bottom) {
                 if localStore.isImporting {
@@ -279,16 +275,9 @@ struct HomeTab: View {
             }
             .frame(width: proxy.size.width, height: height + stretch)
             .offset(y: -stretch)
-            .preference(key: HeroMinYKey.self, value: minY)
         }
         .frame(height: height)
         .overlay(alignment: .topTrailing) { floatingButtons(continueItems).padding(.top, safeTop + 4) }
-        .onPreferenceChange(HeroMinYKey.self) { minY in
-            if #unavailable(iOS 18.0) {
-                let scrolled = minY < -150
-                if scrolled != heroState.scrolled { heroState.scrolled = scrolled }
-            }
-        }
     }
 
     private func floatingButton(_ icon: AppIcon) -> some View {
@@ -763,71 +752,6 @@ struct HomeTab: View {
 /// 否则每扫一页就把整个片库重新过一遍，界面会卡死。
 final class HeroState: ObservableObject {
     @Published var selection = 0
-    @Published var scrolled = false
-}
-
-private extension View {
-    @ViewBuilder
-    func trackHomeShelfHeader(state: HeroState, threshold: CGFloat) -> some View {
-        if #available(iOS 18.0, *) {
-            self.onScrollGeometryChange(for: Bool.self, of: { geometry in
-                geometry.contentOffset.y + geometry.contentInsets.top > threshold
-            }, action: { _, scrolled in state.scrolled = scrolled })
-        } else { self }
-    }
-}
-
-private struct HomeScrolledBar: View {
-    @ObservedObject var state: HeroState
-    let onSearch: () -> Void
-    let onAdd: () -> Void
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        Group { bar }
-            .animation(reduceMotion ? nil : Motion.snappy, value: state.scrolled)
-    }
-
-    @ViewBuilder
-    private var bar: some View {
-        if state.scrolled {
-            HStack(spacing: 8) {
-                Button(action: onSearch) {
-                    HStack(spacing: 8) {
-                        Image(systemName: AppIcon.search.name).font(.system(size: 14, weight: Theme.iconWeight))
-                        Text("你的片库").font(.system(size: 14, weight: .medium))
-                        Spacer(minLength: 0)
-                    }
-                    .foregroundStyle(Theme.textSecondary)
-                    .padding(.horizontal, 14)
-                    .frame(height: 36)
-                    .background(Theme.surface, in: Capsule())
-                    .contentShape(Capsule())
-                }
-                .buttonStyle(.pressable(scale: 0.98))
-                .accessibilityLabel("搜索")
-                .accessibilityIdentifier("home.scrolledSearch")
-                Button(action: onAdd) {
-                    Image(systemName: AppIcon.addCircle.name)
-                        .font(.system(size: 22, weight: Theme.iconWeight))
-                        .frame(width: 44, height: 44)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.pressable(scale: 0.88))
-                .accessibilityLabel("添加影片")
-                .accessibilityIdentifier("home.scrolledAdd")
-            }
-            .padding(.horizontal, Theme.contentInset).padding(.top, 2).padding(.bottom, 6)
-            .background { Rectangle().fill(.regularMaterial).ignoresSafeArea(edges: .top) }
-            .overlay(alignment: .bottom) { Rectangle().fill(Theme.hairline).frame(height: 0.5) }
-            .transition(.move(edge: .top).combined(with: .opacity))
-        }
-    }
-}
-
-private struct HeroMinYKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
 
 /// 只在横幅状态变化时重算自己的内容，父页面不订阅这个对象。
