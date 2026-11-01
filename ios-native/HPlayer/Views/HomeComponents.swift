@@ -621,9 +621,9 @@ struct PosterGridScreen<Item: Identifiable, Cell: View>: View {
                     alignment: .leading,
                     spacing: 22
                 ) {
-                    ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                    // 不做逐个浮现：整页进入时一起出现，避免第二行晚一拍才冒出来
+                    ForEach(items) { item in
                         cell(item, width)
-                            .reveal(index)
                     }
                 }
                 }
