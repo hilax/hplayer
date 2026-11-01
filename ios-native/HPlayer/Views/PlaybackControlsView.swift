@@ -1130,7 +1130,7 @@ struct PlaybackControlsView: View {
         revealControls()
         Task { @MainActor in
             let saved = await playback.screenshot()
-            showNotice(saved ? "截图已保存到相册" : "截图没有成功，请稍后再试")
+            showNotice(saved ? "截图已保存到相册" : "截图未保存，请检查相册权限或稍后重试")
         }
     }
     private func applyVolume(_ value: Double) {

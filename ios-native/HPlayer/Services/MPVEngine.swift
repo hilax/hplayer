@@ -27,10 +27,12 @@ final class MPVEngine {
 
     private(set) var handle: OpaquePointer?
     private let queue = DispatchQueue(label: "app.hplayer.mpv.events", qos: .userInitiated)
+    private let queueIdentity = DispatchSpecificKey<Bool>()
     /// 在主线程调用
     var onEvent: ((Event) -> Void)?
 
     init?(options: [(String, String)], layer: CAMetalLayer) {
+        queue.setSpecific(key: queueIdentity, value: true)
         guard let mpv = mpv_create() else { return nil }
         handle = mpv
         // 警告和错误留着，播放出问题时可以复制给开发者看
@@ -71,8 +73,11 @@ final class MPVEngine {
         guard let mpv = handle else { return }
         handle = nil
         mpv_set_wakeup_callback(mpv, nil, nil)
-        queue.sync {
+        // 最后一个引用可能由 drainEvents 的闭包释放；这时已经在事件队列上。
+        if DispatchQueue.getSpecific(key: queueIdentity) == true {
             mpv_terminate_destroy(mpv)
+        } else {
+            queue.sync { mpv_terminate_destroy(mpv) }
         }
     }
 

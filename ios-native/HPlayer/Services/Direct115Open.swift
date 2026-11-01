@@ -5,10 +5,19 @@ import Security
 /// 115 开放平台的手机端授权与云下载。敏感信息只保存在 Keychain。
 actor Direct115Open {
     static let shared = Direct115Open()
-    private let clientKey = "hplayer.open.clientId"
-    private let tokenKey = "hplayer.open.tokens"
+    typealias JSONTransport = (URLRequest, Bool) async throws -> [String: Any]
+    private let clientKey: String
+    private let tokenKey: String
+    private let transport: JSONTransport?
     private var pending: Pending?
     private var refreshTask: Task<TokenPair, Error>?
+    private var refreshRequestID = UUID()
+    private var pendingRequestID = UUID()
+    private var authorizationID = UUID()
+
+    init(clientKey: String = "hplayer.open.clientId", tokenKey: String = "hplayer.open.tokens", transport: JSONTransport? = nil) {
+        self.clientKey = clientKey; self.tokenKey = tokenKey; self.transport = transport
+    }
 
     private struct TokenPair: Codable {
         var access: String
@@ -42,9 +51,10 @@ actor Direct115Open {
         case ("POST", "/api/115/open/config"):
             let id = (payload["clientId"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             guard !id.isEmpty && id.count <= 200 else { throw APIError.server("请输入有效的 AppID") }
-            if Keychain.load(clientKey) != id { Keychain.delete(tokenKey) }
+            if Keychain.load(clientKey) != id { Keychain.delete(tokenKey); invalidateAuthorization() }
             Keychain.save(id, for: clientKey)
             pending = nil
+            pendingRequestID = UUID()
             result = ["ok": true]
         case ("POST", "/api/115/open/auth/start"):
             result = try await startAuth()
@@ -71,12 +81,18 @@ actor Direct115Open {
     }
 
     private func startAuth() async throws -> [String: Any] {
+        try Task.checkCancellation()
         guard let clientId = Keychain.load(clientKey), !clientId.isEmpty else { throw APIError.server("请先填写 AppID") }
+        let request = UUID()
+        pendingRequestID = request
+        pending = nil
         var random = [UInt8](repeating: 0, count: 32)
         guard SecRandomCopyBytes(kSecRandomDefault, random.count, &random) == errSecSuccess else { throw APIError.server("无法生成授权信息") }
         let verifier = Self.base64URL(Data(random))
         let challenge = Self.base64URL(Data(SHA256.hash(data: Data(verifier.utf8))))
-        let response = try await Self.formRequest("https://passportapi.115.com/open/authDeviceCode", fields: ["client_id": clientId, "code_challenge": challenge, "code_challenge_method": "sha256"])
+        let response = try await formRequest("https://passportapi.115.com/open/authDeviceCode", fields: ["client_id": clientId, "code_challenge": challenge, "code_challenge_method": "sha256"])
+        try Task.checkCancellation()
+        guard pendingRequestID == request, Keychain.load(clientKey) == clientId else { throw APIError.server("授权请求已变更，请重新开始") }
         let data = response["data"] as? [String: Any] ?? [:]
         let uid = Self.string(data["uid"]), time = Self.string(data["time"]), sign = Self.string(data["sign"]), qr = Self.string(data["qrcode"])
         guard !uid.isEmpty && !time.isEmpty && !sign.isEmpty && !qr.isEmpty else { throw APIError.server("115 未返回完整的扫码授权信息") }
@@ -85,16 +101,23 @@ actor Direct115Open {
     }
 
     private func pollAuth() async throws -> [String: Any] {
+        try Task.checkCancellation()
         guard let current = pending, Date() < current.expiry else { pending = nil; return ["status": "expired"] }
-        let response = try await Self.getJSON("https://qrcodeapi.115.com/get/status/", query: ["uid": current.uid, "time": current.time, "sign": current.sign], allowStateZero: true)
+        let request = pendingRequestID
+        let response = try await getJSON("https://qrcodeapi.115.com/get/status/", query: ["uid": current.uid, "time": current.time, "sign": current.sign], allowStateZero: true)
+        try Task.checkCancellation()
+        guard pendingRequestID == request, pending?.uid == current.uid else { throw APIError.server("授权请求已变更，请重新开始") }
         if Self.integer(response["state"]) == 0 { pending = nil; return ["status": "expired", "message": "二维码已失效"] }
         let status = Self.integer((response["data"] as? [String: Any])?["status"])
         if status == -1 || status == -2 { pending = nil; return ["status": "expired", "message": "二维码已失效或授权已取消"] }
         guard status == 2 else { return ["status": "pending", "message": status == 1 ? "已扫码，请在 115 中确认" : "等待扫码"] }
-        let responseToken = try await Self.formRequest("https://passportapi.115.com/open/deviceCodeToToken", fields: ["uid": current.uid, "code_verifier": current.verifier])
-        guard pending?.uid == current.uid else { throw APIError.server("授权请求已变更，请重新开始") }
+        let responseToken = try await formRequest("https://passportapi.115.com/open/deviceCodeToToken", fields: ["uid": current.uid, "code_verifier": current.verifier])
+        try Task.checkCancellation()
+        guard pendingRequestID == request, pending?.uid == current.uid else { throw APIError.server("授权请求已变更，请重新开始") }
         try saveTokens(Self.tokens(responseToken))
+        invalidateAuthorization()
         pending = nil
+        pendingRequestID = UUID()
         return ["status": "authorized"]
     }
 
@@ -115,23 +138,34 @@ actor Direct115Open {
     private func freshTokens(force: Bool = false) async throws -> TokenPair {
         guard let old = loadTokens() else { throw APIError.server("请先在 BT 云下载中完成 115 官方授权") }
         if !force && old.expiresAt.timeIntervalSinceNow > 60 { return old }
+        let session = authorizationID
         let task: Task<TokenPair, Error>
         if let existing = refreshTask { task = existing }
         else {
-            task = Task { try await Self.tokens(Self.formRequest("https://passportapi.115.com/open/refreshToken", fields: ["refresh_token": old.refresh])) }
+            task = Task { try await Self.tokens(self.formRequest("https://passportapi.115.com/open/refreshToken", fields: ["refresh_token": old.refresh])) }
+            refreshRequestID = UUID()
             refreshTask = task
         }
-        do {
-            let updated = try await task.value
-            if loadTokens()?.refresh == old.refresh { try saveTokens(updated) }
-            else if loadTokens()?.refresh != updated.refresh { throw APIError.server("授权已改变，请重试") }
-            refreshTask = nil
-            return updated
-        } catch { refreshTask = nil; throw error }
+        let request = refreshRequestID
+        defer { if refreshRequestID == request { refreshTask = nil } }
+        let updated = try await task.value
+        guard authorizationID == session else { throw APIError.server("授权已改变，请重试") }
+        if loadTokens()?.refresh == old.refresh { try saveTokens(updated) }
+        else if loadTokens()?.refresh != updated.refresh { throw APIError.server("授权已改变，请重试") }
+        return updated
     }
 
-    private func api(_ path: String, query: [String: String] = [:], fields: [String: String]? = nil, retried: Bool = false) async throws -> [String: Any] {
+    private func invalidateAuthorization() {
+        authorizationID = UUID()
+        refreshTask?.cancel(); refreshTask = nil; refreshRequestID = UUID()
+    }
+
+    private func api(_ path: String, query: [String: String] = [:], fields: [String: String]? = nil, retried: Bool = false, expectedAuthorizationID: UUID? = nil) async throws -> [String: Any] {
+        let session = expectedAuthorizationID ?? authorizationID
+        guard authorizationID == session else { throw APIError.server("授权已改变，请重试") }
         let token = try await freshTokens()
+        try Task.checkCancellation()
+        guard authorizationID == session else { throw APIError.server("授权已改变，请重试") }
         guard var components = URLComponents(string: "https://proapi.115.com\(path)") else { throw APIError.badURL }
         if !query.isEmpty { components.queryItems = query.map { URLQueryItem(name: $0.key, value: $0.value) } }
         guard let url = components.url else { throw APIError.badURL }
@@ -143,10 +177,17 @@ actor Direct115Open {
             request.httpMethod = "POST"; request.httpBody = form.data
             request.setValue("multipart/form-data; boundary=\(form.boundary)", forHTTPHeaderField: "Content-Type")
         }
-        do { return try await Self.json(request) }
+        do {
+            let result = try await jsonRequest(request)
+            try Task.checkCancellation()
+            guard authorizationID == session else { throw APIError.server("授权已改变，请重试") }
+            return result
+        }
         catch let error as OpenError where !retried && (error.code == 40140125 || error.code == 40140126) {
+            try Task.checkCancellation()
+            guard authorizationID == session else { throw APIError.server("授权已改变，请重试") }
             if loadTokens()?.access == token.access { _ = try await freshTokens(force: true) }
-            return try await api(path, query: query, fields: fields, retried: true)
+            return try await api(path, query: query, fields: fields, retried: true, expectedAuthorizationID: session)
         }
     }
 
@@ -187,24 +228,29 @@ actor Direct115Open {
     }
 
     private func upload(name: String, encoded: String) async throws -> [String: Any] {
+        let session = authorizationID
         guard name.lowercased().hasSuffix(".torrent"), name.count <= 255, !name.contains("/"), !name.contains("\\"), name.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }), let bytes = Data(base64Encoded: encoded), !bytes.isEmpty, bytes.count <= 4 * 1024 * 1024, bytes.first == 0x64, bytes.last == 0x65 else { throw APIError.server("种子文件无效或超过 4 MB") }
         let sha = Self.sha1(bytes)
         let fields = ["file_name": name, "file_size": String(bytes.count), "target": "U_1_0", "fileid": sha, "preid": Self.sha1(Data(bytes.prefix(128 * 1024))), "topupload": "0"]
-        var data = (try await api("/open/upload/init", fields: fields))["data"] as? [String: Any] ?? [:]
+        var data = (try await api("/open/upload/init", fields: fields, expectedAuthorizationID: session))["data"] as? [String: Any] ?? [:]
         if [700, 701, 702].contains(Self.integer(data["code"])) {
             let range = Self.string(data["sign_check"]).split(separator: "-")
             guard range.count == 2, let start = Int(range[0]), let end = Int(range[1]), start >= 0, end >= start, end < bytes.count, !Self.string(data["sign_key"]).isEmpty else { throw APIError.server("115 返回了无效的上传校验范围") }
             var signed = fields
             signed["sign_key"] = Self.string(data["sign_key"])
             signed["sign_val"] = Self.sha1(bytes.subdata(in: start..<(end + 1)))
-            data = (try await api("/open/upload/init", fields: signed))["data"] as? [String: Any] ?? [:]
+            data = (try await api("/open/upload/init", fields: signed, expectedAuthorizationID: session))["data"] as? [String: Any] ?? [:]
         }
         let status = Self.integer(data["status"])
         guard status == 1 || status == 2 else { throw APIError.server("115 未完成种子上传初始化") }
         var pick = Self.string(data["pick_code"])
         if status == 1 {
-            let token = (try await api("/open/upload/get_token"))["data"] as? [String: Any] ?? [:]
+            let token = (try await api("/open/upload/get_token", expectedAuthorizationID: session))["data"] as? [String: Any] ?? [:]
+            try Task.checkCancellation()
+            guard authorizationID == session else { throw APIError.server("授权已改变，请重试") }
             let response = try await Self.uploadObject(bytes, upload: data, token: token)
+            try Task.checkCancellation()
+            guard authorizationID == session else { throw APIError.server("授权已改变，请重试") }
             let content = response["data"] as? [String: Any] ?? [:]
             let returned = Self.string(content["pick_code"] ?? content["pickcode"] ?? response["pick_code"] ?? response["pickcode"])
             if !returned.isEmpty { pick = returned }
@@ -256,20 +302,24 @@ actor Direct115Open {
         data.append(Data("--\(boundary)--\r\n".utf8))
         return (data, boundary)
     }
-    private static func formRequest(_ url: String, fields: [String: String]) async throws -> [String: Any] {
+    private func formRequest(_ url: String, fields: [String: String]) async throws -> [String: Any] {
         guard let url = URL(string: url) else { throw APIError.badURL }
         var request = URLRequest(url: url); request.httpMethod = "POST"; request.timeoutInterval = 30
         let allowed = CharacterSet.urlQueryAllowed.subtracting(CharacterSet(charactersIn: "&=+?"))
         request.httpBody = Data(fields.map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: allowed) ?? "")" }.joined(separator: "&").utf8)
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        return try await json(request)
+        return try await jsonRequest(request)
     }
-    private static func getJSON(_ url: String, query: [String: String], allowStateZero: Bool = false) async throws -> [String: Any] {
+    private func getJSON(_ url: String, query: [String: String], allowStateZero: Bool = false) async throws -> [String: Any] {
         guard var components = URLComponents(string: url) else { throw APIError.badURL }
         components.queryItems = query.map { URLQueryItem(name: $0.key, value: $0.value) }
         guard let target = components.url else { throw APIError.badURL }
         var request = URLRequest(url: target); request.timeoutInterval = 30
-        return try await json(request, allowStateZero: allowStateZero)
+        return try await jsonRequest(request, allowStateZero: allowStateZero)
+    }
+    private func jsonRequest(_ request: URLRequest, allowStateZero: Bool = false) async throws -> [String: Any] {
+        if let transport { return try Self.checkedJSON(try await transport(request, allowStateZero), allowStateZero: allowStateZero) }
+        return try await Self.json(request, allowStateZero: allowStateZero)
     }
     private static func json(_ request: URLRequest, allowStateZero: Bool = false) async throws -> [String: Any] {
         let config = URLSessionConfiguration.ephemeral; config.httpShouldSetCookies = false
@@ -278,6 +328,9 @@ actor Direct115Open {
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw APIError.server("115 接口请求失败") }
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw APIError.server("115 返回数据无法识别") }
+        return try checkedJSON(json, allowStateZero: allowStateZero)
+    }
+    private static func checkedJSON(_ json: [String: Any], allowStateZero: Bool) throws -> [String: Any] {
         if (!allowStateZero && ((json["state"] as? Bool) == false || (json["state"] as? Int) == 0)) || (json["code"] != nil && integer(json["code"]) != 0) {
             let message = string(json["message"] ?? json["error"])
             throw OpenError(code: integer(json["code"]), message: message.isEmpty ? "115 接口请求失败，请检查应用权限" : message)

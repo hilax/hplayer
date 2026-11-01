@@ -2,6 +2,7 @@ import AVFoundation
 import Foundation
 import Libmpv
 import Network
+import Photos
 import SwiftUI
 import UIKit
 
@@ -623,13 +624,23 @@ final class PlaybackController: ObservableObject {
     /// 截一张当前画面，存进相册；返回是否成功
     func screenshot() async -> Bool {
         guard let engine, loaded else { return false }
-        let path = FileManager.default.temporaryDirectory.appendingPathComponent("hplayer-shot-\(UUID().uuidString).jpg").path
-        guard engine.command(["screenshot-to-file", path, "video"]) >= 0 else { return false }
+        let authorization = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
+        guard authorization == .authorized || authorization == .limited,
+              !Task.isCancelled, loaded, self.engine === engine else { return false }
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("hplayer-shot-\(UUID().uuidString).jpg")
+        defer { try? FileManager.default.removeItem(at: file) }
+        guard engine.command(["screenshot-to-file", file.path, "video"]) >= 0 else { return false }
         for _ in 0..<20 {
-            if FileManager.default.fileExists(atPath: path), let image = UIImage(contentsOfFile: path) {
-                UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil)
-                try? FileManager.default.removeItem(atPath: path)
-                return true
+            guard !Task.isCancelled else { return false }
+            if let image = UIImage(contentsOfFile: file.path) {
+                do {
+                    try await PHPhotoLibrary.shared().performChanges {
+                        PHAssetChangeRequest.creationRequestForAsset(from: image)
+                    }
+                    return true
+                } catch {
+                    return false
+                }
             }
             try? await Task.sleep(nanoseconds: 100_000_000)
         }

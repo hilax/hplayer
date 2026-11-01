@@ -193,6 +193,76 @@ final class MediaMetadataStoreTests: XCTestCase {
         XCTAssertEqual(store.metadataByMediaID[file.id]?.manual, true)
     }
 
+    func testConcurrentWorkerDoesNotConsumeAnotherWorkersQueuedRetry() async throws {
+        let (defaults, suite) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let lookup = MetadataParallelRetryStub(response: seriesMetadata())
+        let store = MediaMetadataStore(defaults: defaults, concurrency: 2, lookup: { parsed in
+            await lookup.lookup(parsed.title)
+        })
+        let first = cloud(name: "凡人修仙传.S01E02.mkv", pickCode: "parallel-first")
+        let second = LibraryMedia(cloud: P115File(id: "parallel-second", parentId: "0", name: "Other.Movie.mkv",
+            isDir: false, kind: "video", size: 500, pickCode: "parallel-second",
+            sha1: String(repeating: "b", count: 40), updatedAt: "", thumbUrl: ""))
+        let firstTitle = MediaNameParser.parse(first.name).title
+        let secondTitle = MediaNameParser.parse(second.name).title
+        store.sync(files: [first, second])
+        for _ in 0..<200 {
+            if await lookup.calls.count == 2 { break }
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        let initialCalls = await lookup.calls
+        XCTAssertEqual(initialCalls[firstTitle], 1)
+        XCTAssertEqual(initialCalls[secondTitle], 1)
+        store.retryFailed(files: [first, second])
+
+        // 第二个请求先失败，其线程会遇到仍在请求中的第一个片名。
+        await lookup.release(secondTitle)
+        for _ in 0..<200 {
+            if await lookup.active[secondTitle] == nil { break }
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        // 让已恢复的第二个工作线程走完 resolve 后的 Task.yield，再放行第一个请求。
+        for _ in 0..<20 { await Task.yield() }
+        await lookup.release(firstTitle)
+        try await waitForScan(store)
+        let finalCalls = await lookup.calls
+        XCTAssertEqual(finalCalls[firstTitle], 2, "Another worker must not discard this explicit retry while the first request is still running")
+        XCTAssertEqual(finalCalls[secondTitle], 2)
+        XCTAssertNotNil(store.metadataByMediaID[first.id])
+        XCTAssertNotNil(store.metadataByMediaID[second.id])
+    }
+
+    func testUnmatchRemovesAnAutomaticResultWaitingForBatchPublication() async throws {
+        let (defaults, suite) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let lookup = MetadataLookupStub(responses: [seriesMetadata(), seriesMetadata()], pauseAtCall: 2)
+        let store = MediaMetadataStore(defaults: defaults, lookup: { _ in await lookup.lookup() })
+        let first = cloud(name: "凡人修仙传.S01E02.mkv", pickCode: "buffered")
+        let second = LibraryMedia(cloud: P115File(id: "other", parentId: "0", name: "Other.Movie.mkv",
+            isDir: false, kind: "video", size: 500, pickCode: "other",
+            sha1: String(repeating: "b", count: 40), updatedAt: "", thumbUrl: ""))
+        store.sync(files: [first, second])
+        for _ in 0..<200 {
+            if await lookup.calls >= 2 { break }
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        let calls = await lookup.calls
+        XCTAssertEqual(calls, 2)
+        XCTAssertNil(store.metadataByMediaID[first.id], "The first result should still be waiting for batch publication")
+
+        // 用户在扫描其他文件时手动选择资料，再取消匹配，旧的待发布结果不能把封面恢复。
+        await store.match(seriesMetadata(), to: first)
+        await store.unmatch(first)
+        await lookup.releaseFirst()
+        try await waitForScan(store)
+        XCTAssertNil(store.metadataByMediaID[first.id])
+        XCTAssertNotNil(store.metadataByMediaID[second.id])
+        let restored = MediaMetadataStore(defaults: defaults, lookup: { _ in XCTFail("Ignored media must stay unmatched"); return nil })
+        restored.hydrate(files: [first])
+        XCTAssertNil(restored.metadataByMediaID[first.id])
+    }
+
     func testAutomaticResultWithoutUsablePosterCanBeRetried() async throws {
         let (defaults, suite) = makeDefaults()
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -572,14 +642,16 @@ private actor PerformerLookupStub {
 private actor MetadataLookupStub {
     private var responses: [MediaMetadata?]
     private let pauseFirst: Bool
+    private let pauseAtCall: Int?
     private var continuation: CheckedContinuation<Void, Never>?
     private(set) var active = 0
     private(set) var calls = 0
     private(set) var maximumConcurrent = 0
 
-    init(responses: [MediaMetadata?], pauseFirst: Bool = false) {
+    init(responses: [MediaMetadata?], pauseFirst: Bool = false, pauseAtCall: Int? = nil) {
         self.responses = responses
         self.pauseFirst = pauseFirst
+        self.pauseAtCall = pauseAtCall
     }
 
     func lookup() async -> MediaMetadata? {
@@ -587,7 +659,7 @@ private actor MetadataLookupStub {
         active += 1
         maximumConcurrent = max(maximumConcurrent, active)
         defer { active -= 1 }
-        if pauseFirst && calls == 1 {
+        if (pauseFirst && calls == 1) || calls == pauseAtCall {
             await withCheckedContinuation { continuation = $0 }
         }
         return responses.isEmpty ? nil : responses.removeFirst()
@@ -596,5 +668,27 @@ private actor MetadataLookupStub {
     func releaseFirst() {
         continuation?.resume()
         continuation = nil
+    }
+}
+
+private actor MetadataParallelRetryStub {
+    private let response: MediaMetadata
+    private var continuations: [String: CheckedContinuation<Void, Never>] = [:]
+    private(set) var calls: [String: Int] = [:]
+    private(set) var active: [String: Bool] = [:]
+
+    init(response: MediaMetadata) { self.response = response }
+
+    func lookup(_ title: String) async -> MediaMetadata? {
+        calls[title, default: 0] += 1
+        let call = calls[title]!
+        active[title] = true
+        defer { active.removeValue(forKey: title) }
+        if call == 1 { await withCheckedContinuation { continuations[title] = $0 } }
+        return call == 1 ? nil : response
+    }
+
+    func release(_ title: String) {
+        continuations.removeValue(forKey: title)?.resume()
     }
 }

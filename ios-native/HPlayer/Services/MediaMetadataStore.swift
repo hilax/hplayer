@@ -209,8 +209,11 @@ final class MediaMetadataStore: ObservableObject {
     private func matchWorker(_ generation: Int) async {
         while isCurrent(generation), pendingIndex < pendingKeys.count {
             let key = pendingKeys[pendingIndex]
+            // sync/retry 会重新排队。若这个片名还在请求中，保留队列位置，
+            // 由持有该请求的工作线程结束后继续，不能让其他线程把重试跳过。
+            guard !inFlightKeys.contains(key) else { return }
             pendingIndex += 1
-            guard !inFlightKeys.contains(key), let files = pendingGroups.removeValue(forKey: key) else { continue }
+            guard let files = pendingGroups.removeValue(forKey: key) else { continue }
             inFlightKeys.insert(key)
             for file in files {
                 guard isCurrent(generation), metadataByMediaID[file.id] == nil else { break }
@@ -479,6 +482,8 @@ final class MediaMetadataStore: ObservableObject {
     }
 
     func match(_ metadata: MediaMetadata, to file: LibraryMedia) async {
+        // 自动匹配可能已完成但尚未批量发布，用户的新选择必须同时覆盖待发布结果。
+        bufferedResults.removeValue(forKey: file.id)
         var value = metadata
         value.matchedByHash = false
         value.manual = true
@@ -506,6 +511,7 @@ final class MediaMetadataStore: ObservableObject {
 
     /// 取消匹配：去掉封面和资料，以后也不再自动识别这个片名，可以随时重新手动匹配
     func unmatch(_ file: LibraryMedia) async {
+        bufferedResults.removeValue(forKey: file.id)
         let key = titleKey(file.name)
         metadataByMediaID.removeValue(forKey: file.id)
         titleCache.removeValue(forKey: key)
