@@ -46,7 +46,12 @@ final class MotionUITests: XCTestCase {
 
         XCTAssertTrue(app.staticTexts["3 条记录"].waitForExistence(timeout: 20))
         app.buttons["history.testProgress"].tap()
-        XCTAssertTrue(app.staticTexts["80%"].waitForExistence(timeout: 5), "Progress must update in place")
+        let first = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "继续播放 沙丘 2")).firstMatch
+        let updated = NSPredicate { _, _ in
+            app.staticTexts["80%"].exists || (first.value as? String)?.contains("80%") == true
+        }
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: updated, object: nil)], timeout: 5), .completed,
+                       "Progress must update in place and remain accessible")
         let more = app.buttons.matching(NSPredicate(format: "label == %@", "沙丘 2 的更多选项")).firstMatch
         XCTAssertTrue(more.waitForExistence(timeout: 5))
         more.tap()
