@@ -102,29 +102,84 @@ struct TabBarHost: View {
     }
 }
 
-/// 首页 / 片库 / 网盘 / 我的。选中的标签：图标换成实心款并弹一下，
-/// 金色底座在标签之间滑动，文字变金色。
+/// 首页 / 片库 / 网盘 / 我的。悬浮的液态玻璃胶囊，选中的标签（图标 + 文字）整个落在一块
+/// 会滑动的玻璃滑块里；手指按住滑块可以左右拖到别的标签，松手后切换过去。
 struct AppTabBar: View {
     @Binding var selection: HomeSection
-    @Namespace private var indicator
+    @State private var dragX: CGFloat?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    private let tabs = HomeSection.tabs
+    private let barHeight: CGFloat = 60
+
+    private func index(at x: CGFloat, width: CGFloat) -> Int {
+        let item = width / CGFloat(tabs.count)
+        return min(max(Int(x / max(item, 1)), 0), tabs.count - 1)
+    }
+
+    private func choose(_ section: HomeSection) {
+        guard selection != section else { return }
+        Haptics.select()
+        withAnimation(reduceMotion ? nil : Motion.snappy) { selection = section }
+    }
+
     var body: some View {
-        HStack(spacing: 0) {
-            ForEach(HomeSection.tabs, id: \.self) { section in
-                TabBarButton(section: section, selected: selection == section, namespace: indicator) {
-                    guard selection != section else { return }
-                    Haptics.select()
-                    withAnimation(reduceMotion ? nil : Motion.snappy) { selection = section }
+        GeometryReader { geo in
+            let width = geo.size.width
+            let itemWidth = width / CGFloat(tabs.count)
+            let selected = tabs.firstIndex(of: selection) ?? 0
+            let highlight = dragX.map { index(at: $0, width: width) } ?? selected
+            let pillX = dragX.map { min(max($0 - itemWidth / 2, 0), width - itemWidth) } ?? CGFloat(selected) * itemWidth
+
+            ZStack(alignment: .leading) {
+                TabGlassPill()
+                    .frame(width: itemWidth, height: geo.size.height)
+                    .offset(x: pillX)
+                    .animation(reduceMotion || dragX != nil ? nil : Motion.snappy, value: pillX)
+
+                HStack(spacing: 0) {
+                    ForEach(Array(tabs.enumerated()), id: \.element) { position, section in
+                        TabBarButton(section: section, selected: position == highlight) { choose(section) }
+                    }
                 }
             }
+            .onChange(of: highlight) { _ in
+                if dragX != nil { Haptics.select() }
+            }
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 10)
+                    .onChanged { value in dragX = min(max(value.location.x, 0), width) }
+                    .onEnded { value in
+                        let target = tabs[index(at: value.location.x, width: width)]
+                        dragX = nil
+                        choose(target)
+                    }
+            )
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
+        .frame(height: barHeight)
+        .padding(4)
         .liquidGlass(in: Capsule(), interactive: true)
         .padding(.horizontal, 22)
         .padding(.top, 4)
         .padding(.bottom, 4)
+    }
+}
+
+/// 选中标签下面的玻璃滑块。
+private struct TabGlassPill: View {
+    var body: some View {
+        if #available(iOS 26.0, *) {
+            Capsule()
+                .fill(Color.clear)
+                .glassEffect(.regular.tint(Theme.accent.opacity(0.28)).interactive(), in: Capsule())
+                .padding(2)
+        } else {
+            Capsule()
+                .fill(Theme.accent.opacity(0.2))
+                .overlay(Capsule().stroke(Color.white.opacity(0.35), lineWidth: 0.6))
+                .shadow(color: Color.black.opacity(0.12), radius: 6, y: 2)
+                .padding(2)
+        }
     }
 }
 
@@ -153,32 +208,23 @@ extension View {
 private struct TabBarButton: View {
     let section: HomeSection
     let selected: Bool
-    let namespace: Namespace.ID
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            VStack(spacing: 2) {
-                ZStack {
-                    if selected {
-                        Capsule()
-                            .fill(Theme.accent.opacity(0.2))
-                            .frame(width: 58, height: 32)
-                            .matchedGeometryEffect(id: "tab.indicator", in: namespace)
-                    }
-                    Image(systemName: selected ? section.icon.activeName : section.icon.name)
-                        .font(.system(size: 19, weight: selected ? .semibold : .regular))
-                        .bounceSymbol(on: selected)
-                }
-                .frame(height: 30)
+            VStack(spacing: 3) {
+                Image(systemName: selected ? section.icon.activeName : section.icon.name)
+                    .font(.system(size: 21, weight: selected ? .semibold : .regular))
+                    .bounceSymbol(on: selected)
+                    .frame(height: 24)
                 Text(section.title)
-                    .font(.system(size: 10, weight: selected ? .semibold : .regular))
+                    .font(.system(size: 10, weight: selected ? .semibold : .medium))
             }
-            .foregroundStyle(selected ? Theme.accent : Theme.textTertiary)
-            .frame(maxWidth: .infinity, minHeight: 46)
+            .foregroundStyle(selected ? Theme.accent : Theme.textSecondary)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.pressable(scale: 0.9))
+        .buttonStyle(.pressable(scale: 0.94))
         .accessibilityLabel(section.title)
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityIdentifier(section.identifier)
