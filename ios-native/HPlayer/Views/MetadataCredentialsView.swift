@@ -17,14 +17,14 @@ struct MetadataCredentialsView: View {
     var body: some View {
         DesignPage(eyebrow: "Optional credentials", title: "资料接口凭证", subtitle: "按需开启更丰富的影片资料。") {
             VStack(alignment: .leading, spacing: 17) {
-                Label("TMDB", systemImage: "key").font(.headline)
+                Label("TMDB", systemImage: AppIcon.key.name).font(.headline)
                 DesignField(label: "API Key / API 读访问令牌", placeholder: "输入 TMDB 凭证", text: $tmdb, secure: true)
                     .focused($focusedField, equals: .tmdb)
                     .accessibilityIdentifier("credentials.tmdb")
                 DesignNotice(text: "用于获取影片资料与中文海报。留空时继续使用番组计划和 IMDb。")
             }.padding(18).surfaceCard()
             VStack(alignment: .leading, spacing: 17) {
-                Label("FANZA（DMM）", systemImage: "key").font(.headline)
+                Label("FANZA（DMM）", systemImage: AppIcon.key.name).font(.headline)
                 DesignField(label: "API ID", placeholder: "DMM Web API ID", text: $apiID, secure: true)
                     .focused($focusedField, equals: .api)
                     .accessibilityIdentifier("credentials.dmm.api")
@@ -42,7 +42,7 @@ struct MetadataCredentialsView: View {
             .accessibilityIdentifier("credentials.save")
             Button("删除已保存的凭证", role: .destructive) { deleting = true }
                 .font(.subheadline).frame(maxWidth: .infinity, minHeight: 44)
-            DesignNotice(symbol: "lock.shield", text: "凭证仅保存在本机钥匙串，不上传到 HPlayer 或 115。")
+            DesignNotice(symbol: AppIcon.privacy.name, text: "凭证仅保存在本机钥匙串，不上传到 HPlayer 或 115。")
         }
         .navigationTitle("资料接口凭证")
         .toolbar {

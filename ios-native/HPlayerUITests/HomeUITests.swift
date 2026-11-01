@@ -9,8 +9,8 @@ final class HomeUITests: XCTestCase {
         app.launch()
         defer { app.terminate() }
 
-        let library = app.tabBars.buttons["资源库"]
-        let settings = app.tabBars.buttons["设置"]
+        let library = app.buttons["tab.cloud"]
+        let settings = app.buttons["tab.mine"]
         XCTAssertTrue(library.waitForExistence(timeout: 20))
         library.tap()
         let account = app.buttons["library.account"]
@@ -87,7 +87,7 @@ final class HomeUITests: XCTestCase {
         XCTAssertFalse(app.otherElements["home.emptyLibrary"].exists, "A saved library must not render the empty onboarding state")
         XCTAssertFalse(app.buttons["home.scanStatus"].exists, "Home never shows scan or matching maintenance")
         XCTAssertFalse(app.otherElements["home.matchingState"].exists)
-        app.tabBars.buttons["资源库"].tap()
+        app.buttons["tab.cloud"].tap()
         let manage = app.buttons["library.manage"]
         if !manage.isHittable { app.swipeUp() }
         XCTAssertTrue(manage.waitForExistence(timeout: 5))

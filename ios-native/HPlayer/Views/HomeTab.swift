@@ -4,6 +4,8 @@ import UniformTypeIdentifiers
 
 struct HomeTab: View {
     var onBrowseLibrary: () -> Void = {}
+    var onSearch: () -> Void = {}
+    var onOpenCatalog: (CatalogKind, CatalogSort) -> Void = { _, _ in }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Namespace private var seriesTransition
     @EnvironmentObject private var recents: RecentStore
@@ -62,7 +64,7 @@ struct HomeTab: View {
         ImagePipeline.shared.prefetch(HomeArtwork.prefetchRequests(library, selection: heroState.selection))
     }
 
-    private let heroHeight: CGFloat = 500
+    private let heroHeight: CGFloat = 214
 
     private var libraryFiles: [LibraryMedia] {
         HomeLibrary.media(local: localStore, cloud: mediaLibrary, appState: appState)
@@ -73,35 +75,31 @@ struct HomeTab: View {
         let continueItems = continueEntries(library)
 
         NavigationStack {
-            GeometryReader { outer in
-                let topInset = outer.safeAreaInsets.top
-                GeometryReader { viewport in
-                    let viewportTop = viewport.frame(in: .global).minY
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 0) {
-                            if library.featured.isEmpty {
-                                emptyHeader(topInset: topInset)
-                                VStack(alignment: .leading, spacing: 28) {
-                                    emptyState
-                                    if !continueItems.isEmpty {
-                                        continueShelf(continueItems)
-                                    }
+            GeometryReader { viewport in
+                let viewportTop = viewport.frame(in: .global).minY
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        topBar(continueItems)
+                        if library.featured.isEmpty {
+                            VStack(alignment: .leading, spacing: 28) {
+                                emptyState
+                                if !continueItems.isEmpty {
+                                    continueShelf(continueItems)
                                 }
-                                .padding(.horizontal, Theme.contentInset)
-                                .padding(.bottom, 40)
-                            } else {
-                                hero(library, topInset: topInset, viewportTop: viewportTop)
-                                sections(library, continueItems: continueItems)
                             }
+                            .padding(.bottom, 40)
+                        } else {
+                            categoryNav
+                            heroCard(library, viewportTop: viewportTop)
+                            sections(library, continueItems: continueItems)
                         }
                     }
-                    .scrollIndicators(.hidden)
-                    .trackHomeShelfHeader(state: heroState, threshold: heroHeight - 90)
                 }
-                .ignoresSafeArea(edges: .top)
+                .scrollIndicators(.hidden)
+                .trackHomeShelfHeader(state: heroState, threshold: 60)
             }
             .overlay(alignment: .top) {
-                HomeScrolledBar(state: heroState, onAdd: { showAdd = true })
+                HomeScrolledBar(state: heroState, onSearch: onSearch, onAdd: { showAdd = true })
             }
             .overlay(alignment: .bottom) {
                 if localStore.isImporting {
@@ -124,7 +122,7 @@ struct HomeTab: View {
                         .id(route.id)
                 } else {
                     VStack(spacing: 10) {
-                        Image(systemName: "person.2")
+                        Image(systemName: AppIcon.people.name)
                         Text("演员合集已更新").font(.headline)
                         Text("返回首页后重新进入演员合集。").foregroundStyle(.secondary)
                     }
@@ -216,6 +214,75 @@ struct HomeTab: View {
         }
     }
 
+    // MARK: 顶栏与分类
+
+    /// 搜索框、观看历史、添加：三个入口放在同一行，搜索框占满剩余宽度。
+    private func topBar(_ continueItems: [ContinueEntry]) -> some View {
+        HStack(spacing: 4) {
+            Button(action: onSearch) {
+                HStack(spacing: 8) {
+                    Image(systemName: AppIcon.search.name).font(.system(size: 15, weight: Theme.iconWeight))
+                    Text("搜索片名、演员或番号").font(.system(size: 14))
+                    Spacer(minLength: 0)
+                }
+                .foregroundStyle(Theme.textTertiary)
+                .padding(.horizontal, 14)
+                .frame(height: 38)
+                .background(Theme.surface, in: Capsule())
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.pressable(scale: 0.98))
+            .accessibilityLabel("搜索")
+            .accessibilityIdentifier("home.search")
+
+            NavigationLink {
+                ContinueHistoryView(entries: continueItems, onOpen: openEntry, onRemove: remove)
+            } label: {
+                Image(systemName: AppIcon.history.name)
+                    .font(.system(size: 21, weight: Theme.iconWeight))
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.pressable(scale: 0.88))
+            .accessibilityLabel("观看历史")
+            .accessibilityIdentifier("home.history")
+
+            addMenu
+        }
+        .padding(.horizontal, Theme.contentInset)
+        .padding(.top, 6)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("home.heroBar")
+    }
+
+    /// 推荐（当前页）和几个分类入口；分类跳到片库并带上对应的筛选。
+    private var categoryNav: some View {
+        ScrollView(.horizontal) {
+            HStack(alignment: .bottom, spacing: 22) {
+                VStack(spacing: 5) {
+                    Text("推荐").font(.system(size: 19, weight: .bold))
+                    Capsule().fill(Theme.gold).frame(width: 16, height: 3)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.isSelected)
+                ForEach(HomeCategory.all) { item in
+                    Button { onOpenCatalog(item.kind, item.sort) } label: {
+                        Text(item.title)
+                            .font(.system(size: 15))
+                            .foregroundStyle(Theme.textSecondary)
+                            .frame(minHeight: 34, alignment: .bottom)
+                            .padding(.bottom, 2)
+                    }
+                    .buttonStyle(.pressable(scale: 0.92))
+                    .accessibilityIdentifier("home.category.\(item.id)")
+                }
+            }
+            .padding(.horizontal, Theme.contentInset)
+            .padding(.top, 8)
+        }
+        .scrollIndicators(.hidden)
+    }
+
     // MARK: 精选横幅
 
     private func currentHero(_ library: HomeSnapshot, selection: Int) -> HomeMediaItem? {
@@ -223,92 +290,80 @@ struct HomeTab: View {
         return featured.indices.contains(selection) ? featured[selection] : featured.first
     }
 
-    /// 直接用横幅与滚动视口的位置计算拉伸，避免下拉时顶部露出空白。
-    private func hero(_ library: HomeSnapshot, topInset: CGFloat, viewportTop: CGFloat) -> some View {
+    /// 圆角横幅卡片。滚动位置通过偏好值上报，用来决定是否显示吸顶的搜索栏（iOS 18 以下）。
+    private func heroCard(_ library: HomeSnapshot, viewportTop: CGFloat) -> some View {
         GeometryReader { proxy in
             let minY = proxy.frame(in: .global).minY - viewportTop
-            let stretch = max(minY, 0)
             HeroObserver(state: heroState) { state in
-                heroPager(library, topInset: topInset, selection: state.selection)
-                    .frame(width: proxy.size.width, height: heroHeight + stretch, alignment: .top)
-                    .offset(y: -stretch)
+                heroPager(library, selection: state.selection)
             }
-            .frame(width: proxy.size.width, height: heroHeight, alignment: .top)
+            .frame(width: proxy.size.width, height: heroHeight)
             .preference(key: HeroMinYKey.self, value: minY)
         }
         .frame(height: heroHeight)
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
+        .padding(.horizontal, Theme.contentInset)
+        .padding(.top, 12)
         .onPreferenceChange(HeroMinYKey.self) { minY in
             if #unavailable(iOS 18.0) {
-                let scrolled = minY < -heroHeight + 90
+                let scrolled = minY < 40
                 if scrolled != heroState.scrolled { heroState.scrolled = scrolled }
             }
         }
     }
 
-    /// 翻页时只有图片和片名跟着滑，播放和换封面两个按钮固定在原处，作用于当前这一页
-    private func heroPager(_ library: HomeSnapshot, topInset: CGFloat, selection: Int) -> some View {
+    /// 翻页时只有图片和片名跟着滑，播放和更多两个按钮固定在原处，作用于当前这一页
+    private func heroPager(_ library: HomeSnapshot, selection: Int) -> some View {
         let featured = library.featured
         let current = currentHero(library, selection: selection)
-        let bottomInset: CGFloat = featured.count > 1 ? 34 : 8
         let binding = Binding<Int>(get: { selection }, set: { heroState.selection = $0 })
-        return ZStack(alignment: .top) {
-            TabView(selection: binding) {
-                ForEach(Array(featured.enumerated()), id: \.element.id) { index, item in
-                    HeroPage(item: item, bottomInset: bottomInset + HeroActions.height + 16)
-                        .tag(index)
-                }
+        return TabView(selection: binding) {
+            ForEach(Array(featured.enumerated()), id: \.element.id) { index, item in
+                HeroPage(item: item)
+                    .tag(index)
             }
-            .tabViewStyle(.page(indexDisplayMode: .never))
-
-            heroTopBar(current, topInset: topInset)
         }
+        .tabViewStyle(.page(indexDisplayMode: .never))
         .overlay(alignment: .bottomLeading) {
             if let current {
-                HeroActions(hasMetadata: current.metadata != nil, title: recents.position(for: current.media.source) == nil ? "播放" : "继续播放") {
+                HeroActions(hasMetadata: current.metadata != nil, title: heroPlayTitle(current)) {
                     playing = HomeLibrary.queue(for: current, in: library.items)
                 } onMatch: {
                     actionItem = current
                 }
-                .padding(.horizontal, Theme.contentInset)
-                .padding(.bottom, bottomInset + 6)
+                .padding(.leading, 18)
+                .padding(.bottom, 16)
             }
         }
-        .overlay(alignment: .bottom) {
+        .overlay(alignment: .bottomTrailing) {
             if featured.count > 1 {
                 heroIndicator(count: featured.count, selection: selection)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.leading, Theme.contentInset)
-                    .padding(.bottom, 4)
+                    .padding(.trailing, 8)
+                    .padding(.bottom, 16)
             }
         }
     }
 
-    private func heroTopBar(_ current: HomeMediaItem?, topInset: CGFloat) -> some View {
-        HStack(spacing: 10) {
-            Spacer(minLength: 8)
-            addMenu
-        }
-        .padding(.horizontal, Theme.contentInset)
-        .padding(.top, topInset + 6)
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("home.heroBar")
+    private func heroPlayTitle(_ item: HomeMediaItem) -> String {
+        recents.position(for: item.media.source) == nil ? "播放" : "继续播放"
     }
 
+    /// 右下角的小圆点：当前页拉长成胶囊，切换时弹簧过渡。
     private func heroIndicator(count: Int, selection: Int) -> some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 4) {
             ForEach(0..<count, id: \.self) { index in
                 Capsule()
-                    .fill(index == selection ? Color.primary : Color.primary.opacity(0.25))
-                    .frame(width: index == selection ? 18 : 6, height: 6)
-                    .contentShape(Rectangle().inset(by: -6))
+                    .fill(index == selection ? Color.white : Color.white.opacity(0.4))
+                    .frame(width: index == selection ? 14 : 4, height: 4)
+                    .contentShape(Rectangle().inset(by: -8))
                     .onTapGesture {
-                        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.3)) { heroState.selection = index }
+                        withAnimation(reduceMotion ? nil : Motion.smooth) { heroState.selection = index }
                     }
             }
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, 8)
         .frame(height: 24)
-        .animation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.8), value: selection)
+        .animation(reduceMotion ? nil : Motion.snappy, value: selection)
         .changeEffect(.shine(duration: 0.45), value: selection, isEnabled: !reduceMotion)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("精选影片")
@@ -327,9 +382,12 @@ struct HomeTab: View {
 
     private var addMenu: some View {
         Button { showAdd = true } label: {
-            Image(systemName: "plus").font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(.primary).frame(width: 44, height: 44).glassCircle()
+            Image(systemName: AppIcon.addCircle.name)
+                .font(.system(size: 22, weight: Theme.iconWeight))
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
         }
+        .buttonStyle(.pressable(scale: 0.88))
         .accessibilityLabel("添加")
         .accessibilityIdentifier("home.sources")
     }
@@ -349,7 +407,7 @@ struct HomeTab: View {
     // MARK: 内容区
 
     private func sections(_ library: HomeSnapshot, continueItems: [ContinueEntry]) -> some View {
-        VStack(alignment: .leading, spacing: 30) {
+        VStack(alignment: .leading, spacing: 28) {
             if !continueItems.isEmpty {
                 continueShelf(continueItems)
             }
@@ -364,71 +422,54 @@ struct HomeTab: View {
             }
         }
         .padding(.horizontal, Theme.contentInset)
-        .padding(.top, 22)
+        .padding(.top, 24)
         .padding(.bottom, 40)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func shelfTitle(_ title: String, detail: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(title)
-                .font(.title3.weight(.bold))
-            Text(detail)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-        }
-    }
-
+    /// 货架标题：左边标题，右边「数量 · 全部 ›」。标题行本身不带左右边距，由外层统一留白。
     private func shelfHeader<Destination: View>(
         _ title: String,
         detail: String,
+        identifier: String = "",
         @ViewBuilder destination: @escaping () -> Destination
     ) -> some View {
-        HStack(alignment: .center, spacing: 8) {
-            shelfTitle(title, detail: detail)
-            Spacer(minLength: 8)
-            NavigationLink {
-                destination()
-            } label: {
-                HStack(spacing: 3) {
-                    Text("全部")
-                    Image(systemName: "chevron.right")
+        ShelfHeader(title: title, identifier: identifier, inset: 0) {
+            HStack(spacing: 10) {
+                Text(detail)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.textTertiary)
+                NavigationLink {
+                    destination()
+                } label: {
+                    ShelfLinkLabel(text: "全部")
+                        .frame(minWidth: 44, minHeight: 44, alignment: .trailing)
                 }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .frame(minWidth: 44, minHeight: 44)
+                .buttonStyle(.pressable(scale: 0.92))
             }
-            .buttonStyle(.plain)
         }
     }
 
     // MARK: 继续观看
 
     private func continueShelf(_ entries: [ContinueEntry]) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                shelfTitle("继续观看", detail: "\(entries.count)")
-                Spacer()
-                NavigationLink {
-                    ContinueHistoryView(entries: entries, onOpen: openEntry, onRemove: remove)
-                } label: {
-                    HStack(spacing: 3) { Text("全部"); Image(systemName: "chevron.right") }
-                        .font(.caption).foregroundStyle(.secondary)
-                        .frame(minWidth: 44, minHeight: 44)
-                }
+        VStack(alignment: .leading, spacing: 8) {
+            shelfHeader("继续观看", detail: "\(entries.count)", identifier: "home.shelf.continue") {
+                ContinueHistoryView(entries: entries, onOpen: openEntry, onRemove: remove)
             }
 
             ScrollView(.horizontal) {
                 LazyHStack(alignment: .top, spacing: 12) {
-                    ForEach(Array(entries.prefix(12))) { entry in
+                    ForEach(Array(entries.prefix(12).enumerated()), id: \.element.id) { index, entry in
                         Button {
                             openEntry(entry)
                         } label: {
                             ContinueCard(entry: entry)
                         }
                         .buttonStyle(PosterButtonStyle())
+                        .reveal(index)
                         .contextMenu {
-                            Button("从继续观看移除", systemImage: "xmark.circle", role: .destructive) {
+                            Button("从继续观看移除", systemImage: AppIcon.remove.name, role: .destructive) {
                                 remove(entry)
                             }
                         }
@@ -541,8 +582,8 @@ struct HomeTab: View {
     // MARK: 电影与剧集
 
     private func movieShelf(_ library: HomeSnapshot) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            shelfHeader("电影", detail: "\(library.movies.count) 部") {
+        VStack(alignment: .leading, spacing: 8) {
+            shelfHeader("电影", detail: "\(library.movies.count) 部", identifier: "home.shelf.movies") {
                 PosterGridScreen(title: "电影", items: library.movies) { item, width in
                     posterCard(item, library: library, width: width)
                 }
@@ -550,8 +591,9 @@ struct HomeTab: View {
 
             ScrollView(.horizontal) {
                 LazyHStack(alignment: .top, spacing: 14) {
-                    ForEach(library.movies) { item in
-                        posterCard(item, library: library, width: 105)
+                    ForEach(Array(library.movies.enumerated()), id: \.element.id) { index, item in
+                        posterCard(item, library: library, width: 108)
+                            .reveal(index)
                     }
                 }
                 .padding(.horizontal, Theme.contentInset)
@@ -573,14 +615,15 @@ struct HomeTab: View {
     }
 
     private func performerShelf(_ library: HomeSnapshot) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            shelfHeader("演员合集", detail: "\(library.performers.count) 位") {
+        VStack(alignment: .leading, spacing: 8) {
+            shelfHeader("演员合集", detail: "\(library.performers.count) 位", identifier: "home.shelf.performers") {
                 PerformerGridView(groups: library.performers)
             }
             ScrollView(.horizontal) {
                 LazyHStack(alignment: .top, spacing: 14) {
-                    ForEach(library.performers) { group in
-                        performerLink(group, width: 210)
+                    ForEach(Array(library.performers.enumerated()), id: \.element.id) { index, group in
+                        performerLink(group, width: 200)
+                            .reveal(index)
                     }
                 }
                 .padding(.horizontal, Theme.contentInset)
@@ -601,8 +644,8 @@ struct HomeTab: View {
 
     private func seriesShelf(_ library: HomeSnapshot) -> some View {
         let episodeCount = library.series.reduce(0) { $0 + $1.episodes.count }
-        return VStack(alignment: .leading, spacing: 14) {
-            shelfHeader("剧集", detail: "\(library.series.count) 部 · \(episodeCount) 集") {
+        return VStack(alignment: .leading, spacing: 8) {
+            shelfHeader("剧集", detail: "\(library.series.count) 部 · \(episodeCount) 集", identifier: "home.shelf.series") {
                 PosterGridScreen(title: "剧集", items: library.series) { group, width in
                     seriesLink(group, width: width, scope: "grid")
                 }
@@ -610,8 +653,9 @@ struct HomeTab: View {
 
             ScrollView(.horizontal) {
                 LazyHStack(alignment: .top, spacing: 14) {
-                    ForEach(library.series) { group in
-                        seriesLink(group, width: 105, scope: "shelf")
+                    ForEach(Array(library.series.enumerated()), id: \.element.id) { index, group in
+                        seriesLink(group, width: 108, scope: "shelf")
+                            .reveal(index)
                     }
                 }
                 .padding(.horizontal, Theme.contentInset)
@@ -634,7 +678,7 @@ struct HomeTab: View {
         .buttonStyle(PosterButtonStyle())
         .accessibilityIdentifier("home.series.\(group.id)")
         .contextMenu {
-            Button("匹配封面", systemImage: "photo") {
+            Button("匹配封面", systemImage: AppIcon.poster.name) {
                 matching = MatchRequest(group: group)
             }
         }
@@ -650,47 +694,59 @@ struct HomeTab: View {
 
     // MARK: 空状态
 
-    private func emptyHeader(topInset: CGFloat) -> some View {
-        HStack(spacing: 10) {
-            Text("首页").font(.largeTitle.bold())
-            Spacer(minLength: 0)
-            addMenu
-        }
-        .padding(.horizontal, Theme.contentInset)
-        .padding(.top, topInset + 6)
-        .padding(.bottom, 10)
-    }
-
     private var emptyState: some View {
-        VStack(spacing: 18) {
-            Image(systemName: "play.rectangle")
-                .font(.system(size: 32, weight: .medium))
+        VStack(spacing: 16) {
+            Image(systemName: AppIcon.playback.name)
+                .font(.system(size: 34, weight: Theme.iconWeight))
                 .foregroundStyle(Theme.accent)
-                .frame(width: 80, height: 80)
-                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 24))
+                .frame(width: 84, height: 84)
+                .background(Theme.tileTint, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+                .reveal(0)
             Text("让好内容，在这里相遇")
-                .font(.title2.weight(.semibold))
+                .font(.display(22))
+                .reveal(1)
             Text("连接你的 115 网盘，或导入本机视频。\n把喜欢的影片，变成随时可看的片库。")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .font(.system(size: 14))
+                .foregroundStyle(Theme.textSecondary)
                 .multilineTextAlignment(.center)
                 .lineSpacing(5)
+                .reveal(2)
             Button { showAdd = true } label: {
-                Label("添加影片", systemImage: "plus")
+                Label("添加影片", systemImage: AppIcon.add.name)
             }
             .buttonStyle(PrimaryActionStyle())
             .frame(maxWidth: 240)
-            Button("浏览资源库", action: onBrowseLibrary)
-                .font(.subheadline.weight(.medium))
+            .padding(.top, 6)
+            .reveal(3)
+            Button("浏览网盘", action: onBrowseLibrary)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(Theme.accent)
                 .frame(minHeight: 44)
                 .accessibilityIdentifier("home.browseLibrary")
+                .reveal(4)
         }
         .padding(.horizontal, 22)
-        .padding(.vertical, 70)
+        .padding(.vertical, 56)
         .frame(maxWidth: .infinity)
         .accessibilityIdentifier("home.emptyLibrary")
     }
 
+}
+
+/// 首页顶部的分类入口：点一下跳到片库并带上对应的筛选。
+private struct HomeCategory: Identifiable {
+    let id: String
+    let title: String
+    let kind: CatalogKind
+    let sort: CatalogSort
+
+    static let all: [HomeCategory] = [
+        HomeCategory(id: "movie", title: "电影", kind: .movie, sort: .recentlyAdded),
+        HomeCategory(id: "series", title: "剧集", kind: .series, sort: .recentlyAdded),
+        HomeCategory(id: "anime", title: "动画", kind: .anime, sort: .recentlyAdded),
+        HomeCategory(id: "performer", title: "演员", kind: .performer, sort: .recentlyAdded),
+        HomeCategory(id: "recent", title: "最近添加", kind: .all, sort: .recentlyAdded),
+    ]
 }
 
 /// 只比较数量和状态，不比较整份片库。扫描中每新增 300 个视频才重新匹配一次，
@@ -713,19 +769,48 @@ private extension View {
 
 private struct HomeScrolledBar: View {
     @ObservedObject var state: HeroState
+    let onSearch: () -> Void
     let onAdd: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
+        Group { bar }
+            .animation(reduceMotion ? nil : Motion.snappy, value: state.scrolled)
+    }
+
+    @ViewBuilder
+    private var bar: some View {
         if state.scrolled {
-            HStack {
-                Text("你的片库").font(.title2.bold())
-                Spacer()
+            HStack(spacing: 8) {
+                Button(action: onSearch) {
+                    HStack(spacing: 8) {
+                        Image(systemName: AppIcon.search.name).font(.system(size: 14, weight: Theme.iconWeight))
+                        Text("你的片库").font(.system(size: 14, weight: .medium))
+                        Spacer(minLength: 0)
+                    }
+                    .foregroundStyle(Theme.textSecondary)
+                    .padding(.horizontal, 14)
+                    .frame(height: 36)
+                    .background(Theme.surface, in: Capsule())
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.pressable(scale: 0.98))
+                .accessibilityLabel("搜索")
+                .accessibilityIdentifier("home.scrolledSearch")
                 Button(action: onAdd) {
-                    Image(systemName: "plus").font(.body.weight(.semibold)).frame(width: 44, height: 44).glassCircle()
-                }.accessibilityLabel("添加影片").accessibilityIdentifier("home.scrolledAdd")
+                    Image(systemName: AppIcon.addCircle.name)
+                        .font(.system(size: 22, weight: Theme.iconWeight))
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.pressable(scale: 0.88))
+                .accessibilityLabel("添加影片")
+                .accessibilityIdentifier("home.scrolledAdd")
             }
-            .padding(.horizontal, Theme.contentInset).padding(.top, 4).padding(.bottom, 10)
+            .padding(.horizontal, Theme.contentInset).padding(.top, 2).padding(.bottom, 6)
             .background { Rectangle().fill(.regularMaterial).ignoresSafeArea(edges: .top) }
             .overlay(alignment: .bottom) { Rectangle().fill(Theme.hairline).frame(height: 0.5) }
+            .transition(.move(edge: .top).combined(with: .opacity))
         }
     }
 }
@@ -755,18 +840,17 @@ private struct HomeSnapshotKey: Equatable {
 
 // MARK: - 横幅单页
 
-/// 精选横幅的一页：背景图铺满，越往下越透明，融进整页取自这张图的底色；片名和按钮压在底部。
+/// 精选横幅的一页：图片铺满圆角卡片，底部压一层深色渐变，片名和信息放在渐变上。
+/// 卡片上的文字固定用白色，浅色和深色模式下都一样清楚。
 private struct HeroPage: View {
     let item: HomeMediaItem
-    /// 底部留给固定按钮和翻页圆点的高度
-    let bottomInset: CGFloat
 
-    @Environment(\.colorScheme) private var colorScheme
+    private static let scrim = Color(red: 11 / 255, green: 12 / 255, blue: 16 / 255)
 
     var body: some View {
         GeometryReader { geometry in
             ZStack(alignment: .bottomLeading) {
-                // 滑到这一页时图通常已经预取好；还没到就先露出后面的虚化底色，不画默认图。
+                // 滑到这一页时图通常已经预取好；还没到就先露出底色，不画默认图。
                 ArtworkView(
                     urlString: HomeArtwork.heroURL(item),
                     fallbackURLString: item.posterURL,
@@ -777,116 +861,99 @@ private struct HeroPage: View {
                 .scaledToFill()
                 .frame(width: geometry.size.width, height: geometry.size.height)
                 .clipped()
-                .mask {
-                    LinearGradient(
-                        stops: [
-                            .init(color: .black, location: 0),
-                            .init(color: .black, location: 0.42),
-                            .init(color: .black.opacity(0.55), location: 0.66),
-                            .init(color: .clear, location: 0.9),
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                }
 
-                // 顶部淡一层底色，状态栏文字在两种模式下都看得清
                 LinearGradient(
-                    colors: [topScrim, topScrim.opacity(0)],
+                    stops: [
+                        .init(color: Self.scrim.opacity(0), location: 0.1),
+                        .init(color: Self.scrim.opacity(0.55), location: 0.55),
+                        .init(color: Self.scrim.opacity(0.94), location: 1),
+                    ],
                     startPoint: .top,
                     endPoint: .bottom
                 )
-                .frame(height: 170)
-                .frame(maxHeight: .infinity, alignment: .top)
 
                 content
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, bottomInset + 6)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 62)
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
             .clipped()
         }
-    }
-
-    private var topScrim: Color {
-        colorScheme == .dark ? Color.black.opacity(0.45) : Color(uiColor: .systemGroupedBackground).opacity(0.6)
+        .background(Theme.surface)
     }
 
     private var content: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("来自你的片库")
-                .font(.caption2.weight(.medium))
-                .tracking(1.5)
-                .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 6) {
             if let logoURL = item.metadata?.logoURL, !logoURL.isEmpty {
                 ArtworkView(urlString: logoURL, title: item.title)
                     .scaledToFit()
-                    .frame(maxWidth: 250, maxHeight: 76, alignment: .leading)
+                    .frame(maxWidth: 200, maxHeight: 44, alignment: .leading)
             } else {
                 Text(item.title)
                     .accessibilityIdentifier("home.heroTitle")
-                    .font(.system(size: 38, weight: .bold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.8)
+                    .font(.display(24))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .shadow(color: .black.opacity(0.4), radius: 6, y: 1)
             }
 
-            HStack(spacing: 10) {
+            HStack(spacing: 8) {
                 if !item.year.isEmpty { Text(item.year) }
                 if !item.countryLabel.isEmpty { Text(item.countryLabel) }
                 if !item.rating.isEmpty {
                     HStack(spacing: 3) {
-                        Image(systemName: "star.fill")
-                            .font(.system(size: 10, weight: .bold))
+                        Image(systemName: AppIcon.rating.name)
+                            .font(.system(size: 9, weight: .bold))
                         Text(item.rating)
                     }
-                    .foregroundStyle(Color(uiColor: UIColor(hex: 0xF5A623)))
+                    .foregroundStyle(Theme.gold)
                 }
                 if let episode = item.episodeLabel { Text(episode) }
                 if let genres = item.metadata?.genres, !genres.isEmpty {
                     Text(genres.prefix(2).joined(separator: " / "))
                 }
             }
-            .font(.footnote.weight(.semibold))
-            .foregroundStyle(Color.primary.opacity(0.85))
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(Color.white.opacity(0.82))
             .lineLimit(1)
-
-            if let overview = item.metadata?.overview, !overview.isEmpty {
-                Text(overview)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                    .frame(maxWidth: 420, alignment: .leading)
-            }
         }
     }
 }
 
 /// 精选播放优先；更正影片资料收在主动打开的更多菜单中。
 private struct HeroActions: View {
-    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    static let height: CGFloat = 48
+    static let height: CGFloat = 38
     let hasMetadata: Bool
     var title = "播放"
     let onPlay: () -> Void
     let onMatch: () -> Void
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             Button(action: onPlay) {
-                Label(title, systemImage: "play.fill")
+                Label(title, systemImage: AppIcon.play.name)
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(Theme.onPrimary)
+                    .padding(.horizontal, 18)
+                    .frame(height: Self.height)
+                    .background(Theme.gold, in: Capsule())
+                    .contentShape(Capsule())
                     .contentTransition(.opacity)
-                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: title)
+                    .animation(reduceMotion ? nil : Motion.fade, value: title)
             }
-            .buttonStyle(PrimaryActionStyle(light: colorScheme == .dark))
+            .buttonStyle(.pressable)
             .accessibilityIdentifier("home.heroPlay")
             Button(action: onMatch) {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 17, weight: .semibold))
+                Image(systemName: AppIcon.more.name)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white)
                     .frame(width: Self.height, height: Self.height)
-                    .glassCircle()
+                    .background(Color.white.opacity(0.2), in: Circle())
+                    .contentShape(Circle())
             }
+            .buttonStyle(.pressable)
             .accessibilityLabel("影片选项")
         }
     }

@@ -163,10 +163,10 @@ struct PlaybackControlsView: View {
                     }
                     .overlay {
                         HStack {
-                            GlassIconButton(systemImage: "lock.open", label: "锁定", diameter: 40, action: lock)
+                            GlassIconButton(systemImage: AppIcon.unlock.name, label: "锁定", diameter: 40, action: lock)
                                 .accessibilityIdentifier("playback.lock")
                             Spacer()
-                            GlassIconButton(systemImage: "camera", label: "截图", diameter: 40) { takeScreenshot() }
+                            GlassIconButton(systemImage: AppIcon.screenshot.name, label: "截图", diameter: 40) { takeScreenshot() }
                                 .accessibilityIdentifier("playback.screenshot")
                         }
                         .padding(.leading, landscape ? edgeControlInset(safe: insets.leading, width: geometry.size.width) : 16)
@@ -177,7 +177,7 @@ struct PlaybackControlsView: View {
                     .zIndex(2)
                 } else if controlsVisible && locked {
                     HStack {
-                        GlassIconButton(systemImage: "lock.fill", label: "解锁", diameter: 40, action: unlock)
+                        GlassIconButton(systemImage: AppIcon.lock.name, label: "解锁", diameter: 40, action: unlock)
                             .accessibilityIdentifier("playback.unlock")
                         Spacer()
                     }
@@ -301,7 +301,7 @@ struct PlaybackControlsView: View {
     /// 左边关闭和片名，右边画面比例、字幕音轨、更多设置；按钮都是液态玻璃
     private func topBar(landscape: Bool) -> some View {
         HStack(alignment: .center, spacing: 12) {
-            GlassIconButton(systemImage: "xmark", label: "关闭播放", action: closePlayer)
+            GlassIconButton(systemImage: AppIcon.close.name, label: "关闭播放", action: closePlayer)
                 .accessibilityIdentifier("playback.close")
 
             VStack(alignment: .leading, spacing: 4) {
@@ -315,12 +315,12 @@ struct PlaybackControlsView: View {
 
             GlassButtonGroup {
                 if landscape {
-                GlassIconButton(systemImage: "aspectratio", label: "画面比例", action: openAspect)
+                GlassIconButton(systemImage: AppIcon.aspect.name, label: "画面比例", action: openAspect)
                     .accessibilityIdentifier("playback.aspect")
-                GlassIconButton(systemImage: "captions.bubble", label: "字幕和音轨") { openSettings(.tracks) }
+                GlassIconButton(systemImage: AppIcon.subtitle.name, label: "字幕和音轨") { openSettings(.tracks) }
                     .accessibilityIdentifier("playback.tracks")
                 }
-                GlassIconButton(systemImage: "ellipsis", label: "更多设置") { openSettings(.playback) }
+                GlassIconButton(systemImage: AppIcon.more.name, label: "更多设置") { openSettings(.playback) }
                     .accessibilityIdentifier("playback.more")
             }
         }
@@ -413,19 +413,19 @@ struct PlaybackControlsView: View {
             if !landscape {
                 HStack(spacing: 18) {
                     Button(action: openAspect) {
-                        Label("画面", systemImage: "aspectratio")
+                        Label("画面", systemImage: AppIcon.aspect.name)
                             .frame(maxWidth: .infinity, minHeight: 44)
                             .contentShape(Rectangle())
                     }
                     .accessibilityIdentifier("playback.aspect")
                     Button { openSettings(.tracks) } label: {
-                        Label("字幕音轨", systemImage: "captions.bubble")
+                        Label("字幕音轨", systemImage: AppIcon.subtitle.name)
                             .frame(maxWidth: .infinity, minHeight: 44)
                             .contentShape(Rectangle())
                     }
                         .accessibilityIdentifier("playback.tracks")
                     Button { openSettings(.playback) } label: {
-                        Label("设置", systemImage: "gearshape")
+                        Label("设置", systemImage: AppIcon.settings.name)
                             .frame(maxWidth: .infinity, minHeight: 44)
                             .contentShape(Rectangle())
                     }
@@ -444,7 +444,7 @@ struct PlaybackControlsView: View {
     private func sideControls(landscape: Bool) -> some View {
         HStack(spacing: 8) {
             Button { openSettings(.playback) } label: {
-                Label(selectedQuality.isEmpty ? "原画" : selectedQuality, systemImage: "play.rectangle")
+                Label(selectedQuality.isEmpty ? "原画" : selectedQuality, systemImage: AppIcon.playback.name)
                     .font(.caption.weight(.medium)).frame(minHeight: 44)
             }.buttonStyle(.plain).disabled(qualities.isEmpty)
                 .accessibilityLabel("播放画质")
@@ -453,7 +453,7 @@ struct PlaybackControlsView: View {
             GlassTextButton(title: "选集", label: "选集") { openList() }
                 .accessibilityIdentifier("playback.playlist")
             Button { toggleOrientation(landscape: landscape) } label: {
-                controlIcon(landscape ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
+                controlIcon(landscape ? AppIcon.exitFullscreen.name : AppIcon.fullscreen.name,
                             label: landscape ? "竖屏" : "横屏", size: 18)
             }
             .buttonStyle(.plain)
@@ -468,7 +468,7 @@ struct PlaybackControlsView: View {
     private func transportControls(spacing: CGFloat, compact: Bool = false) -> some View {
         HStack(spacing: spacing) {
             Button { move(-1) } label: {
-                controlIcon("backward.end.fill", label: "上一个", size: 18).background(.black.opacity(0.3), in: Circle()).glassCircle()
+                controlIcon(AppIcon.previous.name, label: "上一个", size: 18).background(.black.opacity(0.3), in: Circle()).glassCircle()
             }
                 .accessibilityIdentifier("playback.previous")
                 .disabled(previousID == nil)
@@ -480,7 +480,7 @@ struct PlaybackControlsView: View {
             .accessibilityIdentifier("playback.playPause")
             .accessibilityValue(playback.playing ? "playing" : "paused")
             Button { move(1) } label: {
-                controlIcon("forward.end.fill", label: "下一个", size: 18).background(.black.opacity(0.3), in: Circle()).glassCircle()
+                controlIcon(AppIcon.next.name, label: "下一个", size: 18).background(.black.opacity(0.3), in: Circle()).glassCircle()
             }
                 .accessibilityIdentifier("playback.next")
                 .disabled(nextID == nil)
@@ -491,7 +491,7 @@ struct PlaybackControlsView: View {
 
     @ViewBuilder
     private func playPauseIcon(compact: Bool) -> some View {
-        let name = playback.playing ? "pause.fill" : "play.fill"
+        let name = playback.playing ? AppIcon.pause.name : AppIcon.play.name
         let label = playback.playing ? "暂停" : "播放"
         if #available(iOS 17.0, *), !reduceMotion {
             controlIcon(name, label: label, size: compact ? 25 : 29, frame: compact ? 56 : 64)
@@ -522,7 +522,7 @@ struct PlaybackControlsView: View {
                     Text("画面比例")
                         .font(.title2.bold())
                     Spacer()
-                    GlassIconButton(systemImage: "xmark", label: "关闭画面比例", diameter: 32) { closeAspect() }
+                    GlassIconButton(systemImage: AppIcon.close.name, label: "关闭画面比例", diameter: 32) { closeAspect() }
                 }
                 Text("只影响当前视频")
                         .font(.caption)
@@ -588,11 +588,11 @@ struct PlaybackControlsView: View {
     private func aspectIcon(_ option: VideoAspect) -> some View {
         switch option {
         case .fit:
-            Image(systemName: "rectangle.center.inset.filled")
+            Image(systemName: AppIcon.aspectFit.name)
         case .fill:
-            Image(systemName: "rectangle.inset.filled")
+            Image(systemName: AppIcon.aspectFill.name)
         case .stretch:
-            Image(systemName: "arrow.left.and.right.square")
+            Image(systemName: AppIcon.aspectStretch.name)
         default:
             Text(option.title)
                 .font(.system(size: 15, weight: .bold))
@@ -618,7 +618,7 @@ struct PlaybackControlsView: View {
                             .font(.caption).foregroundStyle(.white.opacity(0.5))
                     }
                     Spacer()
-                    GlassIconButton(systemImage: "xmark", label: "关闭设置", diameter: 32) { closeSettings() }
+                    GlassIconButton(systemImage: AppIcon.close.name, label: "关闭设置", diameter: 32) { closeSettings() }
                 }
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
@@ -779,7 +779,7 @@ struct PlaybackControlsView: View {
     private func trackRow(title: String, detail: String, selected: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 10) {
-                Image(systemName: "checkmark")
+                Image(systemName: AppIcon.check.name)
                     .font(.system(size: 12, weight: .bold))
                     .foregroundStyle(Theme.accent)
                     .opacity(selected ? 1 : 0)
@@ -821,7 +821,7 @@ struct PlaybackControlsView: View {
                         .font(.subheadline.monospacedDigit())
                         .foregroundStyle(.white.opacity(0.5))
                     Spacer()
-                    GlassIconButton(systemImage: "xmark", label: "关闭选集", diameter: 32) { closeList() }
+                    GlassIconButton(systemImage: AppIcon.close.name, label: "关闭选集", diameter: 32) { closeList() }
                 }
                 .padding(.horizontal, 18)
                 .padding(.top, 18)
@@ -861,7 +861,7 @@ struct PlaybackControlsView: View {
             HStack(spacing: 12) {
                 Group {
                     if current {
-                        Image(systemName: "waveform")
+                        Image(systemName: AppIcon.audio.name)
                             .font(.system(size: 13, weight: .bold))
                             .foregroundStyle(Theme.accent)
                     } else {
@@ -912,7 +912,7 @@ struct PlaybackControlsView: View {
 
     private func errorCard(_ text: String) -> some View {
         VStack(spacing: 12) {
-            Image(systemName: "exclamationmark.triangle.fill")
+            Image(systemName: AppIcon.alert.name)
                 .font(.system(size: 20, weight: .semibold))
                 .foregroundStyle(Color(uiColor: .systemYellow))
             Text(text)
@@ -999,7 +999,7 @@ struct PlaybackControlsView: View {
 
     private var boostPill: some View {
         HStack(spacing: 6) {
-            Image(systemName: "forward.fill")
+            Image(systemName: AppIcon.skip.name)
                 .font(.system(size: 11, weight: .bold))
             Text("\(String(format: "%g", PlaybackController.boostRate))× 快进中")
                 .font(.footnote.weight(.semibold))
@@ -1533,16 +1533,16 @@ private struct LevelHUD: View {
     private var icon: String {
         switch adjustment.kind {
         case .brightness:
-            return value < 0.35 ? "sun.min.fill" : "sun.max.fill"
+            return value < 0.35 ? AppIcon.brightnessLow.name : AppIcon.brightnessHigh.name
         case .volume:
-            if value <= 0.001 { return "speaker.slash.fill" }
-            if value < 0.34 { return "speaker.wave.1.fill" }
-            if value < 0.67 { return "speaker.wave.2.fill" }
-            return "speaker.wave.3.fill"
+            if value <= 0.001 { return AppIcon.volumeMute.name }
+            if value < 0.34 { return AppIcon.volumeLow.name }
+            if value < 0.67 { return AppIcon.volumeMedium.name }
+            return AppIcon.volumeHigh.name
         case .seek:
-            return "goforward"
+            return AppIcon.seek.name
         case .notice:
-            return "exclamationmark.circle"
+            return AppIcon.alert.name
         }
     }
 }
@@ -1553,7 +1553,7 @@ private struct NoticeHUD: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: "exclamationmark.circle")
+            Image(systemName: AppIcon.alert.name)
                 .font(.system(size: 13, weight: .semibold))
             Text(text)
                 .font(.footnote.weight(.medium))

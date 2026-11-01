@@ -20,27 +20,28 @@ struct CookieWebLoginView: View {
     var body: some View {
         DesignPage(eyebrow: "Connect your collection", title: "连接 115 网盘", subtitle: "让云端收藏，成为随时可看的片库。") {
             VStack(spacing: 18) {
-                Text("115").font(.system(size: 38, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white).frame(width: 88, height: 88)
-                    .background(Theme.primaryAction, in: RoundedRectangle(cornerRadius: 24))
+                Text("115").font(.system(size: 36, weight: .black, design: .rounded))
+                    .foregroundStyle(Theme.onPrimary).frame(width: 88, height: 88)
+                    .background(Theme.accentGradient, in: RoundedRectangle(cornerRadius: Theme.Radius.sheet, style: .continuous))
+                    .reveal(0)
                 Text("使用 115 官方网页登录").font(.headline)
                 Text("完成登录后自动验证并连接，无需手动复制登录信息。")
                     .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 Button {
                     error = ""; candidate = ""; lastAttempt = ""; pageLoading = true
                     pendingConnected = false; showingWeb = true
-                } label: { Label("打开官方登录页面", systemImage: "arrow.up.right.square") }
+                } label: { Label("打开官方登录页面", systemImage: AppIcon.openExternal.name) }
                     .buttonStyle(PrimaryActionStyle()).accessibilityIdentifier("connect115.openWeb")
             }.padding(24).surfaceCard()
             DesignGroup {
-                LibraryActionRow(symbol: "folder", title: "浏览网盘文件", subtitle: "按目录查找你的影片")
+                LibraryActionRow(symbol: AppIcon.folder.name, title: "浏览网盘文件", subtitle: "按目录查找你的影片")
                 Divider().padding(.leading, 62)
-                LibraryActionRow(symbol: "play.rectangle", title: "直接播放原文件", subtitle: "播放时读取所需的视频数据")
+                LibraryActionRow(symbol: AppIcon.playback.name, title: "直接播放原文件", subtitle: "播放时读取所需的视频数据")
                 Divider().padding(.leading, 62)
-                LibraryActionRow(symbol: "rectangle.stack", title: "建立自己的片库", subtitle: "将选中的文件整理到首页")
+                LibraryActionRow(symbol: AppIcon.library.name, title: "建立自己的片库", subtitle: "将选中的文件整理到首页")
             }
-            DesignNotice(symbol: "lock.shield", text: "登录凭证仅保存在本机钥匙串。退出账号会移除本机凭证，不会删除你的网盘文件。")
-            if !error.isEmpty { DesignNotice(symbol: "exclamationmark.circle", text: error, warning: true) }
+            DesignNotice(symbol: AppIcon.privacy.name, text: "登录凭证仅保存在本机钥匙串。退出账号会移除本机凭证，不会删除你的网盘文件。")
+            if !error.isEmpty { DesignNotice(symbol: AppIcon.alert.name, text: error, warning: true) }
         }
         .navigationTitle("连接 115 网盘")
         .designScreen("connect115")

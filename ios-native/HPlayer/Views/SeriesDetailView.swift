@@ -15,6 +15,7 @@ struct SeriesDetailView: View {
     @State private var matching: MatchRequest?
     @State private var season: Int?
     @State private var overviewExpanded = false
+    @Namespace private var seasonNamespace
 
     private static let scrollSpace = "series.scroll"
     private let backdropHeight: CGFloat = 265
@@ -28,7 +29,7 @@ struct SeriesDetailView: View {
                 content(group)
             } else {
                 EmptyStateView(
-                    icon: "film.stack",
+                    icon: AppIcon.series.name,
                     title: "这部剧已经不在首页",
                     message: "可能已经被移除，或者重新匹配成了别的影片。"
                 )
@@ -36,6 +37,7 @@ struct SeriesDetailView: View {
         }
         .background(Theme.pageBackground.ignoresSafeArea())
         .designScreen("detail")
+        .hidesTabBar()
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
@@ -44,9 +46,15 @@ struct SeriesDetailView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
                     if let group {
-                        Button("匹配封面", systemImage: "photo") { matching = MatchRequest(group: group) }
+                        Button("匹配封面", systemImage: AppIcon.poster.name) { matching = MatchRequest(group: group) }
                     }
-                } label: { Image(systemName: "ellipsis") }
+                } label: {
+                    Image(systemName: AppIcon.more.name)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 32, height: 32)
+                        .background(Color.black.opacity(0.4), in: Circle())
+                }
                 .accessibilityLabel("剧集选项")
             }
         }
@@ -127,10 +135,11 @@ struct SeriesDetailView: View {
     private func header(_ group: SeriesGroup) -> some View {
         HStack(alignment: .bottom, spacing: 16) {
             PosterArtwork(urlString: group.posterURL, title: group.title, width: 97)
+                .reveal(0)
 
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 7) {
                 Text(group.title)
-                    .font(.title.weight(.bold))
+                    .font(.display(24))
                     .lineLimit(2)
                     .minimumScaleFactor(0.8)
 
@@ -139,39 +148,36 @@ struct SeriesDetailView: View {
                     if let country = group.episodes.first?.countryLabel, !country.isEmpty { Text(country) }
                     if !group.rating.isEmpty {
                         HStack(spacing: 3) {
-                            Image(systemName: "star.fill")
+                            Image(systemName: AppIcon.rating.name)
                                 .font(.system(size: 10, weight: .bold))
-                                .foregroundStyle(Color(uiColor: UIColor(hex: 0xF5B400)))
                             Text(group.rating)
                         }
+                        .foregroundStyle(Theme.gold)
                     }
                 }
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Theme.textSecondary)
 
-                if !group.metadata.genres.isEmpty {
-                    Text(group.metadata.genres.prefix(3).joined(separator: " / "))
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                let genres = Array(group.metadata.genres.prefix(3))
+                if !genres.isEmpty || !group.sourceLabel.isEmpty {
+                    HStack(spacing: 6) {
+                        ForEach(genres, id: \.self) { chip($0) }
+                        if !group.sourceLabel.isEmpty { chip(group.sourceLabel, tinted: false) }
+                    }
+                    .lineLimit(1)
                 }
-
-                HStack(spacing: 6) {
-                    Text(group.sourceLabel).font(.caption).foregroundStyle(.secondary)
-                }
-                .padding(.top, 2)
             }
             .padding(.bottom, 4)
         }
     }
 
-    private func chip(_ text: String) -> some View {
+    private func chip(_ text: String, tinted: Bool = true) -> some View {
         Text(text)
-            .font(.caption2.weight(.semibold))
-            .foregroundStyle(.primary)
-            .padding(.horizontal, 8)
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(tinted ? Theme.accent : Theme.textSecondary)
+            .padding(.horizontal, 9)
             .frame(height: 22)
-            .glassCapsule()
+            .background(tinted ? Theme.tileTint : Theme.surfaceRaised, in: Capsule())
     }
 
     private func actions(_ group: SeriesGroup) -> some View {
@@ -181,19 +187,18 @@ struct SeriesDetailView: View {
                 Button {
                     play(target.item, in: group)
                 } label: {
-                    Label(target.title, systemImage: "play.fill")
-                        .font(.headline)
-                        .foregroundStyle(.white)
+                    Label(target.title, systemImage: AppIcon.play.name)
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(Theme.onPrimary)
                         .lineLimit(1)
                         .frame(maxWidth: .infinity)
                         .frame(height: 48)
-                        .background(Theme.primaryAction, in: RoundedRectangle(cornerRadius: 14))
+                        .background(Theme.primaryAction, in: Capsule())
+                        .contentShape(Capsule())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.pressable(scale: 0.97))
                 .accessibilityIdentifier("series.play")
             }
-
-
         }
     }
 
@@ -203,91 +208,126 @@ struct SeriesDetailView: View {
         if !text.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
                 Text(text)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineSpacing(3)
+                    .font(.system(size: 14))
+                    .foregroundStyle(Theme.textSecondary)
+                    .lineSpacing(4)
                     .lineLimit(overviewExpanded ? nil : 3)
                 if text.count > 60 {
                     Button(overviewExpanded ? "收起" : "更多") {
-                        withAnimation(.easeInOut(duration: 0.2)) { overviewExpanded.toggle() }
+                        withAnimation(Motion.snappy) { overviewExpanded.toggle() }
                     }
-                    .font(.subheadline.weight(.semibold))
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Theme.accent)
+                    .buttonStyle(.pressable(scale: 0.94))
                 }
             }
         }
     }
 
     private func episodesSection(_ group: SeriesGroup, episodes: [HomeMediaItem], seasons: [Int], currentSeason: Int) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .center, spacing: 8) {
-                Text("分集")
-                    .font(.title3.weight(.bold))
-                Text("\(episodes.count) 集")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 8)
+        let target = resumeTarget(group)?.item
+        return VStack(alignment: .leading, spacing: 12) {
+            ShelfHeader(title: "选集", inset: 0) {
+                Text("共 \(episodes.count) 集")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.textTertiary)
             }
-            ScrollView(.horizontal) {
-                HStack(spacing: 8) {
-                    ForEach(seasons, id: \.self) { value in
-                        SelectionPill(title: "第 \(value) 季 · \(group.episodes.filter { ($0.parsed.season ?? 1) == value }.count) 集", selected: value == currentSeason) { season = value }
+            if seasons.count > 1 {
+                ScrollView(.horizontal) {
+                    HStack(spacing: 6) {
+                        ForEach(seasons, id: \.self) { value in
+                            SelectionPill(
+                                title: "第 \(value) 季 · \(group.episodes.filter { ($0.parsed.season ?? 1) == value }.count) 集",
+                                selected: value == currentSeason,
+                                namespace: seasonNamespace
+                            ) { withAnimation(Motion.snappy) { season = value } }
+                        }
                     }
                 }
-            }.scrollIndicators(.hidden)
+                .scrollIndicators(.hidden)
+            }
 
-            VStack(spacing: 0) {
-                ForEach(episodes) { episode in
-                    episodeRow(episode, group: group)
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 5), spacing: 10) {
+                ForEach(Array(episodes.enumerated()), id: \.element.id) { index, episode in
+                    episodeCell(episode, index: index, group: group, isCurrent: episode.id == target?.id)
                 }
             }
-            .padding(.vertical, 6)
+            .id(currentSeason)
+            .transition(.opacity)
+
+            if let target, let line = episodeDetail(target) {
+                Text(line)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.textTertiary)
+                    .lineLimit(2)
+                    .padding(.top, 2)
+            }
         }
     }
 
-    private func episodeRow(_ episode: HomeMediaItem, group: SeriesGroup) -> some View {
-        let watched = recentEntry(for: episode)?.position
+    /// 选集里的一格：数字、看过的小勾、看到一半的金色进度线；接下来要看的那一集整块填金。
+    private func episodeCell(_ episode: HomeMediaItem, index: Int, group: SeriesGroup, isCurrent: Bool) -> some View {
+        let recent = recentEntry(for: episode)
+        let progress = recent?.progress ?? 0
+        let finished = progress >= 0.92
+        let number = episode.parsed.episode.map { String($0) } ?? String(index + 1)
         return Button {
+            Haptics.tap()
             play(episode, in: group)
         } label: {
-            HStack(spacing: 12) {
-                Text(episode.parsed.episode.map { String(format: "%02d", $0) } ?? "—")
-                    .font(.subheadline.monospacedDigit())
-                    .foregroundStyle(.tertiary)
-                    .frame(width: 28)
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(episode.episodeTitle)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.primary)
-                    Text(episode.media.name)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                    Text([formatSize(episode.media.size), episode.sourceLabel].filter { !$0.isEmpty }.joined(separator: " · "))
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    if let watched {
-                        Text("看到 \(playbackTimeText(watched))")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(Theme.accent)
-                    }
+            ZStack {
+                RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous)
+                    .fill(isCurrent ? Theme.gold : Theme.surface)
+                Text(number)
+                    .font(.system(size: 16, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(isCurrent ? Theme.onPrimary : (finished ? Theme.textTertiary : Color.primary))
+                if finished && !isCurrent {
+                    Image(systemName: AppIcon.check.name)
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(Theme.textTertiary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                        .padding(6)
                 }
-
-                Spacer(minLength: 0)
-                Image(systemName: "play").font(.caption).foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 4)
-            .padding(.vertical, 16)
+            .frame(height: 48)
+            .overlay(alignment: .bottom) {
+                if progress > 0.02 && !finished {
+                    GeometryReader { proxy in
+                        Capsule()
+                            .fill(isCurrent ? Theme.onPrimary.opacity(0.55) : Theme.gold)
+                            .frame(width: max(4, (proxy.size.width - 16) * progress), height: 2)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.leading, 8)
+                    }
+                    .frame(height: 2)
+                    .padding(.bottom, 5)
+                }
+            }
+            .overlay {
+                if !isCurrent {
+                    RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous)
+                        .strokeBorder(Theme.hairline, lineWidth: 0.5)
+                }
+            }
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.pressable(scale: 0.92))
+        .reveal(index)
+        .accessibilityLabel(episode.episodeTitle)
+        .accessibilityValue(finished ? "已看完" : (recent?.position).map { "看到 \(playbackTimeText($0))" } ?? "")
         .contextMenu {
-            Button("播放", systemImage: "play.fill") { play(episode, in: group) }
-            Button("匹配封面", systemImage: "photo") { matching = MatchRequest(item: episode) }
-            Button(episode.isCloud ? "从媒体库移除" : "删除本地文件", systemImage: "trash", role: .destructive) {
+            Button("播放", systemImage: AppIcon.play.name) { play(episode, in: group) }
+            Button("匹配封面", systemImage: AppIcon.poster.name) { matching = MatchRequest(item: episode) }
+            Button(episode.isCloud ? "从媒体库移除" : "删除本地文件", systemImage: AppIcon.trash.name, role: .destructive) {
                 remove(episode)
             }
         }
+    }
+
+    private func episodeDetail(_ episode: HomeMediaItem) -> String? {
+        let parts = [episode.episodeTitle, episode.media.name, formatSize(episode.media.size), episode.sourceLabel]
+            .filter { !$0.isEmpty }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     // MARK: 播放

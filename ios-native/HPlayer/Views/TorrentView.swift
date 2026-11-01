@@ -89,27 +89,27 @@ struct TorrentView: View {
             NavigationLink {
                 Official115SettingsView(onSourceChanged: { Task { await loadTasks(page: 1) } })
             } label: {
-                LibraryActionRow(symbol: "key.horizontal", title: "115 云下载授权", subtitle: "配置开放平台与云下载权限").surfaceCard()
+                LibraryActionRow(symbol: AppIcon.keyHorizontal.name, title: "115 云下载授权", subtitle: "配置开放平台与云下载权限").surfaceCard()
             }.buttonStyle(.plain)
             VStack(spacing: 14) {
-                Image(systemName: "doc.badge.arrow.up").font(.system(size: 38, weight: .light)).foregroundStyle(Theme.accent)
+                Image(systemName: AppIcon.torrentFile.name).font(.system(size: 38, weight: .light)).foregroundStyle(Theme.accent)
                     .padding(.top, 12)
                 Text("添加一个种子").font(.title3.bold())
                 Text("选择 .torrent 文件，查看内容后再创建下载任务。")
                     .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                Button { importing = true } label: { Label("从手机导入 .torrent", systemImage: "plus") }
+                Button { importing = true } label: { Label("从手机导入 .torrent", systemImage: AppIcon.add.name) }
                     .buttonStyle(PrimaryActionStyle()).disabled(busy || !appState.isAuthenticated)
-                Button { browsing = true } label: { Label("选择网盘中的种子", systemImage: "folder") }
+                Button { browsing = true } label: { Label("选择网盘中的种子", systemImage: AppIcon.folder.name) }
                     .buttonStyle(SecondaryActionStyle()).disabled(busy || !appState.isAuthenticated)
             }.padding(22).surfaceCard()
             if busy { HStack(spacing: 12) { ProgressView(); Text(busyText).font(.subheadline).foregroundStyle(.secondary) } }
             if let info {
                 Button { showingFiles = true } label: {
-                    LibraryActionRow(symbol: "checklist", title: info.name, subtitle: "\(info.files.count) 个文件 · \(formatSize(info.size))", value: "选文件").surfaceCard()
+                    LibraryActionRow(symbol: AppIcon.checklist.name, title: info.name, subtitle: "\(info.files.count) 个文件 · \(formatSize(info.size))", value: "选文件").surfaceCard()
                 }.buttonStyle(.plain)
             }
-            if !message.isEmpty { DesignNotice(symbol: "checkmark.circle", text: message) }
-            if !error.isEmpty { DesignNotice(symbol: "exclamationmark.circle", text: error, warning: true) }
+            if !message.isEmpty { DesignNotice(symbol: AppIcon.success.name, text: message) }
+            if !error.isEmpty { DesignNotice(symbol: AppIcon.alert.name, text: error, warning: true) }
             HStack {
                 Text("云下载任务").font(.headline)
                 Spacer()
@@ -120,7 +120,7 @@ struct TorrentView: View {
                 ForEach(tasks.tasks) { task in
                     VStack(alignment: .leading, spacing: 12) {
                         HStack(alignment: .top, spacing: 12) {
-                            Image(systemName: task.status == 2 ? "checkmark.circle" : "arrow.down.circle")
+                            Image(systemName: task.status == 2 ? AppIcon.success.name : AppIcon.download.name)
                                 .font(.title2).foregroundStyle(task.status == -1 ? Theme.warning : Theme.accent)
                             VStack(alignment: .leading, spacing: 6) {
                                 Text(task.name).font(.subheadline.weight(.medium)).lineLimit(2)
@@ -309,12 +309,12 @@ private struct TorrentFolder: View {
             ForEach(files) { file in
                 if file.isDir {
                     NavigationLink { TorrentFolder(cid: file.id, title: file.name, select: select) } label: {
-                        Label(file.name, systemImage: "folder.fill")
+                        Label(file.name, systemImage: AppIcon.folder.name)
                     }
                 } else {
                     Button { select(file) } label: {
                         HStack {
-                            Label(file.name, systemImage: "doc.fill")
+                            Label(file.name, systemImage: AppIcon.file.name)
                             Spacer()
                             Text(formatSize(file.size)).font(.caption).foregroundStyle(.secondary)
                         }

@@ -3,9 +3,12 @@ import SwiftUI
 struct SearchTab: View {
     var initialQuery = ""
     var initialResults: [P115File] = []
+    /// 搜索页当前是否在前台；回到前台时自动弹出键盘，离开时收起。
+    var isActive = true
+    var onClose: () -> Void = {}
     var body: some View {
         NavigationStack {
-            SearchView(initialQuery: initialQuery, initialResults: initialResults)
+            SearchView(initialQuery: initialQuery, initialResults: initialResults, isActive: isActive, onClose: onClose)
         }
     }
 }
@@ -31,6 +34,9 @@ struct SearchView: View {
     @EnvironmentObject private var mediaLibrary: MediaLibraryStore
     @EnvironmentObject private var metadataStore: MediaMetadataStore
 
+    var isActive = true
+    var onClose: () -> Void = {}
+    @Namespace private var scopeNamespace
     @FocusState private var searchFocused: Bool
     @State private var keyword = ""
     @State private var scope: Scope = .all
@@ -43,7 +49,9 @@ struct SearchView: View {
     @State private var playing: PlaybackQueue?
     @State private var openSeriesID: String?
 
-    init(initialQuery: String = "", initialResults: [P115File] = []) {
+    init(initialQuery: String = "", initialResults: [P115File] = [], isActive: Bool = true, onClose: @escaping () -> Void = {}) {
+        self.isActive = isActive
+        self.onClose = onClose
         _keyword = State(initialValue: initialQuery)
         _cloudSearch = StateObject(wrappedValue: CloudSearchStore(initialQuery: initialQuery, initialResults: initialResults))
     }
@@ -56,40 +64,20 @@ struct SearchView: View {
         let library = HomeLibrary.snapshot(local: localStore, cloud: mediaLibrary, metadata: metadataStore, appState: appState)
         let hits = libraryMatches(library)
 
+        VStack(spacing: 0) {
+        searchBar
+        scopePills
         List {
-            PageIntroduction(eyebrow: "Find your next watch", title: "搜索")
-                .padding(.top, 12)
-                .searchRow(top: 0, bottom: 16)
-            HStack(spacing: 12) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("片名、文件名或演员", text: $keyword)
-                    .textInputAutocapitalization(.never).autocorrectionDisabled().submitLabel(.search)
-                    .onSubmit { startSearch() }
-                    .focused($searchFocused)
-                    .accessibilityIdentifier("search.query")
-                if !keyword.isEmpty {
-                    Button { keyword = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
-                        .accessibilityLabel("清空搜索")
-                }
-            }.padding(15).surfaceCard().searchRow(top: 0, bottom: 12)
-            Picker("搜索范围", selection: $scope) {
-                ForEach(Scope.allCases) { item in
-                    Text(item.title).tag(item)
-                }
-            }
-            .pickerStyle(.segmented)
-            .searchRow(top: 4, bottom: 10)
-
             if query.isEmpty {
                 EmptyStateView(
-                    icon: "magnifyingglass",
+                    icon: AppIcon.search.name,
                     title: "找到你想看的",
                     message: "输入片名、演员或文件名里的关键词。片库里的影片会边输入边显示，按搜索键再查 115 网盘。"
                 )
                 .frame(minHeight: 380)
                 .searchRow()
             } else if (scope == .cloud || hits.count == 0) && (scope == .library || results.isEmpty) && !loading && error.isEmpty && (scope == .library || searchedKeyword == query) {
-                EmptyStateView(icon: "magnifyingglass", title: "暂时没有找到", message: "试试更短的片名，或检查文件名。也可以切换搜索范围后再试。", actionTitle: "重新搜索", action: { searchFocused = true })
+                EmptyStateView(icon: AppIcon.search.name, title: "暂时没有找到", message: "试试更短的片名，或检查文件名。也可以切换搜索范围后再试。", actionTitle: "重新搜索", action: { searchFocused = true })
                     .frame(minHeight: 380).searchRow()
             } else {
                 if scope != .cloud {
@@ -103,9 +91,17 @@ struct SearchView: View {
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .scrollDismissesKeyboard(.interactively)
+        }
         .background(Theme.pageBackground.ignoresSafeArea())
-        .navigationTitle("")
-        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .navigationBar)
+        .task {
+            guard isActive, query.isEmpty, !InterfacePreview.active else { return }
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            searchFocused = true
+        }
+        .onChange(of: isActive) { active in
+            if active { if !InterfacePreview.active { searchFocused = true } } else { searchFocused = false }
+        }
         .designScreen(query.isEmpty ? "search" : hits.count == 0 && results.isEmpty && !loading && error.isEmpty ? "search-empty" : "search-results")
         .navigationDestination(for: PerformerRoute.self) { route in
             if let group = library.performers.first(where: { $0.id == route.id }) {
@@ -113,7 +109,7 @@ struct SearchView: View {
                     .id(route.id)
             } else {
                 VStack(spacing: 10) {
-                    Image(systemName: "person.2")
+                    Image(systemName: AppIcon.people.name)
                     Text("演员合集已更新").font(.headline)
                     Text("返回搜索页后重新进入演员合集。").foregroundStyle(.secondary)
                 }
@@ -145,6 +141,72 @@ struct SearchView: View {
             PlayerView(source: queue.source, playlist: queue.items)
                 .environmentObject(appState)
         }
+    }
+
+    // MARK: 顶部搜索栏
+
+    private var searchBar: some View {
+        HStack(spacing: 2) {
+            BarIconButton(icon: .back, label: "返回", identifier: "search.back") {
+                searchFocused = false
+                onClose()
+            }
+            HStack(spacing: 8) {
+                Image(systemName: AppIcon.search.name)
+                    .font(.system(size: 15, weight: Theme.iconWeight))
+                    .foregroundStyle(Theme.textTertiary)
+                TextField("片名、文件名或演员", text: $keyword)
+                    .font(.system(size: 15))
+                    .textInputAutocapitalization(.never).autocorrectionDisabled().submitLabel(.search)
+                    .onSubmit { startSearch() }
+                    .focused($searchFocused)
+                    .accessibilityIdentifier("search.query")
+                if !keyword.isEmpty {
+                    Button { keyword = "" } label: {
+                        Image(systemName: AppIcon.clear.name)
+                            .font(.system(size: 15))
+                            .foregroundStyle(Theme.textTertiary)
+                            .frame(width: 28, height: 28)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.pressable(scale: 0.85))
+                    .accessibilityLabel("清空搜索")
+                    .transition(.scale.combined(with: .opacity))
+                }
+            }
+            .padding(.horizontal, 14)
+            .frame(height: 40)
+            .background(Theme.surface, in: Capsule())
+            .animation(Motion.snappy, value: keyword.isEmpty)
+
+            Button { startSearch(); searchFocused = false } label: {
+                Text("搜索")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(query.isEmpty ? Theme.textTertiary : Theme.accent)
+                    .frame(minWidth: 48, minHeight: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.pressable(scale: 0.92))
+            .disabled(query.isEmpty)
+            .accessibilityIdentifier("search.submit")
+        }
+        .padding(.leading, 4)
+        .padding(.trailing, 6)
+        .padding(.top, 2)
+    }
+
+    private var scopePills: some View {
+        HStack(spacing: 6) {
+            ForEach(Scope.allCases) { item in
+                SelectionPill(title: item.title, selected: scope == item, namespace: scopeNamespace) {
+                    withAnimation(Motion.snappy) { scope = item }
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, Theme.contentInset)
+        .padding(.top, 6)
+        .padding(.bottom, 8)
     }
 
     // MARK: 片库
@@ -185,27 +247,25 @@ struct SearchView: View {
             ForEach(hits.performers) { group in
                 PerformerNavigationLink(group: group) {
                     HStack(spacing: 14) {
-                        Image(systemName: "person.2.fill")
-                            .font(.system(size: 20))
-                            .foregroundStyle(Theme.accent)
-                            .frame(width: 56, height: 56)
+                        IconTile(icon: .people, size: 56)
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(group.name).font(.headline).foregroundStyle(.primary).lineLimit(1)
-                            Text("演员合集 · \(group.collectionItems.count) 部").font(.caption).foregroundStyle(.secondary)
+                            Text(group.name).font(.system(size: 15, weight: .semibold)).foregroundStyle(.primary).lineLimit(1)
+                            Text("演员合集 · \(group.collectionItems.count) 部").font(.system(size: 12)).foregroundStyle(Theme.textSecondary)
                         }
                         Spacer(minLength: 8)
-                        Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+                        Image(systemName: AppIcon.forward.name).font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.textTertiary)
                     }
                     .padding(12)
-                    .surfaceCard(cornerRadius: 20)
+                    .surfaceCard()
                     .contentShape(Rectangle())
                 }
                 .accessibilityIdentifier("search.performer.\(group.id)")
-                .buttonStyle(.plain)
+                .buttonStyle(.pressable(scale: 0.98))
                 .searchRow()
+                .reveal(0)
             }
 
-            ForEach(hits.series) { group in
+            ForEach(Array(hits.series.enumerated()), id: \.element.id) { index, group in
                 Button {
                     openSeriesID = group.id
                 } label: {
@@ -217,11 +277,12 @@ struct SearchView: View {
                         showsPlay: false
                     )
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.pressable(scale: 0.98))
                 .searchRow()
+                .reveal(index)
             }
 
-            ForEach(hits.movies) { item in
+            ForEach(Array(hits.movies.enumerated()), id: \.element.id) { index, item in
                 Button {
                     playing = HomeLibrary.queue(for: item, in: library.items)
                 } label: {
@@ -236,8 +297,9 @@ struct SearchView: View {
                         showsPlay: true
                     )
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.pressable(scale: 0.98))
                 .searchRow()
+                .reveal(index)
             }
         }
     }
@@ -258,8 +320,8 @@ struct SearchView: View {
 
         if !appState.isAuthenticated {
             hintRow(
-                icon: "person.crop.circle.badge.questionmark",
-                text: "登录 115 后才能搜索网盘，到「资源库」登录。"
+                icon: AppIcon.personUnknown.name,
+                text: "登录 115 后才能搜索网盘，到「网盘」页登录。"
             )
         } else if loading {
             HStack {
@@ -271,7 +333,7 @@ struct SearchView: View {
             .searchRow()
         } else if !error.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
-                Label(error, systemImage: "exclamationmark.triangle")
+                Label(error, systemImage: AppIcon.alert.name)
                     .font(.subheadline)
                     .foregroundStyle(Theme.warning)
                 Button("重试") { startSearch() }
@@ -280,11 +342,11 @@ struct SearchView: View {
             }
             .searchRow(top: 4, bottom: 12)
         } else if searchedKeyword != query {
-            hintRow(icon: "return", text: "按键盘上的搜索键，在 115 网盘里搜索「\(query)」。")
+            hintRow(icon: AppIcon.returnKey.name, text: "按键盘上的搜索键，在 115 网盘里搜索「\(query)」。")
         } else if results.isEmpty {
-            hintRow(icon: "magnifyingglass", text: "115 网盘里没有找到相关视频，换个关键词或者试试英文片名。")
+            hintRow(icon: AppIcon.search.name, text: "115 网盘里没有找到相关视频，换个关键词或者试试英文片名。")
         } else {
-            ForEach(results) { file in
+            ForEach(Array(results.enumerated()), id: \.element.id) { index, file in
                 Button {
                     let source = PlaybackSource.p115(title: file.name, pickCode: file.pickCode)
                     let items = results.filter { !$0.isDir && !$0.pickCode.isEmpty }.map { PlaybackSource.p115(title: $0.name, pickCode: $0.pickCode) }
@@ -292,8 +354,9 @@ struct SearchView: View {
                 } label: {
                     FileRow(file: file)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.pressable(scale: 0.98))
                 .searchRow(top: 7, bottom: 7)
+                .reveal(index)
             }
         }
     }
@@ -302,8 +365,8 @@ struct SearchView: View {
 
     private func sectionTitle(_ text: String) -> some View {
         Text(text)
-            .font(.footnote.weight(.semibold))
-            .foregroundStyle(.secondary)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(Theme.textSecondary)
             .searchRow(top: 14, bottom: 4)
     }
 
@@ -349,34 +412,34 @@ private struct LibraryResultRow: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(title)
-                    .font(.headline)
+                    .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(2)
                 if !meta.isEmpty {
                     Text(meta)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.textSecondary)
                         .lineLimit(1)
                 }
                 Text(detail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.textTertiary)
                     .lineLimit(1)
             }
 
             Spacer(minLength: 8)
 
             if showsPlay {
-                Image(systemName: "play.fill")
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 40, height: 40)
-                    .glassProminentCircle()
+                Image(systemName: AppIcon.play.name)
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(Theme.onPrimary)
+                    .frame(width: 36, height: 36)
+                    .background(Theme.gold, in: Circle())
                     .accessibilityHidden(true)
             }
         }
         .padding(12)
-        .surfaceCard(cornerRadius: 20)
+        .surfaceCard()
         .contentShape(Rectangle())
     }
 }

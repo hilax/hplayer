@@ -1,5 +1,5 @@
 {
-  "expected_screens": 41,
+  "expected_screens": 42,
   "screens": [
     {
       "id": "home",
@@ -90,19 +90,27 @@
       "screenshot": "prototype41/film-menu-dark.png"
     },
     {
-      "id": "library",
-      "title": "资源库 · 已连接",
+      "id": "catalog",
+      "title": "片库 · 分类网格",
       "state": "implemented",
-      "native_view": "ios-native/HPlayer/Views/LibraryTab.swift",
-      "route": "资源库 → 已连接",
+      "native_view": "ios-native/HPlayer/Views/CatalogTab.swift",
+      "route": "片库",
+      "screenshot": "prototype41/catalog-dark.png"
+    },
+    {
+      "id": "library",
+      "title": "网盘 · 已连接",
+      "state": "implemented",
+      "native_view": "ios-native/HPlayer/Views/CloudTab.swift",
+      "route": "网盘 → 已连接",
       "screenshot": "prototype41/library-dark.png"
     },
     {
       "id": "library-empty",
-      "title": "资源库 · 未连接",
+      "title": "网盘 · 未连接",
       "state": "implemented",
-      "native_view": "ios-native/HPlayer/Views/LibraryTab.swift",
-      "route": "资源库 → 未连接",
+      "native_view": "ios-native/HPlayer/Views/CloudTab.swift",
+      "route": "网盘 → 未连接",
       "screenshot": "prototype41/library-empty-dark.png"
     },
     {
@@ -110,7 +118,7 @@
       "title": "115 · 文件目录",
       "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/LibraryView.swift",
-      "route": "资源库 → 115 → 目录",
+      "route": "网盘 → 115 → 目录",
       "screenshot": "prototype41/files-dark.png"
     },
     {
@@ -126,7 +134,7 @@
       "title": "本机视频",
       "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/LocalVideosView.swift",
-      "route": "资源库 → 本机视频",
+      "route": "网盘 → 本机视频",
       "screenshot": "prototype41/local-dark.png"
     },
     {
@@ -158,7 +166,7 @@
       "title": "媒体库管理",
       "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/HomeLibraryScanView.swift",
-      "route": "资源库 → 媒体库管理",
+      "route": "网盘 → 媒体库管理",
       "screenshot": "prototype41/manage-dark.png"
     },
     {
@@ -203,10 +211,10 @@
     },
     {
       "id": "settings",
-      "title": "设置",
+      "title": "我的",
       "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/SettingsView.swift",
-      "route": "设置",
+      "route": "我的",
       "screenshot": "prototype41/settings-dark.png"
     },
     {
@@ -214,7 +222,7 @@
       "title": "外观",
       "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/SettingsView.swift",
-      "route": "设置 → 显示方式",
+      "route": "我的 → 显示方式",
       "screenshot": "prototype41/appearance-dark.png"
     },
     {
@@ -222,7 +230,7 @@
       "title": "连接 115",
       "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/CookieWebLoginView.swift",
-      "route": "资源库 / 设置 → 登录 115",
+      "route": "网盘 / 我的 → 登录 115",
       "screenshot": "prototype41/connect115-dark.png"
     },
     {
@@ -238,7 +246,7 @@
       "title": "开源许可",
       "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/SettingsView.swift",
-      "route": "设置 → 开源许可",
+      "route": "我的 → 开源许可",
       "screenshot": "prototype41/licenses-dark.png"
     },
     {
@@ -246,7 +254,7 @@
       "title": "磁力在线播放",
       "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/MagnetPlayerView.swift",
-      "route": "资源库 / 添加 → 磁力播放",
+      "route": "网盘 / 添加 → 磁力播放",
       "screenshot": "prototype41/magnet-dark.png"
     },
     {
@@ -270,7 +278,7 @@
       "title": "BT 种子与云下载",
       "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/TorrentView.swift",
-      "route": "资源库 → BT 云下载",
+      "route": "网盘 → BT 云下载",
       "screenshot": "prototype41/torrent-dark.png"
     },
     {

@@ -1,6 +1,8 @@
 import SwiftUI
 
-struct LibraryTab: View {
+/// 网盘：115 账号卡片、四个工具入口，以及进入网盘文件浏览的入口。
+struct CloudTab: View {
+    var onSearch: () -> Void = {}
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var localStore: LocalMediaStore
     @EnvironmentObject private var accountInfo: P115AccountInfoStore
@@ -18,39 +20,19 @@ struct LibraryTab: View {
     var body: some View {
         NavigationStack(path: $path) {
             ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    PageIntroduction(eyebrow: "Your sources", title: "资源库", subtitle: "你的文件，随时可看。")
-                        .padding(.bottom, 3)
-                    accountCard
-                    HStack(spacing: 12) {
-                        NavigationLink { MagnetPlayerView() } label: {
-                            toolCard(icon: "link", title: "磁力播放", subtitle: "粘贴链接，即刻开始")
-                        }
-                        NavigationLink { TorrentView() } label: {
-                            toolCard(icon: "arrow.down.to.line", title: "BT 云下载", subtitle: "种子解析与任务管理")
-                        }
+                VStack(alignment: .leading, spacing: 18) {
+                    ScreenTitleBar(title: "网盘") {
+                        BarIconButton(icon: .search, label: "搜索网盘", identifier: "cloud.search", action: onSearch)
                     }
-                    .buttonStyle(PosterButtonStyle())
-                    NavigationLink { LocalVideosView() } label: {
-                        LibraryActionRow(symbol: "folder", title: "本机视频", subtitle: "从「文件」导入视频",
-                                         value: localStore.files.isEmpty ? "" : "\(localStore.files.count) 个视频")
-                            .surfaceCard()
-                    }
-                    .buttonStyle(.plain)
-                    VStack(alignment: .leading, spacing: 10) {
-                        GroupLabel(title: "片库管理")
-                        Button { showManagement = true } label: {
-                            LibraryActionRow(symbol: "viewfinder", title: "媒体库管理", subtitle: "扫描目录、整理封面与影片资料")
-                                .surfaceCard()
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier("library.manage")
-                    }
+                    .padding(.horizontal, -Theme.contentInset)
+                    accountCard.reveal(0)
+                    toolGrid.reveal(1)
+                    browseRow.reveal(2)
                 }
                 .frame(maxWidth: 620)
                 .frame(maxWidth: .infinity)
                 .padding(.horizontal, Theme.contentInset)
-                .padding(.top, 14)
+                .padding(.top, 6)
                 .padding(.bottom, 36)
             }
             .scrollIndicators(.hidden)
@@ -67,6 +49,7 @@ struct LibraryTab: View {
                 })
                 .navigationTitle(crumb.name)
                 .toolbar(.visible, for: .navigationBar)
+                .hidesTabBar()
             }
         }
         .fullScreenCover(item: $playing) { queue in
@@ -99,69 +82,108 @@ struct LibraryTab: View {
 
     private var accountCard: some View {
         Button { Task { await open115() } } label: {
-            VStack(alignment: .leading, spacing: 22) {
-                HStack(spacing: 13) {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 12) {
                     Text("115")
-                        .font(.system(size: 19, weight: .bold, design: .rounded))
+                        .font(.system(size: 13, weight: .heavy, design: .rounded))
                         .foregroundStyle(.white)
-                        .frame(width: 46, height: 46)
-                        .background(Theme.primaryAction, in: RoundedRectangle(cornerRadius: 13))
-                    VStack(alignment: .leading, spacing: 5) {
+                        .frame(width: 38, height: 38)
+                        .background(Color(uiColor: UIColor(hex: 0x2A6BFF)), in: Circle())
+                    VStack(alignment: .leading, spacing: 3) {
                         Text(appState.isAuthenticated ? "115 网盘" : "连接 115 网盘")
-                            .font(.headline).foregroundStyle(.primary)
+                            .font(.system(size: 15, weight: .semibold)).foregroundStyle(.primary)
                         Text(status?.userName ?? "把云端收藏，变成私人影院")
-                            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            .font(.caption).foregroundStyle(Theme.textSecondary).lineLimit(1)
                     }
                     Spacer(minLength: 4)
                     if connecting { ProgressView() } else {
-                        Text(syncText).font(.caption2.weight(.medium))
+                        Text(syncText).font(.caption2.weight(.semibold))
                             .foregroundStyle(statusColor)
-                            .padding(.horizontal, 8).padding(.vertical, 5)
-                            .background(statusColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
+                            .padding(.horizontal, 9).padding(.vertical, 5)
+                            .background(statusColor.opacity(0.14), in: Capsule())
                     }
                 }
                 if let quota {
-                    VStack(spacing: 10) {
+                    VStack(spacing: 8) {
+                        QuotaBar(ratio: quotaRatio(quota))
                         HStack {
                             Text("已使用 \(quota.usedText)")
                             Spacer()
                             Text("共 \(quota.totalText)")
                         }
-                        .font(.caption).foregroundStyle(.secondary)
-                        QuotaBar(ratio: quotaRatio(quota))
+                        .font(.caption).foregroundStyle(Theme.textSecondary)
                     }
                 }
-                HStack {
-                    Text(appState.isAuthenticated ? primaryActionTitle : "登录并连接").font(.subheadline.weight(.medium))
+                HStack(spacing: 4) {
+                    Text(appState.isAuthenticated ? primaryActionTitle : "登录并连接")
+                        .font(.system(size: 14, weight: .bold))
                     Spacer()
-                    Image(systemName: "chevron.right").font(.caption)
+                    Image(systemName: AppIcon.forward.name).font(.system(size: 12, weight: .bold))
                 }
-                .foregroundStyle(appState.isAuthenticated ? Theme.accent : .white)
-                .padding(.horizontal, appState.isAuthenticated ? 0 : 14)
-                .frame(minHeight: appState.isAuthenticated ? 32 : 46)
-                .background(appState.isAuthenticated ? Color.clear : Theme.primaryAction, in: RoundedRectangle(cornerRadius: 13))
+                .foregroundStyle(appState.isAuthenticated ? Theme.accent : Theme.onPrimary)
+                .padding(.horizontal, appState.isAuthenticated ? 0 : 16)
+                .frame(minHeight: appState.isAuthenticated ? 28 : 44)
+                .background(appState.isAuthenticated ? Color.clear : Theme.primaryAction, in: Capsule())
             }
-            .padding(21)
-            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 22))
-            .overlay { RoundedRectangle(cornerRadius: 22).strokeBorder(Theme.hairline, lineWidth: 0.5) }
+            .padding(16)
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
+            .overlay { RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous).strokeBorder(Theme.hairline, lineWidth: 0.5) }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.pressable(scale: 0.98))
         .disabled(connecting)
         .accessibilityIdentifier("library.account")
     }
 
-    private func toolCard(icon: String, title: String, subtitle: String) -> some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Image(systemName: icon).font(.system(size: 23, weight: .regular)).foregroundStyle(Theme.accent)
-            VStack(alignment: .leading, spacing: 7) {
-                Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
-                Text(subtitle).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+    /// 四个工具入口：磁力播放、BT 云下载、本机视频、媒体库管理
+    private var toolGrid: some View {
+        HStack(spacing: 8) {
+            NavigationLink { MagnetPlayerView().hidesTabBar() } label: {
+                toolTile(icon: .link, title: "磁力播放")
+            }
+            NavigationLink { TorrentView().hidesTabBar() } label: {
+                toolTile(icon: .download, title: "BT 云下载")
+            }
+            NavigationLink { LocalVideosView().hidesTabBar() } label: {
+                toolTile(icon: .device, title: "本机视频", badge: localStore.files.isEmpty ? "" : "\(localStore.files.count)")
+            }
+            Button { showManagement = true } label: {
+                toolTile(icon: .scan, title: "媒体库管理")
+            }
+            .accessibilityIdentifier("library.manage")
+        }
+        .buttonStyle(.pressable(scale: 0.94))
+    }
+
+    private func toolTile(icon: AppIcon, title: String, badge: String = "") -> some View {
+        VStack(spacing: 7) {
+            IconTile(icon: icon, size: 34)
+            Text(title).font(.system(size: 12)).foregroundStyle(.primary).lineLimit(1).minimumScaleFactor(0.85)
+        }
+        .frame(maxWidth: .infinity, minHeight: 78)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.tile + 2, style: .continuous))
+        .overlay(alignment: .topTrailing) {
+            if !badge.isEmpty {
+                Text(badge)
+                    .font(.system(size: 10, weight: .bold).monospacedDigit())
+                    .foregroundStyle(Theme.onPrimary)
+                    .padding(.horizontal, 5).frame(minWidth: 16, minHeight: 16)
+                    .background(Theme.gold, in: Capsule())
+                    .padding(6)
             }
         }
-        .padding(18)
-        .frame(maxWidth: .infinity, minHeight: 138, alignment: .leading)
-        .surfaceCard()
         .contentShape(Rectangle())
+    }
+
+    /// 全部文件入口：登录后进入网盘根目录。
+    private var browseRow: some View {
+        Button { Task { await open115() } } label: {
+            LibraryActionRow(symbol: AppIcon.folder.name, title: "全部文件",
+                             subtitle: appState.isAuthenticated ? "按目录浏览，选中文件夹加入首页" : "登录 115 后浏览网盘文件")
+                .surfaceCard()
+        }
+        .buttonStyle(.pressable(scale: 0.98))
+        .disabled(connecting)
+        .accessibilityIdentifier("cloud.browse")
     }
 
     // MARK: 路径
@@ -237,6 +259,7 @@ private struct QuotaBar: View {
                 Capsule()
                     .fill(Theme.accentGradient)
                     .frame(width: max(6, proxy.size.width * ratio))
+                    .animation(Motion.smooth, value: ratio)
             }
         }
         .frame(height: 6)

@@ -44,7 +44,7 @@ struct PerformerCollectionView: View {
                     PosterArtwork(urlString: item.posterURL, title: item.title, width: width,
                                   alignment: item.metadata?.isWideJacket == true ? .trailing : .center)
                     Text(item.title)
-                        .font(.caption.weight(.semibold))
+                        .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(2)
                         .frame(width: width, alignment: .leading)

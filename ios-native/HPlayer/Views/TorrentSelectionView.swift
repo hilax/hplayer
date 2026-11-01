@@ -17,7 +17,7 @@ struct TorrentSelectionView: View {
     var body: some View {
         DesignPage(eyebrow: "Choose what to save", title: "选择下载文件", subtitle: "只保存你需要的内容。") {
             HStack(spacing: 14) {
-                Image(systemName: "doc.zipper").font(.largeTitle).foregroundStyle(Theme.accent)
+                Image(systemName: AppIcon.archive.name).font(.largeTitle).foregroundStyle(Theme.accent)
                 VStack(alignment: .leading, spacing: 6) {
                     Text(info.name.isEmpty ? "BT 种子" : info.name).font(.headline).lineLimit(2)
                     Text("\(info.files.count) 个文件 · \(formatSize(info.size))").font(.caption).foregroundStyle(.secondary)
@@ -34,9 +34,9 @@ struct TorrentSelectionView: View {
                 ForEach(info.files) { file in
                     Button { if selected.contains(file.index) { selected.remove(file.index) } else { selected.insert(file.index) } } label: {
                         HStack(spacing: 13) {
-                            Image(systemName: selected.contains(file.index) ? "checkmark.circle.fill" : "circle")
+                            Image(systemName: selected.contains(file.index) ? AppIcon.selected.name : AppIcon.unselected.name)
                                 .font(.title3).foregroundStyle(selected.contains(file.index) ? Theme.accent : Color.secondary)
-                            Image(systemName: "doc").font(.title2).foregroundStyle(.secondary)
+                            Image(systemName: AppIcon.file.name).font(.title2).foregroundStyle(.secondary)
                             VStack(alignment: .leading, spacing: 6) {
                                 Text(file.path).font(.subheadline.weight(.medium)).foregroundStyle(.primary).lineLimit(2).multilineTextAlignment(.leading)
                                 Text(formatSize(file.size)).font(.caption).foregroundStyle(.secondary)
@@ -50,19 +50,19 @@ struct TorrentSelectionView: View {
                 }
             }
             VStack(alignment: .leading, spacing: 16) {
-                Label("保存位置", systemImage: "folder").font(.headline)
+                Label("保存位置", systemImage: AppIcon.folder.name).font(.headline)
                 DesignField(label: "相对于目标文件夹的路径", placeholder: "HPlayer", text: $savePath)
                     .focused($focusedField, equals: .path).submitLabel(.done).onSubmit { focusedField = nil }
                 DesignField(label: "目标文件夹 ID（根目录为 0）", placeholder: "0", text: $folderId).keyboardType(.numberPad).focused($focusedField, equals: .folder)
             }.padding(18).surfaceCard()
-            if !error.isEmpty { DesignNotice(symbol: "exclamationmark.circle", text: error, warning: true) }
+            if !error.isEmpty { DesignNotice(symbol: AppIcon.alert.name, text: error, warning: true) }
         }
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 10) {
                 HStack {
                     Text("已选 \(selected.count) 个文件"); Spacer(); Text(formatSize(selectedSize))
                 }.font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("torrent.selectionSummary")
-                Button(action: onSubmit) { Label(busy ? "正在创建任务…" : "创建云下载任务", systemImage: "icloud.and.arrow.down") }
+                Button(action: onSubmit) { Label(busy ? "正在创建任务…" : "创建云下载任务", systemImage: AppIcon.cloudDownload.name) }
                     .buttonStyle(PrimaryActionStyle()).disabled(!canSubmit)
             }.padding(Theme.contentInset).background(Theme.pageBackground)
         }

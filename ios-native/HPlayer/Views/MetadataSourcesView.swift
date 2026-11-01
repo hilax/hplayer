@@ -12,12 +12,12 @@ struct MetadataSourcesView: View {
         DesignPage(eyebrow: "Metadata sources", title: "资料来源", subtitle: "让每部影片，都有自己的名字。") {
             GroupLabel(title: "影视资料")
             DesignGroup {
-                LibraryActionRow(symbol: "sparkles", title: "番组计划", subtitle: "动画与亚洲影视资料", value: "自动使用", showsChevron: false)
+                LibraryActionRow(symbol: AppIcon.sparkles.name, title: "番组计划", subtitle: "动画与亚洲影视资料", value: "自动使用", showsChevron: false)
                 Divider().padding(.leading, 62)
-                LibraryActionRow(symbol: "film", title: "IMDb / Cinemeta", subtitle: "电影与剧集资料", value: "自动使用", showsChevron: false)
+                LibraryActionRow(symbol: AppIcon.video.name, title: "IMDb / Cinemeta", subtitle: "电影与剧集资料", value: "自动使用", showsChevron: false)
                 Divider().padding(.leading, 62)
                 Button { credentials = true } label: {
-                    LibraryActionRow(symbol: "key", title: "TMDB", subtitle: "可选的中文海报与影片资料", value: tmdbEnabled ? "已开启" : "未配置")
+                    LibraryActionRow(symbol: AppIcon.key.name, title: "TMDB", subtitle: "可选的中文海报与影片资料", value: tmdbEnabled ? "已开启" : "未配置")
                 }.buttonStyle(.plain)
             }
             GroupLabel(title: "番号资料")
@@ -25,17 +25,17 @@ struct MetadataSourcesView: View {
                 Toggle("按番号匹配成人影片", isOn: $adultMatching)
                     .font(.subheadline.weight(.medium))
                     .accessibilityIdentifier("scan.adultMatching")
-                DesignNotice(symbol: "lock.shield", text: "默认关闭。开启后通过 R18.dev 与可选的 FANZA（DMM）查询番号资料。只发送识别出的番号，不发送 115 Cookie、文件路径或视频内容。")
+                DesignNotice(symbol: AppIcon.privacy.name, text: "默认关闭。开启后通过 R18.dev 与可选的 FANZA（DMM）查询番号资料。只发送识别出的番号，不发送 115 Cookie、文件路径或视频内容。")
                 if adultMatching {
                     Divider()
-                    LibraryActionRow(symbol: "film.stack", title: "R18.dev", subtitle: "开启番号匹配后自动使用", value: "已开启", showsChevron: false)
+                    LibraryActionRow(symbol: AppIcon.series.name, title: "R18.dev", subtitle: "开启番号匹配后自动使用", value: "已开启", showsChevron: false)
                     Divider()
                     Button { credentials = true } label: {
-                        LibraryActionRow(symbol: "key", title: "FANZA（DMM）", value: dmmEnabled ? "已开启" : "可选")
+                        LibraryActionRow(symbol: AppIcon.key.name, title: "FANZA（DMM）", value: dmmEnabled ? "已开启" : "可选")
                     }.buttonStyle(.plain)
                 }
             }.padding(18).surfaceCard()
-            Button { credentials = true } label: { Label("管理接口凭证", systemImage: "key") }
+            Button { credentials = true } label: { Label("管理接口凭证", systemImage: AppIcon.key.name) }
                 .buttonStyle(SecondaryActionStyle())
             DesignNotice(text: "关闭资料来源不会删除已经匹配的封面与资料。")
         }
