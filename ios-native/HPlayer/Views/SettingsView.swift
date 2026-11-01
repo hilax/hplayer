@@ -11,6 +11,7 @@ struct SettingsView: View {
     @EnvironmentObject private var accountInfo: P115AccountInfoStore
 
     @AppStorage(AppearanceMode.storageKey) private var appearance: AppearanceMode = .system
+    @State private var confirmLogout = false
 
     private var status: P115Status? { appState.isAuthenticated ? accountInfo.status(for: appState.sessionID) : nil }
     private var loadingStatus: Bool { appState.isAuthenticated && accountInfo.isLoading(for: appState.sessionID) }
@@ -20,17 +21,6 @@ struct SettingsView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 26) {
-                    PageIntroduction(eyebrow: "Make it yours", title: "设置")
-                    HStack(spacing: 15) {
-                        BrandLogo(size: 58)
-                        VStack(alignment: .leading, spacing: 7) {
-                            Text("HPlayer").font(.title2.weight(.bold))
-                            Text("让每一次播放，更简单。")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                    .padding(.vertical, 8)
-
                     accountSection
                     appearanceSection
                     aboutSection
@@ -42,10 +32,13 @@ struct SettingsView: View {
                 .padding(.bottom, 40)
             }
             .background(Theme.pageBackground.ignoresSafeArea())
-            .navigationTitle("")
+            .navigationTitle("设置")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar(.hidden, for: .navigationBar)
             .designScreen("settings")
+            .confirmationDialog("退出后将断开 115 网盘连接", isPresented: $confirmLogout, titleVisibility: .visible) {
+                Button("退出 115", role: .destructive) { appState.logout() }
+                Button("取消", role: .cancel) {}
+            }
         }
     }
 
@@ -55,49 +48,46 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 10) {
             GroupLabel(title: "账号与连接")
             VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: 14) {
-                    Text("115")
-                        .font(.system(size: 16, weight: .heavy, design: .rounded))
-                        .foregroundStyle(.white)
-                        .frame(width: 48, height: 48)
-                        .background(Theme.accentGradient, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+                HStack(spacing: 12) {
+                    Image(systemName: "person")
+                        .font(.system(size: 21, weight: .medium))
+                        .foregroundStyle(Theme.accent)
+                        .frame(width: 45, height: 45)
+                        .background(Theme.tileTint, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
                     VStack(alignment: .leading, spacing: 5) {
                         Text(status?.userName ?? "115 网盘")
-                            .font(.headline)
-                            .lineLimit(1)
-                        HStack(spacing: 6) {
-                            Circle().fill(accountState.color).frame(width: 7, height: 7)
-                            Text(accountState.text)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                            .font(.headline).lineLimit(1)
+                        HStack(spacing: 5) {
+                            if appState.isAuthenticated { Text("115 网盘 ·") }
+                            Circle().fill(accountState.color).frame(width: 6, height: 6)
+                            Text(accountState.text).lineLimit(1)
                         }
+                        .font(.caption).foregroundStyle(.secondary)
                     }
-                    Spacer(minLength: 0)
-                    if loadingStatus && status == nil { ProgressView() }
-                }
-                .padding(16)
-
-                Divider().padding(.horizontal, 16)
-                NavigationLink {
-                    CookieWebLoginView(onConnected: {})
-                        .toolbar(.visible, for: .navigationBar)
-                } label: {
-                    settingsRow(title: appState.isAuthenticated ? "重新登录 115" : "登录 115",
-                                systemImage: "person.crop.circle", tint: Theme.accent)
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("settings.account.login")
-
-                if appState.isAuthenticated {
-                    Divider().padding(.horizontal, 16)
-                    Button(role: .destructive) {
-                        appState.logout()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    if loadingStatus && status == nil { ProgressView().controlSize(.small) }
+                    NavigationLink {
+                        CookieWebLoginView(onConnected: {})
+                            .toolbar(.visible, for: .navigationBar)
                     } label: {
-                        settingsRow(title: "退出 115", systemImage: "rectangle.portrait.and.arrow.right", tint: .red, chevron: false)
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .frame(width: 44, height: 44).contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("settings.account.logout")
+                    .buttonStyle(.plain).foregroundStyle(Theme.accent)
+                    .accessibilityLabel(appState.isAuthenticated ? "重新登录 115" : "登录 115")
+                    .accessibilityIdentifier("settings.account.login")
+                    if appState.isAuthenticated {
+                        Button { confirmLogout = true } label: {
+                            Image(systemName: "rectangle.portrait.and.arrow.right")
+                                .frame(width: 44, height: 44).contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain).foregroundStyle(.red)
+                        .accessibilityLabel("退出 115")
+                        .accessibilityIdentifier("settings.account.logout")
+                    }
                 }
+                .padding(.vertical, 16).padding(.leading, 14).padding(.trailing, 10)
+
                 if !error.isEmpty {
                     Divider().padding(.horizontal, 16)
                     Label(error, systemImage: "exclamationmark.circle")
@@ -127,15 +117,16 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 10) {
             GroupLabel(title: "关于")
             VStack(spacing: 0) {
-                HStack(spacing: 14) {
-                    BrandLogo(size: 42)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("HPlayer").font(.headline)
-                        Text("版本 \(appVersion)").font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer(minLength: 0)
+                HStack(spacing: 12) {
+                    Image(systemName: "info.circle")
+                        .foregroundStyle(Theme.accent)
+                        .frame(width: 32, height: 32)
+                        .background(Theme.tileTint, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    Text("版本").font(.subheadline.weight(.semibold))
+                    Spacer()
+                    Text(appVersion).font(.subheadline).foregroundStyle(.secondary)
                 }
-                .padding(16)
+                .frame(minHeight: 52).padding(.horizontal, 16)
                 Divider().padding(.horizontal, 16)
                 NavigationLink {
                     LicensesView()
@@ -147,7 +138,7 @@ struct SettingsView: View {
                 .accessibilityIdentifier("settings.licenses")
             }
             .surfaceCard()
-            Text("播放内核使用 mpv / MPVKit，磁力播放使用 Nuvio Engine。")
+            Text("播放功能使用的开源组件，可在开源许可中查看。")
                 .font(.caption).foregroundStyle(.secondary)
                 .padding(.leading, 6)
         }

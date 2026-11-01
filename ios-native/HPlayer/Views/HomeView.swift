@@ -3,6 +3,7 @@ import SwiftUI
 struct HomeView: View {
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage(AdultMetadataSettings.enabledKey) private var adultMatching = false
+    @AppStorage(CoverMatchingSettings.automaticKey) private var automaticMatching = false
     @StateObject private var recents = RecentStore.shared
     @StateObject private var mediaLibrary = MediaLibraryStore()
     @StateObject private var localStore = LocalMediaStore()
@@ -70,13 +71,24 @@ struct HomeView: View {
                     scanner.pause()
                     metadataStore.pause()
                     mediaLibrary.flush()
-                } else {
+                } else if automaticMatching || isHomeTest {
                     metadataStore.sync(files: libraryFiles)
+                }
+            }
+            .onChange(of: automaticMatching) { enabled in
+                if enabled && scenePhase != .background {
+                    metadataStore.resumeAutomatic()
+                    metadataStore.sync(files: libraryFiles)
+                } else if !enabled {
+                    metadataStore.stopByUser()
                 }
             }
             .onChange(of: adultMatching) { enabled in
                 metadataStore.pause()
-                guard scenePhase != .background else { return }
+                guard scenePhase != .background, automaticMatching || isHomeTest else {
+                    metadataStore.hydrate(files: libraryFiles)
+                    return
+                }
                 if enabled { metadataStore.retryFailed(files: libraryFiles) }
                 else { metadataStore.sync(files: libraryFiles) }
             }
@@ -87,6 +99,14 @@ struct HomeView: View {
             .environmentObject(scanner)
             .environmentObject(accountInfo)
             .tint(Theme.accent)
+    }
+
+    private var isHomeTest: Bool {
+        #if DEBUG
+        return ProcessInfo.processInfo.environment["HPLAYER_HOME_TEST"] == "1"
+        #else
+        return false
+        #endif
     }
 
     private func refreshAccountInfo() async {

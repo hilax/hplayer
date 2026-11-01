@@ -492,30 +492,96 @@ struct ContinueHistoryView: View {
     let onRemove: (ContinueEntry) -> Void
 
     @State private var confirmClear = false
+
     var body: some View {
-        DesignPage(eyebrow: "Pick up where you left off", title: "继续观看", subtitle: "上次的故事，接着看。") {
-            if entries.isEmpty { EmptyStateView(icon: "clock", title: "还没有播放记录", message: "开始播放后，会在这里记住你的进度。") }
-            ForEach(entries) { entry in
-                GeometryReader { proxy in
-                    Button { onOpen(entry) } label: {
-                        ContinueCard(entry: entry, width: proxy.size.width - 24)
-                            .padding(12).surfaceCard()
-                    }.buttonStyle(.plain)
-                    .contextMenu { Button("移除记录", role: .destructive) { onRemove(entry) } }
-                }.frame(height: historyCardHeight)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack {
+                    Text("最近播放").font(.subheadline.weight(.semibold))
+                    Spacer()
+                    Text("\(entries.count) 条记录").font(.caption).foregroundStyle(.secondary)
+                }
+                if entries.isEmpty {
+                    EmptyStateView(icon: "clock", title: "还没有播放记录", message: "开始播放后，会在这里记住你的进度。")
+                } else {
+                    LazyVStack(spacing: 0) {
+                        ForEach(entries) { entry in
+                            if entry.id != entries.first?.id { Divider().padding(.horizontal, 12) }
+                            historyRow(entry)
+                        }
+                    }
+                    .surfaceCard()
+                }
             }
+            .frame(maxWidth: 680).frame(maxWidth: .infinity)
+            .padding(.horizontal, Theme.contentInset).padding(.vertical, 18)
         }
+        .background(Theme.pageBackground.ignoresSafeArea())
         .navigationTitle("继续观看")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
         .designScreen("continue")
         .toolbar { ToolbarItem(placement: .topBarTrailing) {
-            Button { confirmClear = true } label: { Image(systemName: "ellipsis") }.accessibilityLabel("历史选项")
+            Button { confirmClear = true } label: { Image(systemName: "ellipsis") }
+                .accessibilityLabel("历史选项").disabled(entries.isEmpty)
         } }
         .confirmationDialog("清空继续观看记录？", isPresented: $confirmClear, titleVisibility: .visible) {
             Button("清空记录", role: .destructive) { entries.forEach(onRemove) }
         }
     }
-    private var historyCardHeight: CGFloat { (min(UIScreen.main.bounds.width - Theme.contentInset * 2, 680) - 24) * 9 / 16 + 78 }
 
+    private func historyRow(_ entry: ContinueEntry) -> some View {
+        HStack(spacing: 0) {
+            Button { onOpen(entry) } label: {
+                HStack(spacing: 11) {
+                    ArtworkView(urlString: entry.artworkURL, title: entry.title)
+                        .scaledToFill().frame(width: 106, height: 68).clipped()
+                        .overlay(alignment: .bottomLeading) {
+                            if let progress = validProgress(entry.progress) {
+                                GeometryReader { proxy in
+                                    Rectangle().fill(.white.opacity(0.45))
+                                        .overlay(alignment: .leading) {
+                                            Rectangle().fill(Theme.primaryAction)
+                                                .frame(width: proxy.size.width * progress)
+                                        }
+                                }.frame(height: 4)
+                            }
+                        }
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(entry.title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                        Text(entry.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        if let progress = validProgress(entry.progress) {
+                            HStack(spacing: 5) {
+                                Text("观看进度").foregroundStyle(.secondary)
+                                Text("\(Int((progress * 100).rounded()))%")
+                                    .foregroundStyle(Theme.accent).fontWeight(.semibold)
+                            }.font(.caption2)
+                        } else {
+                            Text("暂无进度").font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("继续播放 \(entry.title)，\(entry.subtitle)")
+            Menu {
+                Button("从继续观看移除", systemImage: "xmark.circle", role: .destructive) { onRemove(entry) }
+            } label: {
+                Image(systemName: "ellipsis").foregroundStyle(.secondary)
+                    .frame(width: 44, height: 44).contentShape(Rectangle())
+            }
+            .accessibilityLabel("\(entry.title) 的更多选项")
+        }
+        .padding(.leading, 12).padding(.trailing, 3).padding(.vertical, 14)
+    }
+
+    private func validProgress(_ value: Double?) -> Double? {
+        guard let value, value.isFinite else { return nil }
+        return min(max(value, 0), 1)
+    }
 }
 
 /// 「全部」页面：三列海报网格

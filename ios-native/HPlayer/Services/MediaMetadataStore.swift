@@ -1,6 +1,10 @@
 import CryptoKit
 import Foundation
 
+enum CoverMatchingSettings {
+    static let automaticKey = "metadata.automaticCoverMatching"
+}
+
 struct MediaMetadata: Codable, Identifiable, Hashable {
     let imdbID: String
     let type: String

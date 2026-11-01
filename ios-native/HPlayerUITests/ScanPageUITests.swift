@@ -44,6 +44,27 @@ final class ScanPageUITests: XCTestCase {
             app.terminate()
         }
     }
+    func testAutomaticMatchingDefaultsOffAndRemembersChoice() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["HPLAYER_SCAN_TEST_STYLE"] = "light"
+        app.launchEnvironment["HPLAYER_RESET_AUTOMATCH_TEST"] = "1"
+        app.launch()
+        let toggle = app.switches["scan.automaticMatching"]
+        if !toggle.isHittable { app.swipeUp() }
+        XCTAssertTrue(toggle.waitForExistence(timeout: 10))
+        XCTAssertEqual(toggle.value as? String, "0")
+        setSwitch(toggle, enabled: true)
+        app.terminate()
+        app.launchEnvironment.removeValue(forKey: "HPLAYER_RESET_AUTOMATCH_TEST")
+        app.launch()
+        if !toggle.isHittable { app.swipeUp() }
+        XCTAssertTrue(toggle.waitForExistence(timeout: 10))
+        XCTAssertEqual(toggle.value as? String, "1")
+        setSwitch(toggle, enabled: false)
+        app.terminate()
+    }
+
     private func setSwitch(_ control: XCUIElement, enabled: Bool) {
         // In a Form the accessibility frame includes the label. Hit the actual
         // trailing switch, rather than tapping the middle of the label cell.

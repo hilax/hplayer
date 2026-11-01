@@ -11,6 +11,7 @@ struct HomeLibraryScanView: View {
     @ObservedObject private var magnetHistory = MagnetHistoryStore.shared
     @Environment(\.dismiss) private var dismiss
     @AppStorage(AdultMetadataSettings.enabledKey) private var adultMatching = false
+    @AppStorage(CoverMatchingSettings.automaticKey) private var automaticMatching = false
 
     let onStart: (Bool) -> Void
     let onStartFolder: (String, String) -> Void
@@ -138,6 +139,7 @@ struct HomeLibraryScanView: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("scan.unmatched")
+                    automaticMatchingCard
                     if metadata.isMatching { coverCard }
                     sourceCard
                     if adultMatching { performerCard }
@@ -282,6 +284,17 @@ struct HomeLibraryScanView: View {
             .background(Theme.primaryAction, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
+    private var automaticMatchingCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Toggle("自动匹配封面", isOn: $automaticMatching)
+                .font(.headline)
+                .accessibilityIdentifier("scan.automaticMatching")
+            Text("关闭时不会自动匹配；可随时手动重新匹配未识别封面。")
+                .font(.footnote).foregroundStyle(.secondary)
+        }
+        .scanCard()
+    }
+
     private var coverCard: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
@@ -350,8 +363,13 @@ struct HomeLibraryScanView: View {
             Divider()
             Button {
                 local.refresh()
-                metadata.resumeAutomatic()
-                metadata.sync(files: HomeLibrary.media(local: local, cloud: library, appState: appState))
+                let files = HomeLibrary.media(local: local, cloud: library, appState: appState)
+                if automaticMatching {
+                    metadata.resumeAutomatic()
+                    metadata.sync(files: files)
+                } else {
+                    metadata.hydrate(files: files)
+                }
             } label: { toolRow("刷新媒体库", icon: "arrow.clockwise") }
             Divider()
             Button(role: .destructive) { confirmClearHistory = true } label: { toolRow("清空继续观看", icon: "clock.arrow.circlepath") }
