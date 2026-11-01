@@ -25,10 +25,14 @@ struct SettingsView: View {
 
     var body: some View {
         NavigationStack {
+            VStack(spacing: 0) {
+            // 标题栏固定在顶部，内容在它下面滚动
+            ScreenTitleBar("我的")
+                .padding(.top, 6)
+                .frame(maxWidth: 620)
+                .frame(maxWidth: .infinity)
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    ScreenTitleBar("我的")
-                        .padding(.horizontal, -Theme.contentInset)
                     profileCard.reveal(0)
                     statsRow.reveal(1)
                     mediaGroup.reveal(2)
@@ -38,10 +42,11 @@ struct SettingsView: View {
                 .frame(maxWidth: 620)
                 .frame(maxWidth: .infinity)
                 .padding(.horizontal, Theme.contentInset)
-                .padding(.top, 6)
+                .padding(.top, 10)
                 .padding(.bottom, 36)
             }
             .scrollIndicators(.hidden)
+            }
             .background(Theme.pageBackground.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
             .designScreen("settings")

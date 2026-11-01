@@ -261,14 +261,14 @@ struct HomeTab: View {
     }
 
     /// 轮播图底部渐隐进页面背景的高度；按钮和指示点整体上移这么多，避开渐隐区。
-    private static let heroFade: CGFloat = 190
-    /// 按钮和页码点上移的高度：停在渐隐区的上半段，背后还有足够的暗色
-    private static let heroControlsLift: CGFloat = 110
+    private static let heroFade: CGFloat = 96
+    /// 按钮和页码点上移的高度：刚好停在渐隐区上方，渐变出现在按钮下面
+    private static let heroControlsLift: CGFloat = 92
 
     /// 铺满屏幕上方的精选轮播：图片延伸到状态栏下面，搜索、历史、添加三个入口悬浮在左上角之上。
     private func heroCard(_ library: HomeSnapshot, continueItems: [ContinueEntry],
                           width: CGFloat, safeTop: CGFloat) -> some View {
-        let height = min(width * 1.18, 520) + safeTop * 0.4 + Self.heroFade
+        let height = min(width * 0.98, 480) + safeTop * 0.4 + Self.heroFade
         return GeometryReader { proxy in
             let minY = proxy.frame(in: .global).minY
             // 下拉时图片向上拉伸，顶部不会露出空白
@@ -838,7 +838,7 @@ private struct HeroPage: View {
 
                 content
                     .padding(.horizontal, 16)
-                    .padding(.bottom, 62 + 110)
+                    .padding(.bottom, 62 + 92)
                     .offset(x: pageX * 0.35)
                     .opacity(1 - min(1, abs(pageX) / width * 1.5))
             }
