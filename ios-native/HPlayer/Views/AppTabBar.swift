@@ -119,15 +119,33 @@ struct AppTabBar: View {
                 }
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.top, 6)
-        .background(alignment: .bottom) {
-            ZStack(alignment: .top) {
-                Rectangle().fill(.ultraThinMaterial)
-                Theme.pageBackground.opacity(0.78)
-                Rectangle().fill(Theme.hairline).frame(height: 0.5)
-            }
-            .ignoresSafeArea(edges: .bottom)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .liquidGlass(in: Capsule(), interactive: true)
+        .padding(.horizontal, 22)
+        .padding(.top, 4)
+        .padding(.bottom, 4)
+    }
+}
+
+extension View {
+    /// 液态玻璃：iOS 26 用系统的 glassEffect（折射、高光、触摸时流动）；
+    /// 更低版本退回毛玻璃 + 渐变描边 + 柔和投影，看起来接近。
+    @ViewBuilder
+    func liquidGlass<S: Shape>(in shape: S, interactive: Bool = false) -> some View {
+        if #available(iOS 26.0, *) {
+            self.glassEffect(interactive ? .regular.interactive() : .regular, in: shape)
+        } else {
+            self
+                .background(.ultraThinMaterial, in: shape)
+                .overlay(
+                    shape.stroke(
+                        LinearGradient(colors: [Color.white.opacity(0.55), Color.white.opacity(0.08), Color.white.opacity(0.3)],
+                                       startPoint: .topLeading, endPoint: .bottomTrailing),
+                        lineWidth: 0.8
+                    )
+                )
+                .shadow(color: Color.black.opacity(0.16), radius: 14, y: 6)
         }
     }
 }
@@ -144,8 +162,8 @@ private struct TabBarButton: View {
                 ZStack {
                     if selected {
                         Capsule()
-                            .fill(Theme.tileTint)
-                            .frame(width: 54, height: 30)
+                            .fill(Theme.accent.opacity(0.2))
+                            .frame(width: 58, height: 32)
                             .matchedGeometryEffect(id: "tab.indicator", in: namespace)
                     }
                     Image(systemName: selected ? section.icon.activeName : section.icon.name)

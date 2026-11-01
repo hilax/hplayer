@@ -294,8 +294,7 @@ struct HomeTab: View {
             .font(.system(size: 17, weight: Theme.iconWeight))
             .foregroundStyle(.white)
             .frame(width: 38, height: 38)
-            .background(Color.black.opacity(0.38), in: Circle())
-            .background(.ultraThinMaterial, in: Circle())
+            .background(Color.white.opacity(0.2), in: Circle())
             .contentShape(Circle())
     }
 
@@ -944,10 +943,10 @@ private struct HeroActions: View {
             Button(action: onPlay) {
                 Label(title, systemImage: AppIcon.play.name)
                     .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(Theme.onPrimary)
+                    .foregroundStyle(.white)
                     .padding(.horizontal, 18)
                     .frame(height: Self.height)
-                    .background(Theme.gold, in: Capsule())
+                    .background(Color.white.opacity(0.2), in: Capsule())
                     .contentShape(Capsule())
                     .contentTransition(.opacity)
                     .animation(reduceMotion ? nil : Motion.fade, value: title)
