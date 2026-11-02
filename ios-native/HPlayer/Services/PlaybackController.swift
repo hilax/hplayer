@@ -278,6 +278,9 @@ final class PlaybackController: ObservableObject {
             ("input-default-bindings", "no"),
             ("idle", "yes"),
             ("keep-open", "yes"),
+            // EOF must not turn an interrupted seek into a user pause and disable recovery.
+            // HPlayer owns pause/replay and decides whether an EOF is a real ending.
+            ("keep-open-pause", "no"),
             ("vo", "gpu-next"),
             ("gpu-api", "vulkan"),
             ("gpu-context", "moltenvk"),
@@ -509,19 +512,22 @@ final class PlaybackController: ObservableObject {
     func prepareForPresentation() { closingPlayback = false }
 
     func toggle() {
+        guard !closingPlayback, currentURL != nil else { return }
+        if ended || (!playing && eofReached) {
+            // A genuine ending replays from zero; an interrupted seek resumes its
+            // latest target. seek also reloads the file if mpv has already closed it.
+            let target = ended ? 0 : (pendingSeek ?? resumePoint)
+            userPaused = false
+            seek(to: target)
+            return
+        }
         if playing {
             userPaused = true
             engine?.set("pause", true)
         } else {
             userPaused = false
             noDataSeconds = 0
-            if eofReached, duration > 0, resumePoint >= duration - 5 {
-                // 真的播完了：从头开始
-                resumePoint = 0
-                ended = false
-                engine?.command(["seek", "0", "absolute"])
-                engine?.set("pause", false)
-            } else if !loaded, currentURL != nil, recoveryTask == nil, !opening || !error.isEmpty {
+            if !loaded, recoveryTask == nil, !opening || !error.isEmpty {
                 // 连接断了停在那里：从停下的位置重新打开
                 recoveryAttempts = []
                 recover(reason: "")
@@ -533,20 +539,20 @@ final class PlaybackController: ObservableObject {
     }
 
     func seek(to seconds: Double) {
-        guard seconds.isFinite, seconds >= 0 else { return }
+        guard !closingPlayback, currentURL != nil, seconds.isFinite, seconds >= 0 else { return }
+        guard seekable || recoveryTask != nil || (!loaded && !opening) else { return }
         let target = duration > 0 ? min(seconds, max(0, duration - 1)) : seconds
         logEvent("跳转 \(Self.clock(engineTime)) → \(Self.clock(target))（总长 \(Self.clock(duration))）")
         resumePoint = target
         currentTime = target
-        if ended || eofReached {
+        if ended {
             // 播到结尾停住以后再往回拖：接着播，不要停在那里
-            ended = false
             userPaused = false
-            engine?.set("pause", false)
         }
+        ended = false
         eofReached = false
         eofDuringSeek = false
-        if currentURL != nil, recoveryTask != nil || (!loaded && !opening) {
+        if recoveryTask != nil || (!loaded && !opening) {
             // 连接已经断了或正在重连：直接从新的目标位置重新打开
             recoveryTask?.cancel()
             recoveryTask = nil
@@ -558,21 +564,31 @@ final class PlaybackController: ObservableObject {
             recover(reason: "")
             return
         }
-        guard seekable else { return }
         pendingSeek = target
         pendingSeekStarted = Date()
         seekAwaitingRestart = true
         seekObservedTime = nil
         noDataSeconds = 0
-        // 大跨度跳转只落到关键帧，4K 原画也能很快开播；小跳转精确到帧
-        let far = abs(target - engineTime) > 60
+        // Keep fast keyframe seeks away from the tail: sparse indexes can snap
+        // past the requested position and immediately hit EOF.
+        let far = abs(target - engineTime) > 60 && (duration <= 0 || target < duration - 30)
         seekUsesKeyframes = far
-        engine?.command(["seek", String(format: "%.3f", target), far ? "absolute+keyframes" : "absolute+exact"])
+        let result = engine?.command(["seek", String(format: "%.3f", target), far ? "absolute+keyframes" : "absolute+exact"])
+        engine?.set("pause", userPaused)
+        if let result, result < 0 {
+            if watchdogEnabled {
+                recover(reason: "跳转没有成功")
+            } else {
+                giveUp("跳转没有成功，请重试")
+            }
+            return
+        }
         #if DEBUG
         if !injectedStaleEOFForUITest,
            ProcessInfo.processInfo.environment["HPLAYER_UI_TEST_STALE_EOF_ON_SEEK"] == "1", duration > 5 {
             injectedStaleEOFForUITest = true
             handle(.property("time-pos", .double(duration - 1)))
+            handle(.property("pause", .flag(true)))
             handle(.property("eof-reached", .flag(true)))
         }
         #endif
@@ -772,9 +788,10 @@ final class PlaybackController: ObservableObject {
                 if abs(value - duration) > 1 { logEvent("总时长 \(Self.clock(value))") }
                 duration = value
             }
-        case ("pause", .flag(let paused)):
-            // 内核在缓存不够时不会改 pause；这里的变化来自用户或打开时的设定
-            if !closingPlayback, paused != userPaused, loaded { userPaused = paused }
+        case ("pause", .flag):
+            // Notifications can be queued before a newer toggle/seek, and mpv's
+            // keep-open EOF can also pause. Only explicit controls own userPaused.
+            break
         case ("paused-for-cache", .flag(let value)):
             if value && !pausedForCache && !seeking { noDataSeconds = 0 }
             pausedForCache = value
@@ -786,6 +803,9 @@ final class PlaybackController: ObservableObject {
                 settlePendingSeek(at: observed)
             }
         case ("eof-reached", .flag(let value)):
+            // Events are delivered to the main queue in batches. A newer seek
+            // may already have cleared EOF by the time this notification arrives.
+            if value, engine?.flag("eof-reached") == false { return }
             eofReached = value
             if !value { eofDuringSeek = false }
             if value {
@@ -872,7 +892,7 @@ final class PlaybackController: ObservableObject {
     }
 
     private func settlePendingSeek(at time: Double) {
-        guard let pending = pendingSeek, !seekAwaitingRestart, time.isFinite else { return }
+        guard let pending = pendingSeek, !seekAwaitingRestart, !seeking, time.isFinite else { return }
         let offset = time - pending
         // A fast keyframe seek can land before its target. A later old position
         // must not confirm a new seek, especially when it is near the end.
@@ -906,7 +926,8 @@ final class PlaybackController: ObservableObject {
     private func updateFlags() {
         let newBuffering = error.isEmpty && (recoveryTask != nil || opening || pausedForCache || (seeking && !userPaused))
         if newBuffering != buffering { buffering = newBuffering }
-        let newPlaying = !userPaused && error.isEmpty && !(eofReached && ended)
+        let newPlaying = !userPaused && error.isEmpty && !ended
+            && (loaded || opening || recoveryTask != nil)
         if newPlaying != playing { playing = newPlaying }
     }
 
@@ -983,7 +1004,9 @@ final class PlaybackController: ObservableObject {
         }
         dataSinceTick = false
         guard watchdogEnabled, recoveryTask == nil, currentURL != nil, error.isEmpty, !userPaused, loaded else { return }
-        if pendingSeek != nil, Date().timeIntervalSince(pendingSeekStarted) >= 7, noDataSeconds >= 5, seeking || pausedForCache || eofReached {
+        // A failed seek need not leave seeking/cache/EOF set. Retain the pending
+        // target until it is confirmed, and recover even when those flags clear.
+        if pendingSeek != nil, Date().timeIntervalSince(pendingSeekStarted) >= 7, noDataSeconds >= 5 {
             recover(reason: "跳转后网络没有响应")
             return
         }

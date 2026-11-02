@@ -68,6 +68,125 @@ final class PlaybackEndTests: XCTestCase {
         XCTAssertEqual(player.currentTime, 70, accuracy: 0.01)
     }
 
+    func testEOFPauseDuringRapidSeeksDoesNotBecomeAUserPause() throws {
+        let player = try player(at: 20)
+        defer { player.stop() }
+        player.seek(to: 295)
+        player.receiveEventForTesting(.property("pause", .flag(true)))
+        player.receiveEventForTesting(.property("eof-reached", .flag(true)))
+        player.seek(to: 120)
+        // The first seek's pause can arrive after the second seek was sent.
+        player.receiveEventForTesting(.property("pause", .flag(true)))
+        player.receiveEventForTesting(.property("time-pos", .double(299)))
+        player.receiveEventForTesting(.playbackRestart)
+        XCTAssertTrue(player.playing, "An EOF pause must not disable seek recovery")
+        XCTAssertFalse(player.ended)
+        XCTAssertEqual(player.currentTime, 120, accuracy: 0.01)
+        XCTAssertEqual(player.confirmedTime ?? -1, 20, accuracy: 0.01)
+
+        player.receiveEventForTesting(.property("eof-reached", .flag(false)))
+        player.receiveEventForTesting(.property("time-pos", .double(120)))
+        player.receiveEventForTesting(.property("seeking", .flag(false)))
+        player.receiveEventForTesting(.property("time-pos", .double(121)))
+        XCTAssertTrue(player.playing)
+        XCTAssertEqual(player.confirmedTime ?? -1, 121, accuracy: 0.01)
+    }
+
+    func testPausedRapidSeeksStayPausedDespiteStaleEvents() throws {
+        let player = try player(at: 20)
+        defer { player.stop() }
+        player.toggle()
+        player.seek(to: 295)
+        player.receiveEventForTesting(.property("eof-reached", .flag(true)))
+        player.seek(to: 120)
+        XCTAssertFalse(player.playing, "An unconfirmed EOF must not resume a paused video")
+        player.receiveEventForTesting(.property("pause", .flag(false)))
+        player.receiveEventForTesting(.property("eof-reached", .flag(false)))
+        player.receiveEventForTesting(.property("time-pos", .double(120)))
+        player.receiveEventForTesting(.playbackRestart)
+        XCTAssertFalse(player.playing, "A queued pause notification must not override the latest control")
+        XCTAssertFalse(player.ended)
+        XCTAssertEqual(player.currentTime, 120, accuracy: 0.01)
+    }
+
+    func testRestartCannotConfirmASeekWhileTheEngineIsStillSeeking() throws {
+        let player = try player(at: 20)
+        defer { player.stop() }
+        player.seek(to: 180)
+        player.seek(to: 170)
+        player.receiveEventForTesting(.property("seeking", .flag(true)))
+        player.receiveEventForTesting(.property("time-pos", .double(170)))
+        player.receiveEventForTesting(.playbackRestart)
+        XCTAssertEqual(player.confirmedTime ?? -1, 20, accuracy: 0.01)
+        player.receiveEventForTesting(.property("time-pos", .double(299.5)))
+        player.receiveEventForTesting(.property("eof-reached", .flag(true)))
+        XCTAssertFalse(player.ended)
+        XCTAssertEqual(player.currentTime, 170, accuracy: 0.01)
+
+        player.receiveEventForTesting(.property("eof-reached", .flag(false)))
+        player.receiveEventForTesting(.property("time-pos", .double(170)))
+        player.receiveEventForTesting(.property("seeking", .flag(false)))
+        XCTAssertEqual(player.confirmedTime ?? -1, 170, accuracy: 0.01)
+        XCTAssertTrue(player.playing)
+    }
+
+    func testReplayAfterKeptOpenEOFTracksTheSeekFromZero() throws {
+        let player = try player(at: 299.5)
+        defer { player.stop() }
+        player.receiveEventForTesting(.property("eof-reached", .flag(true)))
+        XCTAssertTrue(player.ended)
+        player.toggle()
+        XCTAssertFalse(player.ended)
+        XCTAssertTrue(player.playing)
+        XCTAssertEqual(player.currentTime, 0, accuracy: 0.01)
+
+        player.receiveEventForTesting(.property("time-pos", .double(299.5)))
+        player.receiveEventForTesting(.property("eof-reached", .flag(true)))
+        XCTAssertFalse(player.ended, "The previous ending must not finish the replay")
+        XCTAssertEqual(player.currentTime, 0, accuracy: 0.01)
+        player.receiveEventForTesting(.property("eof-reached", .flag(false)))
+        player.receiveEventForTesting(.property("time-pos", .double(0)))
+        player.receiveEventForTesting(.playbackRestart)
+        player.receiveEventForTesting(.property("time-pos", .double(1)))
+        XCTAssertTrue(player.playing)
+        XCTAssertEqual(player.confirmedTime ?? -1, 1, accuracy: 0.01)
+    }
+
+    func testReplayReloadsAFileThatTheEngineAlreadyClosed() throws {
+        let player = try player(at: 299.5)
+        defer { player.stop() }
+        player.receiveEventForTesting(.endFile(reason: 0, error: nil))
+        XCTAssertTrue(player.ended)
+        player.toggle()
+        XCTAssertFalse(player.ended)
+        XCTAssertTrue(player.playing)
+        XCTAssertTrue(player.buffering, "A closed file needs to be reopened before replay")
+        XCTAssertEqual(player.currentTime, 0, accuracy: 0.01)
+    }
+
+    func testInterruptedPausedSeekCanResumeFromTheLatestTarget() throws {
+        let player = try player(at: 20)
+        defer { player.stop() }
+        player.toggle()
+        player.seek(to: 200)
+        player.receiveEventForTesting(.endFile(reason: 0, error: nil))
+        XCTAssertFalse(player.ended)
+        XCTAssertFalse(player.playing)
+        player.toggle()
+        XCTAssertTrue(player.playing)
+        XCTAssertTrue(player.buffering)
+        XCTAssertEqual(player.currentTime, 200, accuracy: 0.01)
+    }
+
+    func testRejectedSeekDoesNotChangeTheDisplayedPosition() throws {
+        let player = try player(at: 20)
+        defer { player.stop() }
+        player.receiveEventForTesting(.property("seekable", .flag(false)))
+        player.seek(to: 200)
+        XCTAssertEqual(player.currentTime, 20, accuracy: 0.01)
+        XCTAssertEqual(player.confirmedTime ?? -1, 20, accuracy: 0.01)
+    }
+
     func testPrematureEOFNearButNotAtTheEndDoesNotAdvance() throws {
         let player = try player(at: 296)
         player.receiveEventForTesting(.property("eof-reached", .flag(true)))

@@ -248,6 +248,39 @@ final class PlaybackUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["4K"].exists)
     }
 
+    func testReplayButtonAfterRapidForwardSeeks() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["HPLAYER_UI_TEST_URL"] = "http://127.0.0.1:8765/range/seek-fixture.mkv"
+        app.launchEnvironment["HPLAYER_UI_TEST_115_HEADERS"] = "1"
+        app.launchEnvironment["HPLAYER_UI_TEST_115_COOKIE"] = "UID=ui-test; CID=ui-test; SEID=ui-test; KID=ui-test"
+        app.launchEnvironment["HPLAYER_UI_TEST_KEEP_CONTROLS_VISIBLE"] = "1"
+        app.launchEnvironment["HPLAYER_UI_TEST_PREFETCH_KB"] = "256"
+        app.launch()
+
+        let surface = app.otherElements["playback.surface"]
+        let pause = app.buttons["playback.playPause"]
+        XCTAssertTrue(wait(timeout: 40) {
+            surface.exists && (pause.value as? String) == "playing"
+                && self.metric("time", surface: surface) > 1 && app.sliders.firstMatch.isEnabled
+        })
+        for _ in 0..<3 {
+            swipe(surface, from: CGVector(dx: 0.06, dy: 0.42), to: CGVector(dx: 0.94, dy: 0.42))
+        }
+        XCTAssertTrue(wait(timeout: 40) {
+            self.metric("time", surface: surface) > 298 && (pause.value as? String) == "paused"
+        }, "The video should finish normally after reaching the tail; status=\(surface.value as? String ?? "")")
+
+        pause.tap()
+        XCTAssertTrue(wait(timeout: 30) {
+            let time = self.metric("time", surface: surface)
+            return time > 0.5 && time < 10 && (pause.value as? String) == "playing"
+        }, "Play should restart the same video without leaving the player; status=\(surface.value as? String ?? "")")
+        let replayed = metric("time", surface: surface)
+        XCTAssertTrue(wait { self.metric("time", surface: surface) > replayed + 2 })
+        XCTAssertTrue(app.staticTexts["测试影片"].exists)
+    }
+
     /// 像 115 上的 4K MKV 一样：索引在文件末尾、每个请求都要等一会儿、经过本机中转。
     /// 大跨度往后滑要落在目标附近接着播；滑过头只停在结尾前，播完后往回滑还能继续播。
     func testFarSeekInMKVThroughRelay() throws {
