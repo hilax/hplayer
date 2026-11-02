@@ -567,20 +567,20 @@ final class MagnetController: ObservableObject {
         if let stream, !preparing, let stats = try? await engine.currentStreamStats(stream.id) {
             fileProgress = stats.fileProgress
         }
-        if playback.playing {
-            lastKnownTime = playback.currentTime
+        if playback.playing, let confirmedTime = playback.confirmedTime {
+            lastKnownTime = confirmedTime
             lastKnownDuration = playback.duration
             if Date().timeIntervalSince(lastSavedAt) >= 5 { savePosition() }
         }
     }
 
     private func savePosition() {
-        guard let link, let index = playingIndex, playback.duration > 0, playback.currentTime > 0 else { return }
+        guard let link, let index = playingIndex, playback.duration > 0, let position = playback.confirmedTime else { return }
         lastSavedAt = Date()
         history.savePosition(
             infoHash: link.infoHash,
             fileIndex: index,
-            seconds: playback.currentTime,
+            seconds: position,
             duration: playback.duration
         )
     }

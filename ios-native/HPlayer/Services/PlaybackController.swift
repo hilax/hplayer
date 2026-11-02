@@ -120,6 +120,8 @@ final class PlaybackController: ObservableObject {
     @Published var notice = ""
     /// 内核报告的真实播放时间（不含正在跳转的目标），给 UI 测试读
     @Published private(set) var engineTime: Double = 0
+    /// Only a confirmed playback position may be written to viewing history.
+    private(set) var confirmedTime: Double?
 
     private var engine: MPVEngine?
     private weak var layer: CAMetalLayer?
@@ -151,6 +153,12 @@ final class PlaybackController: ObservableObject {
     private var hasPlayed = false
     private var pendingSeek: Double?
     private var pendingSeekStarted = Date.distantPast
+    /// A requested position is not confirmed until mpv has restarted playback for the seek.
+    private var seekAwaitingRestart = false
+    private var seekObservedTime: Double?
+    private var seekUsesKeyframes = false
+    /// An EOF reported while seeking can belong to the previous position.
+    private var eofDuringSeek = false
     private var resumePoint: Double = 0
     private var videoHeight: Int64 = 0
     private var hdr = false
@@ -337,7 +345,7 @@ final class PlaybackController: ObservableObject {
     ) {
         guard !closingPlayback else { return }
         session += 1
-        playedThisSession = false
+        if !preservingPosition { playedThisSession = false }
         recoveryTask?.cancel()
         recoveryTask = nil
         recoveryAttempts = []
@@ -368,6 +376,8 @@ final class PlaybackController: ObservableObject {
             currentTime = position
             pendingSeek = position
             pendingSeekStarted = Date()
+            seekAwaitingRestart = true
+            seekUsesKeyframes = true
         }
         userPaused = !keepPlaying
         playing = keepPlaying
@@ -428,6 +438,10 @@ final class PlaybackController: ObservableObject {
     private func resetState(keepDuration: Bool) {
         openTimeoutTask?.cancel()
         pendingSeek = nil
+        seekAwaitingRestart = false
+        seekObservedTime = nil
+        seekUsesKeyframes = false
+        eofDuringSeek = false
         boosted = false
         loaded = false
         hasPlayed = false
@@ -445,6 +459,8 @@ final class PlaybackController: ObservableObject {
         if !keepDuration {
             duration = 0
             currentTime = 0
+            engineTime = 0
+            confirmedTime = nil
             audioTracks = []
             subtitleTracks = []
             selectedAudio = nil
@@ -528,23 +544,46 @@ final class PlaybackController: ObservableObject {
             userPaused = false
             engine?.set("pause", false)
         }
+        eofReached = false
+        eofDuringSeek = false
         if currentURL != nil, recoveryTask != nil || (!loaded && !opening) {
             // 连接已经断了或正在重连：直接从新的目标位置重新打开
             recoveryTask?.cancel()
             recoveryTask = nil
             recoveryAttempts = []
+            pendingSeek = target
+            pendingSeekStarted = Date()
+            seekAwaitingRestart = true
+            seekObservedTime = nil
             recover(reason: "")
             return
         }
         guard seekable else { return }
         pendingSeek = target
         pendingSeekStarted = Date()
+        seekAwaitingRestart = true
+        seekObservedTime = nil
         noDataSeconds = 0
         // 大跨度跳转只落到关键帧，4K 原画也能很快开播；小跳转精确到帧
         let far = abs(target - engineTime) > 60
+        seekUsesKeyframes = far
         engine?.command(["seek", String(format: "%.3f", target), far ? "absolute+keyframes" : "absolute+exact"])
+        #if DEBUG
+        if !injectedStaleEOFForUITest,
+           ProcessInfo.processInfo.environment["HPLAYER_UI_TEST_STALE_EOF_ON_SEEK"] == "1", duration > 5 {
+            injectedStaleEOFForUITest = true
+            handle(.property("time-pos", .double(duration - 1)))
+            handle(.property("eof-reached", .flag(true)))
+        }
+        #endif
         updateFlags()
     }
+
+    #if DEBUG
+    private var injectedStaleEOFForUITest = false
+
+    func receiveEventForTesting(_ event: MPVEngine.Event) { handle(event) }
+    #endif
 
     func skip(_ seconds: Double) { seek(to: max(0, currentTime + seconds)) }
 
@@ -693,6 +732,16 @@ final class PlaybackController: ObservableObject {
                 : "开始播放 \(Self.clock(engineTime))（出画面，距播放页创建 \(Self.milliseconds(since: createdAt)) 毫秒）")
             hasPlayed = true
             playedThisSession = true
+            seekAwaitingRestart = false
+            if let observed = seekObservedTime {
+                checkFailedSeek(observed)
+                settlePendingSeek(at: observed)
+            }
+            if pendingSeek == nil, eofDuringSeek {
+                // Discard an EOF observed for the position we just left.
+                eofReached = false
+                eofDuringSeek = false
+            }
             if !statusNote.isEmpty, recoveryTask == nil { statusNote = "" }
         case .endFile(let reason, let message):
             handleEndFile(reason: reason, message: message)
@@ -707,18 +756,16 @@ final class PlaybackController: ObservableObject {
         switch (name, value) {
         case ("time-pos", .double(let time)):
             engineTime = time
+            if pendingSeek != nil { seekObservedTime = time }
             checkFailedSeek(time)
-            if let pending = pendingSeek {
-                if abs(time - pending) < 2 || !seeking && Date().timeIntervalSince(pendingSeekStarted) > 6 {
-                    pendingSeek = nil
-                }
-            }
+            settlePendingSeek(at: time)
             if pendingSeek == nil {
                 if abs(time - lastPublishedTime) >= 0.25 || time < lastPublishedTime {
                     lastPublishedTime = time
                     currentTime = time
                 }
                 if time > 0 { resumePoint = time }
+                if time.isFinite, time >= 0, hasPlayed, !opening { confirmedTime = time }
             }
         case ("duration", .double(let value)):
             if value.isFinite, value > 0 {
@@ -734,9 +781,19 @@ final class PlaybackController: ObservableObject {
         case ("seeking", .flag(let value)):
             if value && !seeking && !pausedForCache { noDataSeconds = 0 }
             seeking = value
+            if !value, let observed = seekObservedTime {
+                checkFailedSeek(observed)
+                settlePendingSeek(at: observed)
+            }
         case ("eof-reached", .flag(let value)):
             eofReached = value
-            if value { handleReachedEnd() }
+            if !value { eofDuringSeek = false }
+            if value {
+                if pendingSeek != nil || seekAwaitingRestart || seeking || opening || recoveryTask != nil {
+                    eofDuringSeek = true
+                }
+                handleReachedEnd()
+            }
         case ("seekable", .flag(let value)):
             seekable = value
         case ("demuxer-cache-time", .double(let value)):
@@ -771,9 +828,12 @@ final class PlaybackController: ObservableObject {
     }
 
     private func handleReachedEnd() {
-        guard duration > 0 else { return }
+        guard duration.isFinite, duration > 0, currentURL != nil, !closingPlayback else { return }
         logEvent("播到结尾：画面 \(Self.clock(engineTime))，位置 \(Self.clock(resumePoint))，总长 \(Self.clock(duration))")
-        if resumePoint >= duration - 5 || engineTime >= duration - 5 {
+        // resumePoint can be the requested destination, not a position mpv has played.
+        guard pendingSeek == nil, !seekAwaitingRestart, !seeking, !opening, recoveryTask == nil else { return }
+        let tolerance = min(1.5, duration * 0.1)
+        if hasPlayed, engineTime.isFinite, engineTime >= duration - tolerance {
             ended = true
         } else if watchdogEnabled, !userPaused {
             // 没到结尾却「播完」了：多半是网络断了，从断开的位置接着连
@@ -785,7 +845,10 @@ final class PlaybackController: ObservableObject {
         // 2 = 被新的打开或 stop 结束，不算出错
         let stopped = Int32(bitPattern: MPV_END_FILE_REASON_STOP.rawValue)
         let failed = Int32(bitPattern: MPV_END_FILE_REASON_ERROR.rawValue)
+        let eof = Int32(bitPattern: MPV_END_FILE_REASON_EOF.rawValue)
         guard reason != stopped else { return }
+        // A previous file can finish while the next address is being prepared.
+        guard addressTask == nil, !(reason == eof && opening) else { return }
         logEvent("内核结束文件 reason=\(reason)\(message.map { " \($0)" } ?? "")")
         loaded = false
         if reason == failed {
@@ -794,13 +857,47 @@ final class PlaybackController: ObservableObject {
             } else {
                 giveUp(message.map { "播放失败：\($0)" } ?? "播放失败，请尝试其他画质或检查网络")
             }
+        } else if reason == eof {
+            if pendingSeek != nil || seekAwaitingRestart || seeking || opening {
+                if watchdogEnabled, !userPaused {
+                    recover(reason: "跳转时连接中断")
+                } else if !userPaused {
+                    giveUp("跳转未完成，请重试")
+                }
+            } else {
+                eofReached = true
+                handleReachedEnd()
+            }
         }
+    }
+
+    private func settlePendingSeek(at time: Double) {
+        guard let pending = pendingSeek, !seekAwaitingRestart, time.isFinite else { return }
+        let offset = time - pending
+        // A fast keyframe seek can land before its target. A later old position
+        // must not confirm a new seek, especially when it is near the end.
+        let nearEnd = duration > 0 && time >= duration - min(1.5, duration * 0.1)
+        let reachedTarget = offset > (seekUsesKeyframes ? -30 : -2) && offset < (nearEnd ? 1 : 5)
+        guard reachedTarget else { return }
+        pendingSeek = nil
+        seekObservedTime = nil
+        if eofDuringSeek {
+            eofReached = false
+            eofDuringSeek = false
+        }
+        if abs(time - lastPublishedTime) >= 0.25 || time < lastPublishedTime {
+            lastPublishedTime = time
+            currentTime = time
+        }
+        if time > 0 { resumePoint = time }
+        if time >= 0 { confirmedTime = time }
     }
 
     /// 跳转根本没生效（例如服务器拒绝了跳转用的新连接，还在按原来的位置播）：从目标位置重新打开
     private func checkFailedSeek(_ time: Double) {
-        guard let pending = pendingSeek, watchdogEnabled, recoveryTask == nil, !seeking,
-              Date().timeIntervalSince(pendingSeekStarted) > 5, abs(time - pending) > 20 else { return }
+        let tolerance = seekUsesKeyframes ? 30.0 : 20.0
+        guard let pending = pendingSeek, !seekAwaitingRestart, watchdogEnabled, recoveryTask == nil, !seeking,
+              Date().timeIntervalSince(pendingSeekStarted) > 5, abs(time - pending) > tolerance else { return }
         pendingSeek = nil
         resumePoint = pending
         recover(reason: "跳转没有成功")
@@ -886,7 +983,7 @@ final class PlaybackController: ObservableObject {
         }
         dataSinceTick = false
         guard watchdogEnabled, recoveryTask == nil, currentURL != nil, error.isEmpty, !userPaused, loaded else { return }
-        if pendingSeek != nil, Date().timeIntervalSince(pendingSeekStarted) >= 7, noDataSeconds >= 5, seeking || pausedForCache {
+        if pendingSeek != nil, Date().timeIntervalSince(pendingSeekStarted) >= 7, noDataSeconds >= 5, seeking || pausedForCache || eofReached {
             recover(reason: "跳转后网络没有响应")
             return
         }
@@ -957,9 +1054,6 @@ final class PlaybackController: ObservableObject {
         eventLines.append("\(Self.eventClock.string(from: Date())) \(text)")
         if eventLines.count > 40 { eventLines.removeFirst(eventLines.count - 40) }
     }
-
-    /// 原画打不开、一次都没播出来时，播放页可以自动换成 115 转码画质
-    var failedBeforePlaying: Bool { !error.isEmpty && !playedThisSession }
 
     /// 从内核日志里挑最后一条错误，截短后给用户看
     private static func shortReason(from lines: [String]) -> String {
