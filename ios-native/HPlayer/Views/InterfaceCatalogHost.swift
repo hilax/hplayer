@@ -1,7 +1,7 @@
 #if DEBUG
 import SwiftUI
 
-/// Launches production views with isolated stores for the 41-screen simulator audit.
+/// Launches production views with isolated stores for the 42-screen simulator audit.
 /// No prototype screenshot is used as an application screen.
 struct InterfaceCatalogHost: View {
     let screen: String
@@ -36,8 +36,9 @@ struct InterfaceCatalogHost: View {
     @ViewBuilder private var destination: some View {
         switch screen {
         case "home", "home-more", "home-empty", "add", "film-menu": tabs(.home)
-        case "library", "library-empty": tabs(.library)
-        case "settings": tabs(.settings)
+        case "library", "library-empty": tabs(.cloud)
+        case "catalog": tabs(.library)
+        case "settings": tabs(.mine)
         case "search", "search-results", "search-empty": tabs(.search)
         case "movies":
             NavigationStack {

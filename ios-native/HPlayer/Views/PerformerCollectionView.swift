@@ -1,5 +1,8 @@
 import SwiftUI
 
+/// 「演员合集 · 全部」列表页。用值导航，避免闭包式链接和演员链接混用后重复入栈。
+struct PerformerListRoute: Hashable {}
+
 struct PerformerRoute: Hashable {
     let id: String
     let name: String
@@ -44,7 +47,7 @@ struct PerformerCollectionView: View {
                     PosterArtwork(urlString: item.posterURL, title: item.title, width: width,
                                   alignment: item.metadata?.isWideJacket == true ? .trailing : .center)
                     Text(item.title)
-                        .font(.caption.weight(.semibold))
+                        .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(2)
                         .frame(width: width, alignment: .leading)

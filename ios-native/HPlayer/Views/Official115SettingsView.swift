@@ -51,7 +51,7 @@ struct Official115SettingsView: View {
     var body: some View {
         DesignPage(eyebrow: "Official authorization", title: "115 官方授权", subtitle: "为 BT 云下载连接开放平台能力。") {
             HStack(spacing: 14) {
-                Image(systemName: status?.authorized == true ? "checkmark.shield.fill" : "lock.shield")
+                Image(systemName: status?.authorized == true ? AppIcon.verified.name : AppIcon.privacy.name)
                     .font(.title).foregroundStyle(Theme.accent)
                     .frame(width: 52, height: 52).background(Theme.tileTint, in: RoundedRectangle(cornerRadius: 14))
                 VStack(alignment: .leading, spacing: 6) {
@@ -60,7 +60,7 @@ struct Official115SettingsView: View {
                 }
             }.frame(maxWidth: .infinity, alignment: .leading).padding(18).surfaceCard()
             VStack(alignment: .leading, spacing: 16) {
-                Label("1 · 配置应用凭证", systemImage: "key").font(.headline)
+                Label("1 · 配置应用凭证", systemImage: AppIcon.key.name).font(.headline)
                 DesignField(label: "AppID / Client ID", placeholder: "输入开放平台批准的 AppID", text: $clientId)
                     .focused($focusedField, equals: .clientId).submitLabel(.done).onSubmit { focusedField = nil }
                 Button(busy ? "处理中…" : "保存应用凭证") { Task { await saveConfiguration() } }
@@ -69,7 +69,7 @@ struct Official115SettingsView: View {
                 DesignNotice(text: "填写已获批的 AppID，扫码授权使用 PKCE，无需提供 AppSecret。")
             }.padding(18).surfaceCard()
             VStack(alignment: .leading, spacing: 18) {
-                Label("2 · 扫码授权", systemImage: "qrcode.viewfinder").font(.headline)
+                Label("2 · 扫码授权", systemImage: AppIcon.qrScan.name).font(.headline)
                 if let authorization {
                     if let image = qrImage(authorization.verificationUri) {
                         Image(uiImage: image).interpolation(.none).resizable().scaledToFit()
@@ -81,21 +81,21 @@ struct Official115SettingsView: View {
                         HStack {
                             Text(code).font(.system(.title2, design: .monospaced).bold()).textSelection(.enabled)
                             Spacer()
-                            Button { UIPasteboard.general.string = code; message = "验证码已复制" } label: { Image(systemName: "doc.on.doc") }.accessibilityLabel("复制验证码")
+                            Button { UIPasteboard.general.string = code; message = "验证码已复制" } label: { Image(systemName: AppIcon.copy.name) }.accessibilityLabel("复制验证码")
                         }.padding(14).background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: 12))
                     }
                     if let url = URL(string: authorization.verificationUri), url.scheme?.lowercased() == "https", url.host != nil {
-                        Button { openURL(url) } label: { Label("打开 115 授权页面", systemImage: "arrow.up.right.square") }.buttonStyle(PrimaryActionStyle())
+                        Button { openURL(url) } label: { Label("打开 115 授权页面", systemImage: AppIcon.openExternal.name) }.buttonStyle(PrimaryActionStyle())
                     }
-                    Button { UIPasteboard.general.string = authorization.verificationUri; message = "授权内容已复制" } label: { Label("复制授权内容", systemImage: "doc.on.doc") }.buttonStyle(SecondaryActionStyle())
+                    Button { UIPasteboard.general.string = authorization.verificationUri; message = "授权内容已复制" } label: { Label("复制授权内容", systemImage: AppIcon.copy.name) }.buttonStyle(SecondaryActionStyle())
                     DesignNotice(text: "用 115 扫码完成授权。返回此页面后，连接状态会自动更新。")
                 }
                 Button(authorization == nil ? "开始 115 授权" : "重新获取授权码") { Task { await startAuthorization() } }
                     .buttonStyle(SecondaryActionStyle()).disabled(busy || status?.configured != true)
             }.padding(18).surfaceCard()
-            if !message.isEmpty { DesignNotice(symbol: "checkmark.circle", text: message) }
-            if !error.isEmpty { DesignNotice(symbol: "exclamationmark.circle", text: error, warning: true) }
-            DesignNotice(symbol: "lock.shield", text: "授权码在有效期内使用。失效后可重新获取，不需要 AppSecret 或回调域名。")
+            if !message.isEmpty { DesignNotice(symbol: AppIcon.success.name, text: message) }
+            if !error.isEmpty { DesignNotice(symbol: AppIcon.alert.name, text: error, warning: true) }
+            DesignNotice(symbol: AppIcon.privacy.name, text: "授权码在有效期内使用。失效后可重新获取，不需要 AppSecret 或回调域名。")
         }
         .navigationTitle("115 官方授权")
         .designScreen("official")

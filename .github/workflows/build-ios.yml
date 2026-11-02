@@ -37,6 +37,9 @@ jobs:
       - name: Show toolchain
         run: xcodebuild -version && xcrun --sdk iphoneos --show-sdk-version
 
+      - name: Check icon usage
+        run: python3 ios-native/scripts/check-icons.py
+
       - name: Install XcodeGen
         run: brew install xcodegen
 
@@ -204,7 +207,7 @@ jobs:
             cat "$RUNNER_TEMP/player-ui/test-summary.json"
           fi
 
-      - name: Verify all 41 prototype screenshots
+      - name: Verify all 42 prototype screenshots
         if: always() && steps.native-tests.outcome != 'skipped'
         run: |
           python3 ios-native/scripts/verify-interface-coverage.py \

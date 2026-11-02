@@ -10,15 +10,14 @@ struct AddMediaSheet: View {
         VStack(alignment: .leading, spacing: 22) {
             HStack {
                 PageIntroduction(eyebrow: "Build your collection", title: "添加影片")
-                Button { dismiss() } label: { Image(systemName: "xmark").frame(width: 44, height: 44).glassCircle() }
-                    .accessibilityLabel("关闭")
+                SheetCloseButton()
             }
             DesignGroup {
-                action(.local, "folder", "导入本机视频", "从系统「文件」选择视频")
+                action(.local, AppIcon.folder.name, "导入本机视频", "从系统「文件」选择视频")
                 Divider().padding(.leading, 62)
-                action(.cloud, "icloud", "添加 115 文件夹", "浏览目录，加入你的首页")
+                action(.cloud, AppIcon.cloud.name, "添加 115 文件夹", "浏览目录，加入你的首页")
                 Divider().padding(.leading, 62)
-                action(.magnet, "link", "打开磁力链接", "使用 115 或本机引擎解析")
+                action(.magnet, AppIcon.link.name, "打开磁力链接", "使用 115 或本机引擎解析")
             }
             Text("添加后的影片会整理到你的片库。")
                 .font(.caption).foregroundStyle(.secondary)
@@ -31,7 +30,7 @@ struct AddMediaSheet: View {
 
     private func action(_ action: AddMediaAction, _ symbol: String, _ title: String, _ subtitle: String) -> some View {
         Button { onSelect(action) } label: { LibraryActionRow(symbol: symbol, title: title, subtitle: subtitle) }
-            .buttonStyle(.plain)
+            .buttonStyle(.pressable(scale: 0.985))
     }
 }
 
@@ -56,16 +55,16 @@ struct MediaActionSheet: View {
             }
             DesignGroup {
                 Button(action: onPlay) {
-                    LibraryActionRow(symbol: "play.fill", title: position == nil ? "播放" : "继续播放",
+                    LibraryActionRow(symbol: AppIcon.play.name, title: position == nil ? "播放" : "继续播放",
                                      subtitle: position.map { "从 \(playbackTimeText($0)) 继续" } ?? "开始观看这部影片")
                 }.buttonStyle(.plain)
                 Divider().padding(.leading, 62)
                 Button(action: onMatch) {
-                    LibraryActionRow(symbol: "photo", title: "匹配封面", subtitle: "选择或更正影片资料")
+                    LibraryActionRow(symbol: AppIcon.poster.name, title: "匹配封面", subtitle: "选择或更正影片资料")
                 }.buttonStyle(.plain)
                 Divider().padding(.leading, 62)
                 Button { confirmRemove = true } label: {
-                    LibraryActionRow(symbol: "trash", title: item.isCloud ? "从首页移除" : "删除本机文件",
+                    LibraryActionRow(symbol: AppIcon.trash.name, title: item.isCloud ? "从首页移除" : "删除本机文件",
                                      subtitle: item.isCloud ? "保留网盘中的原始文件" : "删除导入到 HPlayer 的副本")
                 }.buttonStyle(.plain)
             }
@@ -111,6 +110,6 @@ struct PerformerGridView: View {
                     }
                 }
             }
-        }.navigationTitle("演员合集").designScreen("people")
+        }.hidesTabBar().navigationTitle("演员合集").designScreen("people")
     }
 }

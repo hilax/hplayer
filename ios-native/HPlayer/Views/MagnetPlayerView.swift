@@ -57,7 +57,7 @@ struct MagnetPlayerView: View {
             .padding(.horizontal, Theme.contentInset)
             .padding(.top, 8)
             .padding(.bottom, 40)
-            .animation(.easeOut(duration: 0.2), value: controller.phase)
+            .animation(Motion.smooth, value: controller.phase)
             .fullScreenCover(item: $controller.cloudQueue) { queue in
                 PlayerView(source: queue.source, playlist: queue.items)
                     .environmentObject(appState)
@@ -102,7 +102,7 @@ struct MagnetPlayerView: View {
 
     private var inputCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label("磁力链接或信息哈希", systemImage: "link").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+            Label("磁力链接或信息哈希", systemImage: AppIcon.link.name).font(.caption.weight(.medium)).foregroundStyle(.secondary)
             TextField("粘贴磁力链接、信息哈希，或包含链接的整段文字", text: $input, axis: .vertical)
                 .font(.subheadline)
                 .lineLimit(3...6)
@@ -153,7 +153,7 @@ struct MagnetPlayerView: View {
                 }
                 .tint(Theme.accent)
             }
-            Button(action: submit) { Label("解析并播放", systemImage: "play.fill") }
+            Button(action: submit) { Label("解析并播放", systemImage: AppIcon.play.name) }
                 .buttonStyle(PrimaryActionStyle()).disabled(detected == nil)
                 .accessibilityIdentifier("magnet.resolve")
         }
@@ -164,7 +164,7 @@ struct MagnetPlayerView: View {
     /// 解析完成后输入框收成一行，点「更换」回到输入状态
     private var linkBar: some View {
         HStack(spacing: 10) {
-            Image(systemName: "link")
+            Image(systemName: AppIcon.link.name)
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(.secondary)
             Text(controller.link.map { "btih:\($0.shortHash)" } ?? input)
@@ -209,17 +209,17 @@ struct MagnetPlayerView: View {
                 Text(link.displayName.map { "已识别：\($0)" } ?? "已识别信息哈希 \(link.shortHash)")
                     .lineLimit(1)
             } icon: {
-                Image(systemName: "checkmark.circle.fill")
+                Image(systemName: AppIcon.selected.name)
                     .foregroundStyle(Theme.success)
             }
             .font(.caption.weight(.medium))
             .foregroundStyle(.secondary)
         } else if !inputHint.isEmpty {
-            Label(inputHint, systemImage: "exclamationmark.circle")
+            Label(inputHint, systemImage: AppIcon.alert.name)
                 .font(.caption)
                 .foregroundStyle(Theme.warning)
         } else if !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            Label("没有识别到磁力链接", systemImage: "questionmark.circle")
+            Label("没有识别到磁力链接", systemImage: AppIcon.help.name)
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -253,7 +253,7 @@ struct MagnetPlayerView: View {
                 ZStack {
                     Circle().stroke(Theme.accent.opacity(0.12), lineWidth: 1).frame(width: 132, height: 132)
                     Circle().stroke(Theme.accent.opacity(0.25), lineWidth: 1).frame(width: 96, height: 96)
-                    Image(systemName: "link").font(.system(size: 32, weight: .light)).foregroundStyle(Theme.accent)
+                    Image(systemName: AppIcon.link.name).font(.system(size: 32, weight: .light)).foregroundStyle(Theme.accent)
                     ProgressView().scaleEffect(1.5).offset(y: 66)
                 }.frame(height: 158)
                 Text(controller.usesCloud ? "115 云下载" : "本机 BT 引擎")
@@ -328,7 +328,7 @@ struct MagnetPlayerView: View {
                     .fill(done ? Theme.success : (active ? Theme.accent : Theme.track))
                     .frame(width: 22, height: 22)
                 if done {
-                    Image(systemName: "checkmark")
+                    Image(systemName: AppIcon.check.name)
                         .font(.system(size: 10, weight: .bold))
                         .foregroundStyle(.white)
                 } else if active {
@@ -377,9 +377,9 @@ struct MagnetPlayerView: View {
 
     private var cloudIcon: String {
         switch controller.cloud {
-        case .ready: return "checkmark.icloud.fill"
-        case .failed: return "exclamationmark.icloud"
-        default: return "icloud.and.arrow.down"
+        case .ready: return AppIcon.cloudReady.name
+        case .failed: return AppIcon.cloudFailed.name
+        default: return AppIcon.cloudDownload.name
         }
     }
 
@@ -394,7 +394,7 @@ struct MagnetPlayerView: View {
     /// 正在用 BT 播放时 115 离线完成了，提示可以切过去
     private var cloudSwitchBanner: some View {
         HStack(spacing: 12) {
-            Image(systemName: "checkmark.icloud.fill")
+            Image(systemName: AppIcon.cloudReady.name)
                 .font(.system(size: 18, weight: .semibold))
                 .foregroundStyle(Theme.success)
             VStack(alignment: .leading, spacing: 2) {
@@ -410,7 +410,7 @@ struct MagnetPlayerView: View {
             } label: {
                 Text("改用 115")
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Theme.onPrimary)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
                     .glassProminentCapsule()
@@ -426,7 +426,7 @@ struct MagnetPlayerView: View {
     private var failureCard: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "exclamationmark.triangle.fill")
+                Image(systemName: AppIcon.alert.name)
                     .font(.system(size: 20))
                     .foregroundStyle(Theme.warning)
                 VStack(alignment: .leading, spacing: 4) {
@@ -445,14 +445,14 @@ struct MagnetPlayerView: View {
                 Button {
                     controller.retry()
                 } label: {
-                    capsuleLabel("重试", systemImage: "arrow.clockwise", prominent: true)
+                    capsuleLabel("重试", systemImage: AppIcon.refresh.name, prominent: true)
                 }
                 .buttonStyle(.plain)
                 Button {
                     controller.reset()
                     input = ""
                 } label: {
-                    capsuleLabel("换一个链接", systemImage: "xmark", prominent: false)
+                    capsuleLabel("换一个链接", systemImage: AppIcon.close.name, prominent: false)
                 }
                 .buttonStyle(.plain)
             }
@@ -478,7 +478,7 @@ struct MagnetPlayerView: View {
 
         if catalog.main.isEmpty {
             VStack(spacing: 10) {
-                Image(systemName: "film.stack")
+                Image(systemName: AppIcon.series.name)
                     .font(.system(size: 26, weight: .semibold))
                     .foregroundStyle(Theme.accent)
                 Text("没有可以播放的视频")
@@ -529,7 +529,7 @@ struct MagnetPlayerView: View {
     private func torrentHeader(_ catalog: MagnetCatalog) -> some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .top, spacing: 14) {
-                IconTile(systemImage: "link", colors: [Theme.brandCyan, Theme.brandBlue], size: 44)
+                IconTile(icon: .link, size: 44)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(catalog.name)
                         .font(.headline)
@@ -546,16 +546,16 @@ struct MagnetPlayerView: View {
                             UINotificationFeedbackGenerator().notificationOccurred(.success)
                         }
                     } label: {
-                        Label("复制磁力链接", systemImage: "doc.on.doc")
+                        Label("复制磁力链接", systemImage: AppIcon.copy.name)
                     }
                     Button(role: .destructive) {
                         controller.reset()
                         input = ""
                     } label: {
-                        Label("关闭这个资源", systemImage: "xmark.circle")
+                        Label("关闭这个资源", systemImage: AppIcon.remove.name)
                     }
                 } label: {
-                    Image(systemName: "ellipsis.circle")
+                    Image(systemName: AppIcon.more.name)
                         .font(.title3)
                         .foregroundStyle(.secondary)
                         .frame(width: 32, height: 32)
@@ -567,10 +567,10 @@ struct MagnetPlayerView: View {
                 Button {
                     controller.play(primary.file)
                 } label: {
-                    Label(primary.title, systemImage: "play.fill")
+                    Label(primary.title, systemImage: AppIcon.play.name)
                         .font(.subheadline.weight(.semibold))
                         .lineLimit(1)
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Theme.onPrimary)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 13)
                         .glassProminentCapsule()
@@ -606,7 +606,7 @@ struct MagnetPlayerView: View {
 
     private func folderHeader(_ folder: String) -> some View {
         HStack(spacing: 6) {
-            Image(systemName: "folder.fill")
+            Image(systemName: AppIcon.folder.name)
                 .foregroundStyle(Theme.folderBack)
             Text(folder.isEmpty ? "根目录" : folder)
                 .lineLimit(1)
@@ -632,11 +632,11 @@ struct MagnetPlayerView: View {
                     if let number {
                         Text("\(number)")
                             .font(.system(size: 14, weight: .bold, design: .rounded).monospacedDigit())
-                            .foregroundStyle(isLast ? Color.white : Theme.accent)
+                            .foregroundStyle(isLast ? Theme.onPrimary : Theme.accent)
                     } else {
-                        Image(systemName: "film")
+                        Image(systemName: AppIcon.video.name)
                             .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(isLast ? Color.white : Theme.accent)
+                            .foregroundStyle(isLast ? Theme.onPrimary : Theme.accent)
                     }
                 }
                 .frame(width: 34, height: 34)
@@ -672,7 +672,7 @@ struct MagnetPlayerView: View {
 
                 Spacer(minLength: 6)
 
-                Image(systemName: "play.circle.fill")
+                Image(systemName: AppIcon.playCircle.name)
                     .font(.system(size: 24))
                     .foregroundStyle(Theme.accent)
             }
@@ -708,12 +708,12 @@ struct MagnetPlayerView: View {
 
     private func icon(for kind: MagnetFile.Kind) -> String {
         switch kind {
-        case .video: return "film"
-        case .subtitle: return "captions.bubble"
-        case .image: return "photo"
-        case .archive: return "doc.zipper"
-        case .document: return "doc.text"
-        case .other: return "doc"
+        case .video: return AppIcon.video.name
+        case .subtitle: return AppIcon.subtitle.name
+        case .image: return AppIcon.poster.name
+        case .archive: return AppIcon.archive.name
+        case .document: return AppIcon.document.name
+        case .other: return AppIcon.file.name
         }
     }
 
@@ -725,14 +725,14 @@ struct MagnetPlayerView: View {
         let rows = content()
         return VStack(alignment: .leading, spacing: 10) {
             Button {
-                withAnimation(.easeOut(duration: 0.2)) { expanded.wrappedValue.toggle() }
+                withAnimation(Motion.snappy) { expanded.wrappedValue.toggle() }
             } label: {
                 HStack {
                     Text(title)
                         .font(.footnote.weight(.semibold))
                         .foregroundStyle(.secondary)
                     Spacer()
-                    Image(systemName: "chevron.down")
+                    Image(systemName: AppIcon.expand.name)
                         .font(.caption.weight(.bold))
                         .foregroundStyle(.secondary)
                         .rotationEffect(.degrees(expanded.wrappedValue ? 0 : -90))
@@ -793,7 +793,7 @@ struct MagnetPlayerView: View {
             controller.open(link)
         } label: {
             HStack(spacing: 12) {
-                Image(systemName: "clock.arrow.circlepath")
+                Image(systemName: AppIcon.history.name)
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(Theme.accent)
                     .frame(width: 34, height: 34)
@@ -810,7 +810,7 @@ struct MagnetPlayerView: View {
                         .lineLimit(1)
                 }
                 Spacer(minLength: 0)
-                Image(systemName: "chevron.right")
+                Image(systemName: AppIcon.forward.name)
                     .font(.caption.weight(.bold))
                     .foregroundStyle(.tertiary)
             }
@@ -823,12 +823,12 @@ struct MagnetPlayerView: View {
             Button {
                 UIPasteboard.general.string = item.magnet
             } label: {
-                Label("复制磁力链接", systemImage: "doc.on.doc")
+                Label("复制磁力链接", systemImage: AppIcon.copy.name)
             }
             Button(role: .destructive) {
                 history.remove(item.infoHash)
             } label: {
-                Label("删除记录", systemImage: "trash")
+                Label("删除记录", systemImage: AppIcon.trash.name)
             }
         }
     }
@@ -848,17 +848,17 @@ struct MagnetPlayerView: View {
     private var tips: some View {
         VStack(alignment: .leading, spacing: 12) {
             Button {
-                withAnimation(.easeOut(duration: 0.2)) { showTips.toggle() }
+                withAnimation(Motion.snappy) { showTips.toggle() }
             } label: {
                 HStack(spacing: 10) {
-                    Image(systemName: "info.circle")
+                    Image(systemName: AppIcon.info.name)
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(.secondary)
                     Text(cloudAvailable ? "使用说明：流量、缓存和 115 离线" : "使用说明：流量和缓存")
                         .font(.subheadline)
                         .foregroundStyle(.primary)
                     Spacer(minLength: 8)
-                    Image(systemName: "chevron.down")
+                    Image(systemName: AppIcon.expand.name)
                         .font(.caption.weight(.bold))
                         .foregroundStyle(.secondary)
                         .rotationEffect(.degrees(showTips ? 180 : 0))
@@ -870,10 +870,10 @@ struct MagnetPlayerView: View {
 
             if showTips {
                 VStack(alignment: .leading, spacing: 8) {
-                    Label("边下边播，会使用手机流量和存储空间；缓存最多 1–2 GB，会自动清理。", systemImage: "antenna.radiowaves.left.and.right")
-                    Label("解析过的资源会记在本机，再次打开不用重新解析，并从上次看到的位置继续。", systemImage: "bolt.horizontal.circle")
+                    Label("边下边播，会使用手机流量和存储空间；缓存最多 1–2 GB，会自动清理。", systemImage: AppIcon.network.name)
+                    Label("解析过的资源会记在本机，再次打开不用重新解析，并从上次看到的位置继续。", systemImage: AppIcon.fast.name)
                     if cloudAvailable {
-                        Label("115 离线的文件保存在你 115 网盘的「云下载」文件夹，看完可以自己删除。", systemImage: "icloud")
+                        Label("115 离线的文件保存在你 115 网盘的「云下载」文件夹，看完可以自己删除。", systemImage: AppIcon.cloud.name)
                     }
                 }
                 .font(.caption)
@@ -891,7 +891,7 @@ struct MagnetPlayerView: View {
     private func capsuleLabel(_ title: String, systemImage: String, prominent: Bool) -> some View {
         let label = Label(title, systemImage: systemImage)
             .font(.subheadline.weight(.semibold))
-            .foregroundStyle(prominent ? Color.white : Color.primary)
+            .foregroundStyle(prominent ? Theme.onPrimary : Color.primary)
             .padding(.horizontal, Theme.contentInset)
             .padding(.vertical, 10)
         if prominent {

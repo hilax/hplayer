@@ -15,7 +15,7 @@ struct LocalVideosView: View {
         Group {
             if localStore.files.isEmpty {
                 EmptyStateView(
-                    icon: "iphone",
+                    icon: AppIcon.device.name,
                     title: "还没有导入视频",
                     message: "从「文件」App 导入的视频保存在 HPlayer 里，也会出现在首页海报墙。",
                     actionTitle: "导入视频",
@@ -27,17 +27,14 @@ struct LocalVideosView: View {
                         .padding(.vertical, 16)
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
-                    Button { showImporter = true } label: {
-                        LibraryActionRow(symbol: "folder", title: "从「文件」导入", subtitle: "导入后，可直接在本机播放。")
-                            .surfaceCard()
-                    }.buttonStyle(.plain).listRowBackground(Color.clear).listRowSeparator(.hidden)
-                    ForEach(localStore.files) { file in
+                    ForEach(Array(localStore.files.enumerated()), id: \.element.id) { index, file in
                         Button {
                             play(file)
                         } label: {
                             LocalVideoRow(file: file, artwork: metadataStore.metadataByMediaID[LibraryMedia(local: file).id]?.posterURL ?? "")
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.pressable(scale: 0.98))
+                        .reveal(index)
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
                         .listRowInsets(EdgeInsets(top: 7, leading: 16, bottom: 7, trailing: 16))
@@ -45,12 +42,12 @@ struct LocalVideosView: View {
                             Button(role: .destructive) {
                                 localStore.delete(file)
                             } label: {
-                                Label("删除", systemImage: "trash")
+                                Label("删除", systemImage: AppIcon.trash.name)
                             }
                         }
                         .contextMenu {
-                            Button("播放", systemImage: "play.fill") { play(file) }
-                            Button("删除本地文件", systemImage: "trash", role: .destructive) {
+                            Button("播放", systemImage: AppIcon.play.name) { play(file) }
+                            Button("删除本地文件", systemImage: AppIcon.trash.name, role: .destructive) {
                                 localStore.delete(file)
                             }
                         }
@@ -62,27 +59,19 @@ struct LocalVideosView: View {
         }
         .background(Theme.pageBackground.ignoresSafeArea())
         .designScreen("local")
+        // 导入入口只留一个：没有视频时用空状态里的按钮，有视频后用底部这一个
         .safeAreaInset(edge: .bottom) {
-            VStack(spacing: 10) {
-                if localStore.isImporting { ProgressView("正在导入视频…").font(.caption) }
-                Button { showImporter = true } label: { Label("导入视频", systemImage: "plus") }
-                    .buttonStyle(PrimaryActionStyle()).disabled(localStore.isImporting)
-            }.padding(Theme.contentInset).background(Theme.pageBackground)
+            if !localStore.files.isEmpty {
+                VStack(spacing: 10) {
+                    if localStore.isImporting { ProgressView("正在导入视频…").font(.caption) }
+                    Button { showImporter = true } label: { Label("导入视频", systemImage: AppIcon.add.name) }
+                        .buttonStyle(PrimaryActionStyle()).disabled(localStore.isImporting)
+                }.padding(Theme.contentInset).background(Theme.pageBackground)
+            }
         }
         .navigationTitle("本机视频")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    showImporter = true
-                } label: {
-                    Image(systemName: "plus")
-                }
-                .accessibilityLabel("导入视频")
-                .disabled(localStore.isImporting)
-            }
-        }
         .fileImporter(
             isPresented: $showImporter,
             allowedContentTypes: [.movie, .video, .mpeg4Movie, .quickTimeMovie, .data],
@@ -124,11 +113,11 @@ private struct LocalVideoRow: View {
         HStack(spacing: 14) {
             ArtworkView(urlString: artwork, title: file.name)
                 .scaledToFill().frame(width: 56, height: 78).clipped()
-                .clipShape(RoundedRectangle(cornerRadius: 10)).allowsHitTesting(false)
+                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous)).allowsHitTesting(false)
 
             VStack(alignment: .leading, spacing: 5) {
                 Text(file.name)
-                    .font(.system(size: 16, weight: .medium))
+                    .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
@@ -139,7 +128,12 @@ private struct LocalVideoRow: View {
             }
 
             Spacer(minLength: 0)
-            Image(systemName: "play.circle").font(.title3).foregroundStyle(Theme.accent)
+            Image(systemName: AppIcon.play.name)
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(Theme.onPrimary)
+                .frame(width: 34, height: 34)
+                .background(Theme.gold, in: Circle())
+                .accessibilityHidden(true)
         }
         .contentShape(Rectangle())
     }

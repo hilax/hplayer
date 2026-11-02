@@ -9,8 +9,8 @@ final class HomeUITests: XCTestCase {
         app.launch()
         defer { app.terminate() }
 
-        let library = app.tabBars.buttons["资源库"]
-        let settings = app.tabBars.buttons["设置"]
+        let library = app.buttons["tab.cloud"]
+        let settings = app.buttons["tab.mine"]
         XCTAssertTrue(library.waitForExistence(timeout: 20))
         library.tap()
         let account = app.buttons["library.account"]
@@ -72,6 +72,8 @@ final class HomeUITests: XCTestCase {
         let chineseSeries = app.descendants(matching: .any)["home.series.bgm:400602"].firstMatch
         XCTAssertTrue(chineseSeries.waitForExistence(timeout: 30), "Chinese title should match through Bangumi")
 
+        // 首页布局变了：先滑回顶部，保证要长按的那张海报在屏幕里。
+        for _ in 0..<3 where !dune.isHittable { app.swipeDown() }
         dune.press(forDuration: 1)
         app.buttons["匹配封面"].tap()
         let result = app.buttons["metadata.result.tt1160419"]
@@ -87,7 +89,7 @@ final class HomeUITests: XCTestCase {
         XCTAssertFalse(app.otherElements["home.emptyLibrary"].exists, "A saved library must not render the empty onboarding state")
         XCTAssertFalse(app.buttons["home.scanStatus"].exists, "Home never shows scan or matching maintenance")
         XCTAssertFalse(app.otherElements["home.matchingState"].exists)
-        app.tabBars.buttons["资源库"].tap()
+        app.buttons["tab.cloud"].tap()
         let manage = app.buttons["library.manage"]
         if !manage.isHittable { app.swipeUp() }
         XCTAssertTrue(manage.waitForExistence(timeout: 5))

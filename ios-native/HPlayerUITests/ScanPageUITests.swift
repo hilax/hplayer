@@ -37,7 +37,10 @@ final class ScanPageUITests: XCTestCase {
                           "Enabling catalog matching should expose performer enrichment")
             XCTAssertFalse(enrich.isEnabled, "There are no recognized videos to enrich in the empty test library")
             if !originallyEnabled {
-                if !sources.isHittable { app.swipeDown() }
+                // 媒体库管理现在是全屏页面，不能下滑关闭，点返回键回到资料来源
+                let doneButton = app.navigationBars["媒体库管理"].buttons["manage.back"]
+                if doneButton.exists { doneButton.tap() }
+                XCTAssertTrue(sources.waitForExistence(timeout: 5))
                 sources.tap()
                 setSwitch(adultMatching, enabled: false)
             }

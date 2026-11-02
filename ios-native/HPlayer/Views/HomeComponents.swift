@@ -263,19 +263,11 @@ func playbackTimeText(_ value: Double) -> String {
 
 // MARK: - 海报与卡片
 
-private let ratingStarColor = Color(uiColor: UIColor(hex: 0xFFC94A))
-
 extension View {
-    /// 压在图片上的小玻璃角标，固定用深色玻璃，白字在任何画面上都清楚
-    @ViewBuilder
+    /// 压在图片上的小标签：近黑的半透明底、5pt 圆角，白字或金字在任何画面上都清楚。
     func glassBadge() -> some View {
-        if #available(iOS 26.0, *) {
-            self.glassEffect(.regular, in: Capsule())
-                .environment(\.colorScheme, .dark)
-        } else {
-            self.background(.black.opacity(0.5), in: Capsule())
-                .overlay { Capsule().strokeBorder(Color.white.opacity(0.18), lineWidth: 0.5) }
-        }
+        self.background(Color(uiColor: UIColor(hex: 0x0B0C10, alpha: 0.72)),
+                        in: RoundedRectangle(cornerRadius: 5, style: .continuous))
     }
 }
 
@@ -283,19 +275,14 @@ struct RatingBadge: View {
     let rating: String
 
     var body: some View {
-        HStack(spacing: 3) {
-            Image(systemName: "star.fill")
-                .font(.system(size: 8, weight: .bold))
-                .foregroundStyle(ratingStarColor)
-            Text(rating)
-                .font(.caption2.weight(.bold).monospacedDigit())
-                .foregroundStyle(.white)
-        }
-        .padding(.horizontal, 7)
-        .frame(height: 22)
-        .glassBadge()
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("评分 \(rating)")
+        Text(rating)
+            .font(.system(size: 10, weight: .bold).monospacedDigit())
+            .foregroundStyle(Theme.gold)
+            .padding(.horizontal, 6)
+            .frame(height: 18)
+            .glassBadge()
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("评分 \(rating)")
     }
 }
 
@@ -303,10 +290,10 @@ struct SourceBadge: View {
     let isCloud: Bool
 
     var body: some View {
-        Image(systemName: isCloud ? "icloud.fill" : "iphone")
-            .font(.system(size: 9, weight: .bold))
+        Image(systemName: isCloud ? AppIcon.cloud.name : AppIcon.device.name)
+            .font(.system(size: 9, weight: .semibold))
             .foregroundStyle(.white)
-            .frame(width: 22, height: 22)
+            .frame(width: 20, height: 18)
             .glassBadge()
             .accessibilityHidden(true)
     }
@@ -317,11 +304,11 @@ struct EpisodeCountBadge: View {
 
     var body: some View {
         Text(text)
-            .font(.caption2.weight(.bold))
+            .font(.system(size: 10, weight: .medium))
             .foregroundStyle(.white)
-            .padding(.horizontal, 8)
-            .frame(height: 22)
-            .glassProminentCapsule()
+            .padding(.horizontal, 6)
+            .frame(height: 18)
+            .glassBadge()
     }
 }
 
@@ -355,14 +342,14 @@ struct PosterArtwork: View {
         }
         .frame(width: width, height: width * 1.5)
         .contentShape(Rectangle())
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous)
                 .strokeBorder(Theme.hairline, lineWidth: 0.5)
         }
         .background {
             // 阴影画在纯色形状上，滚动时不用对整张海报图重新取阴影
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous)
                 .fill(Color.black)
                 .shadow(color: Theme.shadow, radius: 10, x: 0, y: 6)
         }
@@ -379,18 +366,18 @@ struct PosterCard: View {
 
     var body: some View {
         Button(action: onPlay) {
-            VStack(alignment: .leading, spacing: 9) {
+            VStack(alignment: .leading, spacing: 7) {
                 PosterArtwork(urlString: item.posterURL, title: item.title, width: width,
                               alignment: item.metadata?.isWideJacket == true ? .trailing : .center)
 
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: 2) {
                     Text(item.title)
-                        .font(.subheadline.weight(.semibold))
+                        .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
-                    Text(item.year.isEmpty ? item.sourceLabel : "\(item.year)  \(item.sourceLabel)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    Text(item.year.isEmpty ? item.sourceLabel : "\(item.year) · \(item.sourceLabel)")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.textSecondary)
                         .lineLimit(1)
                 }
                 .frame(width: width, alignment: .leading)
@@ -399,9 +386,9 @@ struct PosterCard: View {
         .buttonStyle(PosterButtonStyle())
         .accessibilityIdentifier("home.poster.\(item.metadata?.imdbID ?? item.id)")
         .contextMenu {
-            Button("播放", systemImage: "play.fill", action: onPlay)
-            Button("匹配封面", systemImage: "photo", action: onMatch)
-            Button(item.isCloud ? "从媒体库移除" : "删除本地文件", systemImage: "trash", role: .destructive, action: onDelete)
+            Button("播放", systemImage: AppIcon.play.name, action: onPlay)
+            Button("匹配封面", systemImage: AppIcon.poster.name, action: onMatch)
+            Button(item.isCloud ? "从媒体库移除" : "删除本地文件", systemImage: AppIcon.trash.name, role: .destructive, action: onDelete)
         }
     }
 }
@@ -412,25 +399,25 @@ struct SeriesPosterCard: View {
     var width: CGFloat = 105
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
+        VStack(alignment: .leading, spacing: 7) {
             PosterArtwork(urlString: group.posterURL, title: group.title, width: width)
                 .overlay(alignment: .topLeading) {
-                    EpisodeCountBadge(text: group.countLabel).padding(7)
+                    EpisodeCountBadge(text: group.countLabel).padding(6)
                 }
-                .overlay(alignment: .bottomTrailing) {
+                .overlay(alignment: .topTrailing) {
                     if !group.rating.isEmpty {
-                        RatingBadge(rating: group.rating).padding(7)
+                        RatingBadge(rating: group.rating).padding(6)
                     }
                 }
 
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(group.title)
-                    .font(.subheadline.weight(.semibold))
+                    .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                 Text(group.detailText)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.textSecondary)
                     .lineLimit(1)
             }
             .frame(width: width, alignment: .leading)
@@ -443,41 +430,40 @@ struct SeriesPosterCard: View {
 /// 「继续观看」卡片：16:9 画面、玻璃角标和玻璃进度条
 struct ContinueCard: View {
     let entry: ContinueEntry
-    var width: CGFloat = 238
+    var width: CGFloat = 208
     private var height: CGFloat { width * 9 / 16 }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             ArtworkView(urlString: entry.artworkURL, title: entry.title)
                 .scaledToFill()
                 .frame(width: width, height: height)
                 .clipped()
                 .allowsHitTesting(false)
                 .overlay(alignment: .bottomLeading) {
-                    Image(systemName: "play.fill")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .frame(width: 30, height: 30)
-                        .background(.ultraThinMaterial, in: Circle())
-                        .environment(\.colorScheme, .dark)
-                        .padding(12)
+                    Image(systemName: AppIcon.play.name)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Theme.onPrimary)
+                        .frame(width: 26, height: 26)
+                        .background(Theme.gold, in: Circle())
+                        .padding(10)
                 }
                 .overlay(alignment: .bottomLeading) {
                     if let progress = entry.progress {
                         GeometryReader { proxy in
-                            Rectangle().fill(.white.opacity(0.3))
+                            Rectangle().fill(.white.opacity(0.18))
                                 .overlay(alignment: .leading) {
-                                    Rectangle().fill(Theme.accent)
+                                    Rectangle().fill(Theme.gold)
                                         .frame(width: proxy.size.width * min(max(progress, 0), 1))
                                 }
                         }
                         .frame(height: 3)
                     }
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 14))
-            VStack(alignment: .leading, spacing: 5) {
-                Text(entry.title).font(.subheadline.weight(.medium)).lineLimit(1)
-                Text(entry.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.title).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                Text(entry.subtitle).font(.system(size: 11)).foregroundStyle(Theme.textSecondary).lineLimit(1)
             }
             .frame(width: width, alignment: .leading)
         }
@@ -513,7 +499,7 @@ struct ContinueHistoryView: View {
                     Text("\(entries.count) 条记录").font(.caption).foregroundStyle(.secondary)
                 }
                 if entries.isEmpty {
-                    EmptyStateView(icon: "clock", title: "还没有播放记录", message: "开始播放后，会在这里记住你的进度。")
+                    EmptyStateView(icon: AppIcon.clock.name, title: "还没有播放记录", message: "开始播放后，会在这里记住你的进度。")
                 } else {
                     LazyVStack(spacing: 0) {
                         ForEach(entries) { entry in
@@ -530,15 +516,16 @@ struct ContinueHistoryView: View {
             }
             .frame(maxWidth: 680).frame(maxWidth: .infinity)
             .padding(.horizontal, Theme.contentInset).padding(.vertical, 18)
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: entries.map(\.id))
+            .animation(reduceMotion ? nil : Motion.smooth, value: entries.map(\.id))
         }
         .background(Theme.pageBackground.ignoresSafeArea())
+        .hidesTabBar()
         .navigationTitle("继续观看")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
         .designScreen("continue")
         .toolbar { ToolbarItem(placement: .topBarTrailing) {
-            Button { confirmClear = true } label: { Image(systemName: "ellipsis") }
+            Button { confirmClear = true } label: { Image(systemName: AppIcon.more.name) }
                 .accessibilityLabel("历史选项").disabled(entries.isEmpty)
         } }
         .confirmationDialog("清空继续观看记录？", isPresented: $confirmClear, titleVisibility: .visible) {
@@ -559,7 +546,7 @@ struct ContinueHistoryView: View {
                                         .overlay(alignment: .leading) {
                                             Rectangle().fill(Theme.primaryAction)
                                                 .frame(width: proxy.size.width * progress)
-                                                .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: progress)
+                                                .animation(reduceMotion ? nil : Motion.smooth, value: progress)
                                         }
                                 }.frame(height: 4)
                             }
@@ -573,7 +560,9 @@ struct ContinueHistoryView: View {
                                 Text("观看进度").foregroundStyle(.secondary)
                                 Text("\(Int((progress * 100).rounded()))%")
                                     .foregroundStyle(Theme.accent).fontWeight(.semibold)
+                                    .rollingNumber()
                             }.font(.caption2)
+                            .animation(reduceMotion ? nil : Motion.smooth, value: progress)
                         } else {
                             Text("暂无进度").font(.caption2).foregroundStyle(.secondary)
                         }
@@ -586,9 +575,9 @@ struct ContinueHistoryView: View {
             .accessibilityLabel("继续播放 \(entry.title)，\(entry.subtitle)")
             .accessibilityValue(validProgress(entry.progress).map { "观看进度 \(Int(($0 * 100).rounded()))%" } ?? "暂无进度")
             Menu {
-                Button("从继续观看移除", systemImage: "xmark.circle", role: .destructive) { onRemove(entry) }
+                Button("从继续观看移除", systemImage: AppIcon.remove.name, role: .destructive) { onRemove(entry) }
             } label: {
-                Image(systemName: "ellipsis").foregroundStyle(.secondary)
+                Image(systemName: AppIcon.more.name).foregroundStyle(.secondary)
                     .frame(width: 44, height: 44).contentShape(Rectangle())
             }
             .accessibilityLabel("\(entry.title) 的更多选项")
@@ -632,6 +621,7 @@ struct PosterGridScreen<Item: Identifiable, Cell: View>: View {
                     alignment: .leading,
                     spacing: 22
                 ) {
+                    // 不做逐个浮现：整页进入时一起出现，避免第二行晚一拍才冒出来
                     ForEach(items) { item in
                         cell(item, width)
                     }
@@ -644,6 +634,7 @@ struct PosterGridScreen<Item: Identifiable, Cell: View>: View {
             .scrollIndicators(.hidden)
         }
         .background(Theme.pageBackground.ignoresSafeArea())
+        .hidesTabBar()
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
@@ -660,8 +651,9 @@ struct PosterButtonStyle: ButtonStyle {
             // 整张卡片（含封面和标题之间的空隙）就是点击区域，且不会超出卡片：
             // 铺满裁剪的图片伸出去的部分不能抢相邻卡片的点击。
             .contentShape(Rectangle())
-            .scaleEffect(!reduceMotion && configuration.isPressed ? 0.97 : 1)
-            .animation(reduceMotion ? nil : .spring(response: 0.26, dampingFraction: 0.82), value: configuration.isPressed)
+            .scaleEffect(!reduceMotion && configuration.isPressed ? 0.95 : 1)
+            .opacity(configuration.isPressed ? 0.9 : 1)
+            .animation(reduceMotion ? nil : Motion.snappy, value: configuration.isPressed)
     }
 }
 
@@ -728,23 +720,52 @@ struct ArtworkView: View {
 
     @ViewBuilder private var fallback: some View {
         if drawsFallback {
-            ZStack {
-                LinearGradient(
-                    colors: [
-                        Theme.brandBlue.opacity(0.85),
-                        Theme.brandViolet.opacity(0.75),
-                        Theme.brandNavy,
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-                Text(String(title.prefix(1)).uppercased())
-                    .font(.system(size: letterSize, weight: .heavy, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.85))
-            }
+            PosterPlaceholder(title: title, letterSize: letterSize)
         } else {
             Color.clear
         }
+    }
+}
+
+/// 没有封面时画的「海报」：按片名挑一组固定的深色渐变，左下角用衬线黑体写片名，
+/// 和原型里的占位海报一样；同一个片名永远是同一组颜色。
+struct PosterPlaceholder: View {
+    let title: String
+    var letterSize: CGFloat = 52
+
+    private static let palettes: [(UInt32, UInt32, UInt32)] = [
+        (0x1F3B4D, 0x0B141B, 0xFFC478), (0x3A1E2E, 0x120A10, 0xFF7A6B), (0x24324A, 0x0A0E16, 0x9DB8FF),
+        (0x5A6B70, 0x1B2124, 0xF2EBDD), (0x5B3A1C, 0x160E07, 0xFFB55C), (0x132A52, 0x060B16, 0x5FA8FF),
+        (0x2E4A2A, 0x0D150C, 0xE9D27A), (0x4A2C4F, 0x140B16, 0xF09BD0), (0x1E4A4A, 0x081414, 0x9EE6D2),
+    ]
+
+    private var palette: (UInt32, UInt32, UInt32) {
+        let seed = title.unicodeScalars.reduce(5381) { ($0 &* 33) &+ Int($1.value) }
+        return Self.palettes[Int(seed.magnitude % UInt(Self.palettes.count))]
+    }
+
+    var body: some View {
+        let colors = palette
+        ZStack(alignment: .bottomLeading) {
+            LinearGradient(
+                colors: [Color(uiColor: UIColor(hex: colors.0)), Color(uiColor: UIColor(hex: colors.1))],
+                startPoint: .top, endPoint: .bottom
+            )
+            RadialGradient(
+                colors: [Color(uiColor: UIColor(hex: colors.2)).opacity(0.6), .clear],
+                center: UnitPoint(x: 0.7, y: 0.22), startRadius: 0, endRadius: 150
+            )
+            if letterSize > 4 {
+                Text(title.isEmpty ? " " : title)
+                    .font(.display(max(12, letterSize * 0.32)))
+                    .foregroundStyle(.white.opacity(0.92))
+                    .lineLimit(3)
+                    .minimumScaleFactor(0.6)
+                    .padding(9)
+            }
+        }
+        // 占位海报上的片名只是装饰，旁边的标题文字才是给读屏和自动化测试看的。
+        .accessibilityHidden(true)
     }
 }
 
@@ -808,8 +829,8 @@ struct AmbientBackdrop: View {
                         .scaleEffect(8)
                         .frame(width: proxy.size.width, height: proxy.size.height)
                         .clipped()
-                        .saturation(1.4)
-                        .opacity(colorScheme == .dark ? 0.9 : 0.75)
+                        .saturation(1.15)
+                        .opacity(colorScheme == .dark ? 0.7 : 0.75)
                         .id(urlString)
                         .transition(.opacity)
                 }
@@ -818,7 +839,7 @@ struct AmbientBackdrop: View {
             .frame(width: proxy.size.width, height: proxy.size.height)
             .clipped()
         }
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.5), value: urlString)
+        .animation(reduceMotion ? nil : Motion.artworkFade, value: urlString)
         .ignoresSafeArea()
         .allowsHitTesting(false)
         .accessibilityHidden(true)
@@ -826,7 +847,7 @@ struct AmbientBackdrop: View {
 
     /// 半透明的一层：留住图片的颜色，又让文字看得清
     private var veil: Color {
-        colorScheme == .dark ? Color.black.opacity(0.5) : Color.white.opacity(0.5)
+        colorScheme == .dark ? Color.black.opacity(0.55) : Color.white.opacity(0.5)
     }
 }
 

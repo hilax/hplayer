@@ -11,8 +11,8 @@ parser.add_argument('--coverage', type=Path, required=True)
 parser.add_argument('--output', type=Path, required=True)
 args = parser.parse_args()
 coverage = json.loads(args.coverage.read_text())
-assert coverage['expected_screens'] == 41 and len(coverage['screens']) == 41
-assert len({row['id'] for row in coverage['screens']}) == 41
+assert coverage['expected_screens'] == 42 and len(coverage['screens']) == 42
+assert len({row['id'] for row in coverage['screens']}) == 42
 manifest = json.loads(args.manifest.read_text())
 args.output.mkdir(parents=True, exist_ok=True)
 missing = []
@@ -32,8 +32,8 @@ for row in coverage['screens']:
     row['appearances'] = sorted(found)
     if 'dark' not in found:
         missing.append(row['id'])
-coverage['verified_screens'] = 41 - len(missing)
+coverage['verified_screens'] = 42 - len(missing)
 (args.output / 'coverage.json').write_text(json.dumps(coverage, ensure_ascii=False, indent=2) + '\n')
-print(f"Native prototype coverage: {coverage['verified_screens']}/41 screens")
+print(f"Native prototype coverage: {coverage['verified_screens']}/42 screens")
 if missing:
     raise SystemExit('Missing native screenshots: ' + ', '.join(missing))

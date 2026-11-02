@@ -68,7 +68,7 @@ struct DirectoryView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if !error.isEmpty {
                 EmptyStateView(
-                    icon: "exclamationmark.triangle",
+                    icon: AppIcon.alert.name,
                     title: "目录加载失败",
                     message: error,
                     actionTitle: "重试",
@@ -76,7 +76,7 @@ struct DirectoryView: View {
                 )
             } else if items.isEmpty {
                 EmptyStateView(
-                    icon: "folder",
+                    icon: AppIcon.folder.name,
                     title: "这个文件夹是空的",
                     message: "这里没有视频或子文件夹。"
                 )
@@ -92,7 +92,7 @@ struct DirectoryView: View {
             if selecting { selectionBar }
             else if !loading && !items.isEmpty {
                 VStack(spacing: 8) {
-                    Button(action: addAllToHome) { Label("将当前目录视频加入首页", systemImage: "plus") }
+                    Button(action: addAllToHome) { Label("将当前目录视频加入首页", systemImage: AppIcon.add.name) }
                         .buttonStyle(SecondaryActionStyle())
                         .disabled(!files.contains { $0.isVideo && !$0.pickCode.isEmpty })
                     Text("只加入当前文件夹中的视频，不修改网盘文件。")
@@ -131,17 +131,18 @@ struct DirectoryView: View {
                 .listRowSeparator(.hidden)
                 .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 6, trailing: 16))
 
-            ForEach(items.filter { !selecting || ($0.isVideo && !$0.pickCode.isEmpty) }) { file in
+            ForEach(Array(items.filter { !selecting || ($0.isVideo && !$0.pickCode.isEmpty) }.enumerated()), id: \.element.id) { index, file in
                 Button {
                     tap(file)
                 } label: {
                     FileRow(file: file, selecting: selecting, selected: selection.contains(file.id))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.pressable(scale: 0.98))
+                .reveal(index)
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.visible)
                 .listRowSeparatorTint(Theme.hairline)
-                .listRowInsets(EdgeInsets(top: 8, leading: 22, bottom: 8, trailing: 22))
+                .listRowInsets(EdgeInsets(top: 8, leading: Theme.contentInset, bottom: 8, trailing: Theme.contentInset))
                 .accessibilityIdentifier("library.file.\(file.id)")
                 .accessibilityAddTraits(selection.contains(file.id) ? AccessibilityTraits.isSelected : AccessibilityTraits())
             }
@@ -168,7 +169,7 @@ struct DirectoryView: View {
             HStack(spacing: 4) {
                 ForEach(Array(trail.enumerated()), id: \.offset) { index, crumb in
                     if index > 0 {
-                        Image(systemName: "chevron.right")
+                        Image(systemName: AppIcon.forward.name)
                             .font(.caption2.weight(.bold))
                             .foregroundStyle(.tertiary)
                     }
@@ -192,10 +193,9 @@ struct DirectoryView: View {
                                 .padding(.horizontal, 10)
                                 .frame(maxWidth: 160)
                                 .frame(height: 28)
-                                .background(Theme.surface, in: Capsule())
-                                .overlay { Capsule().strokeBorder(Theme.hairline, lineWidth: 0.5) }
+                                .background(Theme.surfaceRaised, in: Capsule())
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.pressable(scale: 0.94))
                         .disabled(onJump == nil)
                     }
                 }
@@ -217,18 +217,17 @@ struct DirectoryView: View {
                     HStack(spacing: 4) {
                         Text(key.title)
                         if active {
-                            Image(systemName: ascending ? "arrow.up" : "arrow.down")
+                            Image(systemName: ascending ? AppIcon.sortAscending.name : AppIcon.sortDescending.name)
                                 .font(.caption2.weight(.bold))
                         }
                     }
-                    .font(.footnote.weight(active ? .semibold : .regular))
-                    .foregroundStyle(active ? Color.primary : Color.secondary)
-                    .padding(.horizontal, 11)
-                    .frame(height: 30)
-                    .background(Theme.surface, in: Capsule())
-                    .overlay { Capsule().strokeBorder(Theme.hairline, lineWidth: 0.5) }
+                    .font(.system(size: 13, weight: active ? .bold : .regular))
+                    .foregroundStyle(active ? Theme.accent : Theme.textSecondary)
+                    .padding(.horizontal, 12)
+                    .frame(height: 32)
+                    .background(active ? Theme.tileTint : Color.clear, in: Capsule())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.pressable(scale: 0.93))
                 .accessibilityAddTraits(active ? AccessibilityTraits.isSelected : AccessibilityTraits())
             }
 
@@ -237,18 +236,18 @@ struct DirectoryView: View {
             } label: {
                 HStack(spacing: 4) {
                     if foldersFirst {
-                        Image(systemName: "checkmark")
+                        Image(systemName: AppIcon.check.name)
                             .font(.caption2.weight(.bold))
                     }
                     Text("文件夹置顶")
                 }
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(foldersFirst ? Theme.accent : Color.secondary)
-                .padding(.horizontal, 11)
-                .frame(height: 30)
-                .background(foldersFirst ? AnyShapeStyle(Theme.tileTint) : AnyShapeStyle(Theme.surface), in: Capsule())
+                .font(.system(size: 13, weight: foldersFirst ? .bold : .regular))
+                .foregroundStyle(foldersFirst ? Theme.accent : Theme.textSecondary)
+                .padding(.horizontal, 12)
+                .frame(height: 32)
+                .background(foldersFirst ? Theme.tileTint : Color.clear, in: Capsule())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.pressable(scale: 0.93))
             .accessibilityAddTraits(foldersFirst ? AccessibilityTraits.isSelected : AccessibilityTraits())
 
         }}.scrollIndicators(.hidden)
@@ -279,7 +278,7 @@ struct DirectoryView: View {
             Menu {
                 menuContent
             } label: {
-                Image(systemName: "ellipsis.circle")
+                Image(systemName: AppIcon.more.name)
             }
             .disabled(loading)
             .accessibilityLabel("更多")
@@ -292,7 +291,7 @@ struct DirectoryView: View {
         Button {
             startSelecting()
         } label: {
-            Label("选择", systemImage: "checkmark.circle")
+            Label("选择", systemImage: AppIcon.success.name)
         }
         .disabled(items.isEmpty)
 
@@ -300,7 +299,7 @@ struct DirectoryView: View {
             Button {
                 addAllToHome()
             } label: {
-                Label("加入首页", systemImage: "rectangle.stack.badge.plus")
+                Label("加入首页", systemImage: AppIcon.addToLibrary.name)
             }
             .disabled(!files.contains { $0.isVideo && !$0.pickCode.isEmpty })
         }
@@ -320,10 +319,10 @@ struct DirectoryView: View {
     private var selectionBar: some View {
         VStack(spacing: 10) {
             if onImported == nil {
-                Button { playSelected() } label: { Label("播放所选 · \(selectedVideos.count) 项", systemImage: "play.fill") }
+                Button { playSelected() } label: { Label("播放所选 · \(selectedVideos.count) 项", systemImage: AppIcon.play.name) }
                     .buttonStyle(PrimaryActionStyle()).disabled(selectedVideos.isEmpty)
             }
-            Button(action: addSelectedToHome) { Label("加入首页", systemImage: "plus") }
+            Button(action: addSelectedToHome) { Label("加入首页", systemImage: AppIcon.add.name) }
                 .buttonStyle(SecondaryActionStyle()).disabled(selectedVideos.isEmpty)
             Text("按当前列表顺序连续播放所选视频。")
                 .font(.caption2).foregroundStyle(.secondary)
@@ -338,8 +337,8 @@ struct DirectoryView: View {
                 .font(.subheadline.weight(.semibold))
                 .padding(.horizontal, 14)
                 .padding(.vertical, 9)
-                .foregroundStyle(prominent ? Color.white : Color.primary)
-                .background(prominent ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(Theme.surfaceRaised), in: Capsule())
+                .foregroundStyle(prominent ? Theme.onPrimary : Color.primary)
+                .background(prominent ? AnyShapeStyle(Theme.gold) : AnyShapeStyle(Theme.surfaceRaised), in: Capsule())
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
@@ -348,11 +347,11 @@ struct DirectoryView: View {
 
     private func startSelecting() {
         selection = []
-        withAnimation(.easeOut(duration: 0.2)) { selecting = true }
+        withAnimation(Motion.snappy) { selecting = true }
     }
 
     private func exitSelection() {
-        withAnimation(.easeOut(duration: 0.2)) { selecting = false }
+        withAnimation(Motion.snappy) { selecting = false }
         selection = []
     }
 
@@ -484,7 +483,7 @@ struct DirectoryView: View {
     }
 }
 
-/// 115 文件行：左边是淡色圆角底块，文件夹放黄色文件夹图标，视频优先显示网盘缩略图；右边是名称和说明。
+/// 115 文件行：左边是 96×54 的缩略图（视频用网盘截图，文件夹用金色线框文件夹），右边是名称和说明。
 struct FileRow: View {
     let file: P115File
     var selecting = false
@@ -493,40 +492,39 @@ struct FileRow: View {
     private static let tileSize = CGSize(width: 96, height: 54)
 
     var body: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 12) {
             if selecting {
-                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 22))
-                    .foregroundStyle(selected ? Theme.accent : Color(uiColor: .tertiaryLabel))
+                CheckBadge(selected: selected, size: 24)
                     .transition(.scale.combined(with: .opacity))
             }
 
             thumbnail
                 .frame(width: Self.tileSize.width, height: Self.tileSize.height)
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(Theme.hairline, lineWidth: 0.5)
-                }
+                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
 
-            VStack(alignment: .leading, spacing: 5) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(file.name)
-                    .font(.system(size: 16, weight: .medium))
+                    .font(.system(size: 15, weight: .medium))
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
                     .foregroundStyle(.primary)
                 if !subtitle.isEmpty {
                     Text(subtitle)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.textSecondary)
                         .lineLimit(1)
                 }
             }
 
             Spacer(minLength: 0)
+            if file.isDir && !selecting {
+                Image(systemName: AppIcon.forward.name)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.textTertiary)
+            }
         }
         .contentShape(Rectangle())
-        .animation(.easeOut(duration: 0.2), value: selecting)
+        .animation(Motion.snappy, value: selecting)
     }
 
     private var subtitle: String {
@@ -546,10 +544,11 @@ struct FileRow: View {
     @ViewBuilder
     private var thumbnail: some View {
         if file.isDir {
-            FolderGlyph()
-                .frame(width: 44, height: 34)
+            Image(systemName: AppIcon.folder.name)
+                .font(.system(size: 24, weight: Theme.iconWeight))
+                .foregroundStyle(Theme.accent)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Theme.folderTile)
+                .background(Theme.tileTint)
         } else if let url = URL(string: file.thumbUrl), !file.thumbUrl.isEmpty {
             AsyncImage(url: url) { phase in
                 if let image = phase.image {
@@ -564,16 +563,10 @@ struct FileRow: View {
     }
 
     private var videoPlaceholder: some View {
-        Image(systemName: "film")
-            .font(.system(size: 18, weight: .semibold))
-            .foregroundStyle(.white.opacity(0.9))
+        Image(systemName: AppIcon.video.name)
+            .font(.system(size: 18, weight: Theme.iconWeight))
+            .foregroundStyle(Theme.textSecondary)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(
-                LinearGradient(
-                    colors: [Theme.brandBlue.opacity(0.85), Theme.brandViolet.opacity(0.85)],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-            )
+            .background(Theme.surfaceRaised)
     }
 }

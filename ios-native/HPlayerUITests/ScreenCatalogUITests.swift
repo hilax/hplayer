@@ -13,8 +13,8 @@ final class ScreenCatalogUITests: XCTestCase {
     func test09Continue() { capture("continue", expected: "继续观看") }
     func test10Add() { capture("add", expected: "添加影片") }
     func test11FilmMenu() { capture("film-menu", expected: "影片选项") }
-    func test12Library() { capture("library", expected: "资源库") }
-    func test13LibraryEmpty() { capture("library-empty", expected: "资源库") }
+    func test12Library() { capture("library", expected: "网盘") }
+    func test13LibraryEmpty() { capture("library-empty", expected: "网盘") }
     func test14Files() { capture("files", expected: "影视收藏") }
     func test15FilesSelect() { capture("files-select", expected: "选择视频") }
     func test16Local() { capture("local", expected: "本机视频") }
@@ -27,7 +27,7 @@ final class ScreenCatalogUITests: XCTestCase {
     func test23Match() { capture("match", expected: "匹配封面") }
     func test24Metadata() { capture("metadata", expected: "资料来源") }
     func test25Credentials() { capture("credentials", expected: "资料接口凭证") }
-    func test26Settings() { capture("settings", expected: "设置") }
+    func test26Settings() { capture("settings", expected: "我的") }
     func test27Appearance() { capture("appearance", expected: "外观") }
     func test28Connect115() { capture("connect115", expected: "连接 115 网盘") }
     func test29Official() { capture("official", expected: "115 官方授权") }
@@ -44,11 +44,12 @@ final class ScreenCatalogUITests: XCTestCase {
     func test40Episodes() { capture("episodes", expected: "选集") }
     func test41Aspect() { capture("aspect", expected: "画面比例") }
     func test42HomeLight() { capture("home", expected: "播放", style: "light") }
-    func test43LibraryLight() { capture("library", expected: "资源库", style: "light") }
+    func test43LibraryLight() { capture("library", expected: "网盘", style: "light") }
     func test44FilesLight() { capture("files", expected: "影视收藏", style: "light") }
     func test45SearchLight() { capture("search-results", expected: "沙丘 2", style: "light") }
     func test46MetadataLight() { capture("metadata", expected: "资料来源", style: "light") }
-    func test47SettingsLight() { capture("settings", expected: "设置", style: "light") }
+    func test47SettingsLight() { capture("settings", expected: "我的", style: "light") }
+    func test48Catalog() { capture("catalog", expected: "片库") }
 
     private func capture(_ screen: String, expected: String, style: String = "dark") {
         continueAfterFailure = false
@@ -65,14 +66,17 @@ final class ScreenCatalogUITests: XCTestCase {
         if ["portrait", "landscape", "playback", "tracks", "episodes", "aspect"].contains(screen) {
             XCTAssertTrue(app.buttons["playback.close"].waitForExistence(timeout: 25))
             if screen == "portrait" || screen == "landscape" {
-                XCTAssertTrue(wait { (app.windows.firstMatch.frame.width > app.windows.firstMatch.frame.height) == (screen == "landscape") })
+                // 横屏只是播放页内容旋转：按钮写着「竖屏」就是在横屏；窗口自己始终是竖屏
+                let orientationButton = app.buttons["playback.orientation"]
+                XCTAssertTrue(wait { orientationButton.exists && (orientationButton.label == "竖屏") == (screen == "landscape") })
+                XCTAssertGreaterThan(app.windows.firstMatch.frame.height, app.windows.firstMatch.frame.width)
                 XCTAssertTrue(wait { self.seconds(app.staticTexts["playback.elapsed"].label) > 0 })
             }
         } else {
             XCTAssertTrue(app.descendants(matching: .any)["catalog.\(screen)"].firstMatch.waitForExistence(timeout: 25))
         }
         if screen == "home-more" {
-            let movies = app.staticTexts["电影"].firstMatch
+            let movies = app.staticTexts["home.shelf.movies"].firstMatch
             for _ in 0..<3 {
                 let distance = movies.frame.minY - 140
                 if distance < 30 { break }
@@ -82,8 +86,7 @@ final class ScreenCatalogUITests: XCTestCase {
             }
         }
         if screen == "home-more" {
-            XCTAssertTrue(app.buttons["home.scrolledAdd"].waitForExistence(timeout: 5))
-            XCTAssertTrue(app.buttons["home.scrolledAdd"].isHittable, "Scrolled navigation must remain within the safe area")
+            XCTAssertTrue(app.staticTexts["home.shelf.movies"].firstMatch.waitForExistence(timeout: 5))
         }
         if screen == "add" { app.buttons["home.sources"].tap() }
         if screen == "film-menu" { app.buttons["影片选项"].tap() }

@@ -6,34 +6,49 @@ struct SettingsTab: View {
     }
 }
 
+/// 「我的」：账号卡片、三项统计，以及媒体库、外观、关于三组设置。
 struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var accountInfo: P115AccountInfoStore
+    @EnvironmentObject private var recents: RecentStore
+    @EnvironmentObject private var localStore: LocalMediaStore
+    @EnvironmentObject private var mediaLibrary: MediaLibraryStore
 
     @AppStorage(AppearanceMode.storageKey) private var appearance: AppearanceMode = .system
     @State private var confirmLogout = false
+    @State private var showManagement = false
 
     private var status: P115Status? { appState.isAuthenticated ? accountInfo.status(for: appState.sessionID) : nil }
+    private var quota: QuotaResponse? { appState.isAuthenticated ? accountInfo.quota(for: appState.sessionID) : nil }
     private var loadingStatus: Bool { appState.isAuthenticated && accountInfo.isLoading(for: appState.sessionID) }
     private var error: String { appState.isAuthenticated ? accountInfo.error(for: appState.sessionID) : "" }
 
     var body: some View {
         NavigationStack {
+            VStack(spacing: 0) {
+            // 标题栏固定在顶部，内容在它下面滚动
+            ScreenTitleBar("我的")
+                .padding(.top, 6)
+                .frame(maxWidth: 620)
+                .frame(maxWidth: .infinity)
             ScrollView {
-                VStack(alignment: .leading, spacing: 26) {
-                    accountSection
-                    appearanceSection
-                    aboutSection
+                VStack(alignment: .leading, spacing: 20) {
+                    profileCard.reveal(0)
+                    statsRow.reveal(1)
+                    mediaGroup.reveal(2)
+                    appearanceGroup.reveal(3)
+                    aboutGroup.reveal(4)
                 }
                 .frame(maxWidth: 620)
                 .frame(maxWidth: .infinity)
                 .padding(.horizontal, Theme.contentInset)
-                .padding(.top, 8)
-                .padding(.bottom, 40)
+                .padding(.top, 10)
+                .padding(.bottom, 36)
+            }
+            .scrollIndicators(.hidden)
             }
             .background(Theme.pageBackground.ignoresSafeArea())
-            .navigationTitle("设置")
-            .navigationBarTitleDisplayMode(.inline)
+            .toolbar(.hidden, for: .navigationBar)
             .designScreen("settings")
             .confirmationDialog("退出后将断开 115 网盘连接", isPresented: $confirmLogout, titleVisibility: .visible) {
                 Button("退出 115", role: .destructive) { appState.logout() }
@@ -41,126 +56,195 @@ struct SettingsView: View {
                 Button("取消", role: .cancel) {}
             }
         }
+        .fullScreenCover(isPresented: $showManagement) { LibraryManagementView() }
     }
 
-    // MARK: 115 账号
+    // MARK: 账号卡片
 
-    private var accountSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            GroupLabel(title: "账号与连接")
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: 12) {
-                    Image(systemName: "person")
-                        .font(.system(size: 21, weight: .medium))
-                        .foregroundStyle(Theme.accent)
-                        .frame(width: 45, height: 45)
-                        .background(Theme.tileTint, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(status?.userName ?? "115 网盘")
-                            .font(.headline).lineLimit(1)
-                        HStack(spacing: 5) {
-                            if appState.isAuthenticated { Text("115 网盘 ·") }
-                            Circle().fill(accountState.color).frame(width: 6, height: 6)
-                            Text(accountState.text).lineLimit(1)
-                        }
-                        .font(.caption).foregroundStyle(.secondary)
+    private var avatarLetter: String? {
+        guard appState.isAuthenticated, let name = status?.userName, let first = name.first else { return nil }
+        return String(first)
+    }
+
+    private var avatar: some View {
+        ZStack {
+            Circle().fill(Theme.tileTint)
+            Circle().strokeBorder(Theme.accentGradient, lineWidth: 2)
+            if let letter = avatarLetter {
+                Text(letter).font(.display(26)).foregroundStyle(Theme.accent)
+            } else {
+                Image(systemName: AppIcon.mine.name)
+                    .font(.system(size: 26, weight: Theme.iconWeight))
+                    .foregroundStyle(Theme.accent)
+            }
+        }
+        .frame(width: 64, height: 64)
+        .animation(Motion.smooth, value: avatarLetter)
+        .accessibilityHidden(true)
+    }
+
+    private var profileCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 14) {
+                avatar
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(status?.userName ?? "115 网盘")
+                        .font(.system(size: 18, weight: .bold))
+                        .lineLimit(1)
+                    HStack(spacing: 5) {
+                        if appState.isAuthenticated { Text("115 网盘 ·") }
+                        Circle().fill(accountState.color).frame(width: 6, height: 6)
+                        Text(accountState.text).lineLimit(1)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    if loadingStatus && status == nil { ProgressView().controlSize(.small) }
-                    NavigationLink {
-                        CookieWebLoginView(onConnected: {})
-                            .toolbar(.visible, for: .navigationBar)
-                    } label: {
-                        Image(systemName: "arrow.triangle.2.circlepath")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.textSecondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                if loadingStatus && status == nil { ProgressView().controlSize(.small) }
+                NavigationLink {
+                    CookieWebLoginView(onConnected: {})
+                        .toolbar(.visible, for: .navigationBar)
+                        .hidesTabBar()
+                } label: {
+                    Image(systemName: AppIcon.switchAccount.name)
+                        .font(.system(size: 18, weight: Theme.iconWeight))
+                        .frame(width: 44, height: 44).contentShape(Rectangle())
+                }
+                .buttonStyle(.pressable(scale: 0.88)).foregroundStyle(Theme.accent)
+                .accessibilityLabel(appState.isAuthenticated ? "重新登录 115" : "登录 115")
+                .accessibilityIdentifier("settings.account.login")
+                if appState.isAuthenticated {
+                    Button { confirmLogout = true } label: {
+                        Image(systemName: AppIcon.logout.name)
+                            .font(.system(size: 18, weight: Theme.iconWeight))
                             .frame(width: 44, height: 44).contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain).foregroundStyle(Theme.accent)
-                    .accessibilityLabel(appState.isAuthenticated ? "重新登录 115" : "登录 115")
-                    .accessibilityIdentifier("settings.account.login")
-                    if appState.isAuthenticated {
-                        Button { confirmLogout = true } label: {
-                            Image(systemName: "rectangle.portrait.and.arrow.right")
-                                .frame(width: 44, height: 44).contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain).foregroundStyle(.red)
-                        .accessibilityLabel("退出 115")
-                        .accessibilityIdentifier("settings.account.logout")
-                    }
-                }
-                .padding(.vertical, 16).padding(.leading, 14).padding(.trailing, 10)
-
-                if !error.isEmpty {
-                    Divider().padding(.horizontal, 16)
-                    Label(error, systemImage: "exclamationmark.circle")
-                        .font(.caption)
-                        .foregroundStyle(Theme.warning)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(16)
+                    .buttonStyle(.pressable(scale: 0.88)).foregroundStyle(Theme.danger)
+                    .accessibilityLabel("退出 115")
+                    .accessibilityIdentifier("settings.account.logout")
+                    .transition(.scale.combined(with: .opacity))
                 }
             }
-            .surfaceCard()
+            .padding(.vertical, 16).padding(.leading, 16).padding(.trailing, 8)
+
+            if !error.isEmpty {
+                Divider().padding(.horizontal, 16)
+                Label(error, systemImage: AppIcon.alert.name)
+                    .font(.caption)
+                    .foregroundStyle(Theme.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(16)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .surfaceCard()
+        .animation(Motion.snappy, value: appState.isAuthenticated)
+    }
+
+    // MARK: 统计
+
+    private var statsRow: some View {
+        let videos = localStore.files.count + mediaLibrary.files(for: appState).count
+        return HStack(spacing: 0) {
+            stat("\(videos)", "视频")
+            Rectangle().fill(Theme.hairline).frame(width: 0.5, height: 28)
+            stat("\(recents.items.count)", "观看记录")
+            Rectangle().fill(Theme.hairline).frame(width: 0.5, height: 28)
+            stat(quota?.usedText ?? "—", "网盘已用")
+        }
+        .padding(.vertical, 14)
+        .frame(maxWidth: .infinity)
+        .surfaceCard()
+    }
+
+    private func stat(_ value: String, _ title: String) -> some View {
+        VStack(spacing: 4) {
+            Text(value)
+                .font(.display(20))
+                .foregroundStyle(Theme.textPrimary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .rollingNumber()
+                .animation(Motion.smooth, value: value)
+            Text(title)
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.textSecondary)
+        }
+        .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .combine)
+    }
+
+    // MARK: 设置分组
+
+    private func group<Content: View>(_ title: String, @ViewBuilder _ content: @escaping () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            GroupLabel(title: title)
+            DesignGroup { content() }
         }
     }
 
-    private var appearanceSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            GroupLabel(title: "外观")
-            NavigationLink { AppearanceSettingsView() } label: {
-                LibraryActionRow(symbol: "moon", title: "显示方式", value: appearance.title)
-                    .surfaceCard()
+    private var rowDivider: some View {
+        Divider().padding(.leading, 60)
+    }
+
+    private var mediaGroup: some View {
+        group("媒体库") {
+            Button { showManagement = true } label: {
+                LibraryActionRow(symbol: AppIcon.folderSettings.name, title: "媒体库管理",
+                                 subtitle: "扫描网盘、匹配封面、整理未匹配影片")
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.pressable(scale: 0.985))
+            .accessibilityIdentifier("mine.manage")
+            rowDivider
+            NavigationLink {
+                MetadataSourcesView().hidesTabBar()
+            } label: {
+                LibraryActionRow(symbol: AppIcon.tune.name, title: "资料来源",
+                                 subtitle: "番组计划、IMDb、TMDB 与番号资料")
+            }
+            .buttonStyle(.pressable(scale: 0.985))
+            .accessibilityIdentifier("mine.sources")
+            rowDivider
+            NavigationLink {
+                Official115SettingsView(onSourceChanged: {}).hidesTabBar()
+            } label: {
+                LibraryActionRow(symbol: AppIcon.verified.name, title: "115 官方授权",
+                                 subtitle: "BT 云下载等官方接口使用")
+            }
+            .buttonStyle(.pressable(scale: 0.985))
+            .accessibilityIdentifier("mine.official")
+        }
+    }
+
+    private var appearanceGroup: some View {
+        group("外观") {
+            NavigationLink { AppearanceSettingsView().hidesTabBar() } label: {
+                LibraryActionRow(symbol: AppIcon.appearance.name, title: "显示方式", value: appearance.title)
+            }
+            .buttonStyle(.pressable(scale: 0.985))
             .accessibilityIdentifier("settings.appearance")
         }
     }
 
-    private var aboutSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            GroupLabel(title: "关于")
-            VStack(spacing: 0) {
-                HStack(spacing: 12) {
-                    Image(systemName: "info.circle")
-                        .foregroundStyle(Theme.accent)
-                        .frame(width: 32, height: 32)
-                        .background(Theme.tileTint, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    Text("版本").font(.subheadline.weight(.semibold))
-                    Spacer()
-                    Text(appVersion).font(.subheadline).foregroundStyle(.secondary)
-                }
-                .frame(minHeight: 52).padding(.horizontal, 16)
-                Divider().padding(.horizontal, 16)
+    private var aboutGroup: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            group("关于") {
+                LibraryActionRow(symbol: AppIcon.info.name, title: "版本", value: appVersion, showsChevron: false)
+                rowDivider
                 NavigationLink {
                     LicensesView()
                         .toolbar(.visible, for: .navigationBar)
+                        .hidesTabBar()
                 } label: {
-                    settingsRow(title: "开源许可", systemImage: "doc.text", tint: Theme.accent)
+                    LibraryActionRow(symbol: AppIcon.document.name, title: "开源许可")
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.pressable(scale: 0.985))
                 .accessibilityIdentifier("settings.licenses")
             }
-            .surfaceCard()
             Text("播放功能使用的开源组件，可在开源许可中查看。")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.caption).foregroundStyle(Theme.textTertiary)
                 .padding(.leading, 6)
         }
-    }
-
-    private func settingsRow(title: String, systemImage: String, tint: Color, chevron: Bool = true) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: systemImage)
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(tint)
-                .frame(width: 32, height: 32)
-                .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-            Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(chevron ? Color.primary : tint)
-            Spacer(minLength: 8)
-            if chevron {
-                Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
-            }
-        }
-        .frame(minHeight: 52)
-        .padding(.horizontal, 16)
-        .contentShape(Rectangle())
     }
 
     private var accountState: (text: String, color: Color) {
@@ -194,17 +278,16 @@ struct AppearanceSettingsView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     GroupLabel(title: "界面预览")
                     HStack(spacing: 12) {
-                        Image(systemName: "play.rectangle.fill")
-                            .font(.largeTitle).foregroundStyle(Theme.accent)
+                        IconTile(icon: .playback, size: 52)
                         VStack(alignment: .leading, spacing: 7) {
-                            Text("继续观看").font(.headline)
-                            Text("回到上次的故事").font(.caption).foregroundStyle(.secondary)
-                            ProgressView(value: 0.42).tint(Theme.accent)
+                            Text("继续观看").font(.system(size: 15, weight: .semibold))
+                            Text("回到上次的故事").font(.caption).foregroundStyle(Theme.textSecondary)
+                            ProgressView(value: 0.42).tint(Theme.gold)
                         }
                     }
                     .padding(18).surfaceCard()
                 }
-                Label("播放页面始终使用深色外观，避免观看时受到亮色界面干扰。", systemImage: "moon")
+                Label("播放页面始终使用深色外观，避免观看时受到亮色界面干扰。", systemImage: AppIcon.appearance.name)
                     .font(.footnote).foregroundStyle(.secondary)
             }
             .frame(maxWidth: 620).frame(maxWidth: .infinity)
@@ -252,7 +335,7 @@ struct LicensesView: View {
                 if entries.isEmpty { Text("这个版本没有打包许可文件。").foregroundStyle(.secondary).padding(20) }
                 ForEach(entries) { entry in
                     NavigationLink { LicenseTextView(title: entry.title, url: entry.url) } label: {
-                        LibraryActionRow(symbol: "doc.text", title: entry.title, subtitle: entryDetail(entry.id))
+                        LibraryActionRow(symbol: AppIcon.document.name, title: entry.title, subtitle: entryDetail(entry.id))
                     }.buttonStyle(.plain)
                     if entry.id != entries.last?.id { Divider().padding(.leading, 62) }
                 }
@@ -322,18 +405,20 @@ private struct AppearancePicker: View {
     private func option(_ mode: AppearanceMode) -> some View {
         let selected = selection == mode
         return Button {
-            withAnimation(.easeInOut(duration: 0.2)) { selection = mode }
+            if selection != mode { Haptics.select() }
+            withAnimation(Motion.snappy) { selection = mode }
         } label: {
             VStack(spacing: 9) {
                 AppearancePreview(mode: mode)
                     .frame(height: 116)
                     .overlay(alignment: .topTrailing) {
                         if selected {
-                            Image(systemName: "checkmark.circle.fill")
+                            Image(systemName: AppIcon.selected.name)
                                 .font(.system(size: 18, weight: .semibold))
                                 .symbolRenderingMode(.palette)
-                                .foregroundStyle(.white, Theme.accent)
+                                .foregroundStyle(Theme.onPrimary, Theme.gold)
                                 .offset(x: 4, y: -4)
+                                .transition(.scale.combined(with: .opacity))
                         }
                     }
                 Text(mode.title)
@@ -344,14 +429,14 @@ private struct AppearancePicker: View {
             }
             .padding(10)
             .frame(maxWidth: .infinity)
-            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
                     .strokeBorder(selected ? Theme.accent : Theme.hairline, lineWidth: selected ? 2 : 1)
             }
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.pressable(scale: 0.96))
         .accessibilityLabel(mode.title)
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityIdentifier("settings.appearance.\(mode.rawValue)")
@@ -379,8 +464,8 @@ private struct AppearancePreview: View {
     }
 
     private func miniScreen(dark: Bool) -> some View {
-        let background = dark ? Color.black : Color(uiColor: UIColor(hex: 0xF2F2F7))
-        let card = dark ? Color(uiColor: UIColor(hex: 0x2C2C2E)) : Color.white
+        let background = dark ? Color(uiColor: UIColor(hex: 0x0B0C10)) : Color(uiColor: UIColor(hex: 0xF6F3ED))
+        let card = dark ? Color(uiColor: UIColor(hex: 0x1E2028)) : Color.white
         let line = dark ? Color.white.opacity(0.3) : Color.black.opacity(0.14)
         return ZStack(alignment: .topLeading) {
             background

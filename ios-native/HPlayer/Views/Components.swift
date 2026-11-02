@@ -1,13 +1,13 @@
 import SwiftUI
 
-/// App 图标的矢量版：深蓝底上两道渐变竖笔组成 H，中间是播放键。
+/// 品牌标志的矢量版：黑曜石底上两道金色竖笔组成 H，中间是播放键。
 struct BrandLogo: View {
     var size: CGFloat = 88
 
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: size * 0.23, style: .continuous)
-                .fill(Theme.brandNavy)
+                .fill(Theme.brandNight)
 
             BrandMark()
                 .frame(width: size * 0.74, height: size * 0.74)
@@ -30,24 +30,24 @@ struct BrandMark: View {
                 HStack(spacing: 0) {
                     RoundedRectangle(cornerRadius: radius, style: .continuous)
                         .fill(LinearGradient(
-                            colors: [Theme.brandCyan, Theme.brandBlue],
+                            colors: [Theme.goldLight, Theme.gold],
                             startPoint: .top, endPoint: .bottom
                         ))
                         .frame(width: barWidth, height: barHeight)
                     Spacer(minLength: 0)
                     RoundedRectangle(cornerRadius: radius, style: .continuous)
                         .fill(LinearGradient(
-                            colors: [Color(uiColor: UIColor(hex: 0x9C82FF)), Color(uiColor: UIColor(hex: 0x5A34E6))],
+                            colors: [Theme.gold, Theme.goldDeep],
                             startPoint: .top, endPoint: .bottom
                         ))
                         .frame(width: barWidth, height: barHeight)
                 }
 
                 PlayTriangle()
-                    .fill(Theme.brandBlue)
+                    .fill(Theme.brandNight)
                     .overlay {
                         PlayTriangle()
-                            .stroke(Theme.brandNavy, style: StrokeStyle(lineWidth: side * 0.05, lineJoin: .round))
+                            .stroke(Theme.gold, style: StrokeStyle(lineWidth: side * 0.05, lineJoin: .round))
                     }
                     .frame(width: side * 0.52, height: side * 0.46)
                     .offset(x: side * 0.05, y: -side * 0.08)
@@ -79,22 +79,26 @@ struct EmptyStateView: View {
     var body: some View {
         VStack(spacing: 14) {
             Image(systemName: icon)
-                .font(.system(size: 28, weight: .semibold))
+                .font(.system(size: 30, weight: Theme.iconWeight))
                 .foregroundStyle(Theme.accent)
                 .frame(width: 76, height: 76)
-                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 24))
+                .background(Theme.tileTint, in: RoundedRectangle(cornerRadius: Theme.Radius.sheet, style: .continuous))
+                .reveal(0)
             Text(title)
-                .font(.title2.weight(.semibold))
+                .font(.title3.weight(.bold))
+                .reveal(1)
             Text(message)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 300)
+                .reveal(2)
             if let actionTitle, let action {
                 Button(actionTitle, action: action)
                     .buttonStyle(PrimaryActionStyle())
                     .frame(maxWidth: 240)
                     .padding(.top, 8)
+                    .reveal(3)
             }
         }
         .padding(32)
