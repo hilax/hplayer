@@ -8,7 +8,7 @@ final class SettingsUITests: XCTestCase {
         app.launchEnvironment["HPLAYER_METADATA_TEST_ENDPOINT"] = "http://127.0.0.1:8765"
         app.launch()
 
-        let settings = app.buttons["tab.mine"]
+        let settings = app.tabButton("我的")
         XCTAssertTrue(settings.waitForExistence(timeout: 20))
         settings.tap()
 
