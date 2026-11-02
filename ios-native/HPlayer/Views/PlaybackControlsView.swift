@@ -97,14 +97,9 @@ struct PlaybackControlsView: View {
     /// 拖进度条开始时的播放位置，用来算「+ 00:20」
     @State private var scrubStart = 0.0
     @State private var hideTask: Task<Void, Never>?
-    @State private var requestedLandscape = false
-    /// 播放页还在屏幕上；退出后不再去请求横屏
-    @State private var onScreen = false
     @State private var lastSeekTick = 0
     /// 正在转回竖屏准备关闭，期间不再响应关闭和手势
     @State private var closing = false
-    @State private var initialLandscapeRequested = false
-    @State private var rotateError = ""
     @State private var adjustment: PlaybackAdjustment?
     @State private var adjustmentStartTime = 0.0
     @State private var adjustmentStartBrightness = 0.0
@@ -126,7 +121,11 @@ struct PlaybackControlsView: View {
     @State private var busyTask: Task<Void, Never>?
     @State private var copiedDiagnostics = false
     @State private var sideTab: SideTab = .episodes
-    @State private var landscapeMode = false
+    /// 横屏播放：App 的真实方向一直是竖屏，横屏是把播放页内容旋转 90°。
+    /// 这样播放页下面的页面始终是竖屏，关闭播放器时没有任何翻转。
+    @State private var fakeLandscape = PlaybackControlsView.startsInLandscape
+    /// 内容顺时针旋转的角度：手机向左横放是 +90，向右横放是 −90
+    @State private var landscapeAngle = 90.0
     /// 正在柔和关闭：整个播放页淡出并轻轻缩小
     @State private var closeFade = false
     @Namespace private var sideNamespace
@@ -136,12 +135,29 @@ struct PlaybackControlsView: View {
     private static let inlineVideoHeight: CGFloat = 220
     private static var isUITest: Bool { ProcessInfo.processInfo.environment["HPLAYER_UI_TEST_URL"] != nil }
 
+    /// 默认直接横屏播放；界面预览里只有「横屏」设计稿是横屏
+    private static var startsInLandscape: Bool {
+        !(InterfacePreview.active && InterfacePreview.screen != "landscape")
+    }
+
+    /// 横屏时的安全区：刘海 / 灵动岛机型左右各留出一块，上下沿用横屏常见的值
+    private static func layoutInsets(landscape: Bool, portrait: EdgeInsets) -> EdgeInsets {
+        guard landscape else { return portrait }
+        let side: CGFloat = portrait.top > 24 ? portrait.top : 0
+        return EdgeInsets(top: 0, leading: side, bottom: 20, trailing: side)
+    }
+
     private static let speedOptions: [Float] = [0.75, 1, 1.25, 1.5, 2, 3]
 
     var body: some View {
         GeometryReader { geometry in
-            let landscape = geometry.size.width > geometry.size.height
-            let insets = geometry.safeAreaInsets
+            // App 的真实方向始终是竖屏；横屏播放是把播放页内容旋转 90°，所以先算出整块屏幕的竖屏尺寸
+            let portraitInsets = geometry.safeAreaInsets
+            let fullWidth = geometry.size.width + portraitInsets.leading + portraitInsets.trailing
+            let fullHeight = geometry.size.height + portraitInsets.top + portraitInsets.bottom
+            let landscape = fakeLandscape
+            let layoutSize = landscape ? CGSize(width: fullHeight, height: fullWidth) : CGSize(width: fullWidth, height: fullHeight)
+            let insets = Self.layoutInsets(landscape: landscape, portrait: portraitInsets)
             ZStack(alignment: .top) {
                 if landscape {
                     Theme.playerBackground
@@ -152,7 +168,7 @@ struct PlaybackControlsView: View {
                 // 竖屏：上面是 16:9 的小窗播放器，下面是影片信息、选集和文件信息；横屏：画面铺满
                 VStack(spacing: 0) {
                     if !landscape { Color.black.frame(height: insets.top) }
-                    videoLayer(landscape: landscape, insets: insets, width: geometry.size.width)
+                    videoLayer(landscape: landscape, insets: insets, width: layoutSize.width)
                     if !landscape { infoPage(bottomInset: insets.bottom) }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -178,27 +194,27 @@ struct PlaybackControlsView: View {
                 }
             }
             .foregroundColor(.white)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .ignoresSafeArea()
+            .frame(width: layoutSize.width, height: layoutSize.height)
             .opacity(closeFade ? 0 : 1)
             .scaleEffect(closeFade ? 0.96 : 1)
+            .rotationEffect(.degrees(landscape ? landscapeAngle : 0))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .ignoresSafeArea()
             .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: boosting)
-            .onAppear { landscapeMode = landscape }
-            .onChange(of: landscape) { landscapeMode = $0 }
         }
         .background(SystemVolumeHost(controller: systemVolume).frame(width: 1, height: 1).allowsHitTesting(false))
         .background(DarkPresentationStyle().frame(width: 0, height: 0))
         .designScreen("player")
         .environment(\.colorScheme, .dark)
         .tint(.white)
-        .statusBarHidden(landscapeMode)
+        .statusBarHidden(fakeLandscape)
+        .defersSystemGestures(on: fakeLandscape ? .all : [])
         .persistentSystemOverlays(controlsVisible ? .automatic : .hidden)
         .onAppear {
             updateBusy(loading || playback.buffering)
             originalBrightness = ScreenBrightness.screen.brightness
             brightnessLevel = Double(ScreenBrightness.screen.brightness)
             systemVolume.start()
-            onScreen = true
             #if DEBUG
             switch InterfacePreview.screen {
             case "playback": settingsPage = .playback
@@ -209,10 +225,8 @@ struct PlaybackControlsView: View {
             }
             #endif
             revealControls()
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 350_000_000)
-                enterLandscapeByDefault()
-            }
+            UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+            followDeviceOrientation()
         }
         .onDisappear {
             hideTask?.cancel()
@@ -221,10 +235,10 @@ struct PlaybackControlsView: View {
             playback.setBoost(false)
             systemVolume.stop()
             if brightnessAdjusted, let originalBrightness { ScreenBrightness.screen.brightness = originalBrightness }
-            // 播放器之外的页面都只用竖屏。正常从关闭按钮退出时已经先转好了；
-            // 万一是别的方式退出的，这里兜底转回竖屏
-            onScreen = false
-            if !closing { OrientationSupport.restorePortrait() }
+            UIDevice.current.endGeneratingDeviceOrientationNotifications()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
+            followDeviceOrientation()
         }
         .onChange(of: systemVolume.externalChangeCount) { _ in
             showSystemVolumeChange()
@@ -256,9 +270,6 @@ struct PlaybackControlsView: View {
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
             if brightnessAdjusted { ScreenBrightness.screen.brightness = CGFloat(brightnessLevel) }
         }
-        .alert("无法切换屏幕方向", isPresented: Binding(get: { !rotateError.isEmpty }, set: { if !$0 { rotateError = "" } })) {
-            Button("好", role: .cancel) { rotateError = "" }
-        } message: { Text(rotateError) }
     }
 
     private func edgeControlInset(safe: CGFloat, width: CGFloat) -> CGFloat {
@@ -1796,12 +1807,11 @@ struct PlaybackControlsView: View {
             if revealing { revealControls() }
         }
     }
-    /// 柔和关闭：不再先转回竖屏再关。控制栏和整个播放页一起淡出、轻轻缩小，淡出一结束
-    /// 就盖上黑色遮罩并直接关掉播放页，系统在遮罩后面转回竖屏，转好后遮罩淡出。
+    /// 柔和关闭：控制栏和整个播放页一起淡出、轻轻缩小，淡出结束后直接关掉。
+    /// App 本来就是竖屏，下面的页面没有转过，所以不需要翻转，也不需要遮罩。
     private func closePlayer() {
         guard !closing else { return }
         closing = true
-        onScreen = false
         hideTask?.cancel()
         playback.setBoost(false)
         playback.pauseForClose()
@@ -1814,35 +1824,27 @@ struct PlaybackControlsView: View {
         }
         Task { @MainActor in
             if !reduceMotion { try? await Task.sleep(nanoseconds: 310_000_000) }
-            // 先盖黑，再关播放页和转竖屏：旋转发生在黑色后面，转好后黑色柔和淡出
-            let cover = OrientationSupport.coverWindow()
             var transaction = Transaction()
             transaction.disablesAnimations = true
             withTransaction(transaction) { onClose() }
-            OrientationSupport.restorePortrait(revealing: cover)
         }
     }
 
     private func toggleOrientation(landscape: Bool) {
-        requestedLandscape = !landscape
-        requestOrientation(landscape ? .portrait : .landscape)
+        withAnimation(reduceMotion ? nil : Motion.smooth) { fakeLandscape = !landscape }
         revealControls()
     }
-    private func enterLandscapeByDefault() {
-        guard onScreen, !initialLandscapeRequested else { return }
-        // 默认直接横屏播放；界面预览里只有「横屏」设计稿才自动转
-        if InterfacePreview.active && InterfacePreview.screen != "landscape" { return }
-        initialLandscapeRequested = true
-        requestedLandscape = true
-        requestOrientation(.landscape)
-    }
-    private func requestOrientation(_ orientation: UIInterfaceOrientationMask) {
-        OrientationSupport.request(orientation) { error in
-            guard error != nil else { return }
-            DispatchQueue.main.async {
-                rotateError = "当前页面暂时无法切换横竖屏，请退出播放器后重试。"
-            }
+
+    /// 横屏时跟着手机的横放方向走：向左横放内容转 +90°，向右横放转 −90°，其他姿势保持不变
+    private func followDeviceOrientation() {
+        let angle: Double
+        switch UIDevice.current.orientation {
+        case .landscapeLeft: angle = 90
+        case .landscapeRight: angle = -90
+        default: return
         }
+        guard angle != landscapeAngle else { return }
+        withAnimation(reduceMotion ? nil : Motion.smooth) { landscapeAngle = angle }
     }
 }
 
