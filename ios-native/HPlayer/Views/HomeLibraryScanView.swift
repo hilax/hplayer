@@ -160,7 +160,15 @@ struct HomeLibraryScanView: View {
             .navigationTitle("媒体库管理")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } }
+                // 和「资料来源」页一样用返回键，不再用「完成」
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button { dismiss() } label: {
+                        Image(systemName: AppIcon.back.name)
+                            .font(.system(size: 17, weight: .semibold))
+                    }
+                    .accessibilityLabel("返回")
+                    .accessibilityIdentifier("manage.back")
+                }
             }
         }
         .tint(Theme.accent)

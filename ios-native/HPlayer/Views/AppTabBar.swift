@@ -102,7 +102,7 @@ struct TabBarHost: View {
     }
 }
 
-/// 首页 / 片库 / 网盘 / 我的。悬浮的液态玻璃胶囊，用滑动的琥珀高光标示选中的标签。
+/// 首页 / 片库 / 网盘 / 我的。贴着屏幕底部的液态玻璃标签栏（玻璃一直铺到屏幕最底下），用滑动的琥珀高光标示选中的标签。
 /// 手指可以左右拖到别的标签，松手后切换过去。
 struct AppTabBar: View {
     @Binding var selection: HomeSection
@@ -110,7 +110,7 @@ struct AppTabBar: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private let tabs = HomeSection.tabs
-    private let barHeight: CGFloat = 60
+    private let barHeight: CGFloat = 54
 
     private func index(at x: CGFloat, width: CGFloat) -> Int {
         let item = width / CGFloat(tabs.count)
@@ -157,11 +157,28 @@ struct AppTabBar: View {
             )
         }
         .frame(height: barHeight)
-        .padding(4)
-        .liquidGlass(in: Capsule(), interactive: true)
-        .padding(.horizontal, 22)
-        .padding(.top, 4)
-        .padding(.bottom, 4)
+        .padding(.horizontal, 10)
+        .padding(.top, 6)
+        .padding(.bottom, 2)
+        // 玻璃底座一直铺到屏幕最底下（包括 Home 指示条那一块），图标和文字留在指示条上方
+        .background { TabDockBackground().ignoresSafeArea(edges: .bottom) }
+    }
+}
+
+/// 贴底标签栏的玻璃底座：iOS 26 用系统液态玻璃，低版本用毛玻璃；顶边一条细分隔线。
+private struct TabDockBackground: View {
+    var body: some View {
+        Group {
+            if #available(iOS 26.0, *) {
+                Color.clear.glassEffect(.regular, in: Rectangle())
+            } else {
+                Rectangle().fill(.ultraThinMaterial)
+            }
+        }
+        .overlay(alignment: .top) {
+            Rectangle().fill(Color.primary.opacity(0.1)).frame(height: 0.5)
+        }
+        .accessibilityHidden(true)
     }
 }
 
