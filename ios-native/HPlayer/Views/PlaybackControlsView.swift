@@ -150,57 +150,59 @@ struct PlaybackControlsView: View {
     private static let speedOptions: [Float] = [0.75, 1, 1.25, 1.5, 2, 3]
 
     var body: some View {
+        // 外层只用来读竖屏下的安全区；里层铺满整块屏幕（含安全区）拿到真实的屏幕大小
         GeometryReader { geometry in
-            // App 的真实方向始终是竖屏；横屏播放是把播放页内容旋转 90°，所以先算出整块屏幕的竖屏尺寸
             let portraitInsets = geometry.safeAreaInsets
-            let fullWidth = geometry.size.width + portraitInsets.leading + portraitInsets.trailing
-            let fullHeight = geometry.size.height + portraitInsets.top + portraitInsets.bottom
-            let landscape = fakeLandscape
-            let layoutSize = landscape ? CGSize(width: fullHeight, height: fullWidth) : CGSize(width: fullWidth, height: fullHeight)
-            let insets = Self.layoutInsets(landscape: landscape, portrait: portraitInsets)
-            ZStack(alignment: .top) {
-                if landscape {
-                    Theme.playerBackground
-                } else {
-                    Theme.pageBackground
-                }
-
-                // 竖屏：上面是 16:9 的小窗播放器，下面是影片信息、选集和文件信息；横屏：画面铺满
-                VStack(spacing: 0) {
-                    if !landscape { Color.black.frame(height: insets.top) }
-                    videoLayer(landscape: landscape, insets: insets, width: layoutSize.width)
-                    if !landscape { infoPage(bottomInset: insets.bottom) }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-
-                if showAspect && !locked {
-                    aspectPanel(insets: insets)
-                        .zIndex(7)
-                }
-
-                if let settingsPage, !locked {
-                    settingsPanel(page: settingsPage, landscape: landscape, insets: insets)
-                        .zIndex(8)
-                }
-
-                if showList && !locked {
+            GeometryReader { full in
+                let landscape = fakeLandscape
+                // App 的真实方向始终是竖屏；横屏播放是把播放页内容旋转 90°：
+                // 内容按「宽高对调」的尺寸布局，再绕屏幕中心旋转，正好铺满
+                let layoutSize = landscape ? CGSize(width: full.size.height, height: full.size.width) : full.size
+                let insets = Self.layoutInsets(landscape: landscape, portrait: portraitInsets)
+                ZStack(alignment: .top) {
                     if landscape {
-                        sidePanel(insets: insets)
-                            .zIndex(9)
+                        Theme.playerBackground
                     } else {
-                        playlistPanel(landscape: false, insets: insets)
-                            .zIndex(9)
+                        Theme.pageBackground
+                    }
+
+                    // 竖屏：上面是 16:9 的小窗播放器，下面是影片信息、选集和文件信息；横屏：画面铺满
+                    VStack(spacing: 0) {
+                        if !landscape { Color.black.frame(height: insets.top) }
+                        videoLayer(landscape: landscape, insets: insets, width: layoutSize.width)
+                        if !landscape { infoPage(bottomInset: insets.bottom) }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+
+                    if showAspect && !locked {
+                        aspectPanel(insets: insets)
+                            .zIndex(7)
+                    }
+
+                    if let settingsPage, !locked {
+                        settingsPanel(page: settingsPage, landscape: landscape, insets: insets)
+                            .zIndex(8)
+                    }
+
+                    if showList && !locked {
+                        if landscape {
+                            sidePanel(insets: insets)
+                                .zIndex(9)
+                        } else {
+                            playlistPanel(landscape: false, insets: insets)
+                                .zIndex(9)
+                        }
                     }
                 }
+                .foregroundColor(.white)
+                .frame(width: layoutSize.width, height: layoutSize.height)
+                .opacity(closeFade ? 0 : 1)
+                .scaleEffect(closeFade ? 0.96 : 1)
+                .rotationEffect(.degrees(landscape ? landscapeAngle : 0))
+                .position(x: full.size.width / 2, y: full.size.height / 2)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: boosting)
             }
-            .foregroundColor(.white)
-            .frame(width: layoutSize.width, height: layoutSize.height)
-            .opacity(closeFade ? 0 : 1)
-            .scaleEffect(closeFade ? 0.96 : 1)
-            .rotationEffect(.degrees(landscape ? landscapeAngle : 0))
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .ignoresSafeArea()
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: boosting)
         }
         .background(SystemVolumeHost(controller: systemVolume).frame(width: 1, height: 1).allowsHitTesting(false))
         .background(DarkPresentationStyle().frame(width: 0, height: 0))
