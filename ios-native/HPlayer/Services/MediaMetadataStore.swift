@@ -54,6 +54,8 @@ final class MediaMetadataStore: ObservableObject {
     private var bufferedResults: [String: MediaMetadata] = [:]
     private var lastPublishAt = Date()
     @Published private(set) var isMatching = false
+    /// 启动时正在后台恢复封面缓存（解析片名）；首页等它做完再显示，不会先闪一屏没封面的画面。
+    @Published private(set) var isRestoring: Bool
     @Published private(set) var completedScanCount = 0
     @Published private(set) var lastCompletedAt: Date?
 
@@ -114,6 +116,7 @@ final class MediaMetadataStore: ObservableObject {
     init(
         defaults: UserDefaults = .standard,
         concurrency: Int = 1,
+        restoring: Bool = false,
         performerLookup: PerformerLookupHandler? = nil,
         lookup: @escaping (MediaNameParser.ParsedName) async -> MediaMetadata? = { await MetadataSearch.shared.lookup($0) }
     ) {
@@ -121,7 +124,49 @@ final class MediaMetadataStore: ObservableObject {
         self.lookup = lookup
         self.concurrency = max(1, concurrency)
         self.performerLookup = performerLookup
+        self.isRestoring = restoring
         load()
+    }
+
+    /// 启动时恢复已有封面：片名解析（十几个正则 × 整个片库）放到后台线程，
+    /// 回到主线程后 hydrate 只剩字典查询，首页不会被卡住。
+    func restore(files: [LibraryMedia]) async {
+        await prewarmNames(files.map(\.name))
+        hydrate(files: files)
+        finishRestoring()
+    }
+
+    func finishRestoring() {
+        if isRestoring { isRestoring = false }
+    }
+
+    /// 等启动恢复结束；没有在恢复时立即返回。
+    func waitUntilRestored() async {
+        while isRestoring && !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 40_000_000)
+        }
+    }
+
+    private func prewarmNames(_ names: [String]) async {
+        let missing = Array(Set(names).subtracting(nameCache.keys))
+        guard !missing.isEmpty else { return }
+        let parsed = await Task.detached(priority: .userInitiated) {
+            Self.makeNameInfos(missing)
+        }.value
+        for (name, info) in parsed where nameCache[name] == nil { nameCache[name] = info }
+    }
+
+    nonisolated private static func makeNameInfos(_ names: [String]) -> [String: NameInfo] {
+        var result: [String: NameInfo] = [:]
+        result.reserveCapacity(names.count)
+        for name in names { result[name] = makeNameInfo(name) }
+        return result
+    }
+
+    nonisolated private static func makeNameInfo(_ filename: String) -> NameInfo {
+        let parsed = MediaNameParser.parse(filename)
+        let legacyKey = "\(MediaNameParser.cacheKey(parsed.title))|\(parsed.year ?? "")|\(parsed.season != nil || parsed.episode != nil ? "series" : "movie")"
+        return NameInfo(parsed: parsed, catalogKey: parsed.catalogCode.map { "av:\($0)" }, legacyKey: legacyKey)
     }
 
     /// 首帧同步恢复已有封面。这里只查已保存的片名、115 SHA1 和本机文件签名，不访问网络或读取视频内容。
@@ -535,9 +580,7 @@ final class MediaMetadataStore: ObservableObject {
 
     private func nameInfo(_ filename: String) -> NameInfo {
         if let cached = nameCache[filename] { return cached }
-        let parsed = MediaNameParser.parse(filename)
-        let legacyKey = "\(MediaNameParser.cacheKey(parsed.title))|\(parsed.year ?? "")|\(parsed.season != nil || parsed.episode != nil ? "series" : "movie")"
-        let value = NameInfo(parsed: parsed, catalogKey: parsed.catalogCode.map { "av:\($0)" }, legacyKey: legacyKey)
+        let value = Self.makeNameInfo(filename)
         nameCache[filename] = value
         return value
     }

@@ -7,7 +7,7 @@ struct HomeView: View {
     @StateObject private var recents = RecentStore.shared
     @StateObject private var mediaLibrary = MediaLibraryStore()
     @StateObject private var localStore = LocalMediaStore()
-    @StateObject private var metadataStore = MediaMetadataStore(concurrency: 3, performerLookup: { code, contentID in
+    @StateObject private var metadataStore = MediaMetadataStore(concurrency: 3, restoring: true, performerLookup: { code, contentID in
         await MetadataSearch.shared.performers(for: code, contentID: contentID)
     })
     @StateObject private var scanner = CloudLibraryScanner()
@@ -51,12 +51,18 @@ struct HomeView: View {
     }
 
     private func restoreOnce() {
-        guard !restored, !InterfacePreview.active else { return }
+        guard !restored else { return }
+        if InterfacePreview.active {
+            metadataStore.finishRestoring()
+            return
+        }
         restored = true
         scanner.selectAccount(appState.libraryAccountID)
         // 扫描检查点先于首页恢复，避免上次退出时的最后一批文件遗漏。
         mediaLibrary.add(scanner.discoveredFiles, for: appState)
-        metadataStore.hydrate(files: HomeLibrary.media(local: localStore, cloud: mediaLibrary, appState: appState))
+        // 片名解析在后台线程做完再回来恢复封面，主线程不被整个片库的解析拖住。
+        let files = HomeLibrary.media(local: localStore, cloud: mediaLibrary, appState: appState)
+        Task { await metadataStore.restore(files: files) }
     }
 
     var body: some View {
@@ -73,6 +79,8 @@ struct HomeView: View {
             }
             .task(id: syncInput) {
                 guard !InterfacePreview.active else { return }
+                await metadataStore.waitUntilRestored()
+                guard !Task.isCancelled else { return }
                 if scanner.accountID != appState.libraryAccountID {
                     metadataStore.pause()
                     scanner.selectAccount(appState.libraryAccountID)

@@ -32,6 +32,8 @@ struct HomeTab: View {
     @State private var magnetLaunch: MagnetLaunch?
     /// 首页的分组结果。在后台线程算好再换上，匹配、扫描期间界面不会被整页重算拖住。
     @State private var snapshot = HomeSnapshot(items: [])
+    /// 第一份首页分组算好之前不显示内容（也不先闪空状态），算好后淡入。
+    @State private var snapshotReady = false
 
     private var snapshotKey: HomeSnapshotKey {
         HomeSnapshotKey(local: localStore.files.count, cloudRevision: mediaLibrary.revision,
@@ -39,13 +41,27 @@ struct HomeTab: View {
     }
 
     private func rebuildSnapshot() async {
+        // 启动时先等封面缓存恢复完，第一屏直接带封面，不会先出现一屏没封面的画面。
+        await metadataStore.waitUntilRestored()
+        guard !Task.isCancelled else { return }
         let files = libraryFiles
         let matches = metadataStore.metadataByMediaID
         if snapshot.items.isEmpty {
-            // 第一次同步算出，避免首页先闪一下空白。
-            let first = HomeSnapshot(items: files.map { HomeMediaItem(media: $0, metadata: matches[$0.id]) })
+            let first: HomeSnapshot
+            if files.count > 400 {
+                // 片库很大时分组、排序放到后台，主线程不被卡住
+                first = await Task.detached(priority: .userInitiated) {
+                    HomeSnapshot(items: files.map { HomeMediaItem(media: $0, metadata: matches[$0.id]) })
+                }.value
+                guard !Task.isCancelled else { return }
+            } else {
+                first = HomeSnapshot(items: files.map { HomeMediaItem(media: $0, metadata: matches[$0.id]) })
+            }
             snapshot = first
             prefetchArtwork(first)
+            if !snapshotReady {
+                withAnimation(reduceMotion ? nil : Motion.fade) { snapshotReady = true }
+            }
             return
         }
         try? await Task.sleep(nanoseconds: 300_000_000)
@@ -75,10 +91,14 @@ struct HomeTab: View {
 
         NavigationStack {
             GeometryReader { viewport in
-                                ScrollView {
+                ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
-                        if library.featured.isEmpty {
+                        if !snapshotReady || metadataStore.isRestoring {
+                            // 数据还在准备：只留空白页面底色，不显示空状态
+                            Color.clear.frame(height: viewport.size.height)
+                        } else if library.featured.isEmpty {
                             topBar(continueItems)
+                                .padding(.top, viewport.safeAreaInsets.top)
                             VStack(alignment: .leading, spacing: 28) {
                                 emptyState
                                 if !continueItems.isEmpty {
