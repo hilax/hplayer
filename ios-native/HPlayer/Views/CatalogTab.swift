@@ -206,7 +206,7 @@ struct CatalogTab: View {
             PlayerView(source: queue.source, playlist: queue.items)
                 .environmentObject(appState)
         }
-        .sheet(isPresented: $showManagement) { LibraryManagementView() }
+        .fullScreenCover(isPresented: $showManagement) { LibraryManagementView() }
         .sheet(item: $matching) { request in
             MetadataMatchView(file: request.file, current: request.current, onMatch: { metadata in
                 for target in request.targets { await metadataStore.match(metadata, to: target) }

@@ -56,7 +56,7 @@ struct SettingsView: View {
                 Button("取消", role: .cancel) {}
             }
         }
-        .sheet(isPresented: $showManagement) { LibraryManagementView() }
+        .fullScreenCover(isPresented: $showManagement) { LibraryManagementView() }
     }
 
     // MARK: 账号卡片
