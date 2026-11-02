@@ -167,6 +167,8 @@ final class PlaybackController: ObservableObject {
     private var openTimeoutTask: Task<Void, Never>?
     private var watchdogTask: Task<Void, Never>?
     private var recoveryTask: Task<Void, Never>?
+    private var addressTask: Task<Void, Never>?
+    private var addressGeneration = 0
     private var recoveryAttempts: [Date] = []
     private var noDataSeconds = 0
     /// 上一次看门狗检查之后有没有新数据进缓存。读卡死时内核的下载线程堵在网络读取里，
@@ -354,6 +356,7 @@ final class PlaybackController: ObservableObject {
 
     private func start(_ url: URL, direct115: Bool, cookie: String, position: Double, keepPlaying: Bool, keepDuration: Bool) {
         guard !closingPlayback else { return }
+        cancelAddressResolution()
         logEvent("打开 \(url.host ?? url.lastPathComponent)，从 \(Self.clock(position))（距播放页创建 \(Self.milliseconds(since: createdAt)) 毫秒）")
         currentURL = url
         currentDirect115 = direct115
@@ -390,11 +393,19 @@ final class PlaybackController: ObservableObject {
         engine.set("pause", !keepPlaying)
         engine.set("speed", Double(rate))
         applyAspect(engine)
-        engine.command(["loadfile", Self.engineAddress(for: url, direct115: direct115, cookieHeader: cookieHeader), "replace"])
+        let currentSession = session
+        let generation = addressGeneration
+        addressTask = Task { @MainActor [weak self, weak engine] in
+            let address = await Self.engineAddress(for: url, direct115: direct115, cookieHeader: cookieHeader)
+            guard let self, let engine, !Task.isCancelled, !self.closingPlayback,
+                  self.session == currentSession, self.addressGeneration == generation,
+                  self.engine === engine else { return }
+            self.addressTask = nil
+            engine.command(["loadfile", address, "replace"])
+        }
         startWatchdog()
 
         let timeout = openTimeoutSeconds
-        let currentSession = session
         openTimeoutTask?.cancel()
         openTimeoutTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: timeout * 1_000_000_000)
@@ -406,6 +417,12 @@ final class PlaybackController: ObservableObject {
                 self.giveUp("视频加载超时")
             }
         }
+    }
+
+    private func cancelAddressResolution() {
+        addressGeneration &+= 1
+        addressTask?.cancel()
+        addressTask = nil
     }
 
     private func resetState(keepDuration: Bool) {
@@ -466,6 +483,8 @@ final class PlaybackController: ObservableObject {
         closingPlayback = true
         userPaused = true
         pendingOpen = nil
+        cancelAddressResolution()
+        openTimeoutTask?.cancel()
         engine?.set("pause", true)
         updateFlags()
     }
@@ -555,6 +574,7 @@ final class PlaybackController: ObservableObject {
 
     func stop(detach: Bool = true) {
         session += 1
+        cancelAddressResolution()
         recoveryTask?.cancel()
         recoveryTask = nil
         openTimeoutTask?.cancel()
@@ -880,6 +900,7 @@ final class PlaybackController: ObservableObject {
     /// 停掉卡住的连接，换（新）地址从原位置重新打开。90 秒内最多自动试 3 次，之后提示用户点重试。
     private func recover(reason: String) {
         guard let url = currentURL, recoveryTask == nil else { return }
+        cancelAddressResolution()
         let now = Date()
         // 播过之后断了：90 秒内最多试 3 次；一次都没播出来：总共只再试 2 次，免得一直转圈
         if playedThisSession {
@@ -917,6 +938,7 @@ final class PlaybackController: ObservableObject {
 
     private func giveUp(_ reason: String) {
         logEvent("放弃：\(reason)")
+        cancelAddressResolution()
         openTimeoutTask?.cancel()
         recoveryTask?.cancel()
         recoveryTask = nil
@@ -988,7 +1010,7 @@ final class PlaybackController: ObservableObject {
     }
 
     /// 网络视频交给本机中转，由系统网络栈去连 115（mpv 自带的 TLS 连 115 会被断开）；本机地址（磁力边下边播）直接给内核
-    private static func engineAddress(for url: URL, direct115: Bool, cookieHeader: String) -> String {
+    private static func engineAddress(for url: URL, direct115: Bool, cookieHeader: String) async -> String {
         if url.isFileURL { return url.path }
         guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return url.absoluteString }
         let host = url.host?.lowercased() ?? ""
@@ -1003,7 +1025,7 @@ final class PlaybackController: ObservableObject {
             headers["Referer"] = "https://115.com/"
             if !cookieHeader.isEmpty { headers["Cookie"] = cookieHeader }
         }
-        return LocalStreamProxy.shared.localURL(for: url, headers: headers)?.absoluteString ?? url.absoluteString
+        return await LocalStreamProxy.shared.localURL(for: url, headers: headers)?.absoluteString ?? url.absoluteString
     }
 
     static func clock(_ seconds: Double) -> String {
