@@ -204,9 +204,16 @@ final class PlaybackUITests: XCTestCase {
         XCTAssertTrue(wait(timeout: 15) { self.metric("time", surface: surface) > landed + 2 })
         XCTAssertFalse(app.staticTexts["测试下一集"].exists)
 
-        slider.adjust(toNormalizedSliderPosition: 0.96)
-        XCTAssertTrue(wait(timeout: 50) { app.staticTexts["测试下一集"].exists },
-                      "Normal playback at the end should still advance to the next video")
+        // The player content is rotated inside a portrait window. XCUITest's
+        // normalized slider adjustment does not reliably issue a seek there,
+        // so use the same on-screen gesture as the real playback regression.
+        swipe(surface, from: CGVector(dx: 0.06, dy: 0.42), to: CGVector(dx: 0.94, dy: 0.42))
+        swipe(surface, from: CGVector(dx: 0.06, dy: 0.42), to: CGVector(dx: 0.94, dy: 0.42))
+        XCTAssertTrue(wait(timeout: 30) {
+            app.staticTexts["测试下一集"].exists || self.metric("time", surface: surface) > 290
+        }, "Playback should reach the end after seeking; status=\(surface.value as? String ?? "")")
+        XCTAssertTrue(wait(timeout: 30) { app.staticTexts["测试下一集"].exists },
+                      "Normal playback at the end should still advance to the next video; status=\(surface.value as? String ?? "")")
     }
 
     /// The fixture is an actual 3840×2160 H.264/AAC video, served with delayed Range responses.
