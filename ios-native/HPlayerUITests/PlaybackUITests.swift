@@ -13,24 +13,23 @@ final class PlaybackUITests: XCTestCase {
         let previousPage = app.staticTexts["playbackTest.previousPage"]
         let orientation = app.buttons["playback.orientation"]
         let surface = app.otherElements["playback.surface"]
-        XCTAssertTrue(wait { close.exists && surface.exists && app.windows.firstMatch.frame.height > app.windows.firstMatch.frame.width },
-                      "Player should open in the portrait layout with the inline video")
-        XCTAssertGreaterThan(surface.frame.width, surface.frame.height, "The inline video is a 16:9 window")
+        XCTAssertTrue(wait { close.exists && surface.exists && app.windows.firstMatch.frame.width > app.windows.firstMatch.frame.height },
+                      "Player should open in landscape")
         close.tap()
         XCTAssertTrue(wait { !surface.exists && previousPage.exists && reopen.isHittable
             && app.windows.firstMatch.frame.height > app.windows.firstMatch.frame.width },
                       "Closing must reveal the previous page in portrait without a blocking transition")
 
         reopen.tap()
-        XCTAssertTrue(wait { close.exists && surface.exists && app.windows.firstMatch.frame.height > app.windows.firstMatch.frame.width },
-                      "The player should reopen in portrait")
+        XCTAssertTrue(wait { close.exists && surface.exists && app.windows.firstMatch.frame.width > app.windows.firstMatch.frame.height },
+                      "The player should reopen and rotate to landscape")
         orientation.tap()
-        XCTAssertTrue(wait { orientation.label == "竖屏" && app.windows.firstMatch.frame.width > app.windows.firstMatch.frame.height },
-                      "The fullscreen button should rotate to landscape before the second close")
+        XCTAssertTrue(wait { orientation.label == "横屏" && app.windows.firstMatch.frame.height > app.windows.firstMatch.frame.width },
+                      "Player should switch to portrait before the second close")
         close.tap()
         XCTAssertTrue(wait { !surface.exists && previousPage.exists && reopen.isHittable
             && app.windows.firstMatch.frame.height > app.windows.firstMatch.frame.width },
-                      "Closing a landscape player should also restore an interactive previous page")
+                      "Closing a portrait player should also restore an interactive previous page")
     }
 
     func testPlaybackControlsAndLandscape() throws {
@@ -56,9 +55,7 @@ final class PlaybackUITests: XCTestCase {
         let orientation = app.buttons["playback.orientation"]
         let pause = app.buttons["playback.playPause"]
         let elapsed = app.staticTexts["playback.elapsed"]
-        XCTAssertTrue(wait { surface.exists && orientation.exists && app.windows.firstMatch.frame.height > app.windows.firstMatch.frame.width }, "Player should open in the portrait layout")
-        orientation.tap()
-        XCTAssertTrue(wait { surface.exists && orientation.exists && app.windows.firstMatch.frame.width > app.windows.firstMatch.frame.height }, "Fullscreen button should rotate to landscape")
+        XCTAssertTrue(wait { surface.exists && orientation.exists && app.windows.firstMatch.frame.width > app.windows.firstMatch.frame.height }, "Player should open in landscape")
         XCTAssertFalse(app.alerts.firstMatch.exists)
         let frame = app.windows.firstMatch.frame
         XCTAssertGreaterThan(pause.frame.midY, frame.height * 0.72, "Landscape transport belongs below the timeline")

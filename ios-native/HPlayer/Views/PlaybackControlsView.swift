@@ -127,6 +127,8 @@ struct PlaybackControlsView: View {
     @State private var copiedDiagnostics = false
     @State private var sideTab: SideTab = .episodes
     @State private var landscapeMode = false
+    /// 正在柔和关闭：整个播放页淡出并轻轻缩小
+    @State private var closeFade = false
     @Namespace private var sideNamespace
     @AppStorage("player.autoPlayNext") private var autoPlayNext = true
 
@@ -178,6 +180,8 @@ struct PlaybackControlsView: View {
             .foregroundColor(.white)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .ignoresSafeArea()
+            .opacity(closeFade ? 0 : 1)
+            .scaleEffect(closeFade ? 0.96 : 1)
             .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: boosting)
             .onAppear { landscapeMode = landscape }
             .onChange(of: landscape) { landscapeMode = $0 }
@@ -1792,8 +1796,8 @@ struct PlaybackControlsView: View {
             if revealing { revealControls() }
         }
     }
-    /// 让画面和界面一起完成横屏到竖屏的系统旋转（画面跟着旋转实时缩放，见 PlayerVideoViewController），
-    /// 旋转一走完就直接换成上一页：不再等一段时间，也不再播放页面下滑的关闭动画。
+    /// 柔和关闭：不再先转回竖屏再关。控制栏和整个播放页一起淡出、轻轻缩小，
+    /// 淡出一结束就直接关掉播放页，方向由系统在关掉之后转回竖屏。
     private func closePlayer() {
         guard !closing else { return }
         closing = true
@@ -1804,13 +1808,16 @@ struct PlaybackControlsView: View {
         showList = false
         settingsPage = nil
         showAspect = false
-        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) {
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.3)) {
             controlsVisible = false
+            closeFade = true
         }
-        OrientationSupport.rotateToPortrait {
+        Task { @MainActor in
+            if !reduceMotion { try? await Task.sleep(nanoseconds: 310_000_000) }
             var transaction = Transaction()
             transaction.disablesAnimations = true
             withTransaction(transaction) { onClose() }
+            OrientationSupport.restorePortrait()
         }
     }
 
@@ -1821,8 +1828,8 @@ struct PlaybackControlsView: View {
     }
     private func enterLandscapeByDefault() {
         guard onScreen, !initialLandscapeRequested else { return }
-        // 默认停在竖屏的小窗播放器；只有「横屏」设计稿的预览自动转横屏，其余靠全屏按钮
-        guard InterfacePreview.active && InterfacePreview.screen == "landscape" else { return }
+        // 默认直接横屏播放；界面预览里只有「横屏」设计稿才自动转
+        if InterfacePreview.active && InterfacePreview.screen != "landscape" { return }
         initialLandscapeRequested = true
         requestedLandscape = true
         requestOrientation(.landscape)
