@@ -132,7 +132,7 @@ struct AppTabBar: View {
             let pillX = dragX.map { min(max($0 - itemWidth / 2, 0), width - itemWidth) } ?? CGFloat(selected) * itemWidth
 
             ZStack(alignment: .leading) {
-                TabSelectionHighlight()
+                TabSelectionHighlight(isDragging: dragX != nil)
                     .frame(width: itemWidth, height: geo.size.height)
                     .offset(x: pillX)
                     .animation(reduceMotion || dragX != nil ? nil : Motion.snappy, value: pillX)
@@ -165,18 +165,57 @@ struct AppTabBar: View {
     }
 }
 
-/// 贴底标签栏的玻璃底座：iOS 26 用系统液态玻璃，低版本用毛玻璃；顶边一条细分隔线。
+/// 保持贴底，顶部圆角让玻璃边缘和内容之间有系统控件般的折射轮廓。
+private struct TabDockShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        let radius = min(18, rect.width / 2, rect.height)
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + radius))
+        path.addQuadCurve(to: CGPoint(x: rect.minX + radius, y: rect.minY),
+                          control: CGPoint(x: rect.minX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX - radius, y: rect.minY))
+        path.addQuadCurve(to: CGPoint(x: rect.maxX, y: rect.minY + radius),
+                          control: CGPoint(x: rect.maxX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        path.closeSubpath()
+        return path
+    }
+}
+
+/// iOS 26 使用系统 Liquid Glass；更低版本使用系统磨砂材质，并尊重减少透明度设置。
 private struct TabDockBackground: View {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var forceFrostedForUITest: Bool {
+        #if DEBUG
+        return ProcessInfo.processInfo.environment["HPLAYER_UI_TEST_FROSTED_TAB"] == "1"
+        #else
+        return false
+        #endif
+    }
+
     var body: some View {
         Group {
-            if #available(iOS 26.0, *) {
-                Color.clear.glassEffect(.regular, in: Rectangle())
+            if reduceTransparency {
+                TabDockShape().fill(Theme.surface)
+            } else if #available(iOS 26.0, *), !forceFrostedForUITest {
+                Color.clear.glassEffect(.regular.interactive(), in: TabDockShape())
             } else {
-                Rectangle().fill(.ultraThinMaterial)
+                TabDockShape()
+                    .fill(.ultraThinMaterial)
+                    .overlay {
+                        TabDockShape().stroke(
+                            LinearGradient(
+                                colors: [Color.white.opacity(colorScheme == .dark ? 0.30 : 0.8),
+                                         Color.white.opacity(colorScheme == .dark ? 0.06 : 0.25)],
+                                startPoint: .top, endPoint: .bottom
+                            ),
+                            lineWidth: 0.7
+                        )
+                    }
             }
-        }
-        .overlay(alignment: .top) {
-            Rectangle().fill(Color.primary.opacity(0.1)).frame(height: 0.5)
         }
         .accessibilityHidden(true)
     }
@@ -184,11 +223,13 @@ private struct TabDockBackground: View {
 
 /// 选中标签的琥珀高光，与外壳共用一层玻璃，避免嵌套折射让材质发灰。
 private struct TabSelectionHighlight: View {
+    let isDragging: Bool
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Capsule()
-            .fill(Theme.accent.opacity(colorScheme == .dark ? 0.18 : 0.12))
+            .fill(Theme.accent.opacity(colorScheme == .dark ? 0.20 : 0.14))
             .overlay {
                 Capsule().strokeBorder(
                     LinearGradient(
@@ -199,7 +240,10 @@ private struct TabSelectionHighlight: View {
                     lineWidth: 0.6
                 )
             }
-            .padding(2)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 3)
+            .scaleEffect(x: isDragging && !reduceMotion ? 1.03 : 1, y: isDragging && !reduceMotion ? 0.94 : 1)
+            .animation(reduceMotion ? nil : Motion.snappy, value: isDragging)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
     }
