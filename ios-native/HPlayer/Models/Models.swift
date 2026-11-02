@@ -65,6 +65,38 @@ struct QuotaResponse: Codable {
     let totalText: String
     let usedBytes: Int
     let totalBytes: Int
+
+    /// 用字节数换算成 GB / TB 的显示文字；拿不到字节数时才用接口给的文字。
+    init(usedBytes: Int, totalBytes: Int, usedFallback: String = "", totalFallback: String = "") {
+        self.usedBytes = usedBytes
+        self.totalBytes = totalBytes
+        self.usedText = usedBytes > 0 ? formatCapacity(usedBytes) : (usedFallback.isEmpty ? "0 B" : usedFallback)
+        self.totalText = totalBytes > 0 ? formatCapacity(totalBytes) : totalFallback
+    }
+
+    init(usedText: String, totalText: String, usedBytes: Int, totalBytes: Int) {
+        self.usedText = usedText
+        self.totalText = totalText
+        self.usedBytes = usedBytes
+        self.totalBytes = totalBytes
+    }
+}
+
+/// 网盘容量：换算到合适的单位，TB 保留两位小数（14.27 TB），其余最多一位。
+func formatCapacity(_ bytes: Int) -> String {
+    guard bytes > 0 else { return "0 B" }
+    let units = ["B", "KB", "MB", "GB", "TB", "PB"]
+    var value = Double(bytes)
+    var index = 0
+    while value >= 1024 && index < units.count - 1 {
+        value /= 1024
+        index += 1
+    }
+    let decimals: Int
+    if index == 0 { decimals = 0 }
+    else if index >= 4 { decimals = 2 }
+    else { decimals = value >= 100 ? 0 : 1 }
+    return String(format: "%.\(decimals)f %@", value, units[index])
 }
 
 func formatSize(_ bytes: Int) -> String {

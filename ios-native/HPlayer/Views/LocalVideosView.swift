@@ -27,10 +27,6 @@ struct LocalVideosView: View {
                         .padding(.vertical, 16)
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
-                    Button { showImporter = true } label: {
-                        LibraryActionRow(symbol: AppIcon.folder.name, title: "从「文件」导入", subtitle: "导入后，可直接在本机播放。")
-                            .surfaceCard()
-                    }.buttonStyle(.pressable(scale: 0.985)).listRowBackground(Color.clear).listRowSeparator(.hidden)
                     ForEach(Array(localStore.files.enumerated()), id: \.element.id) { index, file in
                         Button {
                             play(file)
@@ -63,27 +59,19 @@ struct LocalVideosView: View {
         }
         .background(Theme.pageBackground.ignoresSafeArea())
         .designScreen("local")
+        // 导入入口只留一个：没有视频时用空状态里的按钮，有视频后用底部这一个
         .safeAreaInset(edge: .bottom) {
-            VStack(spacing: 10) {
-                if localStore.isImporting { ProgressView("正在导入视频…").font(.caption) }
-                Button { showImporter = true } label: { Label("导入视频", systemImage: AppIcon.add.name) }
-                    .buttonStyle(PrimaryActionStyle()).disabled(localStore.isImporting)
-            }.padding(Theme.contentInset).background(Theme.pageBackground)
+            if !localStore.files.isEmpty {
+                VStack(spacing: 10) {
+                    if localStore.isImporting { ProgressView("正在导入视频…").font(.caption) }
+                    Button { showImporter = true } label: { Label("导入视频", systemImage: AppIcon.add.name) }
+                        .buttonStyle(PrimaryActionStyle()).disabled(localStore.isImporting)
+                }.padding(Theme.contentInset).background(Theme.pageBackground)
+            }
         }
         .navigationTitle("本机视频")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    showImporter = true
-                } label: {
-                    Image(systemName: AppIcon.add.name)
-                }
-                .accessibilityLabel("导入视频")
-                .disabled(localStore.isImporting)
-            }
-        }
         .fileImporter(
             isPresented: $showImporter,
             allowedContentTypes: [.movie, .video, .mpeg4Movie, .quickTimeMovie, .data],

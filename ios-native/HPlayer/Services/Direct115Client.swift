@@ -33,9 +33,22 @@ struct Direct115Client {
     func quota() async throws -> QuotaResponse {
         let json = try await jsonRequest("https://webapi.115.com/user/space")
         let data = json["data"] as? [String: Any] ?? [:]
+        return Self.parseQuota(data)
+    }
+
+    /// 115 的 `size` 是字节数（不是带单位的文字），`size_format` 才是文字；
+    /// 以前把 `size` 直接当文字显示、又去读不存在的 `size_byte`，所以数字很长、进度条是 0。
+    static func parseQuota(_ data: [String: Any]) -> QuotaResponse {
         let used = data["all_use"] as? [String: Any] ?? [:]
         let total = data["all_total"] as? [String: Any] ?? [:]
-        return QuotaResponse(usedText: Self.string(used["size"]), totalText: Self.string(total["size"]), usedBytes: Self.integer(used["size_byte"]), totalBytes: Self.integer(total["size_byte"]))
+        func bytes(_ item: [String: Any]) -> Int {
+            let value = integer(item["size_byte"])
+            return value > 0 ? value : integer(item["size"])
+        }
+        return QuotaResponse(
+            usedBytes: bytes(used), totalBytes: bytes(total),
+            usedFallback: string(used["size_format"]), totalFallback: string(total["size_format"])
+        )
     }
 
     func files(cid: String) async throws -> [P115File] {
@@ -199,7 +212,11 @@ struct Direct115Client {
         if let value = value as? NSNumber { return value.stringValue }
         return ""
     }
-    private static func integer(_ value: Any?) -> Int { Int(string(value)) ?? 0 }
+    private static func integer(_ value: Any?) -> Int {
+        if let number = value as? NSNumber { return Int(truncating: number) }
+        if let text = value as? String { return Int(text) ?? Int(Double(text) ?? 0) }
+        return 0
+    }
 }
 
 /// 重定向至 CDN 时不发送 115 登录 Cookie。
