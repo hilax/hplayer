@@ -1796,8 +1796,8 @@ struct PlaybackControlsView: View {
             if revealing { revealControls() }
         }
     }
-    /// 柔和关闭：不再先转回竖屏再关。控制栏和整个播放页一起淡出、轻轻缩小，
-    /// 淡出一结束就直接关掉播放页，方向由系统在关掉之后转回竖屏。
+    /// 柔和关闭：不再先转回竖屏再关。控制栏和整个播放页一起淡出、轻轻缩小，淡出一结束
+    /// 就盖上黑色遮罩并直接关掉播放页，系统在遮罩后面转回竖屏，转好后遮罩淡出。
     private func closePlayer() {
         guard !closing else { return }
         closing = true
@@ -1814,10 +1814,12 @@ struct PlaybackControlsView: View {
         }
         Task { @MainActor in
             if !reduceMotion { try? await Task.sleep(nanoseconds: 310_000_000) }
+            // 先盖黑，再关播放页和转竖屏：旋转发生在黑色后面，转好后黑色柔和淡出
+            let cover = OrientationSupport.coverWindow()
             var transaction = Transaction()
             transaction.disablesAnimations = true
             withTransaction(transaction) { onClose() }
-            OrientationSupport.restorePortrait()
+            OrientationSupport.restorePortrait(revealing: cover)
         }
     }
 

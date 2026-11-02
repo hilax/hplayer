@@ -111,6 +111,39 @@ enum OrientationSupport {
 
     /// 退出播放器时转回竖屏（兜底：播放器不是从关闭按钮退出时）。关闭动画进行中 iOS 可能不理第一次请求，没转过来就隔一会儿再请求，最多三次；
     /// 期间如果又打开了播放器（方向限制已经不是竖屏），就不再坚持。
+    /// 关闭播放器时遮住屏幕旋转：播放页淡出到黑之后，先在窗口最上面盖一层黑色，
+    /// 再关播放页、转回竖屏。这样不用先转竖屏再关，也看不到上一页被带着翻转。
+    @MainActor
+    static func coverWindow() -> UIView? {
+        guard let scene = activeScene, let window = keyWindow(in: scene) else { return nil }
+        let cover = UIView(frame: window.bounds)
+        cover.backgroundColor = .black
+        cover.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        cover.isUserInteractionEnabled = false
+        window.addSubview(cover)
+        return cover
+    }
+
+    /// 转回竖屏；转好、页面排好版之后，把遮罩柔和地淡掉。
+    @MainActor
+    static func restorePortrait(revealing cover: UIView?) {
+        restorePortrait()
+        guard let cover else { return }
+        Task { @MainActor in
+            let started = Date()
+            while Date().timeIntervalSince(started) < 1.5 {
+                if let scene = activeScene, matches(scene.effectiveGeometry.interfaceOrientation, .portrait) { break }
+                try? await Task.sleep(nanoseconds: 50_000_000)
+            }
+            try? await Task.sleep(nanoseconds: 220_000_000)
+            UIView.animate(withDuration: 0.32, delay: 0, options: [.curveEaseOut]) {
+                cover.alpha = 0
+            } completion: { _ in
+                cover.removeFromSuperview()
+            }
+        }
+    }
+
     static func restorePortrait(attempts: Int = 3) {
         request(.portrait) { _ in
             guard attempts > 1, supportedOrientations == .portrait else { return }
