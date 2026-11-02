@@ -211,7 +211,7 @@ jobs:
           manifest = source / "manifest.json"
           if manifest.exists():
               target.mkdir(parents=True, exist_ok=True)
-              names = [f"TabGlass-{material}-{style}" for material in ("system", "frosted") for style in ("dark", "light")]
+              names = [f"TabGlass-{material}-{style}" for material in ("system",) for style in ("dark", "light")]
               for test in json.loads(manifest.read_text()):
                   for attachment in test.get("attachments", []):
                       name = attachment.get("suggestedHumanReadableName", "")

@@ -13,12 +13,11 @@ struct HomeView: View {
     @StateObject private var scanner = CloudLibraryScanner()
     @StateObject private var accountInfo = P115AccountInfoStore()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// 当前标签（系统原生 TabView 的选中项）。
     @State private var selection: HomeSection = .home
-    /// 去过的页面保持存活（滚动位置、搜索词都在），没去过的不提前创建。
-    @State private var visited: Set<HomeSection> = [.home]
-    /// 从搜索返回时回到进入搜索前所在的标签。
-    @State private var lastTab: HomeSection = .home
-    @StateObject private var tabBarVisibility = TabBarVisibility()
+    /// 搜索是盖在标签页上面的全屏页，不占标签位；打开过以后保持存活（搜索词还在）。
+    @State private var searchOpen = false
+    @State private var searchCreated = false
     /// 首页分类入口带过来的筛选；片库读取后会清空。
     @State private var catalogPreset: CatalogPreset?
     @State private var restored = false
@@ -38,9 +37,9 @@ struct HomeView: View {
          sourceStatus: P115Status? = nil, sourceQuota: QuotaResponse? = nil,
          initialSearch: String = "", searchFiles: [P115File] = []) {
         _appState = ObservedObject(wrappedValue: appState)
-        _selection = State(initialValue: initialSection)
-        _visited = State(initialValue: [initialSection])
-        _lastTab = State(initialValue: initialSection == .search ? .home : initialSection)
+        _selection = State(initialValue: initialSection == .search ? .home : initialSection)
+        _searchOpen = State(initialValue: initialSection == .search)
+        _searchCreated = State(initialValue: initialSection == .search)
         if let library { _mediaLibrary = StateObject(wrappedValue: library) }
         if let local { _localStore = StateObject(wrappedValue: local) }
         if let metadata { _metadataStore = StateObject(wrappedValue: metadata) }
@@ -70,8 +69,6 @@ struct HomeView: View {
             .onAppear(perform: restoreOnce)
             .task(id: appState.sessionID) { await refreshAccountInfo() }
             .onChange(of: selection) { section in
-                visited.insert(section)
-                if section != .search { lastTab = section }
                 if section == .cloud || section == .mine { Task { await refreshAccountInfo() } }
             }
             .onChange(of: scenePhase) { phase in
@@ -149,47 +146,63 @@ struct HomeView: View {
                                 background: scenePhase == .background, scanning: scanner.phase == .running)
     }
 
-    /// 自绘的标签页容器：去过的页面都留在内存里，只有当前页可见、可点、可被读屏读到；
-    /// 切换时新页面淡入并从 0.985 放大到 1。标签栏作为底部安全区的一部分，页面内容自动让开。
+    /// 系统原生 TabView：iOS 26 上标签栏是悬浮的 Liquid Glass 胶囊，可以左右拖动切换；
+    /// 选中色用应用的琥珀色，图标用统一图标表。去过的页面系统会保留（滚动位置不丢）。
+    /// 搜索不在标签栏上，是盖在整个 TabView（含标签栏）上面的全屏页。
     private var tabs: some View {
         ZStack {
-            ForEach(HomeSection.allCases, id: \.self) { section in
-                if visited.contains(section) || selection == section {
+            TabView(selection: $selection) {
+                ForEach(HomeSection.tabs, id: \.self) { section in
                     page(for: section)
-                        .opacity(selection == section ? 1 : 0)
-                        .allowsHitTesting(selection == section)
-                        .accessibilityHidden(selection != section)
-                        .zIndex(selection == section ? 1 : 0)
+                        .tabItem {
+                            Label(section.title,
+                                  systemImage: selection == section ? section.icon.activeName : section.icon.name)
+                        }
+                        .tag(section)
                 }
             }
+            .tint(Theme.accent)
+            .accessibilityHidden(searchOpen)
+
+            if searchCreated {
+                SearchTab(initialQuery: initialSearch, initialResults: searchFiles, isActive: searchOpen,
+                          onClose: { closeSearch() })
+                    .background(Theme.pageBackground.ignoresSafeArea())
+                    .opacity(searchOpen ? 1 : 0)
+                    .allowsHitTesting(searchOpen)
+                    .accessibilityHidden(!searchOpen)
+                    .zIndex(1)
+            }
         }
-        .animation(reduceMotion ? nil : Motion.fade, value: selection)
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            TabBarHost(selection: $selection, visibility: tabBarVisibility)
-        }
-        .environment(\.tabBarVisibility, tabBarVisibility)
+        .animation(reduceMotion ? nil : Motion.fade, value: searchOpen)
         .background(Theme.pageBackground.ignoresSafeArea())
     }
+
+    private func openSearch() {
+        searchCreated = true
+        searchOpen = true
+    }
+
+    private func closeSearch() { searchOpen = false }
 
     @ViewBuilder
     private func page(for section: HomeSection) -> some View {
         switch section {
         case .home:
             HomeTab(onBrowseLibrary: { selection = .cloud },
-                    onSearch: { selection = .search },
+                    onSearch: { openSearch() },
                     onOpenCatalog: { kind, sort in
                         catalogPreset = CatalogPreset(kind: kind, sort: sort)
                         selection = .library
                     })
         case .library:
-            CatalogTab(onSearch: { selection = .search }, preset: $catalogPreset)
+            CatalogTab(onSearch: { openSearch() }, preset: $catalogPreset)
         case .cloud:
-            CloudTab(onSearch: { selection = .search })
+            CloudTab(onSearch: { openSearch() })
         case .mine:
             SettingsView()
         case .search:
-            SearchTab(initialQuery: initialSearch, initialResults: searchFiles, isActive: selection == .search,
-                      onClose: { selection = lastTab })
+            EmptyView()
         }
     }
 }
