@@ -32,6 +32,20 @@ private struct PlaybackAdjustment {
 /// 右侧设置面板的分页
 private enum SettingsPage: Equatable { case playback, tracks }
 
+/// 横屏右侧面板的分页：选集、倍速、清晰度、字幕音轨
+private enum SideTab: CaseIterable {
+    case episodes, speed, quality, tracks
+
+    var title: String {
+        switch self {
+        case .episodes: return "选集"
+        case .speed: return "倍速"
+        case .quality: return "清晰度"
+        case .tracks: return "字幕音轨"
+        }
+    }
+}
+
 /// 定时关闭
 private enum SleepTimer: Equatable, Identifiable {
     case off, episodeEnd, minutes(Int)
@@ -111,6 +125,14 @@ struct PlaybackControlsView: View {
     @State private var showBusy = false
     @State private var busyTask: Task<Void, Never>?
     @State private var copiedDiagnostics = false
+    @State private var sideTab: SideTab = .episodes
+    @State private var landscapeMode = false
+    @Namespace private var sideNamespace
+    @AppStorage("player.autoPlayNext") private var autoPlayNext = true
+
+    /// 竖屏时顶部小窗播放器的高度（不含状态栏）
+    private static let inlineVideoHeight: CGFloat = 220
+    private static var isUITest: Bool { ProcessInfo.processInfo.environment["HPLAYER_UI_TEST_URL"] != nil }
 
     private static let speedOptions: [Float] = [0.75, 1, 1.25, 1.5, 2, 3]
 
@@ -118,89 +140,20 @@ struct PlaybackControlsView: View {
         GeometryReader { geometry in
             let landscape = geometry.size.width > geometry.size.height
             let insets = geometry.safeAreaInsets
-            ZStack {
-                Theme.playerBackground
-                PlayerVideoSurface(playback: playback)
-                    .offset(y: landscape ? 0 : -geometry.size.height * 0.1)
-                    .allowsHitTesting(false)
-                PlaybackGestureSurface(
-                    status: gestureStatus,
-                    onTap: toggleControls,
-                    onDoubleTap: {
-                        guard !locked else { revealControls(); return }
-                        playback.toggle()
-                        revealControls()
-                    },
-                    onBoost: setBoost,
-                    onPan: handlePan
-                )
-
-                if controlsVisible && !locked {
-                    VStack(spacing: 0) {
-                        topBar(landscape: landscape)
-                        Spacer(minLength: 0)
-                        bottomBar(landscape: landscape)
-                    }
-                    .padding(.leading, max(insets.leading, landscape ? 28 : 16))
-                    .padding(.trailing, max(insets.trailing, landscape ? 28 : 16))
-                    .padding(.top, max(insets.top, 12))
-                    .padding(.bottom, max(insets.bottom, landscape ? 8 : 14))
-                    .background(alignment: .top) {
-                        LinearGradient(colors: [.black.opacity(0.6), .clear], startPoint: .top, endPoint: .bottom)
-                            .frame(height: insets.top + 120)
-                            .allowsHitTesting(false)
-                    }
-                    .background(alignment: .bottom) {
-                        LinearGradient(colors: [.clear, .black.opacity(0.7)], startPoint: .top, endPoint: .bottom)
-                            .frame(height: insets.bottom + (landscape ? 150 : 190))
-                            .allowsHitTesting(false)
-                    }
-                    .overlay {
-                        if !landscape {
-                            transportControls(spacing: 34)
-                                .offset(y: -geometry.size.height * 0.1)
-                        }
-                    }
-                    .overlay {
-                        HStack {
-                            GlassIconButton(systemImage: AppIcon.unlock.name, label: "锁定", diameter: 40, action: lock)
-                                .accessibilityIdentifier("playback.lock")
-                            Spacer()
-                            GlassIconButton(systemImage: AppIcon.screenshot.name, label: "截图", diameter: 40) { takeScreenshot() }
-                                .accessibilityIdentifier("playback.screenshot")
-                        }
-                        .padding(.leading, landscape ? edgeControlInset(safe: insets.leading, width: geometry.size.width) : 16)
-                        .padding(.trailing, landscape ? edgeControlInset(safe: insets.trailing, width: geometry.size.width) : 16)
-                        .offset(y: landscape ? 0 : geometry.size.height * 0.13)
-                    }
-                    .transition(.opacity)
-                    .zIndex(2)
-                } else if controlsVisible && locked {
-                    HStack {
-                        GlassIconButton(systemImage: AppIcon.lock.name, label: "解锁", diameter: 40, action: unlock)
-                            .accessibilityIdentifier("playback.unlock")
-                        Spacer()
-                    }
-                    .padding(.leading, landscape ? edgeControlInset(safe: insets.leading, width: geometry.size.width) : 16)
-                    .offset(y: landscape ? 0 : geometry.size.height * 0.13)
-                    .transition(.opacity)
-                    .zIndex(3)
+            ZStack(alignment: .top) {
+                if landscape {
+                    Theme.playerBackground
+                } else {
+                    Theme.pageBackground
                 }
 
-                centerStatus
-                    .zIndex(4)
-
-                if boosting {
-                    boostPill
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                        .padding(.top, insets.top + (controlsVisible && !locked ? 70 : 18))
-                        .transition(.opacity)
-                        .allowsHitTesting(false)
-                        .zIndex(5)
+                // 竖屏：上面是 16:9 的小窗播放器，下面是影片信息、选集和文件信息；横屏：画面铺满
+                VStack(spacing: 0) {
+                    if !landscape { Color.black.frame(height: insets.top) }
+                    videoLayer(landscape: landscape, insets: insets, width: geometry.size.width)
+                    if !landscape { infoPage(bottomInset: insets.bottom) }
                 }
-
-                hudLayer(insets: insets)
-                    .zIndex(6)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
 
                 if showAspect && !locked {
                     aspectPanel(insets: insets)
@@ -213,21 +166,28 @@ struct PlaybackControlsView: View {
                 }
 
                 if showList && !locked {
-                    playlistPanel(landscape: landscape, insets: insets)
-                        .zIndex(9)
+                    if landscape {
+                        sidePanel(insets: insets)
+                            .zIndex(9)
+                    } else {
+                        playlistPanel(landscape: false, insets: insets)
+                            .zIndex(9)
+                    }
                 }
             }
             .foregroundColor(.white)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .ignoresSafeArea()
             .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: boosting)
+            .onAppear { landscapeMode = landscape }
+            .onChange(of: landscape) { landscapeMode = $0 }
         }
         .background(SystemVolumeHost(controller: systemVolume).frame(width: 1, height: 1).allowsHitTesting(false))
         .background(DarkPresentationStyle().frame(width: 0, height: 0))
         .designScreen("player")
         .environment(\.colorScheme, .dark)
         .tint(.white)
-        .statusBarHidden(true)
+        .statusBarHidden(landscapeMode)
         .persistentSystemOverlays(controlsVisible ? .automatic : .hidden)
         .onAppear {
             updateBusy(loading || playback.buffering)
@@ -272,6 +232,11 @@ struct PlaybackControlsView: View {
             guard !text.isEmpty else { return }
             showNotice(text)
             playback.notice = ""
+        }
+        .onChange(of: playback.ended) { ended in
+            // 自动连播：播完这一集接着播下一集（界面测试里关闭，免得切走正在检查的那一集）
+            guard ended, autoPlayNext, !Self.isUITest, let id = nextID else { return }
+            onSelect(id)
         }
         .onChange(of: playback.currentTime) { time in
             // 定时关闭「本集结束」：快到结尾时暂停，不再自动播下一集
@@ -371,31 +336,7 @@ struct PlaybackControlsView: View {
     private func bottomBar(landscape: Bool) -> some View {
         VStack(spacing: landscape ? 4 : 10) {
             VStack(spacing: 0) {
-                PlayerScrubber(
-                    // 还不知道总时长时圆点停在最左边，不按当前时间乱放
-                    value: dragging ? dragTime : (playback.duration > 0 ? min(playback.currentTime, playback.duration) : 0),
-                    buffered: playback.duration > 0 ? min(max(playback.bufferedUntil, 0), playback.duration) : 0,
-                    upperBound: max(playback.duration, 1),
-                    enabled: playback.seekable && playback.duration > 0,
-                    onScrub: scrubbed,
-                    onEditingChanged: { editing in
-                        if editing {
-                            dragging = true
-                            scrubStart = playback.currentTime
-                            hideTask?.cancel()
-                            adjustmentHideTask?.cancel()
-                            scrubbed(dragTime)
-                        } else if dragging {
-                            dragging = false
-                            playback.seek(to: dragTime)
-                            hideAdjustmentSoon()
-                        }
-                    },
-                    onCommit: { value in
-                        playback.seek(to: value)
-                        revealControls()
-                    }
-                )
+                scrubber
                 .frame(height: 32)
 
                 HStack {
@@ -410,48 +351,19 @@ struct PlaybackControlsView: View {
             }
 
             sideControls(landscape: landscape)
-            if !landscape {
-                HStack(spacing: 18) {
-                    Button(action: openAspect) {
-                        Label("画面", systemImage: AppIcon.aspect.name)
-                            .frame(maxWidth: .infinity, minHeight: 44)
-                            .contentShape(Rectangle())
-                    }
-                    .accessibilityIdentifier("playback.aspect")
-                    Button { openSettings(.tracks) } label: {
-                        Label("字幕音轨", systemImage: AppIcon.subtitle.name)
-                            .frame(maxWidth: .infinity, minHeight: 44)
-                            .contentShape(Rectangle())
-                    }
-                        .accessibilityIdentifier("playback.tracks")
-                    Button { openSettings(.playback) } label: {
-                        Label("设置", systemImage: AppIcon.settings.name)
-                            .frame(maxWidth: .infinity, minHeight: 44)
-                            .contentShape(Rectangle())
-                    }
-                }
-                .font(.caption)
-                .foregroundStyle(.white.opacity(0.75))
-                .buttonStyle(.plain)
-                .frame(minHeight: 44)
-                .padding(.top, 10)
-                .overlay(alignment: .top) { Rectangle().fill(.white.opacity(0.07)).frame(height: 0.5) }
-            }
         }
     }
 
-    /// 横屏：画质和倍速在左、播放控制居中、选集和方向在右。
+    /// 横屏底栏：播放控制在左，倍速 / 选集 / 画质 / 字幕和横竖屏在右；后四个打开右侧面板的对应分页。
     private func sideControls(landscape: Bool) -> some View {
-        HStack(spacing: 8) {
-            Button { openSettings(.playback) } label: {
-                Label(selectedQuality.isEmpty ? "原画" : selectedQuality, systemImage: AppIcon.playback.name)
-                    .font(.caption.weight(.medium)).frame(minHeight: 44)
-            }.buttonStyle(.plain).disabled(qualities.isEmpty)
-                .accessibilityLabel("播放画质")
-            GlassTextButton(title: "\(String(format: "%g", playback.rate))×", label: "播放速度") { openSettings(.playback) }
+        HStack(spacing: 6) {
+            transportControls(spacing: 10, compact: true)
             Spacer(minLength: 0)
+            GlassTextButton(title: "\(String(format: "%g", playback.rate))×", label: "播放速度") { openSidePanel(.speed) }
             GlassTextButton(title: "选集", label: "选集") { openList() }
                 .accessibilityIdentifier("playback.playlist")
+            GlassTextButton(title: selectedQuality.isEmpty ? "原画" : selectedQuality, label: "播放画质") { openSidePanel(.quality) }
+            GlassTextButton(title: "字幕", label: "字幕和音轨") { openSidePanel(.tracks) }
             Button { toggleOrientation(landscape: landscape) } label: {
                 controlIcon(landscape ? AppIcon.exitFullscreen.name : AppIcon.fullscreen.name,
                             label: landscape ? "竖屏" : "横屏", size: 18)
@@ -459,10 +371,7 @@ struct PlaybackControlsView: View {
             .buttonStyle(.plain)
             .accessibilityIdentifier("playback.orientation")
         }
-        .frame(minHeight: landscape ? 56 : 44)
-        .overlay {
-            if landscape { transportControls(spacing: 24, compact: true) }
-        }
+        .frame(minHeight: 56)
     }
 
     private func transportControls(spacing: CGFloat, compact: Bool = false) -> some View {
@@ -507,6 +416,533 @@ struct PlaybackControlsView: View {
         dragTime = value
         guard dragging, playback.duration > 0 else { return }
         adjustment = seekAdjustment(target: value, from: scrubStart)
+    }
+
+    private var scrubber: some View {
+        PlayerScrubber(
+            // 还不知道总时长时圆点停在最左边，不按当前时间乱放
+            value: dragging ? dragTime : (playback.duration > 0 ? min(playback.currentTime, playback.duration) : 0),
+            buffered: playback.duration > 0 ? min(max(playback.bufferedUntil, 0), playback.duration) : 0,
+            upperBound: max(playback.duration, 1),
+            enabled: playback.seekable && playback.duration > 0,
+            onScrub: scrubbed,
+            onEditingChanged: { editing in
+                if editing {
+                    dragging = true
+                    scrubStart = playback.currentTime
+                    hideTask?.cancel()
+                    adjustmentHideTask?.cancel()
+                    scrubbed(dragTime)
+                } else if dragging {
+                    dragging = false
+                    playback.seek(to: dragTime)
+                    hideAdjustmentSoon()
+                }
+            },
+            onCommit: { value in
+                playback.seek(to: value)
+                revealControls()
+            }
+        )
+    }
+
+    // MARK: 视频层（竖屏小窗 / 横屏全屏）
+
+    @ViewBuilder
+    private func videoLayer(landscape: Bool, insets: EdgeInsets, width: CGFloat) -> some View {
+        let hudInsets = landscape ? insets : EdgeInsets()
+        ZStack {
+            Theme.playerBackground
+            PlayerVideoSurface(playback: playback)
+                .allowsHitTesting(false)
+            PlaybackGestureSurface(
+                status: gestureStatus,
+                onTap: toggleControls,
+                onDoubleTap: {
+                    guard !locked else { revealControls(); return }
+                    playback.toggle()
+                    revealControls()
+                },
+                onBoost: setBoost,
+                onPan: handlePan
+            )
+
+            if controlsVisible && !locked {
+                if landscape {
+                    landscapeControls(insets: insets, width: width)
+                } else {
+                    inlineControls
+                }
+            } else if controlsVisible && locked {
+                HStack {
+                    GlassIconButton(systemImage: AppIcon.lock.name, label: "解锁", diameter: 40, action: unlock)
+                        .accessibilityIdentifier("playback.unlock")
+                    Spacer()
+                }
+                .padding(.leading, landscape ? edgeControlInset(safe: insets.leading, width: width) : 16)
+                .transition(.opacity)
+                .zIndex(3)
+            }
+
+            centerStatus
+                .scaleEffect(landscape ? 1 : 0.8)
+                .zIndex(4)
+
+            if boosting {
+                boostPill
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .padding(.top, hudInsets.top + (controlsVisible && !locked ? (landscape ? 70 : 48) : 18))
+                    .transition(.opacity)
+                    .allowsHitTesting(false)
+                    .zIndex(5)
+            }
+
+            hudLayer(insets: hudInsets)
+                .zIndex(6)
+        }
+        .frame(maxWidth: .infinity, maxHeight: landscape ? .infinity : Self.inlineVideoHeight)
+        .clipped()
+    }
+
+    private func landscapeControls(insets: EdgeInsets, width: CGFloat) -> some View {
+        VStack(spacing: 0) {
+            topBar(landscape: true)
+            Spacer(minLength: 0)
+            bottomBar(landscape: true)
+        }
+        .padding(.leading, max(insets.leading, 28))
+        .padding(.trailing, max(insets.trailing, 28))
+        .padding(.top, max(insets.top, 12))
+        .padding(.bottom, max(insets.bottom, 8))
+        .background(alignment: .top) {
+            LinearGradient(colors: [.black.opacity(0.6), .clear], startPoint: .top, endPoint: .bottom)
+                .frame(height: insets.top + 120)
+                .allowsHitTesting(false)
+        }
+        .background(alignment: .bottom) {
+            LinearGradient(colors: [.clear, .black.opacity(0.7)], startPoint: .top, endPoint: .bottom)
+                .frame(height: insets.bottom + 150)
+                .allowsHitTesting(false)
+        }
+        .overlay {
+            HStack {
+                GlassIconButton(systemImage: AppIcon.unlock.name, label: "锁定", diameter: 40, action: lock)
+                    .accessibilityIdentifier("playback.lock")
+                Spacer()
+                GlassIconButton(systemImage: AppIcon.screenshot.name, label: "截图", diameter: 40) { takeScreenshot() }
+                    .accessibilityIdentifier("playback.screenshot")
+            }
+            .padding(.leading, edgeControlInset(safe: insets.leading, width: width))
+            .padding(.trailing, edgeControlInset(safe: insets.trailing, width: width))
+        }
+        .transition(.opacity)
+        .zIndex(2)
+    }
+
+    /// 竖屏小窗上的控制：左上返回，右上截图和更多；底部一行是播放、时间、进度条、全屏。
+    private var inlineControls: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                Button(action: closePlayer) { controlIcon(AppIcon.back.name, label: "关闭播放", size: 20) }
+                    .accessibilityIdentifier("playback.close")
+                Spacer(minLength: 0)
+                Button { takeScreenshot() } label: { controlIcon(AppIcon.screenshot.name, label: "截图", size: 19) }
+                    .accessibilityIdentifier("playback.screenshot")
+                Button { openSettings(.playback) } label: { controlIcon(AppIcon.more.name, label: "更多设置", size: 19) }
+                    .accessibilityIdentifier("playback.more")
+            }
+            Spacer(minLength: 0)
+            HStack(spacing: 2) {
+                Button { playback.toggle(); revealControls() } label: {
+                    controlIcon(playback.playing ? AppIcon.pause.name : AppIcon.play.name,
+                                label: playback.playing ? "暂停" : "播放", size: 18, frame: 40)
+                }
+                .accessibilityIdentifier("playback.playPause")
+                .accessibilityValue(playback.playing ? "playing" : "paused")
+                Text(timeText(dragging ? dragTime : playback.currentTime))
+                    .font(.system(size: 11).monospacedDigit())
+                    .accessibilityIdentifier("playback.elapsed")
+                scrubber
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 30)
+                    .padding(.horizontal, 6)
+                Text(playback.duration > 0 ? timeText(playback.duration) : "00:00")
+                    .font(.system(size: 11).monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.75))
+                Button { toggleOrientation(landscape: false) } label: {
+                    controlIcon(AppIcon.fullscreen.name, label: "横屏", size: 18)
+                }
+                .accessibilityIdentifier("playback.orientation")
+            }
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 4)
+        .background(alignment: .top) {
+            LinearGradient(colors: [.black.opacity(0.5), .clear], startPoint: .top, endPoint: .bottom)
+                .frame(height: 70)
+                .allowsHitTesting(false)
+        }
+        .background(alignment: .bottom) {
+            LinearGradient(colors: [.clear, .black.opacity(0.7)], startPoint: .top, endPoint: .bottom)
+                .frame(height: 70)
+                .allowsHitTesting(false)
+        }
+        .transition(.opacity)
+        .zIndex(2)
+    }
+
+    // MARK: 竖屏信息页
+
+    private var metaText: String {
+        (badges + (statusLine.isEmpty ? [] : [statusLine])).joined(separator: " · ")
+    }
+
+    private func infoPage(bottomInset: CGFloat) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(title)
+                        .font(.system(size: 20, weight: .bold))
+                        .foregroundStyle(Theme.textPrimary)
+                        .lineLimit(2)
+                    if !metaText.isEmpty {
+                        Text(metaText)
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.textSecondary)
+                    }
+                }
+                quickRow
+                episodesSection
+                nextCard
+                fileInfoSection
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 16)
+            .padding(.bottom, bottomInset + 28)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .scrollIndicators(.hidden)
+    }
+
+    private var quickRow: some View {
+        HStack(spacing: 8) {
+            quickCell(selectedQuality.isEmpty ? "原画" : selectedQuality, "清晰度", id: "playback.quality") { openSettings(.playback) }
+            quickCell("\(String(format: "%g", playback.rate))×", "倍速", id: "playback.speed") { openSettings(.playback) }
+            quickCell(playback.selectedSubtitle == nil ? "关闭" : "已开启", "字幕", id: "playback.tracks") { openSettings(.tracks) }
+            quickCell(playback.aspect.title, "画面", id: "playback.aspect") { openAspect() }
+            quickCell(playback.decoding.title, "解码", id: "playback.decoding") { openSettings(.playback) }
+        }
+        .padding(.top, 14)
+    }
+
+    private func quickCell(_ value: String, _ label: String, id: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 2) {
+                Text(value)
+                    .font(.system(size: 14, weight: .bold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                Text(label)
+                    .font(.system(size: 10))
+                    .foregroundStyle(Theme.textSecondary)
+            }
+            .foregroundStyle(Theme.textPrimary)
+            .frame(maxWidth: .infinity, minHeight: 52)
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier(id)
+    }
+
+    private var episodesSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("选集")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(Theme.textPrimary)
+                Spacer()
+                Button { openList() } label: {
+                    Text("\(autoPlayNext ? "自动连播 · " : "")共 \(max(items.count, 1)) 集 ›")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.textSecondary)
+                        .frame(minHeight: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("playback.playlist")
+            }
+            if !items.isEmpty {
+                ScrollViewReader { proxy in
+                    ScrollView(.horizontal) {
+                        HStack(spacing: 8) {
+                            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                                stripCell(item, index: index)
+                                    .id(item.id)
+                            }
+                        }
+                    }
+                    .scrollIndicators(.hidden)
+                    .onAppear { proxy.scrollTo(selectedID, anchor: .center) }
+                    .onChange(of: selectedID) { id in
+                        withAnimation(reduceMotion ? nil : Motion.smooth) { proxy.scrollTo(id, anchor: .center) }
+                    }
+                }
+            }
+        }
+        .padding(.top, 14)
+    }
+
+    private func stripCell(_ item: PlaybackListItem, index: Int) -> some View {
+        let currentIndex = items.firstIndex { $0.id == selectedID } ?? 0
+        let current = index == currentIndex
+        return Button {
+            onSelect(item.id)
+            revealControls()
+        } label: {
+            Text("\(index + 1)")
+                .font(.system(size: 16, weight: current ? .bold : .medium).monospacedDigit())
+                .foregroundStyle(current ? Theme.gold : (index < currentIndex ? Theme.textTertiary : Theme.textPrimary))
+                .frame(width: 52, height: 52)
+                .background(current ? Theme.gold.opacity(0.12) : Theme.surface,
+                            in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay {
+                    if current {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Theme.gold, lineWidth: 1.5)
+                    }
+                }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(item.title)
+        .accessibilityIdentifier("playback.episode.\(item.id)")
+        .accessibilityAddTraits(current ? .isSelected : [])
+    }
+
+    @ViewBuilder
+    private var nextCard: some View {
+        if let id = nextID, let next = items.first(where: { $0.id == id }) {
+            Button {
+                onSelect(id)
+                revealControls()
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: AppIcon.play.name)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Theme.gold)
+                        .frame(width: 104, height: 58)
+                        .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("接下来")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(Theme.gold)
+                        Text(next.title)
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(Theme.textPrimary)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                        if autoPlayNext {
+                            Text("本集结束后自动播放")
+                                .font(.system(size: 11))
+                                .foregroundStyle(Theme.textSecondary)
+                        }
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(12)
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 18)
+            .accessibilityIdentifier("playback.nextCard")
+        }
+    }
+
+    private var fileRows: [(String, String)] {
+        var rows: [(String, String)] = [("文件", title)]
+        if playback.duration > 0 { rows.append(("时长", timeText(playback.duration))) }
+        if playback.bufferedUntil > 1 { rows.append(("已缓存", "到 " + timeText(playback.bufferedUntil))) }
+        return rows
+    }
+
+    private var fileInfoSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("文件信息")
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(Theme.textPrimary)
+            VStack(spacing: 0) {
+                ForEach(Array(fileRows.enumerated()), id: \.offset) { index, row in
+                    HStack(spacing: 12) {
+                        Text(row.0)
+                            .foregroundStyle(Theme.textSecondary)
+                        Spacer(minLength: 8)
+                        Text(row.1)
+                            .foregroundStyle(Theme.textPrimary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    .font(.system(size: 13))
+                    .frame(minHeight: 40)
+                    .overlay(alignment: .bottom) {
+                        if index < fileRows.count - 1 { Rectangle().fill(Theme.hairline).frame(height: 0.5) }
+                    }
+                }
+            }
+            .padding(.horizontal, 14)
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .padding(.top, 22)
+    }
+
+    // MARK: 横屏右侧面板
+
+    private func sidePanel(insets: EdgeInsets) -> some View {
+        ZStack(alignment: .trailing) {
+            Color.black.opacity(0.45)
+                .contentShape(Rectangle())
+                .onTapGesture { closeList() }
+
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(alignment: .bottom, spacing: 22) {
+                    ForEach(SideTab.allCases, id: \.self) { tab in
+                        sideTabButton(tab)
+                    }
+                }
+                ScrollView {
+                    sideContent
+                        .padding(.top, 16)
+                        .padding(.bottom, 18)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .scrollIndicators(.hidden)
+            }
+            .padding(.top, max(insets.top, 18))
+            .padding(.leading, 22)
+            .padding(.trailing, max(insets.trailing, 0) + 26)
+            .frame(width: 372 + insets.trailing, alignment: .leading)
+            .frame(maxHeight: .infinity, alignment: .top)
+            .playerPanelBackground(cornerRadius: 0)
+            .designScreen("episodes")
+        }
+        .transition(.move(edge: .trailing).combined(with: .opacity))
+    }
+
+    private func sideTabButton(_ tab: SideTab) -> some View {
+        let selected = sideTab == tab
+        return Button {
+            Haptics.select()
+            withAnimation(reduceMotion ? nil : Motion.snappy) { sideTab = tab }
+        } label: {
+            Text(tab.title)
+                .font(.system(size: selected ? 16 : 15, weight: selected ? .bold : .regular))
+                .foregroundStyle(selected ? Color.white : Color.white.opacity(0.62))
+                .padding(.bottom, 8)
+                .overlay(alignment: .bottom) {
+                    if selected {
+                        Capsule()
+                            .fill(Theme.gold)
+                            .frame(width: 14, height: 3)
+                            .matchedGeometryEffect(id: "side.tab", in: sideNamespace)
+                    }
+                }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    @ViewBuilder
+    private var sideContent: some View {
+        switch sideTab {
+        case .episodes:
+            episodesGrid
+        case .speed:
+            settingGroup("播放速度") {
+                chipGrid(Self.speedOptions.map { (String(format: "%g", $0), String(format: "%g", $0)) },
+                         selected: String(format: "%g", playback.rate), columns: 3) { value in
+                    if let rate = Float(value) { playback.setRate(rate) }
+                }
+            }
+        case .quality:
+            if qualities.isEmpty {
+                Text("这个视频只有原画，没有别的清晰度可选。")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.55))
+            } else {
+                VStack(spacing: 2) {
+                    ForEach(qualities) { quality in
+                        trackRow(title: quality.title, detail: "", selected: quality.title == selectedQuality) {
+                            onQuality(quality.id)
+                        }
+                    }
+                }
+            }
+        case .tracks:
+            VStack(alignment: .leading, spacing: 18) {
+                subtitleSettings
+                Divider().overlay(.white.opacity(0.12))
+                audioSettings
+            }
+        }
+    }
+
+    private var episodesGrid: some View {
+        let currentIndex = items.firstIndex { $0.id == selectedID } ?? 0
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("共 \(items.count) 集")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.white.opacity(0.78))
+                Spacer()
+                Text("自动连播")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white.opacity(0.78))
+                Toggle("自动连播", isOn: $autoPlayNext)
+                    .labelsHidden()
+                    .tint(Theme.gold)
+                    .accessibilityIdentifier("playback.autoNext")
+            }
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 5), spacing: 8) {
+                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                    episodeButton(item, index: index, currentIndex: currentIndex)
+                }
+            }
+            Text("已看完的集数显示为灰色，进度会自动同步到「继续观看」。")
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.55))
+        }
+    }
+
+    private func episodeButton(_ item: PlaybackListItem, index: Int, currentIndex: Int) -> some View {
+        let current = index == currentIndex
+        return Button {
+            closeList()
+            onSelect(item.id)
+            revealControls()
+        } label: {
+            Text("\(index + 1)")
+                .font(.system(size: 15, weight: current ? .bold : .medium).monospacedDigit())
+                .foregroundStyle(current ? Theme.gold : (index < currentIndex ? Color(white: 0.56) : Color.white))
+                .frame(maxWidth: .infinity, minHeight: 46)
+                .background(current ? Theme.gold.opacity(0.12) : Color.white.opacity(0.07),
+                            in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay {
+                    if current {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Theme.gold, lineWidth: 1.5)
+                    }
+                }
+                .overlay(alignment: .bottom) {
+                    if current {
+                        Capsule().fill(Theme.gold).frame(height: 2).padding(.horizontal, 12).padding(.bottom, 6)
+                    }
+                }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(item.title)
+        .accessibilityIdentifier("playback.item.\(item.id)")
+        .accessibilityAddTraits(current ? .isSelected : [])
     }
 
     // MARK: 画面比例
@@ -1098,10 +1534,12 @@ struct PlaybackControlsView: View {
         locked = false
         revealControls()
     }
-    private func openList() {
+    private func openList() { openSidePanel(.episodes) }
+    private func openSidePanel(_ tab: SideTab) {
         hideTask?.cancel()
         settingsPage = nil
         showAspect = false
+        sideTab = tab
         withAnimation(reduceMotion ? nil : Motion.smooth) { showList = true }
     }
     private func closeList() {
@@ -1383,7 +1821,8 @@ struct PlaybackControlsView: View {
     }
     private func enterLandscapeByDefault() {
         guard onScreen, !initialLandscapeRequested else { return }
-        if InterfacePreview.active && InterfacePreview.screen != "landscape" { return }
+        // 默认停在竖屏的小窗播放器；只有「横屏」设计稿的预览自动转横屏，其余靠全屏按钮
+        guard InterfacePreview.active && InterfacePreview.screen == "landscape" else { return }
         initialLandscapeRequested = true
         requestedLandscape = true
         requestOrientation(.landscape)
