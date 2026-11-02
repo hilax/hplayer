@@ -124,11 +124,7 @@ struct HomeTab: View {
             }
             .background {
                 HeroObserver(state: heroState) { state in
-                    if let current = currentHero(library, selection: state.selection) {
-                        AmbientBackdrop(urlString: HomeArtwork.heroURL(current), fallbackURLString: current.posterURL)
-                    } else {
-                        Theme.pageBackground.ignoresSafeArea()
-                    }
+                    HomeHeroBackdrop(items: library.featured, selection: state.selection, motion: state.motion)
                 }
             }
             .navigationDestination(for: PerformerListRoute.self) { _ in
@@ -179,6 +175,7 @@ struct HomeTab: View {
             .task(id: snapshotKey) { await rebuildSnapshot() }
             .onChange(of: library.featured.count) { count in
                 if heroState.selection >= count { heroState.selection = 0 }
+                heroState.motion.reset(to: heroState.selection)
             }
         }
         .designScreen(library.featured.isEmpty ? "home-empty" : "home")
@@ -294,7 +291,11 @@ struct HomeTab: View {
             // 下拉时图片向上拉伸，顶部不会露出空白
             let stretch = max(0, minY)
             HeroObserver(state: heroState) { state in
-                heroPager(library, selection: state.selection)
+                heroPager(library, selection: state.selection, originX: proxy.frame(in: .global).minX)
+            }
+            .onPreferenceChange(HeroPagePositionKey.self) { samples in
+                heroState.motion.update(samples: samples, originX: proxy.frame(in: .global).minX,
+                                        width: proxy.size.width, count: library.featured.count)
             }
             .frame(width: proxy.size.width, height: height + stretch)
             .offset(y: -stretch)
@@ -335,13 +336,13 @@ struct HomeTab: View {
     }
 
     /// 翻页时只有图片和片名跟着滑，播放和更多两个按钮固定在原处，作用于当前这一页
-    private func heroPager(_ library: HomeSnapshot, selection: Int) -> some View {
+    private func heroPager(_ library: HomeSnapshot, selection: Int, originX: CGFloat) -> some View {
         let featured = library.featured
         let current = currentHero(library, selection: selection)
         let binding = Binding<Int>(get: { selection }, set: { heroState.selection = $0 })
         return TabView(selection: binding) {
             ForEach(Array(featured.enumerated()), id: \.element.id) { index, item in
-                HeroPage(item: item)
+                HeroPage(item: item, index: index, originX: originX)
                     .tag(index)
             }
         }
@@ -799,6 +800,7 @@ struct HomeTab: View {
 /// 否则每扫一页就把整个片库重新过一遍，界面会卡死。
 final class HeroState: ObservableObject {
     @Published var selection = 0
+    let motion = HeroMotionState()
 }
 
 /// 只在横幅状态变化时重算自己的内容，父页面不订阅这个对象。
@@ -825,6 +827,8 @@ private struct HomeSnapshotKey: Equatable {
 /// 卡片上的文字固定用白色，浅色和深色模式下都一样清楚。
 private struct HeroPage: View {
     let item: HomeMediaItem
+    let index: Int
+    let originX: CGFloat
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private static let scrim = Theme.brandNight
@@ -832,8 +836,8 @@ private struct HeroPage: View {
     var body: some View {
         GeometryReader { geometry in
             let width = max(geometry.size.width, 1)
-            let rawX = reduceMotion ? 0 : geometry.frame(in: .global).minX
-            let pageX = max(-width, min(width, rawX))
+            let rawX = geometry.frame(in: .global).minX
+            let pageX = reduceMotion ? 0 : max(-width, min(width, rawX - originX))
             ZStack(alignment: .bottomLeading) {
                 // 滑到这一页时图通常已经预取好；还没到就先露出底色，不画默认图。
                 ArtworkView(
@@ -846,7 +850,7 @@ private struct HeroPage: View {
                 .scaledToFill()
                 .frame(width: width * 1.4, height: geometry.size.height)
                 .clipped()
-                .offset(x: -pageX * 0.2)
+                .offset(x: -pageX * 0.18)
                 .frame(width: width, height: geometry.size.height)
                 .clipped()
 
@@ -869,11 +873,12 @@ private struct HeroPage: View {
                 content
                     .padding(.horizontal, 16)
                     .padding(.bottom, 62 + 92)
-                    .offset(x: pageX * 0.35)
-                    .opacity(1 - min(1, abs(pageX) / width * 1.5))
+                    .offset(x: pageX * 0.12)
+                    .opacity(1 - min(1, abs(pageX) / width) * 0.35)
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
             .clipped()
+            .preference(key: HeroPagePositionKey.self, value: [index: rawX])
         }
         .background(Theme.surface)
     }
@@ -887,18 +892,18 @@ private struct HeroPage: View {
             .scaledToFill()
             .frame(width: width * 1.4 / 4, height: size.height / 4)
             .clipped()
-            .blur(radius: 7)
+            .blur(radius: 10)
             .scaleEffect(4)
             .frame(width: width * 1.4, height: size.height)
-            .offset(x: -pageX * 0.2)
+            .offset(x: -pageX * 0.18)
             .frame(width: width, height: size.height)
             .clipped()
             .mask {
                 LinearGradient(stops: [
-                    .init(color: .clear, location: 0.55),
-                    .init(color: .black.opacity(0.08), location: 0.68),
-                    .init(color: .black.opacity(0.4), location: 0.8),
-                    .init(color: .black.opacity(0.84), location: 0.92),
+                    .init(color: .clear, location: 0.42),
+                    .init(color: .black.opacity(0.12), location: 0.58),
+                    .init(color: .black.opacity(0.5), location: 0.74),
+                    .init(color: .black.opacity(0.9), location: 0.9),
                     .init(color: .black, location: 1),
                 ], startPoint: .top, endPoint: .bottom)
             }

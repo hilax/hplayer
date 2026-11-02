@@ -805,9 +805,8 @@ enum HomeArtwork {
 // MARK: - 首页底色
 
 /// 首页整页的底色：把当前精选图放大模糊铺满全屏，再盖一层半透明的浅色或深色，
-/// 横幅和下面的电影、剧集列表都压在这层取自精选图的颜色上；切换精选时淡入淡出。
+/// 横幅和货架共用一片连续的封面色调，拖动时由 HomeHeroBackdrop 混合相邻两页。
 struct AmbientBackdrop: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let urlString: String
     var fallbackURLString = ""
 
@@ -825,29 +824,31 @@ struct AmbientBackdrop: View {
                         .scaledToFill()
                         .frame(width: proxy.size.width / 8, height: proxy.size.height / 8)
                         .clipped()
-                        .blur(radius: 7.5)
-                        .scaleEffect(8)
+                        .blur(radius: 11)
+                        .scaleEffect(9)
                         .frame(width: proxy.size.width, height: proxy.size.height)
                         .clipped()
-                        .saturation(1.15)
-                        .opacity(colorScheme == .dark ? 0.7 : 0.75)
-                        .id(urlString)
-                        .transition(.opacity)
+                        .saturation(1.05)
+                        .opacity(colorScheme == .dark ? 0.85 : 0.8)
                 }
                 veil
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
             .clipped()
         }
-        .animation(reduceMotion ? nil : Motion.artworkFade, value: urlString)
         .ignoresSafeArea()
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
 
     /// 半透明的一层：留住图片的颜色，又让文字看得清
-    private var veil: Color {
-        colorScheme == .dark ? Color.black.opacity(0.55) : Color.white.opacity(0.5)
+    private var veil: some View {
+        let color = colorScheme == .dark ? Color.black : Color.white
+        return LinearGradient(stops: [
+            .init(color: color.opacity(colorScheme == .dark ? 0.25 : 0.4), location: 0),
+            .init(color: color.opacity(colorScheme == .dark ? 0.38 : 0.54), location: 0.55),
+            .init(color: color.opacity(colorScheme == .dark ? 0.52 : 0.66), location: 1),
+        ], startPoint: .top, endPoint: .bottom)
     }
 }
 
