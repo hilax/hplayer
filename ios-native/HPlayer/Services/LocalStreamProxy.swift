@@ -15,8 +15,14 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
 
     /// 所有状态只在这个串行队列上读写（监听、连接、URLSession 回调都在这里）
     let queue = DispatchQueue(label: "app.hplayer.stream-proxy", qos: .userInitiated)
+    /// 端口自检可能等待 socket，不能占用转发队列或主线程。
+    private let probeQueue = DispatchQueue(label: "app.hplayer.stream-proxy.probe", qos: .utility)
     private var listener: NWListener?
     private var port: UInt16 = 0
+    private var checkingListener = false
+    private var lastPortCheck: Bool?
+    private var listenerWaiters: [UUID: (UInt16?) -> Void] = [:]
+    private var portProbe: (UInt16) -> Bool = LocalStreamProxy.accepts
     private var session: URLSession!
     /// 每组请求头一个编号，地址里只带编号，Cookie 不出现在 mpv 的日志里
     private var profiles: [String: [String: String]] = [:]
@@ -43,15 +49,8 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
         // 手机锁屏或切到别的 App 再回来，系统可能已经收走了监听端口，但监听对象还显示「就绪」。
         // 回到前台时检查一次，端口连不上就丢掉，下次播放时重建。
         NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: nil) { [weak self] _ in
-            self?.queue.async { self?.dropListenerIfDead() }
+            self?.queue.async { self?.checkListenerIfNeeded() }
         }
-    }
-
-    private func dropListenerIfDead() {
-        guard listener != nil, port != 0, !Self.accepts(port: port) else { return }
-        listener?.cancel()
-        listener = nil
-        port = 0
     }
 
     /// 真的往这个端口连一次。监听对象的状态可能过期（显示就绪，实际端口已被系统收走），以连接结果为准。
@@ -84,12 +83,40 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
     // MARK: 对外
 
     /// 把网络地址换成本机中转地址；中转服务起不来时返回 nil，调用方就直接用原地址
-    func localURL(for upstream: URL, headers: [String: String]) -> URL? {
-        guard let port = ensureRunning() else { return nil }
-        let profile = queue.sync { () -> String in
-            lastProblem = ""
-            return register(headers)
+    func localURL(for upstream: URL, headers: [String: String]) async -> URL? {
+        let id = UUID()
+        let cancellation = ListenerCancellation()
+        return await withTaskCancellationHandler {
+            guard !Task.isCancelled else { return nil }
+            return await withCheckedContinuation { continuation in
+                queue.async {
+                    guard !cancellation.isCancelled else {
+                        continuation.resume(returning: nil)
+                        return
+                    }
+                    self.listenerWaiters[id] = { port in
+                        guard let port, !cancellation.isCancelled else {
+                            continuation.resume(returning: nil)
+                            return
+                        }
+                        self.lastProblem = ""
+                        let profile = self.register(headers)
+                        continuation.resume(returning: Self.localURL(for: upstream, port: port, profile: profile))
+                    }
+                    // A previously ready listener can later enter .waiting without a new startup timer.
+                    self.queue.asyncAfter(deadline: .now() + 2.5) {
+                        self.listenerWaiters.removeValue(forKey: id)?(nil)
+                    }
+                    self.ensureListener()
+                }
+            }
+        } onCancel: {
+            cancellation.cancel()
+            self.queue.async { self.listenerWaiters.removeValue(forKey: id)?(nil) }
         }
+    }
+
+    private static func localURL(for upstream: URL, port: UInt16, profile: String) -> URL? {
         let encoded = Data(upstream.absoluteString.utf8).base64EncodedString()
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")
@@ -105,58 +132,126 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
         queue.sync { lastProblem }
     }
 
-    /// 诊断信息里的中转状态：监听端口，以及真的连一次的结果
+    /// 诊断信息里的最近一次自检结果；诊断不能在主线程重新等待 socket。
     var statusText: String {
         queue.sync {
             guard listener != nil, port != 0 else { return "未启动" }
-            return "端口 \(port)，自检\(Self.accepts(port: port) ? "可连接" : "被拒绝（监听已失效，下次打开会重建）")"
+            guard let lastPortCheck else { return "端口 \(port)，监听已就绪" }
+            return "端口 \(port)，上次自检\(lastPortCheck ? "可连接" : "被拒绝（监听已失效，下次打开会重建）")"
         }
     }
 
     #if DEBUG
     /// 测试用：把记录的端口改成一个没人监听的值，模拟监听被系统收走但状态还显示就绪
     func simulateStalePortForTesting() {
-        queue.sync { port = port == 1 ? 2 : 1 }
+        queue.sync { port = port == 1 ? 2 : 1; lastPortCheck = false }
+    }
+
+    func setPortProbeForTesting(_ probe: @escaping (UInt16) -> Bool) {
+        queue.sync { portProbe = probe }
+    }
+
+    func listenerWaiterCountForTesting() -> Int {
+        queue.sync { listenerWaiters.count }
     }
     #endif
 
     // MARK: 监听
 
-    private func ensureRunning() -> UInt16? {
-        let ready = DispatchSemaphore(value: 0)
-        let running: UInt16? = queue.sync {
-            if let listener, case .ready = listener.state, port != 0, Self.accepts(port: port) { return port }
-            listener?.cancel()
-            listener = nil
+    /// 所有等待者共用一次监听器启动或端口检查。
+    private func ensureListener() {
+        guard let listener else { startListener(); return }
+        switch listener.state {
+        case .ready where port != 0:
+            checkListenerIfNeeded()
+        case .waiting where port != 0:
+            self.listener = nil
             port = 0
-            let parameters = NWParameters.tcp
-            parameters.requiredInterfaceType = .loopback
-            parameters.allowLocalEndpointReuse = true
-            guard let created = try? NWListener(using: parameters, on: .any) else { return nil }
-            created.newConnectionHandler = { [weak self] connection in self?.accept(connection) }
-            created.stateUpdateHandler = { [weak self, weak created] state in
-                guard let self, let created else { return }
-                switch state {
-                case .ready:
-                    if self.listener === created { self.port = created.port?.rawValue ?? 0 }
-                    ready.signal()
-                case .failed, .cancelled:
-                    if self.listener === created {
-                        self.listener = nil
-                        self.port = 0
-                    }
-                    ready.signal()
-                default:
-                    break
+            lastPortCheck = nil
+            listener.cancel()
+            startListener()
+        case .failed, .cancelled:
+            self.listener = nil
+            port = 0
+            lastPortCheck = nil
+            startListener()
+        default:
+            // 启动中，等待 stateUpdateHandler 或超时。
+            break
+        }
+    }
+
+    private func startListener() {
+        let parameters = NWParameters.tcp
+        parameters.requiredInterfaceType = .loopback
+        parameters.allowLocalEndpointReuse = true
+        guard let created = try? NWListener(using: parameters, on: .any) else {
+            finishListenerWaiters(nil)
+            return
+        }
+        created.newConnectionHandler = { [weak self] connection in self?.accept(connection) }
+        created.stateUpdateHandler = { [weak self, weak created] state in
+            guard let self, let created, self.listener === created else { return }
+            switch state {
+            case .ready:
+                self.port = created.port?.rawValue ?? 0
+                self.lastPortCheck = nil
+                guard self.port != 0 else {
+                    self.listener = nil
+                    created.cancel()
+                    self.finishListenerWaiters(nil)
+                    return
+                }
+                self.finishListenerWaiters(self.port)
+            case .failed, .cancelled:
+                self.listener = nil
+                self.port = 0
+                self.lastPortCheck = nil
+                self.finishListenerWaiters(nil)
+            default:
+                break
+            }
+        }
+        listener = created
+        created.start(queue: queue)
+        queue.asyncAfter(deadline: .now() + 2) { [weak self, weak created] in
+            guard let self, let created, self.listener === created, self.port == 0 else { return }
+            self.listener = nil
+            created.cancel()
+            self.finishListenerWaiters(nil)
+        }
+    }
+
+    private func checkListenerIfNeeded() {
+        guard !checkingListener, let checked = listener, port != 0 else { return }
+        let checkedPort = port
+        let probe = portProbe
+        checkingListener = true
+        probeQueue.async {
+            let alive = probe(checkedPort)
+            self.queue.async {
+                self.checkingListener = false
+                guard self.listener === checked, self.port == checkedPort else {
+                    if !self.listenerWaiters.isEmpty { self.ensureListener() }
+                    return
+                }
+                self.lastPortCheck = alive
+                if alive {
+                    self.finishListenerWaiters(checkedPort)
+                } else {
+                    self.listener = nil
+                    self.port = 0
+                    checked.cancel()
+                    if !self.listenerWaiters.isEmpty { self.startListener() }
                 }
             }
-            listener = created
-            created.start(queue: queue)
-            return nil
         }
-        if let running { return running }
-        _ = ready.wait(timeout: .now() + 2)
-        return queue.sync { port != 0 ? port : nil }
+    }
+
+    private func finishListenerWaiters(_ port: UInt16?) {
+        let waiters = Array(listenerWaiters.values)
+        listenerWaiters.removeAll()
+        waiters.forEach { $0(port) }
     }
 
     private func accept(_ connection: NWConnection) {
@@ -235,6 +330,22 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
 
     fileprivate func note(_ text: String) {
         lastProblem = text
+    }
+}
+
+/// Cancellation can race with registering a continuation on the proxy queue.
+private final class ListenerCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+
+    var isCancelled: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return cancelled
+    }
+
+    func cancel() {
+        lock.lock(); defer { lock.unlock() }
+        cancelled = true
     }
 }
 

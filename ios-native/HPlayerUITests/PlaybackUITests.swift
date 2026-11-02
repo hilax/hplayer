@@ -174,6 +174,80 @@ final class PlaybackUITests: XCTestCase {
         add(screenshot)
     }
 
+    /// 模拟快速跳转时旧位置的结束事件晚到：不能切到下一集，真正播完后仍要自动连播。
+    func testStaleEOFDuringSeekDoesNotAutoAdvance() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["HPLAYER_UI_TEST_URL"] = "http://127.0.0.1:8765/range/seek-fixture.mkv"
+        app.launchEnvironment["HPLAYER_UI_TEST_115_HEADERS"] = "1"
+        app.launchEnvironment["HPLAYER_UI_TEST_115_COOKIE"] = "UID=ui-test; CID=ui-test; SEID=ui-test; KID=ui-test"
+        app.launchEnvironment["HPLAYER_UI_TEST_KEEP_CONTROLS_VISIBLE"] = "1"
+        app.launchEnvironment["HPLAYER_UI_TEST_PREFETCH_KB"] = "256"
+        app.launchEnvironment["HPLAYER_UI_TEST_STALE_EOF_ON_SEEK"] = "1"
+        app.launchEnvironment["HPLAYER_UI_TEST_AUTO_NEXT"] = "1"
+        app.launch()
+
+        let surface = app.otherElements["playback.surface"]
+        let pause = app.buttons["playback.playPause"]
+        let slider = app.sliders.firstMatch
+        XCTAssertTrue(wait(timeout: 40) {
+            surface.exists && (pause.value as? String) == "playing"
+                && self.metric("time", surface: surface) > 1 && slider.isEnabled
+        }, "The first video should start")
+        let before = metric("time", surface: surface)
+        swipe(surface, from: CGVector(dx: 0.12, dy: 0.42), to: CGVector(dx: 0.82, dy: 0.42))
+        XCTAssertTrue(wait(timeout: 30) {
+            let time = self.metric("time", surface: surface)
+            return time > before + 80 && time < 280 && app.staticTexts["测试影片"].exists
+        }, "A stale EOF must not advance to the next video; status=\(surface.value as? String ?? "")")
+        let landed = metric("time", surface: surface)
+        XCTAssertTrue(wait(timeout: 15) { self.metric("time", surface: surface) > landed + 2 })
+        XCTAssertFalse(app.staticTexts["测试下一集"].exists)
+
+        // The player content is rotated inside a portrait window. XCUITest's
+        // normalized slider adjustment does not reliably issue a seek there,
+        // so use the same on-screen gesture as the real playback regression.
+        swipe(surface, from: CGVector(dx: 0.06, dy: 0.42), to: CGVector(dx: 0.94, dy: 0.42))
+        swipe(surface, from: CGVector(dx: 0.06, dy: 0.42), to: CGVector(dx: 0.94, dy: 0.42))
+        XCTAssertTrue(wait(timeout: 30) {
+            app.staticTexts["测试下一集"].exists || self.metric("time", surface: surface) > 290
+        }, "Playback should reach the end after seeking; status=\(surface.value as? String ?? "")")
+        XCTAssertTrue(wait(timeout: 30) { app.staticTexts["测试下一集"].exists },
+                      "Normal playback at the end should still advance to the next video; status=\(surface.value as? String ?? "")")
+    }
+
+    /// The fixture is an actual 3840×2160 H.264/AAC video, served with delayed Range responses.
+    func testRapidSeeksKeep4KVideoPlaying() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["HPLAYER_UI_TEST_URL"] = "http://127.0.0.1:8765/range/seek-4k-fixture.mp4"
+        app.launchEnvironment["HPLAYER_UI_TEST_115_HEADERS"] = "1"
+        app.launchEnvironment["HPLAYER_UI_TEST_115_COOKIE"] = "UID=ui-test; CID=ui-test; SEID=ui-test; KID=ui-test"
+        app.launchEnvironment["HPLAYER_UI_TEST_KEEP_CONTROLS_VISIBLE"] = "1"
+        app.launchEnvironment["HPLAYER_UI_TEST_PREFETCH_KB"] = "256"
+        app.launchEnvironment["HPLAYER_UI_TEST_STALE_EOF_ON_SEEK"] = "1"
+        app.launchEnvironment["HPLAYER_UI_TEST_AUTO_NEXT"] = "1"
+        app.launch()
+
+        let surface = app.otherElements["playback.surface"]
+        let pause = app.buttons["playback.playPause"]
+        XCTAssertTrue(wait(timeout: 60) {
+            surface.exists && (pause.value as? String) == "playing" && app.staticTexts["4K"].exists
+                && self.metric("time", surface: surface) > 1 && app.sliders.firstMatch.isEnabled
+        }, "The 4K fixture should start; status=\(surface.value as? String ?? "")")
+        let before = metric("time", surface: surface)
+        swipe(surface, from: CGVector(dx: 0.2, dy: 0.42), to: CGVector(dx: 0.48, dy: 0.42))
+        swipe(surface, from: CGVector(dx: 0.2, dy: 0.42), to: CGVector(dx: 0.58, dy: 0.42))
+        XCTAssertTrue(wait(timeout: 45) {
+            let time = self.metric("time", surface: surface)
+            return time > before + 25 && time < 80 && app.staticTexts["测试影片"].exists
+        }, "Rapid 4K seeks should stay in the same video; status=\(surface.value as? String ?? "")")
+        let landed = metric("time", surface: surface)
+        XCTAssertTrue(wait(timeout: 20) { self.metric("time", surface: surface) > landed + 1 })
+        XCTAssertFalse(app.staticTexts["测试下一集"].exists)
+        XCTAssertTrue(app.staticTexts["4K"].exists)
+    }
+
     /// 像 115 上的 4K MKV 一样：索引在文件末尾、每个请求都要等一会儿、经过本机中转。
     /// 大跨度往后滑要落在目标附近接着播；滑过头只停在结尾前，播完后往回滑还能继续播。
     func testFarSeekInMKVThroughRelay() throws {

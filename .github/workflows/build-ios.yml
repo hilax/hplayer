@@ -205,6 +205,20 @@ jobs:
             xcrun xcresulttool export attachments --path "$RUNNER_TEMP/player-tests.xcresult" --output-path "$RUNNER_TEMP/player-ui"
             xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/player-tests.xcresult" > "$RUNNER_TEMP/player-ui/test-summary.json"
             cat "$RUNNER_TEMP/player-ui/test-summary.json"
+            python3 - "$RUNNER_TEMP/player-ui" "$RUNNER_TEMP/tab-appearance" <<'PY'
+          import json, pathlib, shutil, sys
+          source, target = map(pathlib.Path, sys.argv[1:])
+          manifest = source / "manifest.json"
+          if manifest.exists():
+              target.mkdir(parents=True, exist_ok=True)
+              names = [f"TabGlass-{material}-{style}" for material in ("system", "frosted") for style in ("dark", "light")]
+              for test in json.loads(manifest.read_text()):
+                  for attachment in test.get("attachments", []):
+                      name = attachment.get("suggestedHumanReadableName", "")
+                      for expected in names:
+                          if name.startswith(expected + "_") and not attachment.get("isAssociatedWithFailure"):
+                              shutil.copy2(source / attachment["exportedFileName"], target / (expected + ".png"))
+          PY
           fi
 
       - name: Verify all 42 prototype screenshots
@@ -247,6 +261,15 @@ jobs:
           name: HPlayer-player-ui-test
           path: ${{ runner.temp }}/player-ui
           if-no-files-found: ignore
+
+      - name: Upload tab appearance screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HPlayer-tab-appearance
+          path: ${{ runner.temp }}/tab-appearance
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Upload player HTTP log
         if: always()

@@ -4,6 +4,13 @@ struct Direct115Stream: Identifiable {
     let id: String
     let title: String
     let url: URL
+
+    static func url(forQuality title: String, in streams: [Direct115Stream]) throws -> URL {
+        guard let match = streams.first(where: { $0.title == title }) else {
+            throw APIError.server("当前画质暂不可用，请重试或手动选择其他画质")
+        }
+        return match.url
+    }
 }
 
 /// A single directory page. A nil offset means the directory was fully enumerated.

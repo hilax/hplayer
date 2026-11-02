@@ -134,6 +134,13 @@ struct PlaybackControlsView: View {
     /// 竖屏时顶部小窗播放器的高度（不含状态栏）
     private static let inlineVideoHeight: CGFloat = 220
     private static var isUITest: Bool { ProcessInfo.processInfo.environment["HPLAYER_UI_TEST_URL"] != nil }
+    private static var testAutoNext: Bool {
+        #if DEBUG
+        return ProcessInfo.processInfo.environment["HPLAYER_UI_TEST_AUTO_NEXT"] == "1"
+        #else
+        return false
+        #endif
+    }
 
     /// 默认直接横屏播放；界面预览里只有「横屏」设计稿是横屏
     private static var startsInLandscape: Bool {
@@ -255,7 +262,7 @@ struct PlaybackControlsView: View {
         }
         .onChange(of: playback.ended) { ended in
             // 自动连播：播完这一集接着播下一集（界面测试里关闭，免得切走正在检查的那一集）
-            guard ended, autoPlayNext, !Self.isUITest, let id = nextID else { return }
+            guard ended, autoPlayNext || Self.testAutoNext, !Self.isUITest || Self.testAutoNext, let id = nextID else { return }
             onSelect(id)
         }
         .onChange(of: playback.currentTime) { time in
