@@ -172,8 +172,11 @@ struct HomeView: View {
                 ForEach(HomeSection.tabs, id: \.self) { section in
                     page(for: section)
                         .tabItem {
+                            // 系统 TabView 会把标签栏里所有符号自动换成实心款（四个图标都是实心的）。
+                            // 关掉它，由图标表决定：没选中是线框，选中才是实心，和应用其余图标一致。
                             Label(section.title,
                                   systemImage: selection == section ? section.icon.activeName : section.icon.name)
+                                .environment(\.symbolVariants, .none)
                         }
                         .tag(section)
                 }
