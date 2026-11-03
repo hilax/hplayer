@@ -37,7 +37,9 @@ final class PerformerCollectionUITests: XCTestCase {
         firstCover.tap()
         XCTAssertTrue(app.staticTexts["作品甲1.mp4"].waitForExistence(timeout: 20),
                       "Tapping the first cover must play its own video; titles on screen: \(visibleTitles(app))")
-        XCTAssertFalse(app.staticTexts["作品甲2.mp4"].exists, "The neighbouring cover must not take the tap")
+        // 播放器窗口打开的头几十毫秒，下面的列表页还没被隐藏，先等它让位再判断
+        let neighbourGone = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in !app.staticTexts["作品甲2.mp4"].exists }, object: nil)], timeout: 10) == .completed
+        XCTAssertTrue(neighbourGone, "The neighbouring cover must not take the tap")
 
         let close = app.buttons["playback.close"]
         XCTAssertTrue(close.waitForExistence(timeout: 10))

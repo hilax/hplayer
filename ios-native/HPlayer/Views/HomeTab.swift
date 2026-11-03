@@ -169,7 +169,7 @@ struct HomeTab: View {
             .presentationDetents([.height(590)])
             .presentationDragIndicator(.visible)
         }
-        .fullScreenCover(item: $playing) { queue in
+        .playerWindow(item: $playing) { queue in
             PlayerView(source: queue.source, playlist: queue.items)
                 .environmentObject(appState)
         }

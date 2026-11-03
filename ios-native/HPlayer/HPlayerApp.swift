@@ -254,7 +254,7 @@ private struct PlayerUITestHost: View {
                 await Task.yield()
                 presentingPlayer = true
             }
-            .fullScreenCover(isPresented: $presentingPlayer) {
+            .playerWindow(isPresented: $presentingPlayer) {
                 PlayerView(source: first, playlist: [first, second])
             }
     }

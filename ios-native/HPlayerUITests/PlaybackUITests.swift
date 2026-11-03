@@ -14,8 +14,8 @@ final class PlaybackUITests: XCTestCase {
         let orientation = app.buttons["playback.orientation"]
         let surface = app.otherElements["playback.surface"]
         XCTAssertTrue(wait { close.exists && surface.exists && orientation.exists && orientation.label == "竖屏" },
-                      "Player should open in landscape")
-        XCTAssertTrue(isPortraitWindow(app), "Only the player content is rotated; the app itself never leaves portrait")
+                      "Player should open in landscape; debug=\(debugText(app)); window=\(surface.frame)")
+        XCTAssertTrue(wait { self.isLandscape(app) }, "The player window should be in real landscape")
         close.tap()
         XCTAssertTrue(wait { !surface.exists && previousPage.exists && reopen.isHittable && self.isPortraitWindow(app) },
                       "Closing must simply reveal the previous page, which was portrait all along")
@@ -24,7 +24,7 @@ final class PlaybackUITests: XCTestCase {
         XCTAssertTrue(wait { close.exists && surface.exists && orientation.exists && orientation.label == "竖屏" },
                       "The player should reopen in landscape")
         orientation.tap()
-        XCTAssertTrue(wait { orientation.label == "横屏" && surface.frame.height < app.windows.firstMatch.frame.height * 0.5 },
+        XCTAssertTrue(wait { orientation.label == "横屏" && !self.isLandscape(app) && surface.frame.height < app.windows.firstMatch.frame.height * 0.5 },
                       "Player should switch to the portrait layout before the second close")
         close.tap()
         XCTAssertTrue(wait { !surface.exists && previousPage.exists && reopen.isHittable && self.isPortraitWindow(app) },
@@ -54,14 +54,13 @@ final class PlaybackUITests: XCTestCase {
         let orientation = app.buttons["playback.orientation"]
         let pause = app.buttons["playback.playPause"]
         let elapsed = app.staticTexts["playback.elapsed"]
-        XCTAssertTrue(wait { surface.exists && orientation.exists && orientation.label == "竖屏" }, "Player should open in landscape")
+        XCTAssertTrue(wait { surface.exists && orientation.exists && orientation.label == "竖屏" }, "Player should open in landscape; debug=\(debugText(app)); window=\(surface.frame)")
         XCTAssertFalse(app.alerts.firstMatch.exists)
-        XCTAssertTrue(isPortraitWindow(app), "Only the player content is rotated; the app itself never leaves portrait")
-        // 横屏内容顺时针转了 90°：内容的「下方」在屏幕左边，内容的 x 方向对应屏幕的 y 方向
-        let frame = app.windows.firstMatch.frame
-        XCTAssertLessThan(pause.frame.midX, frame.width * 0.28, "Landscape transport belongs below the timeline")
-        XCTAssertGreaterThan(app.buttons["playback.lock"].frame.midY, frame.height * 0.09, "Lock control should sit inward from the edge")
-        XCTAssertLessThan(app.buttons["playback.screenshot"].frame.midY, frame.height * 0.91, "Screenshot control should sit inward from the edge")
+        XCTAssertTrue(wait { self.isLandscape(app) }, "The player window should be in real landscape")
+        let frame = surface.frame
+        XCTAssertGreaterThan(pause.frame.midY, frame.height * 0.72, "Landscape transport belongs below the timeline")
+        XCTAssertGreaterThan(app.buttons["playback.lock"].frame.midX, frame.width * 0.09, "Lock control should sit inward from the edge")
+        XCTAssertLessThan(app.buttons["playback.screenshot"].frame.midX, frame.width * 0.91, "Screenshot control should sit inward from the edge")
         XCTAssertTrue(wait { (pause.value as? String) == "playing" && self.seconds(elapsed.label) > 0 && app.sliders.firstMatch.isEnabled }, "HLS should play with working seeking")
 
         pause.tap()
@@ -89,7 +88,7 @@ final class PlaybackUITests: XCTestCase {
         swipe(surface, from: CGVector(dx: 0.8, dy: 0.65), to: CGVector(dx: 0.8, dy: 0.4))
         XCTAssertTrue(wait { self.metric("volume", surface: surface) > quieter + 0.1 }, "Right vertical swipe must change volume")
 
-        let center = surface.coordinate(withNormalizedOffset: screenVector(CGVector(dx: 0.5, dy: 0.28)))
+        let center = surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.28))
         center.doubleTap()
         XCTAssertTrue(wait { (pause.value as? String) == "playing" }, "Double tap should resume")
         center.press(forDuration: 1.2)
@@ -118,9 +117,9 @@ final class PlaybackUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["测试下一集"].waitForExistence(timeout: 5))
         XCTAssertTrue(wait { (pause.value as? String) == "playing" })
         orientation.tap()
-        XCTAssertTrue(wait { orientation.label == "横屏" && surface.frame.height < app.windows.firstMatch.frame.height * 0.5 })
+        XCTAssertTrue(wait { orientation.label == "横屏" && !self.isLandscape(app) && surface.frame.height < app.windows.firstMatch.frame.height * 0.5 })
         orientation.tap()
-        XCTAssertTrue(wait { orientation.label == "竖屏" && surface.frame.height > app.windows.firstMatch.frame.height * 0.9 })
+        XCTAssertTrue(wait { orientation.label == "竖屏" && self.isLandscape(app) })
         let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         screenshot.name = "HPlayer landscape gestures"
         screenshot.lifetime = .keepAlways
@@ -342,10 +341,14 @@ final class PlaybackUITests: XCTestCase {
                       "Playback should advance again after leaving the end; status=\(surface.value as? String ?? "")")
     }
 
-    /// 横屏时播放页内容顺时针转了 90°，而系统给出的元素区域是转完以后的屏幕区域：
-    /// 内容里的 (x, y)（占比）对应屏幕上的 (1 − y, x)。下面所有手势都是按横屏内容写的。
-    private func screenVector(_ content: CGVector) -> CGVector {
-        CGVector(dx: 1 - content.dy, dy: content.dx)
+    /// 播放器在独立窗口里真横屏：播放器窗口宽大于高（播放期间主窗口是隐藏的，只有这一个窗口）
+    private func isLandscape(_ app: XCUIApplication) -> Bool {
+        let frame = app.windows.firstMatch.frame
+        return frame.width > frame.height
+    }
+
+    private func debugText(_ app: XCUIApplication) -> String {
+        app.staticTexts["player.debug"].exists ? app.staticTexts["player.debug"].label : "(no debug label)"
     }
 
     private func isPortraitWindow(_ app: XCUIApplication) -> Bool {
@@ -354,8 +357,8 @@ final class PlaybackUITests: XCTestCase {
     }
 
     private func swipe(_ surface: XCUIElement, from: CGVector, to: CGVector) {
-        surface.coordinate(withNormalizedOffset: screenVector(from))
-            .press(forDuration: 0.05, thenDragTo: surface.coordinate(withNormalizedOffset: screenVector(to)))
+        surface.coordinate(withNormalizedOffset: from)
+            .press(forDuration: 0.05, thenDragTo: surface.coordinate(withNormalizedOffset: to))
     }
 
     private func wait(timeout: TimeInterval = 15, _ predicate: @escaping () -> Bool) -> Bool {

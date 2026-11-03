@@ -250,7 +250,7 @@ private struct InterfacePlayerHost: View {
     var body: some View {
         Color.black.ignoresSafeArea()
             .task { presenting = true }
-            .fullScreenCover(isPresented: $presenting) {
+            .playerWindow(isPresented: $presenting) {
                 PlayerView(source: .direct(title: "人生切割术 · 第 3 集", url: url), playlist: (1...9).map { .direct(title: "人生切割术 · 第 \($0) 集", url: url) })
             }
     }

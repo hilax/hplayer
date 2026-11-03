@@ -66,10 +66,13 @@ final class ScreenCatalogUITests: XCTestCase {
         if ["portrait", "landscape", "playback", "tracks", "episodes", "aspect"].contains(screen) {
             XCTAssertTrue(app.buttons["playback.close"].waitForExistence(timeout: 25))
             if screen == "portrait" || screen == "landscape" {
-                // 横屏只是播放页内容旋转：按钮写着「竖屏」就是在横屏；窗口自己始终是竖屏
+                // 播放器在独立窗口里：按钮写着「竖屏」就是在横屏，此时播放画面区域也是真的宽大于高
                 let orientationButton = app.buttons["playback.orientation"]
                 XCTAssertTrue(wait { orientationButton.exists && (orientationButton.label == "竖屏") == (screen == "landscape") })
-                XCTAssertGreaterThan(app.windows.firstMatch.frame.height, app.windows.firstMatch.frame.width)
+                XCTAssertTrue(wait {
+                    let frame = app.windows.firstMatch.frame
+                    return (frame.width > frame.height) == (screen == "landscape")
+                })
                 XCTAssertTrue(wait { self.seconds(app.staticTexts["playback.elapsed"].label) > 0 })
             }
         } else {

@@ -3,6 +3,7 @@ import SwiftUI
 struct PlayerView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.dismissPlayerWindow) private var dismissPlayerWindow
     @StateObject private var playback = PlaybackController()
     @State private var current: PlaybackSource
     private let playlist: [PlaybackSource]
@@ -41,9 +42,14 @@ struct PlayerView: View {
                 let source = current
                 Task { await load(source) }
             },
-            onClose: { dismiss() }
+            onClose: { if let dismissPlayerWindow { dismissPlayerWindow() } else { dismiss() } }
         )
-        .task(id: current.id) { await load(current) }
+        .task(id: current.id) {
+            await PlayerWindowController.shared.waitUntilRevealed()
+            // 等转屏期间切了集（或页面已经关掉），这一轮就不再加载，交给新的一轮
+            guard !Task.isCancelled else { return }
+            await load(current)
+        }
         .onChange(of: playback.currentTime) { _ in saveProgress(force: false) }
         .onChange(of: appState.sessionID) { _ in
             guard case .p115 = current else { return }

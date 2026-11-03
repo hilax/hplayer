@@ -121,11 +121,8 @@ struct PlaybackControlsView: View {
     @State private var busyTask: Task<Void, Never>?
     @State private var copiedDiagnostics = false
     @State private var sideTab: SideTab = .episodes
-    /// 横屏播放：App 的真实方向一直是竖屏，横屏是把播放页内容旋转 90°。
-    /// 这样播放页下面的页面始终是竖屏，关闭播放器时没有任何翻转。
-    @State private var fakeLandscape = PlaybackControlsView.startsInLandscape
-    /// 内容顺时针旋转的角度：手机向左横放是 +90，向右横放是 −90
-    @State private var landscapeAngle = 90.0
+    /// 播放器窗口当前是不是横屏（给状态栏和系统手势用，它们在 GeometryReader 外面）
+    @State private var isLandscapeWindow = PlayerWindowController.startsInLandscape
     /// 正在柔和关闭：整个播放页淡出并轻轻缩小
     @State private var closeFade = false
     @Namespace private var sideNamespace
@@ -142,30 +139,23 @@ struct PlaybackControlsView: View {
         #endif
     }
 
-    /// 默认直接横屏播放；界面预览里只有「横屏」设计稿是横屏
-    private static var startsInLandscape: Bool {
-        !(InterfacePreview.active && InterfacePreview.screen != "landscape")
-    }
-
-    /// 横屏时的安全区：刘海 / 灵动岛机型左右各留出一块，上下沿用横屏常见的值
-    private static func layoutInsets(landscape: Bool, portrait: EdgeInsets) -> EdgeInsets {
-        guard landscape else { return portrait }
-        let side: CGFloat = portrait.top > 24 ? portrait.top : 0
-        return EdgeInsets(top: 0, leading: side, bottom: 20, trailing: side)
+    /// 横屏时的安全区：沿用系统给的左右刘海避让，上沿贴边，下沿至少留 20 给进度条
+    private static func layoutInsets(landscape: Bool, system: EdgeInsets) -> EdgeInsets {
+        guard landscape else { return system }
+        return EdgeInsets(top: 0, leading: system.leading, bottom: max(system.bottom, 20), trailing: system.trailing)
     }
 
     private static let speedOptions: [Float] = [0.75, 1, 1.25, 1.5, 2, 3]
 
     var body: some View {
-        // 外层只用来读竖屏下的安全区；里层铺满整块屏幕（含安全区）拿到真实的屏幕大小
+        // 外层读系统安全区；里层铺满整块屏幕（含安全区）拿到真实的屏幕大小。
+        // 播放器在独立窗口里，横竖屏就是窗口的真实方向：宽大于高就是横屏。
         GeometryReader { geometry in
-            let portraitInsets = geometry.safeAreaInsets
+            let systemInsets = geometry.safeAreaInsets
             GeometryReader { full in
-                let landscape = fakeLandscape
-                // App 的真实方向始终是竖屏；横屏播放是把播放页内容旋转 90°：
-                // 内容按「宽高对调」的尺寸布局，再绕屏幕中心旋转，正好铺满
-                let layoutSize = landscape ? CGSize(width: full.size.height, height: full.size.width) : full.size
-                let insets = Self.layoutInsets(landscape: landscape, portrait: portraitInsets)
+                let landscape = full.size.width > full.size.height
+                let layoutSize = full.size
+                let insets = Self.layoutInsets(landscape: landscape, system: systemInsets)
                 ZStack(alignment: .top) {
                     if landscape {
                         Theme.playerBackground
@@ -205,19 +195,19 @@ struct PlaybackControlsView: View {
                 .frame(width: layoutSize.width, height: layoutSize.height)
                 .opacity(closeFade ? 0 : 1)
                 .scaleEffect(closeFade ? 0.96 : 1)
-                .rotationEffect(.degrees(landscape ? landscapeAngle : 0))
-                .position(x: full.size.width / 2, y: full.size.height / 2)
                 .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: boosting)
+                // onChange 不管初始值：窗口没能转成横屏（系统拒绝）时，状态栏和系统手势也要按真实方向来
+                .onAppear { isLandscapeWindow = landscape }
+                .onChange(of: landscape) { isLandscapeWindow = $0 }
             }
             .ignoresSafeArea()
         }
         .background(SystemVolumeHost(controller: systemVolume).frame(width: 1, height: 1).allowsHitTesting(false))
-        .background(DarkPresentationStyle().frame(width: 0, height: 0))
         .designScreen("player")
         .environment(\.colorScheme, .dark)
         .tint(.white)
-        .statusBarHidden(fakeLandscape)
-        .defersSystemGestures(on: fakeLandscape ? .all : [])
+        .statusBarHidden(isLandscapeWindow)
+        .defersSystemGestures(on: isLandscapeWindow ? .all : [])
         .persistentSystemOverlays(controlsVisible ? .automatic : .hidden)
         .onAppear {
             updateBusy(loading || playback.buffering)
@@ -234,8 +224,6 @@ struct PlaybackControlsView: View {
             }
             #endif
             revealControls()
-            UIDevice.current.beginGeneratingDeviceOrientationNotifications()
-            followDeviceOrientation()
         }
         .onDisappear {
             hideTask?.cancel()
@@ -244,10 +232,6 @@ struct PlaybackControlsView: View {
             playback.setBoost(false)
             systemVolume.stop()
             if brightnessAdjusted, let originalBrightness { ScreenBrightness.screen.brightness = originalBrightness }
-            UIDevice.current.endGeneratingDeviceOrientationNotifications()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
-            followDeviceOrientation()
         }
         .onChange(of: systemVolume.externalChangeCount) { _ in
             showSystemVolumeChange()
@@ -1138,7 +1122,7 @@ struct PlaybackControlsView: View {
         }
         settingGroup("遇到问题", footer: "播放不正常时点一下，把复制的内容发给开发者，里面有最近的跳转、重连记录和播放内核的报错，不含 Cookie。") {
             chip(copiedDiagnostics ? "已复制" : "复制播放诊断信息", selected: false) {
-                UIPasteboard.general.string = playback.diagnostics
+                UIPasteboard.general.string = diagnosticsText
                 copiedDiagnostics = true
             }
             .accessibilityIdentifier("playback.copyDiagnosticsSetting")
@@ -1406,7 +1390,7 @@ struct PlaybackControlsView: View {
             if error.isEmpty {
                 // 真机上打不开时，把内核日志复制下来发给开发者
                 Button {
-                    UIPasteboard.general.string = playback.diagnostics
+                    UIPasteboard.general.string = diagnosticsText
                     copiedDiagnostics = true
                 } label: {
                     Text(copiedDiagnostics ? "已复制" : "复制诊断信息")
@@ -1817,13 +1801,14 @@ struct PlaybackControlsView: View {
         }
     }
     /// 柔和关闭：控制栏和整个播放页一起淡出、轻轻缩小，淡出结束后直接关掉。
-    /// App 本来就是竖屏，下面的页面没有转过，所以不需要翻转，也不需要遮罩。
+    /// 主窗口一直是竖屏、没有转过，所以不需要翻转，也不需要遮罩。
     private func closePlayer() {
         guard !closing else { return }
         closing = true
         hideTask?.cancel()
         playback.setBoost(false)
         playback.pauseForClose()
+        PlayerWindowController.shared.willClose()
         showList = false
         settingsPage = nil
         showAspect = false
@@ -1839,21 +1824,15 @@ struct PlaybackControlsView: View {
         }
     }
 
-    private func toggleOrientation(landscape: Bool) {
-        withAnimation(reduceMotion ? nil : Motion.smooth) { fakeLandscape = !landscape }
-        revealControls()
+    /// 播放内核的诊断信息，后面附上播放器窗口的转屏过程和主线程卡顿记录
+    private var diagnosticsText: String {
+        [playback.diagnostics, PlayerWindowController.shared.diagnostics].filter { !$0.isEmpty }.joined(separator: "\n\n")
     }
 
-    /// 横屏时跟着手机的横放方向走：向左横放内容转 +90°，向右横放转 −90°，其他姿势保持不变
-    private func followDeviceOrientation() {
-        let angle: Double
-        switch UIDevice.current.orientation {
-        case .landscapeLeft: angle = 90
-        case .landscapeRight: angle = -90
-        default: return
-        }
-        guard angle != landscapeAngle else { return }
-        withAnimation(reduceMotion ? nil : Motion.smooth) { landscapeAngle = angle }
+    /// 横竖屏按钮：让播放器窗口真的转过去（系统的控制中心、录屏方向也跟着变）
+    private func toggleOrientation(landscape: Bool) {
+        PlayerWindowController.shared.setLandscape(!landscape)
+        revealControls()
     }
 }
 
@@ -2215,29 +2194,5 @@ private final class ScrubberSlider: UISlider {
             UIBezierPath(roundedRect: CGRect(origin: .zero, size: size), cornerRadius: radius).fill()
         }
         return image.resizableImage(withCapInsets: UIEdgeInsets(top: 0, left: radius, bottom: 0, right: radius), resizingMode: .stretch)
-    }
-}
-
-// MARK: - 深色弹出层
-
-/// 播放页固定使用深色：把所在的全屏弹出层设为深色，菜单也跟着变深，不影响 App 其他页面。
-private struct DarkPresentationStyle: UIViewRepresentable {
-    func makeUIView(context: Context) -> DarkStyleAnchorView { DarkStyleAnchorView() }
-    func updateUIView(_ view: DarkStyleAnchorView, context: Context) {}
-}
-
-private final class DarkStyleAnchorView: UIView {
-    override func didMoveToWindow() {
-        super.didMoveToWindow()
-        isUserInteractionEnabled = false
-        guard window != nil else { return }
-        var responder: UIResponder? = next
-        while let current = responder {
-            if let controller = current as? UIViewController, controller.presentingViewController != nil {
-                controller.overrideUserInterfaceStyle = .dark
-                return
-            }
-            responder = current.next
-        }
     }
 }

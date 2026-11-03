@@ -58,7 +58,7 @@ struct MagnetPlayerView: View {
             .padding(.top, 8)
             .padding(.bottom, 40)
             .animation(Motion.smooth, value: controller.phase)
-            .fullScreenCover(item: $controller.cloudQueue) { queue in
+            .playerWindow(item: $controller.cloudQueue) { queue in
                 PlayerView(source: queue.source, playlist: queue.items)
                     .environmentObject(appState)
             }
@@ -93,7 +93,7 @@ struct MagnetPlayerView: View {
         .onDisappear {
             if !controller.playerVisible && controller.cloudQueue == nil { controller.deactivate() }
         }
-        .fullScreenCover(isPresented: $controller.playerVisible) {
+        .playerWindow(isPresented: $controller.playerVisible) {
             MagnetWatchView(controller: controller)
         }
     }
