@@ -60,6 +60,13 @@ final class LibrarySnapshotStore: ObservableObject {
         catalogReady = true
     }
 
+    /// 界面检查用：直接放一份算好的分组（不经过 HomeView 的后台计算）。
+    func seed(_ snapshot: HomeSnapshot) {
+        home = snapshot
+        revision += 1
+        ready = true
+    }
+
     nonisolated static func make(_ files: [LibraryMedia], _ matches: [String: MediaMetadata]) -> HomeSnapshot {
         HomeSnapshot(items: files.map { HomeMediaItem(media: $0, metadata: matches[$0.id]) })
     }

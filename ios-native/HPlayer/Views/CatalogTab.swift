@@ -133,7 +133,6 @@ struct CatalogTab: View {
     @Binding var preset: CatalogPreset?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Namespace private var seriesTransition
     @Namespace private var pillKind
     @Namespace private var pillRegion
     @Namespace private var pillYear
@@ -414,13 +413,10 @@ struct CatalogTab: View {
                 matching = MatchRequest(item: item)
             }
         case .series(let group):
-            let sourceID = "catalog|\(group.id)"
             NavigationLink {
                 SeriesDetailView(seriesID: group.id)
-                    .modifier(SeriesTransitionDestination(id: sourceID, namespace: seriesTransition, reduceMotion: reduceMotion))
             } label: {
                 SeriesPosterCard(group: group, width: width)
-                    .modifier(SeriesTransitionSource(id: sourceID, namespace: seriesTransition, reduceMotion: reduceMotion))
             }
             .buttonStyle(PosterButtonStyle())
             .accessibilityIdentifier("catalog.series.\(group.id)")

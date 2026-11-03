@@ -110,6 +110,6 @@ struct PerformerGridView: View {
                     }
                 }
             }
-        }.hidesTabBar().navigationTitle("演员合集").designScreen("people")
+        }.navigationTitle("演员合集").designScreen("people")
     }
 }

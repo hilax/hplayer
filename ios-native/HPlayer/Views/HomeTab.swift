@@ -9,7 +9,6 @@ struct HomeTab: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// 系统（或「外观」设置）的深浅色。首页内容强制按深色显示，从首页推出去的页面要恢复成这个。
     @Environment(\.colorScheme) private var colorScheme
-    @Namespace private var seriesTransition
     @EnvironmentObject private var recents: RecentStore
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var mediaLibrary: MediaLibraryStore
@@ -715,14 +714,11 @@ struct HomeTab: View {
     }
 
     private func seriesLink(_ group: SeriesGroup, width: CGFloat, scope: String) -> some View {
-        let sourceID = "\(scope)|\(group.id)"
-        return NavigationLink {
+        NavigationLink {
             SeriesDetailView(seriesID: group.id)
                 .restoringAppearance(colorScheme)
-                .modifier(SeriesTransitionDestination(id: sourceID, namespace: seriesTransition, reduceMotion: reduceMotion))
         } label: {
             SeriesPosterCard(group: group, width: width)
-                .modifier(SeriesTransitionSource(id: sourceID, namespace: seriesTransition, reduceMotion: reduceMotion))
         }
         .buttonStyle(PosterButtonStyle())
         .accessibilityIdentifier("home.series.\(group.id)")

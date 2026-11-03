@@ -10,7 +10,8 @@ struct SeriesDetailView: View {
     @EnvironmentObject private var localStore: LocalMediaStore
     @EnvironmentObject private var metadataStore: MediaMetadataStore
     @EnvironmentObject private var recents: RecentStore
-    @Environment(\.dismiss) private var dismiss
+    /// 首页在后台算好的分组结果，直接读；不要在 body 里重新把整个片库分组（打开时卡的就是这个）。
+    @EnvironmentObject private var librarySnapshots: LibrarySnapshotStore
 
     @State private var playing: PlaybackQueue?
     @State private var matching: MatchRequest?
@@ -22,8 +23,7 @@ struct SeriesDetailView: View {
     private let backdropHeight: CGFloat = 265
 
     var body: some View {
-        let snapshot = HomeLibrary.snapshot(local: localStore, cloud: mediaLibrary, metadata: metadataStore, appState: appState)
-        let group = snapshot.series.first { $0.id == seriesID }
+        let group = librarySnapshots.home.series.first { $0.id == seriesID }
 
         Group {
             if let group {
@@ -39,12 +39,25 @@ struct SeriesDetailView: View {
         .background(Theme.pageBackground.ignoresSafeArea())
         .designScreen("detail")
         .hidesTabBar()
-        // 返回和更多按钮画在页面里面，不用系统导航栏的：系统导航栏的按钮在关闭时要等缩放动画
-        // 全部结束才消失，会飘在首页上面；画在页面里就跟着整页一起退出。
-        // 导航栏只是藏起来，左边缘右滑返回的手势照常可用。
+        // 返回和更多用系统导航栏，和应用其他二级页一样（iOS 26 上是液态玻璃圆按钮）；
+        // 导航栏底色去掉，背景图一直铺到状态栏下面。
         .navigationTitle("")
-        .toolbar(.hidden, for: .navigationBar)
-        .overlay(alignment: .top) { topButtons(group) }
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
+        .modifier(TransparentNavigationBar())
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                if let group {
+                    Menu {
+                        Button("匹配封面", systemImage: AppIcon.poster.name) { matching = MatchRequest(group: group) }
+                    } label: {
+                        Image(systemName: AppIcon.more.name)
+                    }
+                    .accessibilityLabel("剧集选项")
+                    .accessibilityIdentifier("series.more")
+                }
+            }
+        }
         .playerWindow(item: $playing) { queue in
             PlayerView(source: queue.source, playlist: queue.items)
                 .environmentObject(appState)
@@ -63,38 +76,6 @@ struct SeriesDetailView: View {
     }
 
     // MARK: 页面
-
-    /// 左上返回、右上更多。深色半透明圆底，压在背景图上也看得清。
-    private func topButtons(_ group: SeriesGroup?) -> some View {
-        HStack {
-            Button { dismiss() } label: { topCircle(AppIcon.back.name) }
-                .accessibilityLabel("返回")
-                .accessibilityIdentifier("series.back")
-            Spacer()
-            if let group {
-                Menu {
-                    Button("匹配封面", systemImage: AppIcon.poster.name) { matching = MatchRequest(group: group) }
-                } label: {
-                    topCircle(AppIcon.more.name)
-                }
-                .accessibilityLabel("剧集选项")
-                .accessibilityIdentifier("series.more")
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.top, 6)
-    }
-
-    private func topCircle(_ symbol: String) -> some View {
-        Image(systemName: symbol)
-            .font(.system(size: 15, weight: .semibold))
-            .foregroundStyle(.white)
-            .frame(width: 36, height: 36)
-            .background(Color.black.opacity(0.4), in: Circle())
-            .overlay { Circle().strokeBorder(Color.white.opacity(0.18), lineWidth: 0.5) }
-            .frame(width: 44, height: 44)
-            .contentShape(Circle())
-    }
 
     private func content(_ group: SeriesGroup) -> some View {
         let seasons = group.seasons
@@ -390,6 +371,18 @@ struct SeriesDetailView: View {
             localStore.delete(local)
         } else {
             mediaLibrary.remove(pickCode: episode.media.pickCode, for: appState)
+        }
+    }
+}
+
+/// iOS 26 的导航栏按钮自带液态玻璃底，去掉导航栏底色就能直接压在背景图上；
+/// 更早的系统按钮没有底，保留系统默认的导航栏底色，免得返回键在亮色背景图上看不清。
+private struct TransparentNavigationBar: ViewModifier {
+    @ViewBuilder func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.toolbarBackground(.hidden, for: .navigationBar)
+        } else {
+            content
         }
     }
 }

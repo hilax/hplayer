@@ -519,7 +519,8 @@ struct ContinueHistoryView: View {
             .animation(reduceMotion ? nil : Motion.smooth, value: entries.map(\.id))
         }
         .background(Theme.pageBackground.ignoresSafeArea())
-        .hidesTabBar()
+        // 首页「全部」进来的列表页保留底部标签栏（和系统音乐、App Store 一样）：
+        // 收起再升起会让标签栏先消失、返回时再冒出来。
         .navigationTitle("继续观看")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
@@ -634,7 +635,7 @@ struct PosterGridScreen<Item: Identifiable, Cell: View>: View {
             .scrollIndicators(.hidden)
         }
         .background(Theme.pageBackground.ignoresSafeArea())
-        .hidesTabBar()
+        // 「全部」网格保留底部标签栏，进出时标签栏不再先消失再冒出来。
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)

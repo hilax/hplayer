@@ -30,9 +30,16 @@ final class MotionUITests: XCTestCase {
         XCTAssertTrue(series.waitForExistence(timeout: 5))
         series.tap()
         XCTAssertTrue(app.staticTexts["人生切割术"].firstMatch.waitForExistence(timeout: 10))
-        app.buttons["series.back"].tap()
+        // 返回和更多都在系统导航栏上
+        let more = app.buttons["series.more"]
+        XCTAssertTrue(more.waitForExistence(timeout: 5), "The options button sits in the system navigation bar")
+        let detailShot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        detailShot.name = "Series detail navigation bar"
+        detailShot.lifetime = .keepAlways
+        add(detailShot)
+        app.navigationBars.buttons.element(boundBy: 0).tap()
         XCTAssertTrue(series.waitForExistence(timeout: 5), "Returning from detail should keep the shelf usable")
-        XCTAssertTrue(app.buttons["series.back"].waitForNonExistence(timeout: 3), "The back and more buttons must leave with the page")
+        XCTAssertTrue(more.waitForNonExistence(timeout: 3), "The navigation bar buttons must leave with the page")
     }
 
     private func exerciseHistory(reduceMotion: Bool) {

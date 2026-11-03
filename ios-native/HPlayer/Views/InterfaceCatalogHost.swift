@@ -6,6 +6,8 @@ import SwiftUI
 struct InterfaceCatalogHost: View {
     let screen: String
     @StateObject private var fixture = InterfaceCatalogData()
+    /// 剧集详情从这里读分组；正式应用里由 HomeView 提供，单独打开的检查页要自己备一份。
+    @StateObject private var snapshots = LibrarySnapshotStore()
     @State private var ready = false
     @State private var selectedFiles: Set<Int> = [0, 1, 2, 3]
     @State private var savePath = "云下载 / 剧集"
@@ -25,10 +27,12 @@ struct InterfaceCatalogHost: View {
         .environmentObject(fixture.metadata)
         .environmentObject(fixture.recents)
         .environmentObject(fixture.scanner)
+        .environmentObject(snapshots)
         .tint(Theme.accent)
         .preferredColorScheme(ProcessInfo.processInfo.environment["HPLAYER_DESIGN_STYLE"] == "light" ? .light : .dark)
         .task {
             await fixture.prepare(empty: screen == "home-empty")
+            snapshots.seed(fixture.snapshot)
             ready = true
         }
     }
