@@ -245,7 +245,7 @@ final class PlayerWindowController {
     // MARK: 原型调试信息（验证通过后删掉）
 
     /// 验证通过，不再在播放页上显示调试文字；排查问题时改成 true
-    private static let showsDebugLabel = true
+    private static let showsDebugLabel = false
     private var debugLabel: UILabel?
     private var debugLines: [String] = []
     private var pendingDebug: [String] = []
