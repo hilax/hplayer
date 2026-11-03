@@ -39,8 +39,13 @@ final class PlayerWindowController {
     private var revealWaiters: [CheckedContinuation<Void, Never>] = []
     /// 播放期间暂时隐藏的主窗口：系统校验「支持的方向」时会把它也算进去，它只支持竖屏，横屏请求就被拒绝
     private var hiddenMain: UIWindow?
+    /// 这一次弹出的标记。关闭只认自己弹出的那个窗口：别的播放入口复位状态时，不会把正在播的窗口误关掉。
+    private var token: UUID?
 
     var isPresented: Bool { window != nil }
+
+    /// 这个标记对应的窗口是不是还开着
+    func isShowing(_ token: UUID) -> Bool { window != nil && self.token == token }
 
     /// 默认直接横屏播放；界面预览里只有「横屏」设计稿是横屏
     nonisolated static var startsInLandscape: Bool {
@@ -57,11 +62,20 @@ final class PlayerWindowController {
             ?? scene?.windows.first { !($0 is PlayerWindow) && $0.windowLevel == .normal }
     }
 
-    /// 弹出播放器窗口。`onDismissed` 在窗口被我们以外的原因关掉时调用，让调用方把自己的状态复位。
-    func present(_ root: AnyView, landscape: Bool, onDismissed: @escaping () -> Void) {
-        guard window == nil else { return }
+    /// 弹出播放器窗口，返回这次弹出的标记（关闭时要带上）。
+    /// `onDismissed` 在窗口被调用方以外的原因关掉时调用（被新的播放顶替、没有可用的场景），让调用方把自己的状态复位。
+    @discardableResult
+    func present(_ root: AnyView, landscape: Bool, onDismissed: @escaping () -> Void) -> UUID? {
+        if window != nil {
+            // 另一个入口要播放时，正在播的窗口让位：先关掉它、通知它的入口复位，再弹出新的。
+            // 例如磁力页从 BT 播放改用 115 播放：关旧窗口和开新窗口发生在同一次刷新里，两边的回调谁先谁后不固定，
+            // 以前新窗口先到时会被直接忽略，115 播放就再也打不开。
+            let previous = self.onDismissed
+            dismiss()
+            previous?()
+        }
         pendingDebug = []
-        guard let scene = activeScene() else { onDismissed(); return }
+        guard let scene = activeScene() else { onDismissed(); return nil }
         self.onDismissed = onDismissed
         revealed = false
         wantsLandscape = landscape
@@ -83,13 +97,16 @@ final class PlayerWindowController {
 
         self.window = player
         self.host = host
+        let token = UUID()
+        self.token = token
         UIDevice.current.beginGeneratingDeviceOrientationNotifications()
 
         if landscape {
             // 等窗口成为 key window、系统登记完它的支持方向，再请求转屏
-            Task { @MainActor [weak self] in
+            Task { @MainActor [weak self, weak player] in
                 try? await Task.sleep(nanoseconds: 80_000_000)
-                guard let self, self.window != nil else { return }
+                // 只对这一次弹出的窗口生效：期间关掉又打开了新的，就不再动它
+                guard let self, let player, self.window === player else { return }
                 self.hideMain(in: scene)
                 self.requestOrientation(Self.preferredLandscape(), in: scene)
             }
@@ -101,6 +118,7 @@ final class PlayerWindowController {
             try? await Task.sleep(nanoseconds: 3_000_000_000)
             self?.reveal()   // 兜底：转屏一直没成功（被系统拒绝、主线程被占住）时，也不能一直黑着
         }
+        return token
     }
 
     /// 播放页里的「横屏 / 竖屏」按钮
@@ -125,14 +143,21 @@ final class PlayerWindowController {
         hiddenMain = nil
     }
 
+    /// 关闭这次弹出的窗口；标记对不上（窗口已经被新的播放顶替）就什么都不做。
+    func dismiss(token: UUID) {
+        guard self.token == token else { return }
+        dismiss()
+    }
+
     /// 关闭：窗口移除，系统方向回到竖屏。主窗口一直是竖屏，不会有翻转。
-    func dismiss() {
+    private func dismiss() {
         guard let player = window else { return }
         let scene = player.windowScene
         revealTask?.cancel()
         resumeRevealWaiters()
         window = nil
         host = nil
+        token = nil
         onDismissed = nil
         player.isHidden = true
         player.rootViewController = nil
@@ -181,6 +206,7 @@ final class PlayerWindowController {
     /// 请求系统把界面转到指定方向。失败（或没转成）时重试，最后用旧办法兜底；
     /// 过程和结果显示在播放页左上角的小字里，方便真机排查。
     private func requestOrientation(_ mask: UIInterfaceOrientationMask, in scene: UIWindowScene, attempt: Int = 0) {
+        guard let target = window else { return }
         let wantLandscape = !mask.contains(.portrait)
         host?.setNeedsUpdateOfSupportedInterfaceOrientations()
         window?.makeKey()
@@ -189,9 +215,10 @@ final class PlayerWindowController {
         scene.requestGeometryUpdate(.iOS(interfaceOrientations: mask)) { [weak self] error in
             Task { @MainActor in self?.debug("系统拒绝：\(error.localizedDescription)") }
         }
-        Task { @MainActor [weak self] in
+        Task { @MainActor [weak self, weak target] in
             try? await Task.sleep(nanoseconds: 450_000_000)
-            guard let self, self.window != nil else { return }
+            // 期间窗口被关掉或换成了新的，就不再重试，免得去转新窗口
+            guard let self, let target, self.window === target else { return }
             let landscape = scene.interfaceOrientation.isLandscape
             self.debug("结果 scene=\(scene.interfaceOrientation.rawValue) 窗口=\(Int(self.window?.bounds.width ?? 0))×\(Int(self.window?.bounds.height ?? 0))")
             if landscape == wantLandscape { self.revealWhenReady(); return }
@@ -284,21 +311,30 @@ private struct PlayerWindowModifier<Root: View>: ViewModifier {
     @EnvironmentObject private var appState: AppState
     @Binding var isPresented: Bool
     let root: () -> Root
+    /// 这个入口弹出的窗口的标记；关闭时只关自己弹出的那个
+    @State private var token: UUID?
 
     func body(content: Content) -> some View {
         content
             .onChange(of: isPresented) { show in
-                show ? present() : PlayerWindowController.shared.dismiss()
+                if show {
+                    present()
+                } else if let token {
+                    PlayerWindowController.shared.dismiss(token: token)
+                    self.token = nil
+                }
             }
             .onAppear { if isPresented { present() } }
     }
 
     private func present() {
+        // 页面重新出现时自己的窗口还开着，不要重新弹一个（会把正在播的视频从头再开）
+        if let token, PlayerWindowController.shared.isShowing(token) { return }
         let binding = $isPresented
         let view = root()
             .environmentObject(appState)
             .environment(\.dismissPlayerWindow, { binding.wrappedValue = false })
-        PlayerWindowController.shared.present(
+        token = PlayerWindowController.shared.present(
             AnyView(view),
             landscape: PlayerWindowController.startsInLandscape,
             onDismissed: { binding.wrappedValue = false }

@@ -46,6 +46,8 @@ struct PlayerView: View {
         )
         .task(id: current.id) {
             await PlayerWindowController.shared.waitUntilRevealed()
+            // 等转屏期间切了集（或页面已经关掉），这一轮就不再加载，交给新的一轮
+            guard !Task.isCancelled else { return }
             await load(current)
         }
         .onChange(of: playback.currentTime) { _ in saveProgress(force: false) }

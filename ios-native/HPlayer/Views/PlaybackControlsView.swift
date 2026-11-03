@@ -196,6 +196,8 @@ struct PlaybackControlsView: View {
                 .opacity(closeFade ? 0 : 1)
                 .scaleEffect(closeFade ? 0.96 : 1)
                 .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: boosting)
+                // onChange 不管初始值：窗口没能转成横屏（系统拒绝）时，状态栏和系统手势也要按真实方向来
+                .onAppear { isLandscapeWindow = landscape }
                 .onChange(of: landscape) { isLandscapeWindow = $0 }
             }
             .ignoresSafeArea()
