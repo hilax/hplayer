@@ -427,7 +427,8 @@ struct PlaybackControlsView: View {
                             .foregroundStyle(playback.selectedSubtitle == nil ? Color.white : Theme.gold)
                     }
                     .buttonStyle(.plain)
-                    .accessibilityIdentifier("playback.tracks")
+                    // 顶栏右边已经有一个同名的「字幕和音轨」按钮（playback.tracks），这里用独立的标识
+                    .accessibilityIdentifier("playback.subtitles")
                     .playerBubble(isPresented: bubbleBinding(.tracks)) { tracksBubble }
                     Button { openList() } label: {
                         controlIcon(AppIcon.playlist.name, label: "选集", size: 20)

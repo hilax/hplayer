@@ -66,8 +66,8 @@ final class PlaybackUITests: XCTestCase {
         let slider = app.sliders.firstMatch
         XCTAssertLessThan(app.buttons["playback.quality"].frame.midX, app.buttons["playback.speed"].frame.midX)
         XCTAssertLessThan(app.buttons["playback.speed"].frame.midX, pause.frame.midX, "Quality and speed sit left of the transport")
-        XCTAssertGreaterThan(app.buttons["playback.tracks"].frame.midX, pause.frame.midX, "Subtitles sit right of the transport")
-        XCTAssertGreaterThan(app.buttons["playback.playlist"].frame.midX, app.buttons["playback.tracks"].frame.midX)
+        XCTAssertGreaterThan(app.buttons["playback.subtitles"].frame.midX, pause.frame.midX, "Subtitles sit right of the transport")
+        XCTAssertGreaterThan(app.buttons["playback.playlist"].frame.midX, app.buttons["playback.subtitles"].frame.midX)
         XCTAssertLessThanOrEqual(elapsed.frame.maxX, slider.frame.minX + 4, "Elapsed time sits left of the timeline")
         XCTAssertGreaterThanOrEqual(app.staticTexts["总时长"].frame.minX, slider.frame.maxX - 4, "Total time sits right of the timeline")
         XCTAssertLessThan(abs(elapsed.frame.midY - slider.frame.midY), 12, "Elapsed time is on the timeline row")
