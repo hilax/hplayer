@@ -41,6 +41,12 @@ final class PlayerWindowController {
     private var hiddenMain: UIWindow?
     /// 这一次弹出的标记。关闭只认自己弹出的那个窗口：别的播放入口复位状态时，不会把正在播的窗口误关掉。
     private var token: UUID?
+    /// 每发起一轮转屏请求加一：旧一轮的重试看到编号变了就停下，不和新一轮（比如点了横竖屏按钮）打架。
+    private var orientationRound = 0
+    /// 最近一次打开播放器的转屏过程和主线程卡顿，附在「复制播放诊断信息」里，真机排查不用开调试文字。
+    private var log: [String] = []
+    private var presentedAt = Date()
+    private var watchdog: Task<Void, Never>?
 
     var isPresented: Bool { window != nil }
 
@@ -75,10 +81,18 @@ final class PlayerWindowController {
             previous?()
         }
         pendingDebug = []
+        log = []
+        presentedAt = Date()
         guard let scene = activeScene() else { onDismissed(); return nil }
         self.onDismissed = onDismissed
         revealed = false
         wantsLandscape = landscape
+        debug("打开 横屏=\(landscape) 设备方向=\(UIDevice.current.orientation.rawValue) 场景方向=\(scene.interfaceOrientation.rawValue)")
+        if landscape {
+            // 主窗口只支持竖屏，它可见时系统会拒绝横屏请求：在播放器窗口出来之前就先藏好，
+            // 不再等 80 毫秒以后才藏（那时第一次转屏请求很可能已经按「主窗口可见」被拒绝了）。
+            hideMain(in: scene)
+        }
 
         let player = PlayerWindow(windowScene: scene)
         player.allowedOrientations = landscape ? .landscape : .portrait
@@ -107,7 +121,6 @@ final class PlayerWindowController {
                 try? await Task.sleep(nanoseconds: 80_000_000)
                 // 只对这一次弹出的窗口生效：期间关掉又打开了新的，就不再动它
                 guard let self, let player, self.window === player else { return }
-                self.hideMain(in: scene)
                 self.requestOrientation(Self.preferredLandscape(), in: scene)
             }
         } else {
@@ -118,6 +131,7 @@ final class PlayerWindowController {
             try? await Task.sleep(nanoseconds: 3_000_000_000)
             self?.reveal()   // 兜底：转屏一直没成功（被系统拒绝、主线程被占住）时，也不能一直黑着
         }
+        startWatchdog()
         return token
     }
 
@@ -158,6 +172,9 @@ final class PlayerWindowController {
         window = nil
         host = nil
         token = nil
+        orientationRound += 1
+        watchdog?.cancel()
+        watchdog = nil
         onDismissed = nil
         player.isHidden = true
         player.rootViewController = nil
@@ -203,29 +220,45 @@ final class PlayerWindowController {
         UIView.animate(withDuration: 0.25, delay: 0, options: [.curveEaseOut]) { window.alpha = 1 }
     }
 
-    /// 请求系统把界面转到指定方向。失败（或没转成）时重试，最后用旧办法兜底；
-    /// 过程和结果显示在播放页左上角的小字里，方便真机排查。
-    private func requestOrientation(_ mask: UIInterfaceOrientationMask, in scene: UIWindowScene, attempt: Int = 0) {
-        guard let target = window else { return }
+    /// 请求系统把界面转到指定方向，开始新的一轮（旧一轮的重试随之停下）。
+    private func requestOrientation(_ mask: UIInterfaceOrientationMask, in scene: UIWindowScene) {
+        orientationRound += 1
+        attemptOrientation(mask, in: scene, round: orientationRound, attempt: 0)
+    }
+
+    /// 真机上刚打开的头一两秒，系统常常拒绝转屏，过一会儿再请求就能转过去（以前只试 3 次就放弃，
+    /// 播放页停在竖屏，要手动点横屏按钮）。现在头 3 次没转成先按当前方向显示出来，
+    /// 但不放弃：接着每 0.8 秒再请求一次，直到系统接受，最多大约 6 秒。
+    private static let maxOrientationAttempts = 9
+
+    private func attemptOrientation(_ mask: UIInterfaceOrientationMask, in scene: UIWindowScene, round: Int, attempt: Int) {
+        guard let target = window, round == orientationRound else { return }
         let wantLandscape = !mask.contains(.portrait)
         host?.setNeedsUpdateOfSupportedInterfaceOrientations()
-        window?.makeKey()
-        debug("windows=\(scene.windows.map { "\(type(of: $0))\($0.isHidden ? "H" : "")\(Int($0.windowLevel.rawValue))\($0.isKeyWindow ? "K" : "")" }.joined(separator: ","))")
-        debug("请求\(Self.name(mask)) #\(attempt) 窗口=\(window.map { Self.name($0.allowedOrientations) } ?? "-")")
-        scene.requestGeometryUpdate(.iOS(interfaceOrientations: mask)) { [weak self] error in
-            Task { @MainActor in self?.debug("系统拒绝：\(error.localizedDescription)") }
+        target.makeKey()
+        if attempt == 0 {
+            debug("windows=\(scene.windows.map { "\(type(of: $0))\($0.isHidden ? "H" : "")\(Int($0.windowLevel.rawValue))\($0.isKeyWindow ? "K" : "")" }.joined(separator: ","))")
         }
+        debug("请求\(Self.name(mask)) #\(attempt) 窗口=\(Self.name(target.allowedOrientations))")
+        scene.requestGeometryUpdate(.iOS(interfaceOrientations: mask)) { [weak self] error in
+            Task { @MainActor in self?.debug("系统拒绝 #\(attempt)：\(error.localizedDescription)") }
+        }
+        let delay: UInt64 = attempt < 2 ? 450_000_000 : 800_000_000
         Task { @MainActor [weak self, weak target] in
-            try? await Task.sleep(nanoseconds: 450_000_000)
-            // 期间窗口被关掉或换成了新的，就不再重试，免得去转新窗口
-            guard let self, let target, self.window === target else { return }
+            try? await Task.sleep(nanoseconds: delay)
+            // 期间窗口被关掉、换成了新的，或者又发起了新的一轮，就不再管这一轮
+            guard let self, let target, self.window === target, round == self.orientationRound else { return }
             let landscape = scene.interfaceOrientation.isLandscape
-            self.debug("结果 scene=\(scene.interfaceOrientation.rawValue) 窗口=\(Int(self.window?.bounds.width ?? 0))×\(Int(self.window?.bounds.height ?? 0))")
+            self.debug("结果 #\(attempt) scene=\(scene.interfaceOrientation.rawValue) 窗口=\(Int(target.bounds.width))×\(Int(target.bounds.height))")
             if landscape == wantLandscape { self.revealWhenReady(); return }
-            if attempt < 2 {
-                self.requestOrientation(mask, in: scene, attempt: attempt + 1)
+            if attempt == 2 {
+                // 先按当前方向显示，不让用户一直对着黑屏；后面转过去时画面会跟着转
+                self.debug("头 3 次没转成，先显示，继续重试")
+                self.reveal()
+            }
+            if attempt + 1 < Self.maxOrientationAttempts {
+                self.attemptOrientation(mask, in: scene, round: round, attempt: attempt + 1)
             } else {
-                // 系统一直不肯转：留在当前方向，照常显示（调试文字里有原因）
                 self.debug("转屏失败，保持当前方向")
                 self.reveal()
             }
@@ -257,7 +290,35 @@ final class PlayerWindowController {
         debug("询问 \(kind) → \(Self.name(answer))")
     }
 
+    /// 附在「复制播放诊断信息」后面的播放器窗口记录
+    var diagnostics: String {
+        log.isEmpty ? "" : "[播放器窗口]\n" + log.joined(separator: "\n")
+    }
+
+    /// 打开后 15 秒内每 0.1 秒看一眼主线程：被占住超过 0.25 秒就记一笔，排查「打开就卡住」用
+    private func startWatchdog() {
+        watchdog?.cancel()
+        watchdog = Task.detached(priority: .utility) { [weak self] in
+            let end = Date().addingTimeInterval(15)
+            while !Task.isCancelled, Date() < end {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                let sent = Date()
+                await MainActor.run { }
+                let blocked = Date().timeIntervalSince(sent)
+                if blocked > 0.25 {
+                    await self?.debug("主线程卡了 \(Int(blocked * 1000)) 毫秒")
+                }
+            }
+        }
+    }
+
     private func debug(_ text: String) {
+        let line = String(format: "%5.2fs ", Date().timeIntervalSince(presentedAt)) + text
+        // 系统反复询问支持方向时同一句会连着出现很多次，只记一次
+        if log.last.map({ $0.dropFirst(7) == line.dropFirst(7) }) != true {
+            log.append(line)
+            if log.count > 60 { log.removeFirst(log.count - 60) }
+        }
         pendingDebug.append(text)
         if pendingDebug.count > 8 { pendingDebug.removeFirst() }
         guard Self.showsDebugLabel, let window else { return }

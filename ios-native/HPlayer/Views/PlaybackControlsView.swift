@@ -1122,7 +1122,7 @@ struct PlaybackControlsView: View {
         }
         settingGroup("遇到问题", footer: "播放不正常时点一下，把复制的内容发给开发者，里面有最近的跳转、重连记录和播放内核的报错，不含 Cookie。") {
             chip(copiedDiagnostics ? "已复制" : "复制播放诊断信息", selected: false) {
-                UIPasteboard.general.string = playback.diagnostics
+                UIPasteboard.general.string = diagnosticsText
                 copiedDiagnostics = true
             }
             .accessibilityIdentifier("playback.copyDiagnosticsSetting")
@@ -1390,7 +1390,7 @@ struct PlaybackControlsView: View {
             if error.isEmpty {
                 // 真机上打不开时，把内核日志复制下来发给开发者
                 Button {
-                    UIPasteboard.general.string = playback.diagnostics
+                    UIPasteboard.general.string = diagnosticsText
                     copiedDiagnostics = true
                 } label: {
                     Text(copiedDiagnostics ? "已复制" : "复制诊断信息")
@@ -1822,6 +1822,11 @@ struct PlaybackControlsView: View {
             transaction.disablesAnimations = true
             withTransaction(transaction) { onClose() }
         }
+    }
+
+    /// 播放内核的诊断信息，后面附上播放器窗口的转屏过程和主线程卡顿记录
+    private var diagnosticsText: String {
+        [playback.diagnostics, PlayerWindowController.shared.diagnostics].filter { !$0.isEmpty }.joined(separator: "\n\n")
     }
 
     /// 横竖屏按钮：让播放器窗口真的转过去（系统的控制中心、录屏方向也跟着变）
