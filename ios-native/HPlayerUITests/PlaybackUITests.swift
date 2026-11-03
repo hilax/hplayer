@@ -15,7 +15,7 @@ final class PlaybackUITests: XCTestCase {
         let surface = app.otherElements["playback.surface"]
         XCTAssertTrue(wait { close.exists && surface.exists && orientation.exists && orientation.label == "竖屏" },
                       "Player should open in landscape; debug=\(debugText(app)); window=\(surface.frame)")
-        XCTAssertTrue(wait { self.isLandscape(surface) }, "The player window should be in real landscape")
+        XCTAssertTrue(wait { self.isLandscape(app) }, "The player window should be in real landscape")
         close.tap()
         XCTAssertTrue(wait { !surface.exists && previousPage.exists && reopen.isHittable && self.isPortraitWindow(app) },
                       "Closing must simply reveal the previous page, which was portrait all along")
@@ -24,7 +24,7 @@ final class PlaybackUITests: XCTestCase {
         XCTAssertTrue(wait { close.exists && surface.exists && orientation.exists && orientation.label == "竖屏" },
                       "The player should reopen in landscape")
         orientation.tap()
-        XCTAssertTrue(wait { orientation.label == "横屏" && !self.isLandscape(surface) && surface.frame.height < app.windows.firstMatch.frame.height * 0.5 },
+        XCTAssertTrue(wait { orientation.label == "横屏" && !self.isLandscape(app) && surface.frame.height < app.windows.firstMatch.frame.height * 0.5 },
                       "Player should switch to the portrait layout before the second close")
         close.tap()
         XCTAssertTrue(wait { !surface.exists && previousPage.exists && reopen.isHittable && self.isPortraitWindow(app) },
@@ -56,7 +56,7 @@ final class PlaybackUITests: XCTestCase {
         let elapsed = app.staticTexts["playback.elapsed"]
         XCTAssertTrue(wait { surface.exists && orientation.exists && orientation.label == "竖屏" }, "Player should open in landscape; debug=\(debugText(app)); window=\(surface.frame)")
         XCTAssertFalse(app.alerts.firstMatch.exists)
-        XCTAssertTrue(wait { self.isLandscape(surface) }, "The player window should be in real landscape")
+        XCTAssertTrue(wait { self.isLandscape(app) }, "The player window should be in real landscape")
         let frame = surface.frame
         XCTAssertGreaterThan(pause.frame.midY, frame.height * 0.72, "Landscape transport belongs below the timeline")
         XCTAssertGreaterThan(app.buttons["playback.lock"].frame.midX, frame.width * 0.09, "Lock control should sit inward from the edge")
@@ -117,9 +117,9 @@ final class PlaybackUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["测试下一集"].waitForExistence(timeout: 5))
         XCTAssertTrue(wait { (pause.value as? String) == "playing" })
         orientation.tap()
-        XCTAssertTrue(wait { orientation.label == "横屏" && !self.isLandscape(surface) && surface.frame.height < app.windows.firstMatch.frame.height * 0.5 })
+        XCTAssertTrue(wait { orientation.label == "横屏" && !self.isLandscape(app) && surface.frame.height < app.windows.firstMatch.frame.height * 0.5 })
         orientation.tap()
-        XCTAssertTrue(wait { orientation.label == "竖屏" && self.isLandscape(surface) })
+        XCTAssertTrue(wait { orientation.label == "竖屏" && self.isLandscape(app) })
         let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         screenshot.name = "HPlayer landscape gestures"
         screenshot.lifetime = .keepAlways
@@ -341,9 +341,9 @@ final class PlaybackUITests: XCTestCase {
                       "Playback should advance again after leaving the end; status=\(surface.value as? String ?? "")")
     }
 
-    /// 播放器在独立窗口里真横屏：画面区域宽大于高
-    private func isLandscape(_ surface: XCUIElement) -> Bool {
-        let frame = surface.frame
+    /// 播放器在独立窗口里真横屏：播放器窗口宽大于高（播放期间主窗口是隐藏的，只有这一个窗口）
+    private func isLandscape(_ app: XCUIApplication) -> Bool {
+        let frame = app.windows.firstMatch.frame
         return frame.width > frame.height
     }
 

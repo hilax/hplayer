@@ -69,8 +69,10 @@ final class ScreenCatalogUITests: XCTestCase {
                 // 播放器在独立窗口里：按钮写着「竖屏」就是在横屏，此时播放画面区域也是真的宽大于高
                 let orientationButton = app.buttons["playback.orientation"]
                 XCTAssertTrue(wait { orientationButton.exists && (orientationButton.label == "竖屏") == (screen == "landscape") })
-                let surface = app.otherElements["playback.surface"]
-                XCTAssertTrue(wait { surface.exists && (surface.frame.width > surface.frame.height) == (screen == "landscape") })
+                XCTAssertTrue(wait {
+                    let frame = app.windows.firstMatch.frame
+                    return (frame.width > frame.height) == (screen == "landscape")
+                })
                 XCTAssertTrue(wait { self.seconds(app.staticTexts["playback.elapsed"].label) > 0 })
             }
         } else {
