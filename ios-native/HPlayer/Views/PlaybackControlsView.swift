@@ -96,6 +96,8 @@ struct PlaybackControlsView: View {
     @State private var dragTime = 0.0
     /// 拖进度条开始时的播放位置，用来算「+ 00:20」
     @State private var scrubStart = 0.0
+    /// 当前的 dragging 是不是由画面上的横滑快进带起来的（不是手指按在进度条上）
+    @State private var panScrubbing = false
     @State private var hideTask: Task<Void, Never>?
     @State private var lastSeekTick = 0
     /// 正在转回竖屏准备关闭，期间不再响应关闭和手势
@@ -362,22 +364,25 @@ struct PlaybackControlsView: View {
         }
     }
 
-    /// 横屏底栏：播放控制在左，倍速 / 选集 / 画质 / 字幕和横竖屏在右；后四个打开右侧面板的对应分页。
+    /// 横屏底栏：上一集、暂停、下一集在进度条下方正中；倍速 / 选集 / 画质 / 字幕和横竖屏靠右，
+    /// 后四个打开右侧面板的对应分页。
     private func sideControls(landscape: Bool) -> some View {
-        HStack(spacing: 6) {
-            transportControls(spacing: 10, compact: true)
-            Spacer(minLength: 0)
-            GlassTextButton(title: "\(String(format: "%g", playback.rate))×", label: "播放速度") { openSidePanel(.speed) }
-            GlassTextButton(title: "选集", label: "选集") { openList() }
-                .accessibilityIdentifier("playback.playlist")
-            GlassTextButton(title: selectedQuality.isEmpty ? "原画" : selectedQuality, label: "播放画质") { openSidePanel(.quality) }
-            GlassTextButton(title: "字幕", label: "字幕和音轨") { openSidePanel(.tracks) }
-            Button { toggleOrientation(landscape: landscape) } label: {
-                controlIcon(landscape ? AppIcon.exitFullscreen.name : AppIcon.fullscreen.name,
-                            label: landscape ? "竖屏" : "横屏", size: 18)
+        ZStack {
+            HStack(spacing: 6) {
+                Spacer(minLength: 0)
+                GlassTextButton(title: "\(String(format: "%g", playback.rate))×", label: "播放速度") { openSidePanel(.speed) }
+                GlassTextButton(title: "选集", label: "选集") { openList() }
+                    .accessibilityIdentifier("playback.playlist")
+                GlassTextButton(title: selectedQuality.isEmpty ? "原画" : selectedQuality, label: "播放画质") { openSidePanel(.quality) }
+                GlassTextButton(title: "字幕", label: "字幕和音轨") { openSidePanel(.tracks) }
+                Button { toggleOrientation(landscape: landscape) } label: {
+                    controlIcon(landscape ? AppIcon.exitFullscreen.name : AppIcon.fullscreen.name,
+                                label: landscape ? "竖屏" : "横屏", size: 18)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("playback.orientation")
             }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("playback.orientation")
+            transportControls(spacing: 10, compact: true)
         }
         .frame(minHeight: 56)
     }
@@ -1659,13 +1664,18 @@ struct PlaybackControlsView: View {
 
     private func handlePan(_ state: UIGestureRecognizer.State, origin: CGPoint, translation: CGPoint, size: CGSize) {
         if state == .cancelled || state == .failed {
+            endPanScrub()
             panActive = false
             panKind = nil
             adjustment = nil
             revealControls()
             return
         }
-        guard !locked, !showList, settingsPage == nil, !showAspect, !closing, size.width > 0, size.height > 0 else { return }
+        guard !locked, !showList, settingsPage == nil, !showAspect, !closing, size.width > 0, size.height > 0 else {
+            // 横滑到一半被别的面板打断：进度条别停在半路
+            if state == .ended { endPanScrub() }
+            return
+        }
         if state == .began {
             setBoost(false)
             adjustmentHideTask?.cancel()
@@ -1700,6 +1710,7 @@ struct PlaybackControlsView: View {
                     return
                 }
                 panKind = .seek
+                beginPanScrub(at: adjustmentStartTime)
                 lastSeekTick = Int(adjustmentStartTime / Self.seekTickSeconds)
                 Self.seekTicker.prepare()
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
@@ -1722,6 +1733,8 @@ struct PlaybackControlsView: View {
             let target = min(max(adjustmentStartTime + Double(moveX / size.width) * range, 0), max(0, ceiling))
             seekHaptic(target: target)
             adjustment = seekAdjustment(target: target, from: adjustmentStartTime)
+            // 进度条和左右两端的时间跟着手指实时走；松手才真正跳转
+            dragTime = target
         case .brightness:
             let value = min(max(adjustmentStartBrightness - Double(moveY / size.height) * 1.2, 0.02), 1)
             ScreenBrightness.screen.brightness = CGFloat(value)
@@ -1738,10 +1751,30 @@ struct PlaybackControlsView: View {
             if let target = adjustment?.targetTime {
                 playback.seek(to: target)
             }
+            endPanScrub()
             self.panKind = nil
             panActive = false
             hideAdjustmentSoon()
         }
+    }
+
+    /// 开始横滑快进：把控制栏亮出来，进度条改由手指位置驱动（和手指按在进度条上拖是同一套显示）。
+    private func beginPanScrub(at time: Double) {
+        panScrubbing = true
+        dragTime = time
+        dragging = true
+        hideTask?.cancel()
+        if !controlsVisible {
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) { controlsVisible = true }
+        }
+    }
+
+    /// 横滑结束（松手、取消或被打断）：进度条回到跟着播放位置走。
+    /// 跳转已经在松手时发出，playback.currentTime 当场就是目标位置，所以不会先弹回旧位置。
+    private func endPanScrub() {
+        guard panScrubbing else { return }
+        panScrubbing = false
+        dragging = false
     }
 
     private func seekAdjustment(target: Double, from start: Double) -> PlaybackAdjustment {

@@ -59,6 +59,9 @@ final class PlaybackUITests: XCTestCase {
         XCTAssertTrue(wait { self.isLandscape(app) }, "The player window should be in real landscape")
         let frame = surface.frame
         XCTAssertGreaterThan(pause.frame.midY, frame.height * 0.72, "Landscape transport belongs below the timeline")
+        XCTAssertEqual(pause.frame.midX, frame.midX, accuracy: frame.width * 0.03, "Landscape transport sits in the middle, under the timeline")
+        XCTAssertLessThan(app.buttons["playback.previous"].frame.midX, pause.frame.midX, "Previous is left of play/pause")
+        XCTAssertGreaterThan(app.buttons["playback.next"].frame.midX, pause.frame.midX, "Next is right of play/pause")
         XCTAssertGreaterThan(app.buttons["playback.lock"].frame.midX, frame.width * 0.09, "Lock control should sit inward from the edge")
         XCTAssertLessThan(app.buttons["playback.screenshot"].frame.midX, frame.width * 0.91, "Screenshot control should sit inward from the edge")
         XCTAssertTrue(wait { (pause.value as? String) == "playing" && self.seconds(elapsed.label) > 0 && app.sliders.firstMatch.isEnabled }, "HLS should play with working seeking")
