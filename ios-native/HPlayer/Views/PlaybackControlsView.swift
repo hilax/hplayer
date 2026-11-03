@@ -47,32 +47,88 @@ private enum SideTab: CaseIterable {
 }
 
 /// 横屏底栏上弹出气泡的三个按钮
-private enum PlayerBubble: Equatable {
+private enum PlayerBubble: Hashable {
     case quality, speed, tracks
+}
 
-    /// 低于 iOS 16.4 弹不了气泡，退回到右侧面板的对应分页
-    var sideTab: SideTab {
-        switch self {
-        case .quality: return .quality
-        case .speed: return .speed
-        case .tracks: return .tracks
-        }
+/// 每个气泡按钮把自己的位置报上来，气泡层据此把气泡放在按钮正上方。
+private struct PlayerBubbleAnchorKey: PreferenceKey {
+    static var defaultValue: [PlayerBubble: Anchor<CGRect>] { [:] }
+    static func reduce(value: inout [PlayerBubble: Anchor<CGRect>], nextValue: () -> [PlayerBubble: Anchor<CGRect>]) {
+        value.merge(nextValue()) { $1 }
     }
 }
 
 private extension View {
-    /// 在按钮旁边弹出的小气泡。iPhone 上默认会变成整页抽屉，这里要求保持气泡样式。
-    @ViewBuilder
-    func playerBubble<Bubble: View>(isPresented: Binding<Bool>, @ViewBuilder content: @escaping () -> Bubble) -> some View {
-        if #available(iOS 16.4, *) {
-            popover(isPresented: isPresented, attachmentAnchor: .rect(.bounds), arrowEdge: .bottom) {
-                content()
-                    .presentationCompactAdaptation(.popover)
-                    .preferredColorScheme(.dark)
+    func bubbleAnchor(_ kind: PlayerBubble) -> some View {
+        anchorPreference(key: PlayerBubbleAnchorKey.self, value: .bounds) { [kind: $0] }
+    }
+}
+
+/// 气泡外形：圆角矩形，底边带一个指向按钮的小箭头。
+/// 形状占满的区域底部 arrowHeight 高度留给箭头，箭头尖离左边（或右边）arrowInset。
+private struct PlayerBubbleShape: Shape {
+    static let arrowHeight: CGFloat = 7
+    static let arrowWidth: CGFloat = 15
+    static let cornerRadius: CGFloat = 16
+
+    var arrowInset: CGFloat
+    var fromTrailing: Bool
+
+    func path(in rect: CGRect) -> Path {
+        let r = Self.cornerRadius
+        let body = rect.height - Self.arrowHeight
+        let minX = rect.minX, maxX = rect.maxX, minY = rect.minY, maxY = minY + body
+        let rawTip = fromTrailing ? maxX - arrowInset : minX + arrowInset
+        // 箭头不挤进圆角里
+        let tip = min(max(rawTip, minX + r + Self.arrowWidth / 2), maxX - r - Self.arrowWidth / 2)
+        var path = Path()
+        path.move(to: CGPoint(x: minX + r, y: minY))
+        path.addArc(tangent1End: CGPoint(x: maxX, y: minY), tangent2End: CGPoint(x: maxX, y: minY + r), radius: r)
+        path.addArc(tangent1End: CGPoint(x: maxX, y: maxY), tangent2End: CGPoint(x: maxX - r, y: maxY), radius: r)
+        path.addLine(to: CGPoint(x: tip + Self.arrowWidth / 2, y: maxY))
+        path.addLine(to: CGPoint(x: tip, y: maxY + Self.arrowHeight))
+        path.addLine(to: CGPoint(x: tip - Self.arrowWidth / 2, y: maxY))
+        path.addArc(tangent1End: CGPoint(x: minX, y: maxY), tangent2End: CGPoint(x: minX, y: maxY - r), radius: r)
+        path.addArc(tangent1End: CGPoint(x: minX, y: minY), tangent2End: CGPoint(x: minX + r, y: minY), radius: r)
+        path.closeSubpath()
+        return path
+    }
+}
+
+/// 气泡外壳：磨砂底 + 一圈细边，大小完全由里面的选项决定。
+/// 选项太多放不下时在气泡内滚动，气泡高度停在 maxHeight。
+private struct PlayerBubbleSurface<Content: View>: View {
+    let arrowInset: CGFloat
+    let fromTrailing: Bool
+    let maxHeight: CGFloat
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        let shape = PlayerBubbleShape(arrowInset: arrowInset, fromTrailing: fromTrailing)
+        // 隐藏的一份只用来撑出宽高（高度封顶），真正能点的那份放在上面的滚动视图里
+        content()
+            .padding(6)
+            .fixedSize(horizontal: true, vertical: false)
+            .hidden()
+            .accessibilityHidden(true)
+            .frame(maxHeight: maxHeight, alignment: .top)
+            .overlay {
+                ScrollView {
+                    content().padding(6)
+                }
+                .scrollIndicators(.hidden)
+                .clipShape(RoundedRectangle(cornerRadius: PlayerBubbleShape.cornerRadius, style: .continuous))
             }
-        } else {
-            self
-        }
+            .padding(.bottom, PlayerBubbleShape.arrowHeight)
+            .background {
+                ZStack {
+                    shape.fill(.thinMaterial)
+                    shape.fill(Color.black.opacity(0.22))
+                }
+            }
+            .overlay { shape.stroke(Color.white.opacity(0.16), lineWidth: 0.5) }
+            .foregroundStyle(.white)
     }
 }
 
@@ -233,6 +289,8 @@ struct PlaybackControlsView: View {
                 // onChange 不管初始值：窗口没能转成横屏（系统拒绝）时，状态栏和系统手势也要按真实方向来
                 .onAppear { isLandscapeWindow = landscape }
                 .onChange(of: landscape) { isLandscapeWindow = $0; bubble = nil }
+                // 控制栏收起时气泡跟着收起，不会留一个看不见的气泡挡住自动隐藏
+                .onChange(of: controlsVisible) { if !$0 { bubble = nil } }
             }
             .ignoresSafeArea()
         }
@@ -378,26 +436,41 @@ struct PlaybackControlsView: View {
     /// 下一行：画质和倍速在左，上一集、暂停、下一集在正中，字幕、选集和横竖屏在右。
     private func bottomBar(landscape: Bool) -> some View {
         VStack(spacing: landscape ? 0 : 10) {
-            HStack(spacing: 12) {
-                Text(timeText(dragging ? dragTime : playback.currentTime))
-                    .font(.caption.weight(.medium).monospacedDigit())
-                    .frame(width: timeLabelWidth, alignment: .leading)
-                    .accessibilityIdentifier("playback.elapsed")
+            HStack(spacing: 4) {
+                let shown = dragging ? dragTime : playback.currentTime
+                let long = max(playback.duration, shown) >= 3600
+                timeSlot(long: long, alignment: .leading) {
+                    Text(timeText(shown))
+                        .font(.caption.weight(.medium).monospacedDigit())
+                        .accessibilityIdentifier("playback.elapsed")
+                }
                 scrubber
                     .frame(maxWidth: .infinity)
                     .frame(height: 32)
-                Text(playback.duration > 0 ? timeText(playback.duration) : "00:00")
-                    .font(.caption.monospacedDigit()).foregroundStyle(.white.opacity(0.6))
-                    .frame(width: timeLabelWidth, alignment: .trailing)
-                    .accessibilityLabel("总时长")
+                timeSlot(long: long, alignment: .trailing) {
+                    Text(playback.duration > 0 ? timeText(playback.duration) : "00:00")
+                        .font(.caption.weight(.medium).monospacedDigit()).foregroundStyle(.white.opacity(0.6))
+                        .accessibilityLabel("总时长")
+                }
             }
 
             sideControls(landscape: landscape)
         }
     }
 
-    /// 时间文字的宽度固定，播放到一小时以上时进度条也不会跟着抖
-    private var timeLabelWidth: CGFloat { playback.duration >= 3600 ? 58 : 42 }
+    /// 时间文字按内容收紧宽度，紧贴进度条；宽度按「是否一小时以上」预留，
+    /// 刚打开视频时总时长还是 0，但续播位置已经是 1:59:52，也不会被挤成两行。
+    private func timeSlot<Slot: View>(long: Bool, alignment: Alignment, @ViewBuilder label: () -> Slot) -> some View {
+        ZStack(alignment: alignment) {
+            Text(long ? "0:00:00" : "00:00")
+                .font(.caption.weight(.medium).monospacedDigit())
+                .hidden()
+                .accessibilityHidden(true)
+            label()
+        }
+        .lineLimit(1)
+        .fixedSize()
+    }
 
     /// 画质、倍速、字幕音轨三个按钮点开后在按钮旁边弹出气泡；选集仍然打开右侧面板。按钮都是不带底色的图标。
     private func sideControls(landscape: Bool) -> some View {
@@ -408,7 +481,7 @@ struct PlaybackControlsView: View {
                         .buttonStyle(.plain)
                         .accessibilityLabel("播放画质")
                         .accessibilityIdentifier("playback.quality")
-                        .playerBubble(isPresented: bubbleBinding(.quality)) { qualityBubble }
+                        .bubbleAnchor(.quality)
                     Button { openBubble(.speed) } label: {
                         controlIcon(AppIcon.speed.name, label: "播放速度", size: 20)
                             .foregroundStyle(abs(playback.rate - 1) > 0.01 ? Theme.gold : Color.white)
@@ -416,7 +489,7 @@ struct PlaybackControlsView: View {
                     .buttonStyle(.plain)
                     .accessibilityValue("\(String(format: "%g", playback.rate))×")
                     .accessibilityIdentifier("playback.speed")
-                    .playerBubble(isPresented: bubbleBinding(.speed)) { speedBubble }
+                    .bubbleAnchor(.speed)
                 }
                 // 图标四周有留白，往外挪一点，让图标本身和左边的时间文字对齐
                 .padding(.leading, -10)
@@ -429,7 +502,7 @@ struct PlaybackControlsView: View {
                     .buttonStyle(.plain)
                     // 顶栏右边已经有一个同名的「字幕和音轨」按钮（playback.tracks），这里用独立的标识
                     .accessibilityIdentifier("playback.subtitles")
-                    .playerBubble(isPresented: bubbleBinding(.tracks)) { tracksBubble }
+                    .bubbleAnchor(.tracks)
                     Button { openList() } label: {
                         controlIcon(AppIcon.playlist.name, label: "选集", size: 20)
                     }
@@ -460,22 +533,9 @@ struct PlaybackControlsView: View {
             .contentShape(Rectangle())
     }
 
-    private func bubbleBinding(_ kind: PlayerBubble) -> Binding<Bool> {
-        Binding(
-            get: { bubble == kind },
-            set: { presented in
-                if presented { bubble = kind } else if bubble == kind { closeBubble() }
-            }
-        )
-    }
-
     private func openBubble(_ kind: PlayerBubble) {
         hideTask?.cancel()
-        if #available(iOS 16.4, *) {
-            bubble = kind
-        } else {
-            openSidePanel(kind.sideTab)
-        }
+        bubble = kind
     }
 
     /// 关掉气泡后重新开始计时，控制栏过几秒再自动隐藏
@@ -484,59 +544,152 @@ struct PlaybackControlsView: View {
         revealControls()
     }
 
+    /// 气泡层：盖在整个控制层上。先铺一层透明的点击区（点气泡以外的任何地方收起气泡），
+    /// 再把气泡放在对应按钮的正上方，箭头对着按钮图标。画质、倍速在左，字幕在右。
+    private func bubbleLayer(_ anchors: [PlayerBubble: Anchor<CGRect>]) -> some View {
+        GeometryReader { proxy in
+            if let kind = bubble, let anchor = anchors[kind] {
+                let rect = proxy[anchor]
+                let fromTrailing = kind == .tracks
+                let edge: CGFloat = 10
+                let reach: CGFloat = 28
+                let side = fromTrailing
+                    ? max(edge, proxy.size.width - rect.midX - reach)
+                    : max(edge, rect.midX - reach)
+                let inset = fromTrailing ? proxy.size.width - rect.midX - side : rect.midX - side
+                ZStack(alignment: fromTrailing ? .bottomTrailing : .bottomLeading) {
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture { closeBubble() }
+                    PlayerBubbleSurface(arrowInset: inset, fromTrailing: fromTrailing,
+                                        maxHeight: max(100, rect.minY - 24)) {
+                        bubbleContent(kind)
+                    }
+                    .padding(fromTrailing ? .trailing : .leading, side)
+                    // 箭头尖落在按钮框的上沿稍靠下，正好在图标上方留一小段空隙
+                    .padding(.bottom, max(0, proxy.size.height - rect.minY - 2))
+                    .transition(.scale(scale: 0.88, anchor: fromTrailing ? .bottomTrailing : .bottomLeading).combined(with: .opacity))
+                }
+            }
+        }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: bubble)
+    }
+
+    @ViewBuilder
+    private func bubbleContent(_ kind: PlayerBubble) -> some View {
+        switch kind {
+        case .speed: speedBubble
+        case .quality: qualityBubble
+        case .tracks: tracksBubble
+        }
+    }
+
     private var speedBubble: some View {
         VStack(spacing: 2) {
             ForEach(Self.speedOptions, id: \.self) { rate in
-                trackRow(title: "\(String(format: "%g", rate))×", detail: "", selected: abs(playback.rate - rate) < 0.001) {
+                bubbleRow(title: "\(String(format: "%g", rate))×", selected: abs(playback.rate - rate) < 0.001) {
                     playback.setRate(rate)
                     closeBubble()
                 }
             }
         }
-        .padding(8)
-        .frame(width: 150)
-        .foregroundStyle(.white)
     }
 
     @ViewBuilder
     private var qualityBubble: some View {
         if qualities.isEmpty {
-            Text("这个视频只有原画，没有别的清晰度可选。")
-                .font(.caption)
-                .foregroundStyle(.white.opacity(0.7))
-                .padding(14)
-                .frame(width: 200, alignment: .leading)
+            bubbleNote("这个视频只有原画，没有别的清晰度可选。")
         } else {
             VStack(spacing: 2) {
                 ForEach(qualities) { quality in
-                    trackRow(title: quality.title, detail: "", selected: quality.title == selectedQuality) {
+                    bubbleRow(title: quality.title, selected: quality.title == selectedQuality) {
                         onQuality(quality.id)
                         closeBubble()
                     }
                 }
             }
-            .padding(8)
-            .frame(width: 170)
-            .foregroundStyle(.white)
         }
     }
 
+    /// 字幕和音轨两组选项放在同一个气泡里；选了不收起，字幕和音轨可以连着选
     private var tracksBubble: some View {
-        // 字幕和音轨可能很多，限制高度后在气泡里滚动；条目少时按条目数收紧，避免留一大块空白
-        let rows = 2 + playback.subtitleTracks.count + playback.audioTracks.count
-        let height = min(300, CGFloat(rows) * 46 + 70)
-        return ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                subtitleSettings
-                Divider().overlay(.white.opacity(0.12))
-                audioSettings
+        VStack(alignment: .leading, spacing: 2) {
+            bubbleHeader("字幕")
+            bubbleRow(title: "关闭字幕", selected: playback.selectedSubtitle == nil) {
+                playback.selectSubtitle(nil)
+                revealControls()
             }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            ForEach(playback.subtitleTracks) { track in
+                bubbleRow(title: track.title, detail: track.detail, selected: playback.selectedSubtitle == track.id) {
+                    playback.selectSubtitle(track.id)
+                    revealControls()
+                }
+            }
+            if playback.subtitleTracks.isEmpty {
+                bubbleNote("这个视频没有内嵌字幕。同一文件夹里同名的字幕文件会自动加载。")
+            }
+            bubbleHeader("音轨").padding(.top, 8)
+            ForEach(playback.audioTracks) { track in
+                bubbleRow(title: track.title, detail: track.detail, selected: playback.selectedAudio == track.id) {
+                    playback.selectAudio(track.id)
+                    revealControls()
+                }
+            }
+            if playback.audioTracks.isEmpty {
+                bubbleNote("视频加载后会在这里列出所有音轨。")
+            }
         }
-        .scrollIndicators(.hidden)
-        .frame(width: 280, height: height)
-        .foregroundStyle(.white)
+    }
+
+    /// 气泡里的一个选项：只比文字大一圈，选中的用琥珀色字加淡底
+    private func bubbleRow(title: String, detail: String = "", selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(Self.clipped(title, 20))
+                    .font(.subheadline.weight(selected ? .semibold : .regular))
+                    .lineLimit(1)
+                if !detail.isEmpty {
+                    Text(Self.clipped(detail, 28))
+                        .font(.caption2)
+                        .foregroundStyle(selected ? Theme.accent.opacity(0.8) : Color.white.opacity(0.55))
+                        .lineLimit(1)
+                }
+            }
+            .foregroundStyle(selected ? Theme.accent : Color.white)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(selected ? Theme.accent.opacity(0.16) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    private func bubbleHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.white.opacity(0.55))
+            .padding(.horizontal, 12)
+            .padding(.top, 4)
+            .padding(.bottom, 2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func bubbleNote(_ text: String) -> some View {
+        Text(text)
+            .font(.caption)
+            .foregroundStyle(.white.opacity(0.6))
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(width: 190, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+    }
+
+    /// 选项文字太长时截短，气泡不会被一个长名字撑得很宽
+    private static func clipped(_ text: String, _ limit: Int) -> String {
+        text.count > limit ? String(text.prefix(limit)) + "…" : text
     }
 
     private func transportControls(spacing: CGFloat, compact: Bool = false) -> some View {
@@ -699,6 +852,10 @@ struct PlaybackControlsView: View {
             }
             .padding(.leading, edgeControlInset(safe: insets.leading, width: width))
             .padding(.trailing, edgeControlInset(safe: insets.trailing, width: width))
+        }
+        // 画质、倍速、字幕的气泡画在整个控制层最上面
+        .overlayPreferenceValue(PlayerBubbleAnchorKey.self) { anchors in
+            bubbleLayer(anchors)
         }
         .transition(.opacity)
         .zIndex(2)

@@ -70,6 +70,8 @@ final class PlaybackUITests: XCTestCase {
         XCTAssertGreaterThan(app.buttons["playback.playlist"].frame.midX, app.buttons["playback.subtitles"].frame.midX)
         XCTAssertLessThanOrEqual(elapsed.frame.maxX, slider.frame.minX + 4, "Elapsed time sits left of the timeline")
         XCTAssertGreaterThanOrEqual(app.staticTexts["总时长"].frame.minX, slider.frame.maxX - 4, "Total time sits right of the timeline")
+        XCTAssertLessThan(slider.frame.minX - elapsed.frame.maxX, 14, "Elapsed time hugs the timeline")
+        XCTAssertLessThan(app.staticTexts["总时长"].frame.minX - slider.frame.maxX, 14, "Total time hugs the timeline")
         XCTAssertLessThan(abs(elapsed.frame.midY - slider.frame.midY), 12, "Elapsed time is on the timeline row")
         XCTAssertGreaterThan(app.buttons["playback.lock"].frame.midX, frame.width * 0.09, "Lock control should sit inward from the edge")
         XCTAssertLessThan(app.buttons["playback.screenshot"].frame.midX, frame.width * 0.91, "Screenshot control should sit inward from the edge")
@@ -81,6 +83,8 @@ final class PlaybackUITests: XCTestCase {
         app.buttons["playback.speed"].tap()
         let fast = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "1.5×")).firstMatch
         XCTAssertTrue(fast.waitForExistence(timeout: 5), "Speed options open as a bubble beside the button")
+        XCTAssertLessThan(fast.frame.width, 130, "The bubble is as wide as its options, not a fixed-width panel")
+        XCTAssertLessThanOrEqual(fast.frame.maxY, app.buttons["playback.speed"].frame.minY + 4, "The bubble opens above its button")
         fast.tap()
         XCTAssertTrue(wait { (surface.value as? String)?.contains("rate=1.5") == true }, "Picking a speed applies it")
         XCTAssertTrue(wait { !fast.exists }, "The bubble closes after picking")
