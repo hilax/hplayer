@@ -36,6 +36,7 @@ final class PlayerWindowController {
     /// 打开时要不要横屏：要横屏的话，窗口真的转成横屏以后才淡入，避免先露出竖屏那一帧
     private var wantsLandscape = false
     private var revealTask: Task<Void, Never>?
+    private var revealWaiters: [CheckedContinuation<Void, Never>] = []
     /// 播放期间暂时隐藏的主窗口：系统校验「支持的方向」时会把它也算进去，它只支持竖屏，横屏请求就被拒绝
     private var hiddenMain: UIWindow?
 
@@ -113,7 +114,8 @@ final class PlayerWindowController {
         guard hiddenMain == nil, let main = mainWindow(in: scene) else { return }
         main.isHidden = true
         hiddenMain = main
-        debug("隐藏主窗")
+        let presented = main.rootViewController?.presentedViewController
+        debug("隐藏主窗 presented=\(presented.map { String(describing: type(of: $0)) } ?? "无") state=\(scene.activationState.rawValue)")
     }
 
     /// 播放页开始淡出时先把主窗口放回来，淡出时露出的是它
@@ -128,6 +130,7 @@ final class PlayerWindowController {
         guard let player = window else { return }
         let scene = player.windowScene
         revealTask?.cancel()
+        resumeRevealWaiters()
         window = nil
         host = nil
         onDismissed = nil
@@ -154,10 +157,24 @@ final class PlayerWindowController {
         if !wantsLandscape || isLandscape { reveal() }
     }
 
+    /// 播放页等转屏结束再开始加载视频：转屏期间主线程不被解码、建连接占住，转得更干净。
+    /// 最多等到兜底时间；没有播放器窗口时立即返回。
+    func waitUntilRevealed() async {
+        guard window != nil, !revealed else { return }
+        await withCheckedContinuation { revealWaiters.append($0) }
+    }
+
+    private func resumeRevealWaiters() {
+        let waiters = revealWaiters
+        revealWaiters = []
+        waiters.forEach { $0.resume() }
+    }
+
     private func reveal() {
         guard !revealed, let window else { return }
         revealed = true
         revealTask?.cancel()
+        resumeRevealWaiters()
         UIView.animate(withDuration: 0.25, delay: 0, options: [.curveEaseOut]) { window.alpha = 1 }
     }
 
@@ -181,11 +198,8 @@ final class PlayerWindowController {
             if attempt < 2 {
                 self.requestOrientation(mask, in: scene, attempt: attempt + 1)
             } else {
-                // 旧办法：直接改设备方向再让系统重新评估
-                let target: UIInterfaceOrientation = wantLandscape ? .landscapeRight : .portrait
-                UIDevice.current.setValue(target.rawValue, forKey: "orientation")
-                UIViewController.attemptRotationToDeviceOrientation()
-                self.debug("旧办法兜底")
+                // 系统一直不肯转：留在当前方向，照常显示（调试文字里有原因）
+                self.debug("转屏失败，保持当前方向")
                 self.reveal()
             }
         }
@@ -204,7 +218,7 @@ final class PlayerWindowController {
     // MARK: 原型调试信息（验证通过后删掉）
 
     /// 验证通过，不再在播放页上显示调试文字；排查问题时改成 true
-    private static let showsDebugLabel = false
+    private static let showsDebugLabel = true
     private var debugLabel: UILabel?
     private var debugLines: [String] = []
     private var pendingDebug: [String] = []

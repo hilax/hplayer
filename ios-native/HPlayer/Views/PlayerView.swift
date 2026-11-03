@@ -44,7 +44,10 @@ struct PlayerView: View {
             },
             onClose: { if let dismissPlayerWindow { dismissPlayerWindow() } else { dismiss() } }
         )
-        .task(id: current.id) { await load(current) }
+        .task(id: current.id) {
+            await PlayerWindowController.shared.waitUntilRevealed()
+            await load(current)
+        }
         .onChange(of: playback.currentTime) { _ in saveProgress(force: false) }
         .onChange(of: appState.sessionID) { _ in
             guard case .p115 = current else { return }
