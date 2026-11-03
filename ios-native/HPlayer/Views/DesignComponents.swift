@@ -148,10 +148,11 @@ struct LibraryActionRow: View {
     var subtitle: String = ""
     var value: String = ""
     var showsChevron = true
+    var tone: IconTile.Tone = .accent
 
     var body: some View {
         HStack(spacing: 12) {
-            IconTile(symbolName: symbol, size: 34)
+            IconTile(symbolName: symbol, size: 34, tone: tone)
             VStack(alignment: .leading, spacing: 3) {
                 Text(title).font(.system(size: 14, weight: .medium)).foregroundStyle(.primary)
                 if !subtitle.isEmpty {

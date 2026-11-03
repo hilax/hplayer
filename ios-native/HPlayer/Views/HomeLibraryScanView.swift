@@ -10,6 +10,7 @@ struct HomeLibraryScanView: View {
     @ObservedObject private var recents = RecentStore.shared
     @ObservedObject private var magnetHistory = MagnetHistoryStore.shared
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage(AdultMetadataSettings.enabledKey) private var adultMatching = false
     @AppStorage(CoverMatchingSettings.automaticKey) private var automaticMatching = false
 
@@ -116,38 +117,16 @@ struct HomeLibraryScanView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-                    PageIntroduction(eyebrow: "Keep your library in shape", title: "媒体库管理", subtitle: "整理你的文件、封面与影片资料。", showsTitle: false)
-                    .accessibilityElement(children: .combine)
-
+                VStack(alignment: .leading, spacing: 20) {
                     scanCard
-                    scanActions
-                    if !appState.isAuthenticated {
-                        NavigationLink { CookieWebLoginView(onConnected: {}) } label: {
-                            Label("连接 115 后可扫描云端目录", systemImage: AppIcon.cloudLocked.name)
-                                .font(.subheadline).frame(maxWidth: .infinity, alignment: .leading)
-                        }.buttonStyle(.plain)
-                    }
-                    HStack(spacing: 10) {
-                        libraryMetric("片库视频", value: totalVideos)
-                        libraryMetric("已匹配", value: matchedVideos)
-                        libraryMetric("未匹配", value: max(0, totalVideos - matchedVideos))
-                    }
-                    NavigationLink { HomeUnmatchedMediaView() } label: {
-                        LibraryActionRow(symbol: AppIcon.poster.name, title: "未匹配影片", subtitle: "查看、播放或手动校正", value: "\(max(0, totalVideos - matchedVideos))")
-                            .surfaceCard()
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("scan.unmatched")
-                    automaticMatchingCard
-                    if metadata.isMatching { coverCard }
-                    sourceCard
+                    if !appState.isAuthenticated { loginHint }
+                    overviewCard
+                    coverGroup
                     if adultMatching { performerCard }
-                    toolsCard
-
-                    Label("只读取文件列表，不下载整部视频，也不删除网盘文件。扫描在前台进行，退出后可继续。", systemImage: AppIcon.privacy.name)
-                        .font(.footnote).foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    maintenanceGroup
+                    DesignNotice(symbol: AppIcon.privacy.name,
+                                 text: "只读取文件列表，不下载整部视频，也不删除网盘文件。扫描在前台进行，退出后可继续。")
+                        .padding(.horizontal, 4)
                 }
                 .padding(.horizontal, Theme.contentInset)
                 .padding(.top, 14)
@@ -155,6 +134,7 @@ struct HomeLibraryScanView: View {
                 .frame(maxWidth: 680)
                 .frame(maxWidth: .infinity)
             }
+            .scrollIndicators(.hidden)
             .background(Theme.pageBackground.ignoresSafeArea())
             .task(id: "\(metadata.revision)|\(library.revision)|\(local.files.count)|\(appState.libraryAccountID ?? "local")") { refreshMatched() }
             .navigationTitle("媒体库管理")
@@ -181,50 +161,75 @@ struct HomeLibraryScanView: View {
         }
     }
 
+    private var unmatchedCount: Int { max(0, totalVideos - matchedVideos) }
+
+    // MARK: 扫描
+
+    /// 页面最上面的主卡片：扫描状态、进度和主操作都在这一张里。
     private var scanCard: some View {
         VStack(alignment: .leading, spacing: 18) {
-            HStack(alignment: .top, spacing: 12) {
-                ProgressRing(value: scanRingValue, lineWidth: 5) {
+            HStack(spacing: 16) {
+                ProgressRing(value: scanRingValue, lineWidth: 6) {
                     Image(systemName: scanner.phase == .completed ? AppIcon.success.name : AppIcon.autoMatch.name)
-                        .font(.system(size: 20, weight: Theme.iconWeight))
+                        .font(.system(size: 22, weight: Theme.iconWeight))
                         .foregroundStyle(Theme.accent)
                         .morphSymbol()
                 }
-                .frame(width: 56, height: 56)
+                .frame(width: 64, height: 64)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(scanner.phase == .running ? "正在扫描" : status)
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(status).font(.system(size: 17, weight: .bold))
-                    Text(scanDescription).font(.system(size: 13)).foregroundStyle(Theme.textSecondary)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(status).font(.system(size: 18, weight: .bold))
+                    Text(scanDescription)
+                        .font(.system(size: 13)).foregroundStyle(Theme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 0)
             }
-            HStack {
-                Text("扫描范围").foregroundStyle(.secondary)
-                Spacer()
-                Text(scanner.scopeName ?? "整个网盘")
-            }.font(.caption)
+            HStack(spacing: 6) {
+                Image(systemName: AppIcon.folder.name).font(.system(size: 11, weight: Theme.iconWeight))
+                Text("扫描范围").foregroundStyle(Theme.textSecondary)
+                Text(scanner.scopeName ?? "整个网盘").fontWeight(.semibold).lineLimit(1)
+            }
+            .font(.caption)
+            .padding(.horizontal, 12).padding(.vertical, 7)
+            .background(Theme.surfaceRaised, in: Capsule())
             if scanner.phase != .idle {
-                Divider()
-                HStack {
-                    scanMetric("已扫描", value: "\(scanner.progress.scannedFolders)", unit: "文件夹")
-                    Spacer()
-                    scanMetric("已发现", value: "\(scanner.progress.discoveredFolders)", unit: "文件夹")
-                    Spacer()
-                    scanMetric("发现视频", value: "\(scanner.progress.discoveredVideos)", unit: "本次")
-                }
+                scanMetrics
                 if scanner.phase == .running, !scanner.currentFolderName.isEmpty {
-                    Label(scanner.currentFolderName, systemImage: AppIcon.folder.name).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    Label(scanner.currentFolderName, systemImage: AppIcon.folder.name)
+                        .font(.caption).foregroundStyle(Theme.textSecondary).lineLimit(1)
                 }
             }
             if !scanner.lastError.isEmpty {
-                Label(scanner.lastError, systemImage: AppIcon.alert.name)
-                    .font(.subheadline).foregroundStyle(Theme.warning)
-                Text("已发现的影片和扫描进度都已保留，可稍后继续。")
-                    .font(.footnote).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 6) {
+                    DesignNotice(symbol: AppIcon.alert.name, text: scanner.lastError, warning: true)
+                    Text("已发现的影片和扫描进度都已保留，可稍后继续。")
+                        .font(.footnote).foregroundStyle(Theme.textSecondary)
+                }
             }
+            scanActions
         }
-        .scanCard()
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .surfaceCard(cornerRadius: Theme.Radius.sheet)
+        .overlay {
+            RoundedRectangle(cornerRadius: Theme.Radius.sheet, style: .continuous)
+                .fill(LinearGradient(colors: [Theme.accent.opacity(0.10), .clear], startPoint: .topLeading, endPoint: .center))
+                .allowsHitTesting(false)
+        }
+    }
+
+    private var scanMetrics: some View {
+        HStack(spacing: 0) {
+            scanMetric("已扫描", value: "\(scanner.progress.scannedFolders)", unit: "文件夹")
+            Rectangle().fill(Theme.hairline).frame(width: 0.5, height: 40)
+            scanMetric("已发现", value: "\(scanner.progress.discoveredFolders)", unit: "文件夹")
+            Rectangle().fill(Theme.hairline).frame(width: 0.5, height: 40)
+            scanMetric("发现视频", value: "\(scanner.progress.discoveredVideos)", unit: "本次")
+        }
+        .padding(.vertical, 14)
+        .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous))
     }
 
     /// 圆环进度：已扫描的文件夹占已发现文件夹的比例；扫完是满环，没开始是空环。
@@ -238,14 +243,6 @@ struct HomeLibraryScanView: View {
         }
     }
 
-    private func libraryMetric(_ title: String, value: Int) -> some View {
-        VStack(spacing: 8) {
-            Text("\(value)").font(.display(22).monospacedDigit()).rollingNumber()
-                .animation(Motion.smooth, value: value)
-            Text(title).font(.caption).foregroundStyle(Theme.textSecondary)
-        }.frame(maxWidth: .infinity).padding(.vertical, 18).surfaceCard()
-    }
-
     private var scanDescription: String {
         switch scanner.phase {
         case .idle: return "手动开始，或选择一个文件夹扫描"
@@ -257,12 +254,13 @@ struct HomeLibraryScanView: View {
     }
 
     private func scanMetric(_ title: String, value: String, unit: String) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(title).font(.caption).foregroundStyle(.secondary)
+        VStack(spacing: 3) {
+            Text(title).font(.caption).foregroundStyle(Theme.textSecondary)
             Text(value).font(.display(22)).monospacedDigit().rollingNumber()
                 .animation(Motion.smooth, value: value)
-            Text(unit).font(.caption).foregroundStyle(.secondary)
+            Text(unit).font(.caption).foregroundStyle(Theme.textTertiary)
         }
+        .frame(maxWidth: .infinity)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(title)\(value)\(unit)")
     }
@@ -276,116 +274,202 @@ struct HomeLibraryScanView: View {
                     metadata.stopByUser()
                     library.flush()
                 } label: {
-                    primaryAction("暂停扫描", icon: AppIcon.pause.name)
+                    Label("暂停扫描", systemImage: AppIcon.pause.name)
                 }
+                .buttonStyle(PrimaryActionStyle())
                 .accessibilityIdentifier("scan.pause")
-            } else if scanner.canResume {
-                Button { onStart(false) } label: {
-                    primaryAction("继续全盘扫描", icon: AppIcon.play.name)
-                }
-                .accessibilityIdentifier("scan.resume")
-                Button("从头重新扫描", systemImage: AppIcon.refresh.name) { onStart(true) }
-                    .frame(maxWidth: .infinity, minHeight: 44)
             } else {
-                Button { onStart(scanner.phase == .completed) } label: {
-                    primaryAction(scanner.phase == .completed ? "重新扫描全盘" : "开始全盘扫描", icon: AppIcon.autoMatch.name)
+                if scanner.canResume {
+                    Button { onStart(false) } label: {
+                        Label("继续全盘扫描", systemImage: AppIcon.play.name)
+                    }
+                    .buttonStyle(PrimaryActionStyle())
+                    .accessibilityIdentifier("scan.resume")
+                } else {
+                    Button { onStart(scanner.phase == .completed) } label: {
+                        Label(scanner.phase == .completed ? "重新扫描全盘" : "开始全盘扫描", systemImage: AppIcon.autoMatch.name)
+                    }
+                    .buttonStyle(PrimaryActionStyle())
+                    .accessibilityIdentifier("scan.start")
                 }
-                .accessibilityIdentifier("scan.start")
-            }
-            if scanner.phase != .running {
-                Button("选择文件夹扫描", systemImage: AppIcon.folderSettings.name) { pickingFolder = true }
-                    .frame(maxWidth: .infinity, minHeight: 44)
+                HStack(spacing: 10) {
+                    if scanner.canResume {
+                        Button { onStart(true) } label: {
+                            Label("从头重新扫描", systemImage: AppIcon.refresh.name).lineLimit(1).minimumScaleFactor(0.8)
+                        }
+                        .buttonStyle(SecondaryActionStyle())
+                    }
+                    Button { pickingFolder = true } label: {
+                        Label("选择文件夹扫描", systemImage: AppIcon.folderSettings.name).lineLimit(1).minimumScaleFactor(0.8)
+                    }
+                    .buttonStyle(SecondaryActionStyle())
                     .accessibilityIdentifier("scan.chooseFolder")
+                }
             }
         }
-        .buttonStyle(.plain)
         .disabled(!appState.isAuthenticated)
     }
 
-    private func primaryAction(_ title: String, icon: String) -> some View {
-        Label(title, systemImage: icon)
-            .font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.onPrimary)
-            .frame(maxWidth: .infinity, minHeight: 50)
-            .background(Theme.primaryAction, in: Capsule())
-    }
-
-    private var automaticMatchingCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Toggle("自动匹配封面", isOn: $automaticMatching)
-                .font(.headline)
-                .accessibilityIdentifier("scan.automaticMatching")
-            Text("关闭时不会自动匹配；可随时手动重新匹配未识别封面。")
-                .font(.footnote).foregroundStyle(.secondary)
-        }
-        .scanCard()
-    }
-
-    private var coverCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Label("封面与影片资料", systemImage: AppIcon.posterBatch.name)
-                    .font(.headline)
-                Spacer(minLength: 8)
-                if metadata.isMatching { ProgressView().accessibilityLabel("正在匹配封面") }
-            }
-            Text(metadata.isMatching ? "正在自动匹配封面" : "封面匹配当前空闲")
-                .font(.subheadline).foregroundStyle(.secondary)
-            LabeledContent("片库已匹配视频", value: "\(matchedVideos) 部")
-                .font(.subheadline)
-            Text("文件扫描与封面匹配分别进行。未匹配的文件仍可在资源库播放。")
-                .font(.footnote).foregroundStyle(.secondary)
-            if metadata.isMatching {
-                Button("停止匹配封面", systemImage: AppIcon.stop.name, role: .destructive) {
-                    metadata.stopByUser()
-                    library.flush()
-                }
-                .accessibilityIdentifier("scan.stopMatching")
-            }
-        }
-        .scanCard()
-    }
-
-    private var sourceCard: some View {
-        NavigationLink { MetadataSourcesView() } label: {
-            LibraryActionRow(symbol: AppIcon.tune.name, title: "资料来源", subtitle: "番组计划、IMDb、TMDB 与番号资料")
+    private var loginHint: some View {
+        NavigationLink { CookieWebLoginView(onConnected: {}) } label: {
+            LibraryActionRow(symbol: AppIcon.cloudLocked.name, title: "连接 115 后可扫描云端目录", subtitle: "登录后就能开始扫描你的片库")
                 .surfaceCard()
         }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("scan.sources")
+        .buttonStyle(.pressable(scale: 0.985))
+    }
+
+    // MARK: 概况
+
+    private var overviewCard: some View {
+        let ratio = totalVideos == 0 ? 0 : Double(matchedVideos) / Double(totalVideos)
+        return VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text("片库概况").font(.system(size: 15, weight: .semibold))
+                Spacer(minLength: 8)
+                if totalVideos > 0 {
+                    Text("\(Int((ratio * 100).rounded()))%")
+                        .font(.display(22).monospacedDigit()).foregroundStyle(Theme.accent).rollingNumber()
+                        .animation(Motion.smooth, value: matchedVideos)
+                    Text("已有封面").font(.caption).foregroundStyle(Theme.textSecondary)
+                }
+            }
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Theme.track)
+                    Capsule().fill(Theme.accentGradient)
+                        .frame(width: ratio > 0 ? max(proxy.size.width * ratio, 8) : 0)
+                        .animation(reduceMotion ? nil : Motion.smooth, value: ratio)
+                }
+            }
+            .frame(height: 8)
+            .accessibilityHidden(true)
+            HStack(alignment: .top, spacing: 12) {
+                overviewStat("片库视频", value: totalVideos, dot: Theme.textPrimary)
+                overviewStat("已匹配", value: matchedVideos, dot: Theme.accent)
+                overviewStat("未匹配", value: unmatchedCount, dot: Theme.textTertiary)
+            }
+        }
+        .padding(18)
+        .surfaceCard()
+    }
+
+    private func overviewStat(_ title: String, value: Int, dot: Color) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Circle().fill(dot).frame(width: 7, height: 7)
+                Text(title).font(.caption).foregroundStyle(Theme.textSecondary)
+            }
+            Text("\(value)").font(.display(24).monospacedDigit()).rollingNumber()
+                .animation(Motion.smooth, value: value)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(title)\(value)")
+    }
+
+    // MARK: 封面与资料
+
+    private var rowDivider: some View { Divider().padding(.leading, 60) }
+
+    private var coverGroup: some View {
+        DesignGroup {
+            Toggle(isOn: $automaticMatching) {
+                HStack(spacing: 12) {
+                    IconTile(icon: .autoMatch, size: 34)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("自动匹配封面").font(.system(size: 14, weight: .medium))
+                        Text("关闭后只在手动重新匹配时查找").font(.caption).foregroundStyle(Theme.textSecondary)
+                    }
+                }
+            }
+            .padding(.horizontal, 14).padding(.vertical, 10)
+            .frame(minHeight: 58)
+            .accessibilityIdentifier("scan.automaticMatching")
+            rowDivider
+            if metadata.isMatching {
+                matchingRow
+                rowDivider
+            }
+            NavigationLink { HomeUnmatchedMediaView() } label: {
+                LibraryActionRow(symbol: AppIcon.poster.name, title: "未匹配影片", subtitle: "查看、播放或手动校正", value: "\(unmatchedCount)")
+            }
+            .buttonStyle(.pressable(scale: 0.985))
+            .accessibilityIdentifier("scan.unmatched")
+            rowDivider
+            NavigationLink { MetadataSourcesView() } label: {
+                LibraryActionRow(symbol: AppIcon.tune.name, title: "资料来源", subtitle: "番组计划、IMDb、TMDB 与番号资料")
+            }
+            .buttonStyle(.pressable(scale: 0.985))
+            .accessibilityIdentifier("scan.sources")
+            rowDivider
+            let nothingToMatch = library.files(for: appState).isEmpty && local.files.isEmpty
+            Button(action: onRetryMatching) {
+                LibraryActionRow(symbol: AppIcon.posterSearch.name, title: "重新匹配未识别封面", subtitle: "对还没有封面的影片再查一次", showsChevron: false)
+            }
+            .buttonStyle(.pressable(scale: 0.985))
+            .disabled(nothingToMatch)
+            .opacity(nothingToMatch ? 0.4 : 1)
+        }
+    }
+
+    private var matchingRow: some View {
+        HStack(spacing: 12) {
+            ProgressView().frame(width: 34, height: 34).accessibilityLabel("正在匹配封面")
+            VStack(alignment: .leading, spacing: 3) {
+                Text("正在自动匹配封面").font(.system(size: 14, weight: .medium))
+                Text("已有封面 \(matchedVideos) 部；未匹配的文件仍可播放").font(.caption).foregroundStyle(Theme.textSecondary)
+            }
+            Spacer(minLength: 8)
+            Button {
+                metadata.stopByUser()
+                library.flush()
+            } label: {
+                Label("停止", systemImage: AppIcon.stop.name)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Theme.danger)
+            }
+            .buttonStyle(.pressable(scale: 0.94))
+            .accessibilityIdentifier("scan.stopMatching")
+        }
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .frame(minHeight: 58)
     }
 
     private var performerCard: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Label("演员资料", systemImage: AppIcon.people.name)
-                .font(.headline)
-            LabeledContent("已识别影片的演员信息", value: performerSummary)
-                .font(.subheadline)
+            HStack(spacing: 12) {
+                IconTile(icon: .people, size: 34)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("演员资料").font(.system(size: 14, weight: .medium))
+                    Text(performerSummary).font(.caption).foregroundStyle(Theme.textSecondary)
+                }
+                Spacer(minLength: 0)
+            }
             performerEnrichmentStatus
-            Button(performerEnrichmentActive ? "停止补全演员" : "补全演员资料",
-                   systemImage: performerEnrichmentActive ? AppIcon.stop.name : AppIcon.peopleAdd.name) {
+            Button {
                 if performerEnrichmentActive {
                     metadata.stopPerformerEnrichment()
                 } else {
                     metadata.startPerformerEnrichment(force: true)
                 }
+            } label: {
+                Label(performerEnrichmentActive ? "停止补全演员" : "补全演员资料",
+                      systemImage: performerEnrichmentActive ? AppIcon.stop.name : AppIcon.peopleAdd.name)
             }
+            .buttonStyle(SecondaryActionStyle())
             .disabled(!performerEnrichmentActive && !metadata.isMatching && performerStats.have >= performerStats.total)
             .accessibilityIdentifier("scan.enrichPerformers")
-            Text("先扫描并识别番号影片，再补查缺失的演员信息。来源不一定收录所有演员；同一演员有两部以上影片时，首页会显示演员合集。")
-                .font(.footnote).foregroundStyle(.secondary)
+            DesignNotice(text: "先扫描并识别番号影片，再补查缺失的演员信息。来源不一定收录所有演员；同一演员有两部以上影片时，首页会显示演员合集。")
         }
-        .scanCard()
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .surfaceCard()
     }
 
-    private var toolsCard: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Label("匹配与管理", systemImage: AppIcon.tune.name)
-                .font(.headline).padding(.bottom, 8)
-            Button(action: onRetryMatching) {
-                toolRow("重新匹配未识别封面", icon: AppIcon.posterSearch.name)
-            }
-            .disabled(library.files(for: appState).isEmpty && local.files.isEmpty)
-            Divider()
+    // MARK: 维护
+
+    private var maintenanceGroup: some View {
+        DesignGroup {
             Button {
                 local.refresh()
                 let files = HomeLibrary.media(local: local, cloud: library, appState: appState)
@@ -395,40 +479,24 @@ struct HomeLibraryScanView: View {
                 } else {
                     metadata.hydrate(files: files)
                 }
-            } label: { toolRow("刷新媒体库", icon: AppIcon.refresh.name) }
-            Divider()
-            Button(role: .destructive) { confirmClearHistory = true } label: { toolRow("清空继续观看", icon: AppIcon.history.name) }
-            Divider()
+            } label: {
+                LibraryActionRow(symbol: AppIcon.refresh.name, title: "刷新媒体库", subtitle: "重新读取本机和云端的影片列表", showsChevron: false)
+            }
+            .buttonStyle(.pressable(scale: 0.985))
+            rowDivider
             Button { copyDiagnostics() } label: {
-                toolRow(copiedDiagnostics ? "已复制" : "复制匹配诊断信息", icon: AppIcon.copy.name)
+                LibraryActionRow(symbol: copiedDiagnostics ? AppIcon.success.name : AppIcon.copy.name,
+                                 title: copiedDiagnostics ? "已复制" : "复制匹配诊断信息",
+                                 subtitle: "匹配不上时，把它发给开发者", showsChevron: false)
             }
+            .buttonStyle(.pressable(scale: 0.985))
             .accessibilityIdentifier("scan.copyDiagnostics")
-        }
-        .buttonStyle(.plain)
-        .scanCard()
-    }
-
-    private func toolRow(_ title: String, icon: String) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: icon).foregroundStyle(Theme.accent).frame(width: 26)
-            Text(title).foregroundStyle(.primary)
-            Spacer(minLength: 8)
-            Image(systemName: AppIcon.forward.name).font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
-        }
-        .frame(minHeight: 48)
-        .contentShape(Rectangle())
-    }
-
-}
-
-private extension View {
-    func scanCard() -> some View {
-        self.padding(18)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(Theme.hairline, lineWidth: 1)
+            rowDivider
+            Button(role: .destructive) { confirmClearHistory = true } label: {
+                LibraryActionRow(symbol: AppIcon.history.name, title: "清空继续观看", subtitle: "只清除观看进度，不影响影片", showsChevron: false, tone: .danger)
             }
+            .buttonStyle(.pressable(scale: 0.985))
+        }
     }
 }
 

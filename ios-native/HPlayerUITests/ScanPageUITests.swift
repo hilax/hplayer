@@ -57,7 +57,7 @@ final class ScanPageUITests: XCTestCase {
         if !toggle.isHittable { app.swipeUp() }
         XCTAssertTrue(toggle.waitForExistence(timeout: 10))
         XCTAssertEqual(toggle.value as? String, "0")
-        toggle.tap()
+        tapSwitch(toggle)
         XCTAssertTrue(waitForSwitch(toggle, value: "1"))
         app.terminate()
         app.launchEnvironment.removeValue(forKey: "HPLAYER_RESET_AUTOMATCH_TEST")
@@ -65,9 +65,14 @@ final class ScanPageUITests: XCTestCase {
         if !toggle.isHittable { app.swipeUp() }
         XCTAssertTrue(toggle.waitForExistence(timeout: 10))
         XCTAssertEqual(toggle.value as? String, "1")
-        toggle.tap()
+        tapSwitch(toggle)
         XCTAssertTrue(waitForSwitch(toggle, value: "0"))
         app.terminate()
+    }
+
+    /// 开关所在的一整行都算在元素范围里，点最右边真正的开关
+    private func tapSwitch(_ control: XCUIElement) {
+        control.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
     }
 
     private func waitForSwitch(_ control: XCUIElement, value: String) -> Bool {
