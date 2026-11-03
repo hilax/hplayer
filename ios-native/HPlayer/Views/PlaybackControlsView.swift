@@ -46,6 +46,36 @@ private enum SideTab: CaseIterable {
     }
 }
 
+/// 横屏底栏上弹出气泡的三个按钮
+private enum PlayerBubble: Equatable {
+    case quality, speed, tracks
+
+    /// 低于 iOS 16.4 弹不了气泡，退回到右侧面板的对应分页
+    var sideTab: SideTab {
+        switch self {
+        case .quality: return .quality
+        case .speed: return .speed
+        case .tracks: return .tracks
+        }
+    }
+}
+
+private extension View {
+    /// 在按钮旁边弹出的小气泡。iPhone 上默认会变成整页抽屉，这里要求保持气泡样式。
+    @ViewBuilder
+    func playerBubble<Bubble: View>(isPresented: Binding<Bool>, @ViewBuilder content: @escaping () -> Bubble) -> some View {
+        if #available(iOS 16.4, *) {
+            popover(isPresented: isPresented, attachmentAnchor: .rect(.bounds), arrowEdge: .bottom) {
+                content()
+                    .presentationCompactAdaptation(.popover)
+                    .preferredColorScheme(.dark)
+            }
+        } else {
+            self
+        }
+    }
+}
+
 /// 定时关闭
 private enum SleepTimer: Equatable, Identifiable {
     case off, episodeEnd, minutes(Int)
@@ -98,6 +128,8 @@ struct PlaybackControlsView: View {
     @State private var scrubStart = 0.0
     /// 当前的 dragging 是不是由画面上的横滑快进带起来的（不是手指按在进度条上）
     @State private var panScrubbing = false
+    /// 底栏上正在弹出的气泡（画质、倍速、字幕音轨）
+    @State private var bubble: PlayerBubble?
     @State private var hideTask: Task<Void, Never>?
     @State private var lastSeekTick = 0
     /// 正在转回竖屏准备关闭，期间不再响应关闭和手势
@@ -200,7 +232,7 @@ struct PlaybackControlsView: View {
                 .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: boosting)
                 // onChange 不管初始值：窗口没能转成横屏（系统拒绝）时，状态栏和系统手势也要按真实方向来
                 .onAppear { isLandscapeWindow = landscape }
-                .onChange(of: landscape) { isLandscapeWindow = $0 }
+                .onChange(of: landscape) { isLandscapeWindow = $0; bubble = nil }
             }
             .ignoresSafeArea()
         }
@@ -342,49 +374,168 @@ struct PlaybackControlsView: View {
 
     // MARK: 底部
 
-    /// 进度条在上，两头是当前时间和总时长；下面一行：锁定和倍速在左，上一集、暂停、下一集在正中，选集和横竖屏在右。
+    /// 横屏底栏。上一行：已播放时间、进度条、总时长排成一行；
+    /// 下一行：画质和倍速在左，上一集、暂停、下一集在正中，字幕、选集和横竖屏在右。
     private func bottomBar(landscape: Bool) -> some View {
-        VStack(spacing: landscape ? 4 : 10) {
-            VStack(spacing: 0) {
+        VStack(spacing: landscape ? 0 : 10) {
+            HStack(spacing: 12) {
+                Text(timeText(dragging ? dragTime : playback.currentTime))
+                    .font(.caption.weight(.medium).monospacedDigit())
+                    .frame(width: timeLabelWidth, alignment: .leading)
+                    .accessibilityIdentifier("playback.elapsed")
                 scrubber
-                .frame(height: 32)
-
-                HStack {
-                    Text(timeText(dragging ? dragTime : playback.currentTime))
-                        .font(.caption.weight(.medium).monospacedDigit())
-                        .accessibilityIdentifier("playback.elapsed")
-                    Spacer()
-                    Text(playback.duration > 0 ? "−" + timeText(max(0, playback.duration - (dragging ? dragTime : playback.currentTime))) : "00:00")
-                        .font(.caption.monospacedDigit()).foregroundStyle(.white.opacity(0.6))
-                        .accessibilityLabel("剩余播放时间")
-                }.padding(.bottom, 7)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 32)
+                Text(playback.duration > 0 ? timeText(playback.duration) : "00:00")
+                    .font(.caption.monospacedDigit()).foregroundStyle(.white.opacity(0.6))
+                    .frame(width: timeLabelWidth, alignment: .trailing)
+                    .accessibilityLabel("总时长")
             }
 
             sideControls(landscape: landscape)
         }
     }
 
-    /// 横屏底栏：上一集、暂停、下一集在进度条下方正中；倍速 / 选集 / 画质 / 字幕和横竖屏靠右，
-    /// 后四个打开右侧面板的对应分页。
+    /// 时间文字的宽度固定，播放到一小时以上时进度条也不会跟着抖
+    private var timeLabelWidth: CGFloat { playback.duration >= 3600 ? 58 : 42 }
+
+    /// 画质、倍速、字幕音轨三个按钮点开后在按钮旁边弹出气泡；选集仍然打开右侧面板。按钮都是不带底色的图标。
     private func sideControls(landscape: Bool) -> some View {
         ZStack {
-            HStack(spacing: 6) {
-                Spacer(minLength: 0)
-                GlassTextButton(title: "\(String(format: "%g", playback.rate))×", label: "播放速度") { openSidePanel(.speed) }
-                GlassTextButton(title: "选集", label: "选集") { openList() }
-                    .accessibilityIdentifier("playback.playlist")
-                GlassTextButton(title: selectedQuality.isEmpty ? "原画" : selectedQuality, label: "播放画质") { openSidePanel(.quality) }
-                GlassTextButton(title: "字幕", label: "字幕和音轨") { openSidePanel(.tracks) }
-                Button { toggleOrientation(landscape: landscape) } label: {
-                    controlIcon(landscape ? AppIcon.exitFullscreen.name : AppIcon.fullscreen.name,
-                                label: landscape ? "竖屏" : "横屏", size: 18)
+            HStack(spacing: 0) {
+                HStack(spacing: 0) {
+                    Button { openBubble(.quality) } label: { qualityIcon }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("播放画质")
+                        .accessibilityIdentifier("playback.quality")
+                        .playerBubble(isPresented: bubbleBinding(.quality)) { qualityBubble }
+                    Button { openBubble(.speed) } label: {
+                        controlIcon(AppIcon.speed.name, label: "播放速度", size: 20)
+                            .foregroundStyle(abs(playback.rate - 1) > 0.01 ? Theme.gold : Color.white)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityValue("\(String(format: "%g", playback.rate))×")
+                    .accessibilityIdentifier("playback.speed")
+                    .playerBubble(isPresented: bubbleBinding(.speed)) { speedBubble }
                 }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("playback.orientation")
+                // 图标四周有留白，往外挪一点，让图标本身和左边的时间文字对齐
+                .padding(.leading, -10)
+                Spacer(minLength: 0)
+                HStack(spacing: 0) {
+                    Button { openBubble(.tracks) } label: {
+                        controlIcon(AppIcon.subtitle.name, label: "字幕和音轨", size: 20)
+                            .foregroundStyle(playback.selectedSubtitle == nil ? Color.white : Theme.gold)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("playback.tracks")
+                    .playerBubble(isPresented: bubbleBinding(.tracks)) { tracksBubble }
+                    Button { openList() } label: {
+                        controlIcon(AppIcon.playlist.name, label: "选集", size: 20)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("playback.playlist")
+                    Button { toggleOrientation(landscape: landscape) } label: {
+                        controlIcon(landscape ? AppIcon.exitFullscreen.name : AppIcon.fullscreen.name,
+                                    label: landscape ? "竖屏" : "横屏", size: 18)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("playback.orientation")
+                }
+                .padding(.trailing, -10)
             }
             transportControls(spacing: 10, compact: true)
         }
         .frame(minHeight: 56)
+    }
+
+    /// 画质图标：圆角框里写 HD
+    private var qualityIcon: some View {
+        Text("HD")
+            .font(.system(size: 11, weight: .heavy))
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1.5)
+            .overlay { RoundedRectangle(cornerRadius: 4, style: .continuous).strokeBorder(lineWidth: 1.6) }
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
+    }
+
+    private func bubbleBinding(_ kind: PlayerBubble) -> Binding<Bool> {
+        Binding(
+            get: { bubble == kind },
+            set: { presented in
+                if presented { bubble = kind } else if bubble == kind { closeBubble() }
+            }
+        )
+    }
+
+    private func openBubble(_ kind: PlayerBubble) {
+        hideTask?.cancel()
+        if #available(iOS 16.4, *) {
+            bubble = kind
+        } else {
+            openSidePanel(kind.sideTab)
+        }
+    }
+
+    /// 关掉气泡后重新开始计时，控制栏过几秒再自动隐藏
+    private func closeBubble() {
+        bubble = nil
+        revealControls()
+    }
+
+    private var speedBubble: some View {
+        VStack(spacing: 2) {
+            ForEach(Self.speedOptions, id: \.self) { rate in
+                trackRow(title: "\(String(format: "%g", rate))×", detail: "", selected: abs(playback.rate - rate) < 0.001) {
+                    playback.setRate(rate)
+                    closeBubble()
+                }
+            }
+        }
+        .padding(8)
+        .frame(width: 150)
+        .foregroundStyle(.white)
+    }
+
+    @ViewBuilder
+    private var qualityBubble: some View {
+        if qualities.isEmpty {
+            Text("这个视频只有原画，没有别的清晰度可选。")
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.7))
+                .padding(14)
+                .frame(width: 200, alignment: .leading)
+        } else {
+            VStack(spacing: 2) {
+                ForEach(qualities) { quality in
+                    trackRow(title: quality.title, detail: "", selected: quality.title == selectedQuality) {
+                        onQuality(quality.id)
+                        closeBubble()
+                    }
+                }
+            }
+            .padding(8)
+            .frame(width: 170)
+            .foregroundStyle(.white)
+        }
+    }
+
+    private var tracksBubble: some View {
+        // 字幕和音轨可能很多，限制高度后在气泡里滚动；条目少时按条目数收紧，避免留一大块空白
+        let rows = 2 + playback.subtitleTracks.count + playback.audioTracks.count
+        let height = min(300, CGFloat(rows) * 46 + 70)
+        return ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                subtitleSettings
+                Divider().overlay(.white.opacity(0.12))
+                audioSettings
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .scrollIndicators(.hidden)
+        .frame(width: 280, height: height)
+        .foregroundStyle(.white)
     }
 
     private func transportControls(spacing: CGFloat, compact: Bool = false) -> some View {
@@ -1620,7 +1771,7 @@ struct PlaybackControlsView: View {
 #endif
         hideTask = Task {
             try? await Task.sleep(nanoseconds: 5_000_000_000)
-            if !Task.isCancelled && !showList && settingsPage == nil && !showAspect && !dragging && !boosting && adjustment == nil && !playback.buffering {
+            if !Task.isCancelled && !showList && settingsPage == nil && !showAspect && bubble == nil && !dragging && !boosting && adjustment == nil && !playback.buffering {
                 withAnimation(reduceMotion ? nil : .easeOut(duration: 0.25)) { controlsVisible = false }
             }
         }

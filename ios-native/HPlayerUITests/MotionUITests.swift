@@ -30,8 +30,9 @@ final class MotionUITests: XCTestCase {
         XCTAssertTrue(series.waitForExistence(timeout: 5))
         series.tap()
         XCTAssertTrue(app.staticTexts["人生切割术"].firstMatch.waitForExistence(timeout: 10))
-        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.buttons["series.back"].tap()
         XCTAssertTrue(series.waitForExistence(timeout: 5), "Returning from detail should keep the shelf usable")
+        XCTAssertTrue(app.buttons["series.back"].waitForNonExistence(timeout: 3), "The back and more buttons must leave with the page")
     }
 
     private func exerciseHistory(reduceMotion: Bool) {

@@ -10,6 +10,7 @@ struct SeriesDetailView: View {
     @EnvironmentObject private var localStore: LocalMediaStore
     @EnvironmentObject private var metadataStore: MediaMetadataStore
     @EnvironmentObject private var recents: RecentStore
+    @Environment(\.dismiss) private var dismiss
 
     @State private var playing: PlaybackQueue?
     @State private var matching: MatchRequest?
@@ -38,26 +39,12 @@ struct SeriesDetailView: View {
         .background(Theme.pageBackground.ignoresSafeArea())
         .designScreen("detail")
         .hidesTabBar()
+        // 返回和更多按钮画在页面里面，不用系统导航栏的：系统导航栏的按钮在关闭时要等缩放动画
+        // 全部结束才消失，会飘在首页上面；画在页面里就跟着整页一起退出。
+        // 导航栏只是藏起来，左边缘右滑返回的手势照常可用。
         .navigationTitle("")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar(.visible, for: .navigationBar)
-        .toolbarBackground(.hidden, for: .navigationBar)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    if let group {
-                        Button("匹配封面", systemImage: AppIcon.poster.name) { matching = MatchRequest(group: group) }
-                    }
-                } label: {
-                    Image(systemName: AppIcon.more.name)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .frame(width: 32, height: 32)
-                        .background(Color.black.opacity(0.4), in: Circle())
-                }
-                .accessibilityLabel("剧集选项")
-            }
-        }
+        .toolbar(.hidden, for: .navigationBar)
+        .overlay(alignment: .top) { topButtons(group) }
         .playerWindow(item: $playing) { queue in
             PlayerView(source: queue.source, playlist: queue.items)
                 .environmentObject(appState)
@@ -76,6 +63,38 @@ struct SeriesDetailView: View {
     }
 
     // MARK: 页面
+
+    /// 左上返回、右上更多。深色半透明圆底，压在背景图上也看得清。
+    private func topButtons(_ group: SeriesGroup?) -> some View {
+        HStack {
+            Button { dismiss() } label: { topCircle(AppIcon.back.name) }
+                .accessibilityLabel("返回")
+                .accessibilityIdentifier("series.back")
+            Spacer()
+            if let group {
+                Menu {
+                    Button("匹配封面", systemImage: AppIcon.poster.name) { matching = MatchRequest(group: group) }
+                } label: {
+                    topCircle(AppIcon.more.name)
+                }
+                .accessibilityLabel("剧集选项")
+                .accessibilityIdentifier("series.more")
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 6)
+    }
+
+    private func topCircle(_ symbol: String) -> some View {
+        Image(systemName: symbol)
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: 36, height: 36)
+            .background(Color.black.opacity(0.4), in: Circle())
+            .overlay { Circle().strokeBorder(Color.white.opacity(0.18), lineWidth: 0.5) }
+            .frame(width: 44, height: 44)
+            .contentShape(Circle())
+    }
 
     private func content(_ group: SeriesGroup) -> some View {
         let seasons = group.seasons

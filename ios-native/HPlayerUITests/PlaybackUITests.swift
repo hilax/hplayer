@@ -62,12 +62,31 @@ final class PlaybackUITests: XCTestCase {
         XCTAssertEqual(pause.frame.midX, frame.midX, accuracy: frame.width * 0.03, "Landscape transport sits in the middle, under the timeline")
         XCTAssertLessThan(app.buttons["playback.previous"].frame.midX, pause.frame.midX, "Previous is left of play/pause")
         XCTAssertGreaterThan(app.buttons["playback.next"].frame.midX, pause.frame.midX, "Next is right of play/pause")
+        // 画质、倍速在左，字幕、选集在右；时间贴着进度条两端
+        let slider = app.sliders.firstMatch
+        XCTAssertLessThan(app.buttons["playback.quality"].frame.midX, app.buttons["playback.speed"].frame.midX)
+        XCTAssertLessThan(app.buttons["playback.speed"].frame.midX, pause.frame.midX, "Quality and speed sit left of the transport")
+        XCTAssertGreaterThan(app.buttons["playback.tracks"].frame.midX, pause.frame.midX, "Subtitles sit right of the transport")
+        XCTAssertGreaterThan(app.buttons["playback.playlist"].frame.midX, app.buttons["playback.tracks"].frame.midX)
+        XCTAssertLessThanOrEqual(elapsed.frame.maxX, slider.frame.minX + 4, "Elapsed time sits left of the timeline")
+        XCTAssertGreaterThanOrEqual(app.staticTexts["总时长"].frame.minX, slider.frame.maxX - 4, "Total time sits right of the timeline")
+        XCTAssertLessThan(abs(elapsed.frame.midY - slider.frame.midY), 12, "Elapsed time is on the timeline row")
         XCTAssertGreaterThan(app.buttons["playback.lock"].frame.midX, frame.width * 0.09, "Lock control should sit inward from the edge")
         XCTAssertLessThan(app.buttons["playback.screenshot"].frame.midX, frame.width * 0.91, "Screenshot control should sit inward from the edge")
         XCTAssertTrue(wait { (pause.value as? String) == "playing" && self.seconds(elapsed.label) > 0 && app.sliders.firstMatch.isEnabled }, "HLS should play with working seeking")
 
         pause.tap()
         XCTAssertTrue(wait { (pause.value as? String) == "paused" })
+        // 倍速点开是气泡，选一档后气泡收起、倍速生效
+        app.buttons["playback.speed"].tap()
+        let fast = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "1.5×")).firstMatch
+        XCTAssertTrue(fast.waitForExistence(timeout: 5), "Speed options open as a bubble beside the button")
+        fast.tap()
+        XCTAssertTrue(wait { (surface.value as? String)?.contains("rate=1.5") == true }, "Picking a speed applies it")
+        XCTAssertTrue(wait { !fast.exists }, "The bubble closes after picking")
+        app.buttons["playback.speed"].tap()
+        app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "1×")).firstMatch.tap()
+        XCTAssertTrue(wait { (surface.value as? String)?.contains("rate=1;") == true }, "Back to normal speed")
         let before = seconds(elapsed.label)
         swipe(surface, from: CGVector(dx: 0.4, dy: 0.32), to: CGVector(dx: 0.65, dy: 0.32))
         XCTAssertTrue(wait { (surface.value as? String)?.contains("快进") == true })

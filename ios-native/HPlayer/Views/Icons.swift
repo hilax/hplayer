@@ -21,6 +21,7 @@ enum AppIcon: String, CaseIterable {
     // MARK: 播放
     case play, playCircle, pause, stop, previous, next, skip, seek, fullscreen, exitFullscreen
     case lock, unlock, screenshot, subtitle, audio, aspect, aspectFit, aspectFill, aspectStretch
+    case speed, playlist
     case brightnessLow, brightnessHigh
     case volumeMute, volumeLow, volumeMedium, volumeHigh
     case playback
@@ -96,6 +97,8 @@ enum AppIcon: String, CaseIterable {
         case .aspectFit: return "rectangle.center.inset.filled"
         case .aspectFill: return "rectangle.inset.filled"
         case .aspectStretch: return "arrow.left.and.right.square"
+        case .speed: return "speedometer"
+        case .playlist: return "list.bullet"
         case .brightnessLow: return "sun.min.fill"
         case .brightnessHigh: return "sun.max.fill"
         case .volumeMute: return "speaker.slash.fill"
