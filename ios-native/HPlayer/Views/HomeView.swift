@@ -15,6 +15,7 @@ struct HomeView: View {
     /// 首页和片库共用的分组结果，在这里算一次，两个页面直接读。
     @StateObject private var librarySnapshots = LibrarySnapshotStore()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
     /// 当前标签（系统原生 TabView 的选中项）。
     @State private var selection: HomeSection = .home
     /// 搜索是盖在标签页上面的全屏页，不占标签位；打开过以后保持存活（搜索词还在）。
@@ -174,9 +175,18 @@ struct HomeView: View {
                         .tabItem {
                             // 系统 TabView 会把标签栏里所有符号自动换成实心款（四个图标都是实心的）。
                             // 关掉它，由图标表决定：没选中是线框，选中才是实心，和应用其余图标一致。
-                            Label(section.title,
-                                  systemImage: selection == section ? section.icon.activeName : section.icon.name)
-                                .environment(\.symbolVariants, .none)
+                            // 选中的图标由系统染成主题琥珀色；没选中的图标 iOS 26 不允许改颜色，
+                            // 所以用预先染成主题次要灰（和原来自绘标签栏一样）的图片。
+                            Label {
+                                Text(section.title)
+                            } icon: {
+                                if selection == section {
+                                    Image(systemName: section.icon.activeName)
+                                } else {
+                                    Image(uiImage: Self.restingTabIcon(section.icon, scheme: colorScheme))
+                                }
+                            }
+                            .environment(\.symbolVariants, .none)
                         }
                         .tag(section)
                 }
@@ -196,6 +206,14 @@ struct HomeView: View {
         }
         .animation(reduceMotion ? nil : Motion.fade, value: searchOpen)
         .background(Theme.pageBackground.ignoresSafeArea())
+    }
+
+    /// 没选中标签的图标：线框款，预先染成主题的次要文字灰（浅色 / 深色各一套）。
+    private static func restingTabIcon(_ icon: AppIcon, scheme: ColorScheme) -> UIImage {
+        let traits = UITraitCollection(userInterfaceStyle: scheme == .dark ? .dark : .light)
+        let color = Theme.textSecondaryUIColor.resolvedColor(with: traits)
+        guard let image = UIImage(systemName: icon.name) else { return UIImage() }
+        return image.withTintColor(color, renderingMode: .alwaysOriginal)
     }
 
     private func openSearch() {

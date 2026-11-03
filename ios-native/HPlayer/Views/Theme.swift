@@ -96,7 +96,8 @@ enum Theme {
     static let contentInset: CGFloat = 16
 
     static let textPrimary = Color(uiColor: .adaptive(light: UIColor(hex: 0x1B1D24), dark: UIColor(hex: 0xF2F3F5)))
-    static let textSecondary = Color(uiColor: .adaptive(light: UIColor(hex: 0x5E6371), dark: UIColor(hex: 0xA1A6B3)))
+    static let textSecondaryUIColor = UIColor.adaptive(light: UIColor(hex: 0x5E6371), dark: UIColor(hex: 0xA1A6B3))
+    static let textSecondary = Color(uiColor: textSecondaryUIColor)
     static let textTertiary = Color(uiColor: .adaptive(light: UIColor(hex: 0x8B90A0), dark: UIColor(hex: 0x6B7080)))
     /// 首页铺的是封面取色的底：上面的灰色次要文字会发闷，改用半透明白，底色偏亮偏暗都看得清。
     static let textSecondaryOnArtwork = Color.white.opacity(0.78)
