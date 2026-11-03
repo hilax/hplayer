@@ -47,6 +47,51 @@ enum ReadaheadLevel: Int, CaseIterable, Identifiable {
     }
 }
 
+/// 字幕样式：经典（半透明黑底）、大字（黑底放大）、描边（默认，和以前一样）、透明底（只有柔和阴影）。
+/// SRT 这类纯文字字幕完全按样式显示；ASS 特效字幕保留自带的样式，只跟着「大字」放大。
+enum SubtitleStyle: String, CaseIterable, Identifiable {
+    case classic, large, outline, soft
+
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .classic: return "经典"
+        case .large: return "大字"
+        case .outline: return "描边"
+        case .soft: return "透明底"
+        }
+    }
+
+    private static let key = "player.subtitleStyle"
+
+    static var saved: SubtitleStyle {
+        get { SubtitleStyle(rawValue: UserDefaults.standard.string(forKey: key) ?? "") ?? .outline }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: key) }
+    }
+
+    /// 样式会改到的 mpv 字幕选项。没写到的项用内核默认值，所以「描边」就是原来的样子
+    static let optionKeys = ["sub-border-style", "sub-outline-size", "sub-outline-color", "sub-shadow-offset",
+                             "sub-back-color", "sub-blur", "sub-scale"]
+
+    /// 和内核默认值不同的那几项（颜色是 #AARRGGBB）
+    var overrides: [String: String] {
+        switch self {
+        case .classic:
+            // 把描边画成紧贴每行文字的半透明黑框
+            return ["sub-border-style": "opaque-box", "sub-outline-size": "3", "sub-outline-color": "#A0000000",
+                    "sub-shadow-offset": "0"]
+        case .large:
+            return ["sub-border-style": "opaque-box", "sub-outline-size": "3", "sub-outline-color": "#A0000000",
+                    "sub-shadow-offset": "0", "sub-scale": "1.3"]
+        case .outline:
+            return [:]
+        case .soft:
+            // 不描边，只留一圈柔和的投影
+            return ["sub-outline-size": "0", "sub-shadow-offset": "2", "sub-back-color": "#B4000000", "sub-blur": "0.6"]
+        }
+    }
+}
+
 /// 画面比例
 enum VideoAspect: String, CaseIterable, Identifiable {
     case fit, fill, stretch, ratio16x9, ratio4x3, ratio235
@@ -103,6 +148,9 @@ final class PlaybackController: ObservableObject {
     @Published private(set) var rate: Float = 1
     @Published private(set) var decoding = VideoDecoding.saved
     @Published private(set) var readahead = ReadaheadLevel.saved
+    @Published private(set) var subtitleStyle = SubtitleStyle.saved
+    /// 内核刚建好时字幕选项的默认值，切回「描边」或某项没被样式改到时用它还原
+    private var subtitleDefaults: [String: String] = [:]
     @Published private(set) var aspect: VideoAspect = .fit
     /// 画面缩放，1 = 原始大小
     @Published private(set) var zoom: Double = 1
@@ -259,6 +307,7 @@ final class PlaybackController: ObservableObject {
             created.observe(name, format)
         }
         engine = created
+        applySubtitleStyle(created)
         logEvent("播放内核就绪（创建用了 \(Self.milliseconds(since: began)) 毫秒，距播放页创建 \(Self.milliseconds(since: createdAt)) 毫秒）")
         // 创建期间页面换了图层（很少见）：把现在的图层交给内核
         if let current = self.layer, current !== layer { created.attach(layer: current) }
@@ -666,6 +715,26 @@ final class PlaybackController: ObservableObject {
     func setAspect(_ value: VideoAspect) {
         aspect = value
         if let engine { applyAspect(engine) }
+    }
+
+    func setSubtitleStyle(_ value: SubtitleStyle) {
+        guard value != subtitleStyle else { return }
+        subtitleStyle = value
+        SubtitleStyle.saved = value
+        if let engine { applySubtitleStyle(engine) }
+    }
+
+    /// 字幕样式直接改内核属性，正在显示的字幕马上换样子，不用重新打开视频
+    private func applySubtitleStyle(_ engine: MPVEngine) {
+        if subtitleDefaults.isEmpty {
+            for key in SubtitleStyle.optionKeys {
+                if let value = engine.string(key) { subtitleDefaults[key] = value }
+            }
+        }
+        let overrides = subtitleStyle.overrides
+        for key in SubtitleStyle.optionKeys {
+            if let value = overrides[key] ?? subtitleDefaults[key] { engine.set(key, value) }
+        }
     }
 
     func setZoom(_ value: Double) {

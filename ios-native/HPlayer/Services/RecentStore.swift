@@ -53,6 +53,12 @@ final class RecentStore: ObservableObject {
         return items.first { Self.key(of: $0) == key }?.position
     }
 
+    /// 看到的比例（有续播位置时才有），播放页的选集里画成进度条
+    func progress(for source: PlaybackSource) -> Double? {
+        let key = Self.key(for: source)
+        return items.first { Self.key(of: $0) == key }?.progress
+    }
+
     /// 刚开头或快看完时不记位置，下次从头播放
     func savePosition(for source: PlaybackSource, seconds: Double, duration: Double) {
         guard seconds.isFinite, duration.isFinite, duration > 0 else { return }

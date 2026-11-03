@@ -26,7 +26,7 @@ struct PlayerView: View {
             title: current.title,
             loading: loading,
             error: error,
-            items: playlist.map { PlaybackListItem(id: $0.id, title: $0.title) },
+            items: playlist.map { PlaybackListItem(id: $0.id, title: $0.title, progress: RecentStore.shared.progress(for: $0)) },
             selectedID: current.id,
             qualities: qualityChoices,
             selectedQuality: selectedQuality,

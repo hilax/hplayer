@@ -5,6 +5,8 @@ struct PlaybackListItem: Identifiable, Hashable {
     let id: String
     let title: String
     var subtitle: String = ""
+    /// 看到的比例（播放记录里有续播位置才有），选集里画成进度条
+    var progress: Double? = nil
 }
 
 struct PlaybackChoice: Identifiable, Hashable {
@@ -32,103 +34,145 @@ private struct PlaybackAdjustment {
 /// 右侧设置面板的分页
 private enum SettingsPage: Equatable { case playback, tracks }
 
-/// 横屏右侧面板的分页：选集、倍速、清晰度、字幕音轨
-private enum SideTab: CaseIterable {
-    case episodes, speed, quality, tracks
+/// 横屏播放页上点按钮弹出的玻璃层：底栏的画质、倍速、字幕音轨、选集，顶栏的画面比例、更多
+private enum PlayerPopover: Hashable {
+    case quality, speed, tracks, episodes, aspect, more
+}
+
+/// 「更多」菜单里的二级页
+private enum MoreSection: Hashable {
+    case decoding, readahead, sleep
 
     var title: String {
         switch self {
-        case .episodes: return "选集"
-        case .speed: return "倍速"
-        case .quality: return "清晰度"
-        case .tracks: return "字幕音轨"
+        case .decoding: return "解码"
+        case .readahead: return "提前缓存"
+        case .sleep: return "定时关闭"
         }
     }
 }
 
-/// 横屏底栏上弹出气泡的三个按钮
-private enum PlayerBubble: Hashable {
-    case quality, speed, tracks
+/// 弹出层要知道按钮和进度条在哪：按钮报自己的位置，弹出层贴着它长出来，底栏的弹出层停在进度条上方
+private enum PlayerAnchor: Hashable {
+    case popover(PlayerPopover)
+    case timeline
 }
 
-/// 每个气泡按钮把自己的位置报上来，气泡层据此把气泡放在按钮正上方。
-private struct PlayerBubbleAnchorKey: PreferenceKey {
-    static var defaultValue: [PlayerBubble: Anchor<CGRect>] { [:] }
-    static func reduce(value: inout [PlayerBubble: Anchor<CGRect>], nextValue: () -> [PlayerBubble: Anchor<CGRect>]) {
+private struct PlayerAnchorKey: PreferenceKey {
+    static var defaultValue: [PlayerAnchor: Anchor<CGRect>] { [:] }
+    static func reduce(value: inout [PlayerAnchor: Anchor<CGRect>], nextValue: () -> [PlayerAnchor: Anchor<CGRect>]) {
         value.merge(nextValue()) { $1 }
     }
 }
 
 private extension View {
-    func bubbleAnchor(_ kind: PlayerBubble) -> some View {
-        anchorPreference(key: PlayerBubbleAnchorKey.self, value: .bounds) { [kind: $0] }
+    func playerAnchor(_ anchor: PlayerAnchor) -> some View {
+        anchorPreference(key: PlayerAnchorKey.self, value: .bounds) { [anchor: $0] }
     }
-}
 
-/// 气泡外形：圆角矩形，底边带一个指向按钮的小箭头。
-/// 形状占满的区域底部 arrowHeight 高度留给箭头，箭头尖离左边（或右边）arrowInset。
-private struct PlayerBubbleShape: Shape {
-    static let arrowHeight: CGFloat = 7
-    static let arrowWidth: CGFloat = 15
-    static let cornerRadius: CGFloat = 16
-
-    var arrowInset: CGFloat
-    var fromTrailing: Bool
-
-    func path(in rect: CGRect) -> Path {
-        let r = Self.cornerRadius
-        let body = rect.height - Self.arrowHeight
-        let minX = rect.minX, maxX = rect.maxX, minY = rect.minY, maxY = minY + body
-        let rawTip = fromTrailing ? maxX - arrowInset : minX + arrowInset
-        // 箭头不挤进圆角里
-        let tip = min(max(rawTip, minX + r + Self.arrowWidth / 2), maxX - r - Self.arrowWidth / 2)
-        var path = Path()
-        path.move(to: CGPoint(x: minX + r, y: minY))
-        path.addArc(tangent1End: CGPoint(x: maxX, y: minY), tangent2End: CGPoint(x: maxX, y: minY + r), radius: r)
-        path.addArc(tangent1End: CGPoint(x: maxX, y: maxY), tangent2End: CGPoint(x: maxX - r, y: maxY), radius: r)
-        path.addLine(to: CGPoint(x: tip + Self.arrowWidth / 2, y: maxY))
-        path.addLine(to: CGPoint(x: tip, y: maxY + Self.arrowHeight))
-        path.addLine(to: CGPoint(x: tip - Self.arrowWidth / 2, y: maxY))
-        path.addArc(tangent1End: CGPoint(x: minX, y: maxY), tangent2End: CGPoint(x: minX, y: maxY - r), radius: r)
-        path.addArc(tangent1End: CGPoint(x: minX, y: minY), tangent2End: CGPoint(x: minX + r, y: minY), radius: r)
-        path.closeSubpath()
-        return path
-    }
-}
-
-/// 气泡外壳：磨砂底 + 一圈细边，大小完全由里面的选项决定。
-/// 选项太多放不下时在气泡内滚动，气泡高度停在 maxHeight。
-private struct PlayerBubbleSurface<Content: View>: View {
-    let arrowInset: CGFloat
-    let fromTrailing: Bool
-    let maxHeight: CGFloat
-    @ViewBuilder var content: () -> Content
-
-    var body: some View {
-        let shape = PlayerBubbleShape(arrowInset: arrowInset, fromTrailing: fromTrailing)
-        // 隐藏的一份只用来撑出宽高（高度封顶），真正能点的那份放在上面的滚动视图里
-        content()
-            .padding(6)
-            .fixedSize(horizontal: true, vertical: false)
-            .hidden()
-            .accessibilityHidden(true)
-            .frame(maxHeight: maxHeight, alignment: .top)
-            .overlay {
-                ScrollView {
-                    content().padding(6)
-                }
-                .scrollIndicators(.hidden)
-                .clipShape(RoundedRectangle(cornerRadius: PlayerBubbleShape.cornerRadius, style: .continuous))
-            }
-            .padding(.bottom, PlayerBubbleShape.arrowHeight)
-            .background {
+    /// 弹出层的玻璃底：iOS 26 用系统液态玻璃的 Regular 款（磨砂、适合放文字），
+    /// 低版本用磨砂材质加一层压暗和细边，亮画面上也看得清
+    @ViewBuilder
+    func playerGlass(cornerRadius: CGFloat) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        if #available(iOS 26.0, *) {
+            self.glassEffect(.regular, in: shape)
+        } else {
+            self.background {
                 ZStack {
                     shape.fill(.thinMaterial)
                     shape.fill(Color.black.opacity(0.22))
                 }
             }
-            .overlay { shape.stroke(Color.white.opacity(0.16), lineWidth: 0.5) }
-            .foregroundStyle(.white)
+            .overlay { shape.strokeBorder(Color.white.opacity(0.16), lineWidth: 0.5) }
+            .shadow(color: .black.opacity(0.3), radius: 18, y: 8)
+        }
+    }
+}
+
+/// 选项不多时按内容大小显示；超过 maxHeight 时高度停住，在里面滚动。宽度始终按内容
+private struct HuggingScroll<Content: View>: View {
+    let maxHeight: CGFloat
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        // 隐藏的一份只用来撑出宽高（高度封顶），真正能点的那份放在上面的滚动视图里
+        content()
+            .fixedSize(horizontal: true, vertical: false)
+            .hidden()
+            .accessibilityHidden(true)
+            .frame(maxHeight: maxHeight, alignment: .top)
+            .overlay(alignment: .top) {
+                ScrollView {
+                    content()
+                }
+                .scrollIndicators(.hidden)
+            }
+    }
+}
+
+/// 画面比例的小图示：外框是屏幕，里面的实心块是画面落在屏幕上的样子
+private struct AspectGlyph: View {
+    let option: VideoAspect
+
+    /// 实心块在 34×26 画布里的位置；外框在 (1.5, 3, 31, 20)
+    private var inner: CGRect {
+        switch option {
+        case .fit: return CGRect(x: 6, y: 7.5, width: 22, height: 11)
+        case .fill: return CGRect(x: -2, y: 4.5, width: 38, height: 17)
+        case .stretch: return CGRect(x: 4, y: 5.5, width: 26, height: 15)
+        case .ratio16x9: return CGRect(x: 4, y: 5.7, width: 26, height: 14.6)
+        case .ratio4x3: return CGRect(x: 7, y: 5.5, width: 20, height: 15)
+        case .ratio235: return CGRect(x: 4, y: 7.5, width: 26, height: 11)
+        }
+    }
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .strokeBorder(lineWidth: 1.5)
+                .opacity(0.6)
+                .frame(width: 31, height: 20)
+                .offset(x: 1.5, y: 3)
+            RoundedRectangle(cornerRadius: 2, style: .continuous)
+                .opacity(0.85)
+                .frame(width: inner.width, height: inner.height)
+                .offset(x: inner.minX, y: inner.minY)
+        }
+        .frame(width: 34, height: 26, alignment: .topLeading)
+        .clipped()
+        .accessibilityHidden(true)
+    }
+}
+
+/// 字幕样式的选项本身就按那种样式显示
+private struct SubtitleStyleLabel: View {
+    let style: SubtitleStyle
+
+    var body: some View {
+        let text = Text(style.title).foregroundColor(.white)
+        switch style {
+        case .classic:
+            text.font(.system(size: 13, weight: .medium))
+                .padding(.horizontal, 7)
+                .padding(.vertical, 2)
+                .background(Color.black.opacity(0.62), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+        case .large:
+            text.font(.system(size: 16, weight: .semibold))
+                .padding(.horizontal, 7)
+                .padding(.vertical, 1)
+                .background(Color.black.opacity(0.62), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+        case .outline:
+            text.font(.system(size: 14, weight: .bold))
+                .shadow(color: .black, radius: 0, x: 1, y: 1)
+                .shadow(color: .black, radius: 0, x: -1, y: -1)
+                .shadow(color: .black, radius: 0, x: 1, y: -1)
+                .shadow(color: .black, radius: 0, x: -1, y: 1)
+        case .soft:
+            text.font(.system(size: 14, weight: .semibold))
+                .shadow(color: .black.opacity(0.9), radius: 1.5, y: 1)
+                .shadow(color: .black.opacity(0.6), radius: 5)
+        }
     }
 }
 
@@ -184,8 +228,12 @@ struct PlaybackControlsView: View {
     @State private var scrubStart = 0.0
     /// 当前的 dragging 是不是由画面上的横滑快进带起来的（不是手指按在进度条上）
     @State private var panScrubbing = false
-    /// 底栏上正在弹出的气泡（画质、倍速、字幕音轨）
-    @State private var bubble: PlayerBubble?
+    /// 横屏点按钮弹出的玻璃层（画质、倍速、字幕音轨、选集、画面比例、更多）
+    @State private var popover: PlayerPopover?
+    /// 「更多」菜单里当前打开的二级页
+    @State private var moreSection: MoreSection?
+    /// 选完一项后稍等一下再收起弹出层，让选中的那块玻璃先滑过去
+    @State private var popoverCloseTask: Task<Void, Never>?
     @State private var hideTask: Task<Void, Never>?
     @State private var lastSeekTick = 0
     /// 正在转回竖屏准备关闭，期间不再响应关闭和手势
@@ -210,12 +258,10 @@ struct PlaybackControlsView: View {
     @State private var showBusy = false
     @State private var busyTask: Task<Void, Never>?
     @State private var copiedDiagnostics = false
-    @State private var sideTab: SideTab = .episodes
     /// 播放器窗口当前是不是横屏（给状态栏和系统手势用，它们在 GeometryReader 外面）
     @State private var isLandscapeWindow = PlayerWindowController.startsInLandscape
     /// 正在柔和关闭：整个播放页淡出并轻轻缩小
     @State private var closeFade = false
-    @Namespace private var sideNamespace
     @AppStorage("player.autoPlayNext") private var autoPlayNext = true
 
     /// 竖屏时顶部小窗播放器的高度（不含状态栏）
@@ -271,14 +317,10 @@ struct PlaybackControlsView: View {
                             .zIndex(8)
                     }
 
-                    if showList && !locked {
-                        if landscape {
-                            sidePanel(insets: insets)
-                                .zIndex(9)
-                        } else {
-                            playlistPanel(landscape: false, insets: insets)
-                                .zIndex(9)
-                        }
+                    // 横屏的选集是弹出层里的玻璃面板，这里只管竖屏的选集抽屉
+                    if showList && !locked && !landscape {
+                        playlistPanel(landscape: false, insets: insets)
+                            .zIndex(9)
                     }
                 }
                 .foregroundColor(.white)
@@ -288,9 +330,14 @@ struct PlaybackControlsView: View {
                 .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: boosting)
                 // onChange 不管初始值：窗口没能转成横屏（系统拒绝）时，状态栏和系统手势也要按真实方向来
                 .onAppear { isLandscapeWindow = landscape }
-                .onChange(of: landscape) { isLandscapeWindow = $0; bubble = nil }
-                // 控制栏收起时气泡跟着收起，不会留一个看不见的气泡挡住自动隐藏
-                .onChange(of: controlsVisible) { if !$0 { bubble = nil } }
+                .onChange(of: landscape) { isLandscape in
+                    isLandscapeWindow = isLandscape
+                    popover = nil
+                    // 竖屏的选集抽屉在横屏不显示，转过去时收起，免得挡住手势
+                    if isLandscape { showList = false }
+                }
+                // 控制栏收起时弹出层跟着收起，不会留一个看不见的弹出层挡住自动隐藏
+                .onChange(of: controlsVisible) { if !$0 { popover = nil } }
             }
             .ignoresSafeArea()
         }
@@ -378,15 +425,21 @@ struct PlaybackControlsView: View {
 
             Spacer(minLength: 8)
 
+            // 字幕和音轨在底栏右边已经有一个按钮，顶栏不再重复
             GlassButtonGroup {
                 if landscape {
-                GlassIconButton(systemImage: AppIcon.aspect.name, label: "画面比例", action: openAspect)
-                    .accessibilityIdentifier("playback.aspect")
-                GlassIconButton(systemImage: AppIcon.subtitle.name, label: "字幕和音轨") { openSettings(.tracks) }
-                    .accessibilityIdentifier("playback.tracks")
+                    GlassIconButton(systemImage: AppIcon.aspect.name, label: "画面比例") { togglePopover(.aspect) }
+                        .overlay { popoverRing(.aspect) }
+                        .accessibilityIdentifier("playback.aspect")
+                        .playerAnchor(.popover(.aspect))
+                    GlassIconButton(systemImage: AppIcon.more.name, label: "更多设置") { togglePopover(.more) }
+                        .overlay { popoverRing(.more) }
+                        .accessibilityIdentifier("playback.more")
+                        .playerAnchor(.popover(.more))
+                } else {
+                    GlassIconButton(systemImage: AppIcon.more.name, label: "更多设置") { openSettings(.playback) }
+                        .accessibilityIdentifier("playback.more")
                 }
-                GlassIconButton(systemImage: AppIcon.more.name, label: "更多设置") { openSettings(.playback) }
-                    .accessibilityIdentifier("playback.more")
             }
         }
     }
@@ -453,6 +506,8 @@ struct PlaybackControlsView: View {
                         .accessibilityLabel("总时长")
                 }
             }
+            // 底栏的弹出层停在这一行上方，不盖住进度条和时间
+            .playerAnchor(.timeline)
 
             sideControls(landscape: landscape)
         }
@@ -472,42 +527,47 @@ struct PlaybackControlsView: View {
         .fixedSize()
     }
 
-    /// 画质、倍速、字幕音轨三个按钮点开后在按钮旁边弹出气泡；选集仍然打开右侧面板。按钮都是不带底色的图标。
+    /// 画质、倍速在左，字幕音轨、选集和横竖屏在右，按钮都是不带底色的图标；
+    /// 点开时图标下面亮起一块玻璃，对应的玻璃层从按钮的位置长出来。
     private func sideControls(landscape: Bool) -> some View {
         ZStack {
             HStack(spacing: 0) {
                 HStack(spacing: 0) {
-                    Button { openBubble(.quality) } label: { qualityIcon }
+                    Button { togglePopover(.quality) } label: { qualityIcon }
                         .buttonStyle(.plain)
+                        .background { popoverLens(.quality) }
                         .accessibilityLabel("播放画质")
                         .accessibilityIdentifier("playback.quality")
-                        .bubbleAnchor(.quality)
-                    Button { openBubble(.speed) } label: {
+                        .playerAnchor(.popover(.quality))
+                    Button { togglePopover(.speed) } label: {
                         controlIcon(AppIcon.speed.name, label: "播放速度", size: 20)
                             .foregroundStyle(abs(playback.rate - 1) > 0.01 ? Theme.gold : Color.white)
                     }
                     .buttonStyle(.plain)
+                    .background { popoverLens(.speed) }
                     .accessibilityValue("\(String(format: "%g", playback.rate))×")
                     .accessibilityIdentifier("playback.speed")
-                    .bubbleAnchor(.speed)
+                    .playerAnchor(.popover(.speed))
                 }
                 // 图标四周有留白，往外挪一点，让图标本身和左边的时间文字对齐
                 .padding(.leading, -10)
                 Spacer(minLength: 0)
                 HStack(spacing: 0) {
-                    Button { openBubble(.tracks) } label: {
+                    Button { togglePopover(.tracks) } label: {
                         controlIcon(AppIcon.subtitle.name, label: "字幕和音轨", size: 20)
                             .foregroundStyle(playback.selectedSubtitle == nil ? Color.white : Theme.gold)
                     }
                     .buttonStyle(.plain)
-                    // 顶栏右边已经有一个同名的「字幕和音轨」按钮（playback.tracks），这里用独立的标识
+                    .background { popoverLens(.tracks) }
                     .accessibilityIdentifier("playback.subtitles")
-                    .bubbleAnchor(.tracks)
-                    Button { openList() } label: {
+                    .playerAnchor(.popover(.tracks))
+                    Button { togglePopover(.episodes) } label: {
                         controlIcon(AppIcon.playlist.name, label: "选集", size: 20)
                     }
                     .buttonStyle(.plain)
+                    .background { popoverLens(.episodes) }
                     .accessibilityIdentifier("playback.playlist")
+                    .playerAnchor(.popover(.episodes))
                     Button { toggleOrientation(landscape: landscape) } label: {
                         controlIcon(landscape ? AppIcon.exitFullscreen.name : AppIcon.fullscreen.name,
                                     label: landscape ? "竖屏" : "横屏", size: 18)
@@ -533,161 +593,711 @@ struct PlaybackControlsView: View {
             .contentShape(Rectangle())
     }
 
-    private func openBubble(_ kind: PlayerBubble) {
-        hideTask?.cancel()
-        bubble = kind
+    /// 底栏图标打开弹出层时，图标下面亮起的一块玻璃
+    @ViewBuilder
+    private func popoverLens(_ kind: PlayerPopover) -> some View {
+        if popover == kind {
+            Circle()
+                .fill(Color.white.opacity(0.18))
+                .overlay { Circle().strokeBorder(Color.white.opacity(0.3), lineWidth: 0.5) }
+                .padding(2)
+                .transition(.scale(scale: 0.6).combined(with: .opacity))
+                .allowsHitTesting(false)
+        }
     }
 
-    /// 关掉气泡后重新开始计时，控制栏过几秒再自动隐藏
-    private func closeBubble() {
-        bubble = nil
+    /// 顶栏玻璃按钮打开弹出层时多一圈亮边
+    @ViewBuilder
+    private func popoverRing(_ kind: PlayerPopover) -> some View {
+        if popover == kind {
+            Circle()
+                .strokeBorder(Color.white.opacity(0.6), lineWidth: 1.2)
+                .transition(.opacity)
+                .allowsHitTesting(false)
+        }
+    }
+
+    // MARK: 弹出层
+
+    private static let popoverSpring = Animation.spring(response: 0.42, dampingFraction: 0.8)
+
+    private var popoverCloseAnimation: Animation {
+        reduceMotion ? .easeOut(duration: 0.15) : .easeIn(duration: 0.18)
+    }
+
+    private func togglePopover(_ kind: PlayerPopover) {
+        hideTask?.cancel()
+        popoverCloseTask?.cancel()
+        let next: PlayerPopover? = popover == kind ? nil : kind
+        moreSection = nil
+        if next != nil { copiedDiagnostics = false }
+        withAnimation(next == nil ? popoverCloseAnimation : (reduceMotion ? .easeOut(duration: 0.15) : Self.popoverSpring)) {
+            popover = next
+        }
+        if next == nil { revealControls() }
+    }
+
+    /// 收起弹出层；选完一项时可以稍等一下再收（让选中的那块玻璃先滑过去、勾先亮起来）
+    private func closePopover(after delay: Double = 0) {
+        popoverCloseTask?.cancel()
+        guard delay > 0 else {
+            withAnimation(popoverCloseAnimation) { popover = nil }
+            moreSection = nil
+            revealControls()
+            return
+        }
+        popoverCloseTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            closePopover()
+        }
+    }
+
+    /// 缩放的中心放在按钮上：打开时从按钮里长出来，收起时缩回按钮
+    private func popoverTransition(from rect: CGRect?, in size: CGSize) -> AnyTransition {
+        guard !reduceMotion, let rect, size.width > 0, size.height > 0 else { return .opacity }
+        let anchor = UnitPoint(x: rect.midX / size.width, y: rect.midY / size.height)
+        return .scale(scale: 0.3, anchor: anchor).combined(with: .opacity)
+    }
+
+    /// 弹出层盖在整个横屏控制层上。先铺一层点击区：点弹出层以外的任何地方都收起（选集打开时顺便压暗画面）；
+    /// 再把玻璃层放到按钮旁边：画质、倍速在左下，字幕在右下（都停在进度条上方），
+    /// 画面比例和更多从右上的按钮下面长出来，选集是右侧整条悬浮面板。
+    private func popoverLayer(_ anchors: [PlayerAnchor: Anchor<CGRect>], insets: EdgeInsets) -> some View {
+        GeometryReader { proxy in
+            ZStack {
+                if let kind = popover {
+                    Rectangle()
+                        .fill(Color.black.opacity(kind == .episodes ? 0.32 : 0))
+                        .contentShape(Rectangle())
+                        .onTapGesture { closePopover() }
+                        .transition(.opacity)
+                        .accessibilityHidden(true)
+                    popoverPanel(kind, anchors: anchors, proxy: proxy, insets: insets)
+                }
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height)
+        }
+    }
+
+    @ViewBuilder
+    private func popoverPanel(_ kind: PlayerPopover, anchors: [PlayerAnchor: Anchor<CGRect>],
+                              proxy: GeometryProxy, insets: EdgeInsets) -> some View {
+        let size = proxy.size
+        let leadingEdge = max(insets.leading, 28)
+        let trailingEdge = max(insets.trailing, 28)
+        let topEdge = max(insets.top, 12)
+        let bottomEdge = max(insets.bottom, 8)
+        let button = anchors[.popover(kind)].map { proxy[$0] }
+        let timelineTop = anchors[.timeline].map { proxy[$0].minY } ?? size.height - bottomEdge - 88
+        // 底栏的弹出层：底边停在进度条上方，最高到顶栏下面
+        let aboveBottom = size.height - timelineTop + 6
+        let aboveHeight = max(120, timelineTop - 6 - (topEdge + 46))
+        switch kind {
+        case .quality, .speed, .tracks:
+            let leading = kind != .tracks
+            popoverContent(kind, maxHeight: aboveHeight)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: leading ? .bottomLeading : .bottomTrailing)
+                .padding(.leading, leading ? leadingEdge - 10 : 0)
+                .padding(.trailing, leading ? 0 : trailingEdge - 10)
+                .padding(.bottom, aboveBottom)
+                .transition(popoverTransition(from: button, in: size))
+        case .aspect, .more:
+            let top = (button?.maxY ?? topEdge + 44) + 8
+            popoverContent(kind, maxHeight: max(120, timelineTop - top - 8))
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                .padding(.top, top)
+                .padding(.trailing, trailingEdge)
+                .transition(popoverTransition(from: button, in: size))
+        case .episodes:
+            episodesPopover
+                .frame(width: 340, height: max(160, size.height - topEdge - bottomEdge))
+                .playerGlass(cornerRadius: 30)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+                .padding(.trailing, trailingEdge - 10)
+                .transition(reduceMotion ? .opacity : .move(edge: .trailing).combined(with: .opacity))
+        }
+    }
+
+    @ViewBuilder
+    private func popoverContent(_ kind: PlayerPopover, maxHeight: CGFloat) -> some View {
+        switch kind {
+        case .quality:
+            qualityPopover(maxHeight: maxHeight).fixedSize().playerGlass(cornerRadius: 24)
+        case .speed:
+            speedPopover.fixedSize().playerGlass(cornerRadius: 30)
+        case .tracks:
+            tracksPopover(maxHeight: maxHeight).fixedSize().playerGlass(cornerRadius: 24)
+        case .aspect:
+            aspectPopover.fixedSize().playerGlass(cornerRadius: 24)
+        case .more:
+            morePopover.fixedSize().playerGlass(cornerRadius: 24)
+        case .episodes:
+            EmptyView()
+        }
+    }
+
+    // MARK: 弹出层 · 画质
+
+    private func qualityPopover(maxHeight: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            popoverHeader("画质")
+            if qualities.isEmpty {
+                popoverRow(title: "原画", detail: originalQualityDetail, selected: true) { closePopover() }
+                popoverNote("这个视频只有原画，没有别的清晰度可选。")
+            } else {
+                HuggingScroll(maxHeight: maxHeight - 40) {
+                    VStack(spacing: 0) {
+                        ForEach(qualities) { quality in
+                            popoverRow(title: quality.title, detail: qualityDetail(quality),
+                                       selected: isSelectedQuality(quality)) {
+                                if !isSelectedQuality(quality) { onQuality(quality.id) }
+                                closePopover(after: 0.3)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .padding(6)
+    }
+
+    private func isSelectedQuality(_ quality: PlaybackChoice) -> Bool {
+        quality.title == selectedQuality || (selectedQuality.isEmpty && quality.id == qualities.first?.id)
+    }
+
+    /// 原画写出正在播放的分辨率和 HDR；没拿到时写「不转码」
+    private var originalQualityDetail: String {
+        let playingOriginal = selectedQuality.isEmpty || selectedQuality == "原画"
+        let parts = playingOriginal
+            ? playback.videoBadges.filter { $0.hasSuffix("K") || $0.hasSuffix("P") || $0 == "HDR" }
+            : []
+        return parts.isEmpty ? "不转码" : parts.joined(separator: " · ")
+    }
+
+    private func qualityDetail(_ quality: PlaybackChoice) -> String {
+        quality.title == "原画" ? originalQualityDetail : "转码"
+    }
+
+    // MARK: 弹出层 · 倍速
+
+    /// 一条玻璃分段条：选中的那块亮玻璃会弹性滑到新档位
+    private var speedPopover: some View {
+        let index = Self.speedOptions.firstIndex { abs($0 - playback.rate) < 0.001 } ?? 1
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 24) {
+                Text("播放速度")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.6))
+                Spacer(minLength: 0)
+                Text("长按画面临时 \(String(format: "%g", PlaybackController.boostRate))×")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white.opacity(0.5))
+            }
+            .padding(.horizontal, 10)
+            .padding(.top, 2)
+            // 和下面的分段条一样宽，提示文字靠右
+            .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 0) {
+                ForEach(Array(Self.speedOptions.enumerated()), id: \.offset) { offset, rate in
+                    Button {
+                        playback.setRate(rate)
+                        closePopover(after: 0.35)
+                    } label: {
+                        Text(Self.speedLabel(rate))
+                            .font(.system(size: 15, weight: .semibold).monospacedDigit())
+                            .foregroundStyle(offset == index ? Theme.accent : Color.white.opacity(0.88))
+                            .frame(width: 58, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(offset == index ? .isSelected : [])
+                }
+            }
+            .padding(4)
+            .background(alignment: .leading) {
+                Capsule()
+                    .fill(Color.white.opacity(0.2))
+                    .overlay { Capsule().strokeBorder(Color.white.opacity(0.32), lineWidth: 0.5) }
+                    .shadow(color: .black.opacity(0.25), radius: 5, y: 2)
+                    .frame(width: 58, height: 44)
+                    .offset(x: 4 + CGFloat(index) * 58)
+                    .animation(reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.68), value: index)
+            }
+            .background(Color.black.opacity(0.26), in: Capsule())
+        }
+        .padding(10)
+    }
+
+    /// 1 写成 1.0×，档位文字长短接近，分段条看起来更整齐
+    private static func speedLabel(_ rate: Float) -> String {
+        rate == rate.rounded() ? String(format: "%.1f×", rate) : "\(String(format: "%g", rate))×"
+    }
+
+    // MARK: 弹出层 · 字幕与音轨
+
+    /// 字幕、音轨、样式三栏横排：横屏宽而矮，三栏并排比一长串列表好找；选了不收起，可以连着选
+    private func tracksPopover(maxHeight: CGFloat) -> some View {
+        // 弹出层可用高度减去栏目标题（约 28）和上下留白（12），剩下的放选项
+        let rowsHeight = max(88, maxHeight - 40)
+        return HStack(alignment: .top, spacing: 0) {
+            trackColumn("字幕") {
+                HuggingScroll(maxHeight: rowsHeight) {
+                    VStack(spacing: 0) {
+                        popoverRow(title: "关闭", selected: playback.selectedSubtitle == nil) {
+                            playback.selectSubtitle(nil)
+                            revealControls()
+                        }
+                        ForEach(playback.subtitleTracks) { track in
+                            popoverRow(title: track.title, detail: track.detail, selected: playback.selectedSubtitle == track.id) {
+                                playback.selectSubtitle(track.id)
+                                revealControls()
+                            }
+                        }
+                        if playback.subtitleTracks.isEmpty {
+                            popoverNote("这个视频没有内嵌字幕。同一文件夹里同名的字幕文件会自动加载。", width: 150)
+                        }
+                    }
+                }
+            }
+            trackColumn("音轨", divided: true) {
+                HuggingScroll(maxHeight: rowsHeight) {
+                    VStack(spacing: 0) {
+                        ForEach(playback.audioTracks) { track in
+                            popoverRow(title: track.title, detail: track.detail, selected: playback.selectedAudio == track.id) {
+                                playback.selectAudio(track.id)
+                                revealControls()
+                            }
+                        }
+                        if playback.audioTracks.isEmpty {
+                            popoverNote("视频加载后会在这里列出所有音轨。", width: 150)
+                        }
+                    }
+                }
+            }
+            trackColumn("样式", divided: true) {
+                VStack(spacing: 0) {
+                    ForEach(SubtitleStyle.allCases) { style in
+                        subtitleStyleRow(style)
+                    }
+                    if selectedSubtitleKeepsOwnStyle {
+                        popoverNote("特效和图形字幕会保留自带的样式。", width: 112)
+                    }
+                }
+            }
+        }
+        .padding(6)
+    }
+
+    private func trackColumn<Content: View>(_ title: String, divided: Bool = false,
+                                            @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            popoverHeader(title)
+            content()
+        }
+        .frame(minWidth: 128, alignment: .topLeading)
+        .padding(.leading, divided ? 4 : 0)
+        .overlay(alignment: .leading) {
+            if divided {
+                Rectangle()
+                    .fill(Color.white.opacity(0.14))
+                    .frame(width: 0.5)
+                    .padding(.vertical, 12)
+            }
+        }
+    }
+
+    private func subtitleStyleRow(_ style: SubtitleStyle) -> some View {
+        let selected = playback.subtitleStyle == style
+        return Button {
+            playback.setSubtitleStyle(style)
+            revealControls()
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: AppIcon.check.name)
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(Theme.accent)
+                    .opacity(selected ? 1 : 0)
+                    .frame(width: 16)
+                    .accessibilityHidden(true)
+                SubtitleStyleLabel(style: style)
+            }
+            .padding(.leading, 12)
+            .padding(.trailing, 16)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .background(selected ? Color.white.opacity(0.13) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("字幕样式：\(style.title)")
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    /// ASS 这类特效字幕、PGS 这类图形字幕有自己的样式，换样式时提醒一句
+    private var selectedSubtitleKeepsOwnStyle: Bool {
+        guard let id = playback.selectedSubtitle,
+              let track = playback.subtitleTracks.first(where: { $0.id == id }) else { return false }
+        let detail = track.detail.uppercased()
+        return ["ASS", "SSA", "PGS", "DVD", "DVB"].contains { detail.contains($0) }
+    }
+
+    // MARK: 弹出层 · 选集
+
+    /// 右侧整条的悬浮玻璃面板：每集一行，左边是集数小块（看过的部分画成进度条），当前这集高亮
+    private var episodesPopover: some View {
+        let currentIndex = items.firstIndex { $0.id == selectedID } ?? 0
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Text("选集")
+                    .font(.system(size: 17, weight: .semibold))
+                Text("共 \(items.count) 集")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.white.opacity(0.6))
+                Spacer(minLength: 8)
+                Text("自动连播")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.white.opacity(0.75))
+                Toggle("自动连播", isOn: $autoPlayNext)
+                    .labelsHidden()
+                    .tint(Theme.gold)
+                    .accessibilityIdentifier("playback.autoNext")
+            }
+            .padding(.leading, 10)
+            .padding(.trailing, 4)
+            .frame(height: 44)
+            ScrollViewReader { reader in
+                ScrollView {
+                    LazyVStack(spacing: 4) {
+                        ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                            episodeRow(item, index: index, current: index == currentIndex)
+                                .id(item.id)
+                        }
+                    }
+                }
+                .scrollIndicators(.hidden)
+                .onAppear { reader.scrollTo(selectedID, anchor: .center) }
+            }
+        }
+        .padding(.top, 12)
+        .padding(.horizontal, 10)
+        .padding(.bottom, 10)
+    }
+
+    private func episodeRow(_ item: PlaybackListItem, index: Int, current: Bool) -> some View {
+        Button {
+            closePopover()
+            onSelect(item.id)
+            revealControls()
+        } label: {
+            HStack(spacing: 12) {
+                episodeTile(index: index, current: current, progress: item.progress)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(item.title)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(current ? Theme.accent : Color.white)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                    if current {
+                        HStack(spacing: 5) {
+                            Image(systemName: AppIcon.nowPlaying.name)
+                                .font(.system(size: 10, weight: .semibold))
+                            Text("正在播放")
+                        }
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Theme.accent)
+                    } else if let progress = item.progress, progress > 0 {
+                        Text("看到 \(Int((progress * 100).rounded()))%")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.white.opacity(0.6))
+                    } else if !item.subtitle.isEmpty {
+                        Text(item.subtitle)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.white.opacity(0.6))
+                            .lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(6)
+            .background(current ? Color.white.opacity(0.13) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(item.title)
+        .accessibilityIdentifier("playback.item.\(item.id)")
+        .accessibilityAddTraits(current ? .isSelected : [])
+    }
+
+    /// 集数小块；有播放记录时底下画一条看到的进度
+    private func episodeTile(index: Int, current: Bool, progress: Double?) -> some View {
+        ZStack(alignment: .bottomLeading) {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(current ? Theme.accent.opacity(0.22) : Color.white.opacity(0.08))
+            Text(String(format: "%02d", index + 1))
+                .font(.system(size: 19, weight: .semibold, design: .rounded).monospacedDigit())
+                .foregroundStyle(current ? Theme.accent : Color.white.opacity(0.85))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if let progress, progress > 0 {
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.white.opacity(0.22))
+                    Capsule().fill(Theme.accent).frame(width: max(4, 60 * min(progress, 1)))
+                }
+                .frame(width: 60, height: 3)
+                .padding(.leading, 6)
+                .padding(.bottom, 5)
+            }
+        }
+        .frame(width: 72, height: 44)
+        .accessibilityHidden(true)
+    }
+
+    // MARK: 弹出层 · 画面比例
+
+    /// 3×2 的玻璃格，每格一个小图示；下面一行是缩放和还原。选了不收起，方便接着调缩放
+    private var aspectPopover: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            popoverHeader("画面比例", leading: 10)
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(82), spacing: 4), count: 3), spacing: 4) {
+                ForEach(VideoAspect.allCases) { option in
+                    aspectTile(option)
+                }
+            }
+            HStack(spacing: 8) {
+                Text("缩放")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.6))
+                Slider(value: Binding(get: { playback.zoom }, set: { playback.setZoom($0) }), in: 1...2)
+                    .frame(width: 90)
+                    .accessibilityLabel("画面缩放")
+                Text("\(Int((playback.zoom * 100).rounded()))%")
+                    .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                    .frame(width: 38, alignment: .trailing)
+                Button {
+                    playback.setAspect(.fit)
+                    playback.setZoom(1)
+                } label: {
+                    Text("还原")
+                        .font(.system(size: 12, weight: .semibold))
+                        .padding(.horizontal, 12)
+                        .frame(height: 30)
+                        .background(Color.white.opacity(0.12), in: Capsule())
+                        .frame(height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("还原画面")
+            }
+            .padding(.horizontal, 10)
+        }
+        .padding(6)
+    }
+
+    private func aspectTile(_ option: VideoAspect) -> some View {
+        let selected = playback.aspect == option
+        return Button {
+            playback.setAspect(option)
+            revealControls()
+        } label: {
+            VStack(spacing: 6) {
+                AspectGlyph(option: option)
+                Text(option.title)
+                    .font(.system(size: 12, weight: selected ? .semibold : .medium))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(selected ? Theme.accent : Color.white.opacity(0.9))
+            .frame(width: 82, height: 68)
+            .background(selected ? Color.white.opacity(0.13) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(option.title)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    // MARK: 弹出层 · 更多
+
+    /// 和系统菜单一样：解码、提前缓存、定时关闭点进去是二级页，左上角返回；最后是复制诊断信息
+    private var morePopover: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            if let section = moreSection {
+                Button {
+                    withAnimation(reduceMotion ? nil : Motion.snappy) { moreSection = nil }
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: AppIcon.back.name)
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(.white.opacity(0.75))
+                            .frame(width: 22)
+                        Text(section.title)
+                            .font(.system(size: 15, weight: .semibold))
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 12)
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("返回")
+                popoverDivider
+                moreOptions(section)
+            } else {
+                moreRow(.decoder, title: "解码", value: playback.decoding.title, id: "decoding") { openMoreSection(.decoding) }
+                moreRow(.download, title: "提前缓存", value: playback.readahead.title, id: "readahead") { openMoreSection(.readahead) }
+                moreRow(.sleepTimer, title: "定时关闭", value: sleepTimer.title, id: "sleep") { openMoreSection(.sleep) }
+                popoverDivider
+                Button {
+                    UIPasteboard.general.string = diagnosticsText
+                    copiedDiagnostics = true
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: AppIcon.copy.name)
+                            .font(.system(size: 16))
+                            .foregroundStyle(copiedDiagnostics ? Theme.accent : Color.white.opacity(0.75))
+                            .frame(width: 22)
+                        Text(copiedDiagnostics ? "已复制诊断信息" : "复制播放诊断信息")
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundStyle(copiedDiagnostics ? Theme.accent : Color.white)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 12)
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("playback.copyDiagnostics")
+            }
+        }
+        .padding(6)
+        .frame(width: 256)
+    }
+
+    private func openMoreSection(_ section: MoreSection?) {
+        withAnimation(reduceMotion ? nil : Motion.snappy) { moreSection = section }
         revealControls()
     }
 
-    /// 气泡层：盖在整个控制层上。先铺一层透明的点击区（点气泡以外的任何地方收起气泡），
-    /// 再把气泡放在对应按钮的正上方，箭头对着按钮图标。画质、倍速在左，字幕在右。
-    private func bubbleLayer(_ anchors: [PlayerBubble: Anchor<CGRect>]) -> some View {
-        GeometryReader { proxy in
-            if let kind = bubble, let anchor = anchors[kind] {
-                let rect = proxy[anchor]
-                let fromTrailing = kind == .tracks
-                let edge: CGFloat = 10
-                let reach: CGFloat = 28
-                let side = fromTrailing
-                    ? max(edge, proxy.size.width - rect.midX - reach)
-                    : max(edge, rect.midX - reach)
-                let inset = fromTrailing ? proxy.size.width - rect.midX - side : rect.midX - side
-                ZStack(alignment: fromTrailing ? .bottomTrailing : .bottomLeading) {
-                    Color.clear
-                        .contentShape(Rectangle())
-                        .onTapGesture { closeBubble() }
-                    PlayerBubbleSurface(arrowInset: inset, fromTrailing: fromTrailing,
-                                        maxHeight: max(100, rect.minY - 24)) {
-                        bubbleContent(kind)
-                    }
-                    .padding(fromTrailing ? .trailing : .leading, side)
-                    // 箭头尖落在按钮框的上沿稍靠下，正好在图标上方留一小段空隙
-                    .padding(.bottom, max(0, proxy.size.height - rect.minY - 2))
-                    .transition(.scale(scale: 0.88, anchor: fromTrailing ? .bottomTrailing : .bottomLeading).combined(with: .opacity))
-                }
-            }
-        }
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: bubble)
-    }
-
-    @ViewBuilder
-    private func bubbleContent(_ kind: PlayerBubble) -> some View {
-        switch kind {
-        case .speed: speedBubble
-        case .quality: qualityBubble
-        case .tracks: tracksBubble
-        }
-    }
-
-    private var speedBubble: some View {
-        VStack(spacing: 2) {
-            ForEach(Self.speedOptions, id: \.self) { rate in
-                bubbleRow(title: "\(String(format: "%g", rate))×", selected: abs(playback.rate - rate) < 0.001) {
-                    playback.setRate(rate)
-                    closeBubble()
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var qualityBubble: some View {
-        if qualities.isEmpty {
-            bubbleNote("这个视频只有原画，没有别的清晰度可选。")
-        } else {
-            VStack(spacing: 2) {
-                ForEach(qualities) { quality in
-                    bubbleRow(title: quality.title, selected: quality.title == selectedQuality) {
-                        onQuality(quality.id)
-                        closeBubble()
-                    }
-                }
-            }
-        }
-    }
-
-    /// 字幕和音轨两组选项放在同一个气泡里；选了不收起，字幕和音轨可以连着选
-    private var tracksBubble: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            bubbleHeader("字幕")
-            bubbleRow(title: "关闭字幕", selected: playback.selectedSubtitle == nil) {
-                playback.selectSubtitle(nil)
-                revealControls()
-            }
-            ForEach(playback.subtitleTracks) { track in
-                bubbleRow(title: track.title, detail: track.detail, selected: playback.selectedSubtitle == track.id) {
-                    playback.selectSubtitle(track.id)
-                    revealControls()
-                }
-            }
-            if playback.subtitleTracks.isEmpty {
-                bubbleNote("这个视频没有内嵌字幕。同一文件夹里同名的字幕文件会自动加载。")
-            }
-            bubbleHeader("音轨").padding(.top, 8)
-            ForEach(playback.audioTracks) { track in
-                bubbleRow(title: track.title, detail: track.detail, selected: playback.selectedAudio == track.id) {
-                    playback.selectAudio(track.id)
-                    revealControls()
-                }
-            }
-            if playback.audioTracks.isEmpty {
-                bubbleNote("视频加载后会在这里列出所有音轨。")
-            }
-        }
-    }
-
-    /// 气泡里的一个选项：只比文字大一圈，选中的用琥珀色字加淡底
-    private func bubbleRow(title: String, detail: String = "", selected: Bool, action: @escaping () -> Void) -> some View {
+    private func moreRow(_ icon: AppIcon, title: String, value: String, id: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text(Self.clipped(title, 20))
-                    .font(.subheadline.weight(selected ? .semibold : .regular))
+            HStack(spacing: 10) {
+                Image(systemName: icon.name)
+                    .font(.system(size: 16))
+                    .foregroundStyle(.white.opacity(0.75))
+                    .frame(width: 22)
+                Text(title)
+                    .font(.system(size: 15, weight: .medium))
+                Spacer(minLength: 12)
+                Text(value)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.white.opacity(0.6))
+                Image(systemName: AppIcon.forward.name)
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.45))
+            }
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityValue(value)
+        .accessibilityIdentifier("playback.more.\(id)")
+    }
+
+    @ViewBuilder
+    private func moreOptions(_ section: MoreSection) -> some View {
+        switch section {
+        case .decoding:
+            ForEach(VideoDecoding.allCases) { option in
+                popoverRow(title: option.title, selected: playback.decoding == option) {
+                    playback.setDecoding(option)
+                    openMoreSection(nil)
+                }
+            }
+        case .readahead:
+            ForEach(ReadaheadLevel.allCases) { option in
+                popoverRow(title: option.title, selected: playback.readahead == option) {
+                    playback.setReadahead(option)
+                    openMoreSection(nil)
+                }
+            }
+            popoverNote("边播边往后存，最多 2GB，退出播放后自动清掉；用流量时最多存 1 分钟。", width: 208)
+        case .sleep:
+            ForEach(SleepTimer.options) { option in
+                popoverRow(title: option.title, selected: sleepTimer == option) {
+                    setSleepTimer(option)
+                    openMoreSection(nil)
+                }
+            }
+        }
+    }
+
+    // MARK: 弹出层里的通用部件
+
+    private func popoverHeader(_ title: String, leading: CGFloat = 38) -> some View {
+        Text(title)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(.white.opacity(0.6))
+            .padding(.leading, leading)
+            .padding(.trailing, 12)
+            .padding(.top, 8)
+            .padding(.bottom, 4)
+    }
+
+    /// 选项行：左边一列留给勾，选中的那行用琥珀色字加一块亮一点的玻璃底
+    private func popoverRow(title: String, detail: String = "", selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: AppIcon.check.name)
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(Theme.accent)
+                    .opacity(selected ? 1 : 0)
+                    .frame(width: 16)
+                    .accessibilityHidden(true)
+                Text(Self.clipped(title, 18))
+                    .font(.system(size: 15, weight: selected ? .semibold : .medium))
+                    .foregroundStyle(selected ? Theme.accent : Color.white)
                     .lineLimit(1)
+                Spacer(minLength: detail.isEmpty ? 0 : 20)
                 if !detail.isEmpty {
-                    Text(Self.clipped(detail, 28))
-                        .font(.caption2)
-                        .foregroundStyle(selected ? Theme.accent.opacity(0.8) : Color.white.opacity(0.55))
+                    Text(Self.clipped(detail, 16))
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.58))
                         .lineLimit(1)
                 }
             }
-            .foregroundStyle(selected ? Theme.accent : Color.white)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(selected ? Theme.accent.opacity(0.16) : Color.clear,
-                        in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .padding(.leading, 12)
+            .padding(.trailing, 14)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .background(selected ? Color.white.opacity(0.13) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
-    private func bubbleHeader(_ title: String) -> some View {
-        Text(title)
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(.white.opacity(0.55))
-            .padding(.horizontal, 12)
-            .padding(.top, 4)
-            .padding(.bottom, 2)
-            .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func bubbleNote(_ text: String) -> some View {
+    private func popoverNote(_ text: String, width: CGFloat = 190) -> some View {
         Text(text)
             .font(.caption)
-            .foregroundStyle(.white.opacity(0.6))
+            .foregroundStyle(.white.opacity(0.55))
             .fixedSize(horizontal: false, vertical: true)
-            .frame(width: 190, alignment: .leading)
+            .frame(width: width, alignment: .leading)
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
     }
 
-    /// 选项文字太长时截短，气泡不会被一个长名字撑得很宽
+    private var popoverDivider: some View {
+        Rectangle()
+            .fill(Color.white.opacity(0.14))
+            .frame(height: 0.5)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 4)
+    }
+
+    /// 选项文字太长时截短，弹出层不会被一个长名字撑得很宽
     private static func clipped(_ text: String, _ limit: Int) -> String {
         text.count > limit ? String(text.prefix(limit)) + "…" : text
     }
@@ -852,10 +1462,14 @@ struct PlaybackControlsView: View {
             }
             .padding(.leading, edgeControlInset(safe: insets.leading, width: width))
             .padding(.trailing, edgeControlInset(safe: insets.trailing, width: width))
+            // 弹出层打开时两侧的锁定、截图淡出，画面上只留正在用的那一层
+            .opacity(popover == nil ? 1 : 0)
+            .allowsHitTesting(popover == nil)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: popover)
         }
-        // 画质、倍速、字幕的气泡画在整个控制层最上面
-        .overlayPreferenceValue(PlayerBubbleAnchorKey.self) { anchors in
-            bubbleLayer(anchors)
+        // 所有弹出层画在整个控制层最上面
+        .overlayPreferenceValue(PlayerAnchorKey.self) { anchors in
+            popoverLayer(anchors, insets: insets)
         }
         .transition(.opacity)
         .zIndex(2)
@@ -1115,156 +1729,6 @@ struct PlaybackControlsView: View {
             .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
         .padding(.top, 22)
-    }
-
-    // MARK: 横屏右侧面板
-
-    private func sidePanel(insets: EdgeInsets) -> some View {
-        ZStack(alignment: .trailing) {
-            Color.black.opacity(0.45)
-                .contentShape(Rectangle())
-                .onTapGesture { closeList() }
-
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(alignment: .bottom, spacing: 22) {
-                    ForEach(SideTab.allCases, id: \.self) { tab in
-                        sideTabButton(tab)
-                    }
-                }
-                ScrollView {
-                    sideContent
-                        .padding(.top, 16)
-                        .padding(.bottom, 18)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .scrollIndicators(.hidden)
-            }
-            .padding(.top, max(insets.top, 18))
-            .padding(.leading, 22)
-            .padding(.trailing, max(insets.trailing, 0) + 26)
-            .frame(width: 372 + insets.trailing, alignment: .leading)
-            .frame(maxHeight: .infinity, alignment: .top)
-            .playerPanelBackground(cornerRadius: 0)
-            .designScreen("episodes")
-        }
-        .transition(.move(edge: .trailing).combined(with: .opacity))
-    }
-
-    private func sideTabButton(_ tab: SideTab) -> some View {
-        let selected = sideTab == tab
-        return Button {
-            Haptics.select()
-            withAnimation(reduceMotion ? nil : Motion.snappy) { sideTab = tab }
-        } label: {
-            Text(tab.title)
-                .font(.system(size: selected ? 16 : 15, weight: selected ? .bold : .regular))
-                .foregroundStyle(selected ? Color.white : Color.white.opacity(0.62))
-                .padding(.bottom, 8)
-                .overlay(alignment: .bottom) {
-                    if selected {
-                        Capsule()
-                            .fill(Theme.gold)
-                            .frame(width: 14, height: 3)
-                            .matchedGeometryEffect(id: "side.tab", in: sideNamespace)
-                    }
-                }
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityAddTraits(selected ? .isSelected : [])
-    }
-
-    @ViewBuilder
-    private var sideContent: some View {
-        switch sideTab {
-        case .episodes:
-            episodesGrid
-        case .speed:
-            settingGroup("播放速度") {
-                chipGrid(Self.speedOptions.map { (String(format: "%g", $0), String(format: "%g", $0)) },
-                         selected: String(format: "%g", playback.rate), columns: 3) { value in
-                    if let rate = Float(value) { playback.setRate(rate) }
-                }
-            }
-        case .quality:
-            if qualities.isEmpty {
-                Text("这个视频只有原画，没有别的清晰度可选。")
-                    .font(.caption)
-                    .foregroundStyle(.white.opacity(0.55))
-            } else {
-                VStack(spacing: 2) {
-                    ForEach(qualities) { quality in
-                        trackRow(title: quality.title, detail: "", selected: quality.title == selectedQuality) {
-                            onQuality(quality.id)
-                        }
-                    }
-                }
-            }
-        case .tracks:
-            VStack(alignment: .leading, spacing: 18) {
-                subtitleSettings
-                Divider().overlay(.white.opacity(0.12))
-                audioSettings
-            }
-        }
-    }
-
-    private var episodesGrid: some View {
-        let currentIndex = items.firstIndex { $0.id == selectedID } ?? 0
-        return VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Text("共 \(items.count) 集")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.white.opacity(0.78))
-                Spacer()
-                Text("自动连播")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.white.opacity(0.78))
-                Toggle("自动连播", isOn: $autoPlayNext)
-                    .labelsHidden()
-                    .tint(Theme.gold)
-                    .accessibilityIdentifier("playback.autoNext")
-            }
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 5), spacing: 8) {
-                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                    episodeButton(item, index: index, currentIndex: currentIndex)
-                }
-            }
-            Text("已看完的集数显示为灰色，进度会自动同步到「继续观看」。")
-                .font(.caption)
-                .foregroundStyle(.white.opacity(0.55))
-        }
-    }
-
-    private func episodeButton(_ item: PlaybackListItem, index: Int, currentIndex: Int) -> some View {
-        let current = index == currentIndex
-        return Button {
-            closeList()
-            onSelect(item.id)
-            revealControls()
-        } label: {
-            Text("\(index + 1)")
-                .font(.system(size: 15, weight: current ? .bold : .medium).monospacedDigit())
-                .foregroundStyle(current ? Theme.gold : (index < currentIndex ? Color(white: 0.56) : Color.white))
-                .frame(maxWidth: .infinity, minHeight: 46)
-                .background(current ? Theme.gold.opacity(0.12) : Color.white.opacity(0.07),
-                            in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .overlay {
-                    if current {
-                        RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Theme.gold, lineWidth: 1.5)
-                    }
-                }
-                .overlay(alignment: .bottom) {
-                    if current {
-                        Capsule().fill(Theme.gold).frame(height: 2).padding(.horizontal, 12).padding(.bottom, 6)
-                    }
-                }
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(item.title)
-        .accessibilityIdentifier("playback.item.\(item.id)")
-        .accessibilityAddTraits(current ? .isSelected : [])
     }
 
     // MARK: 画面比例
@@ -1847,6 +2311,7 @@ struct PlaybackControlsView: View {
     private func move(_ offset: Int) { if let id = adjacent(offset) { onSelect(id); revealControls() } }
     private func lock() {
         locked = true
+        popover = nil
         showList = false
         settingsPage = nil
         showAspect = false
@@ -1856,12 +2321,11 @@ struct PlaybackControlsView: View {
         locked = false
         revealControls()
     }
-    private func openList() { openSidePanel(.episodes) }
-    private func openSidePanel(_ tab: SideTab) {
+    /// 竖屏的选集抽屉（横屏的选集是弹出层）
+    private func openList() {
         hideTask?.cancel()
         settingsPage = nil
         showAspect = false
-        sideTab = tab
         withAnimation(reduceMotion ? nil : Motion.smooth) { showList = true }
     }
     private func closeList() {
@@ -1929,7 +2393,7 @@ struct PlaybackControlsView: View {
 #endif
         hideTask = Task {
             try? await Task.sleep(nanoseconds: 5_000_000_000)
-            if !Task.isCancelled && !showList && settingsPage == nil && !showAspect && bubble == nil && !dragging && !boosting && adjustment == nil && !playback.buffering {
+            if !Task.isCancelled && !showList && settingsPage == nil && !showAspect && popover == nil && !dragging && !boosting && adjustment == nil && !playback.buffering {
                 withAnimation(reduceMotion ? nil : .easeOut(duration: 0.25)) { controlsVisible = false }
             }
         }
@@ -1939,6 +2403,7 @@ struct PlaybackControlsView: View {
     }
 
     private func toggleControls() {
+        if popover != nil { closePopover(); return }
         if settingsPage != nil { closeSettings(); return }
         if showAspect { closeAspect(); return }
         if controlsVisible {
@@ -1951,7 +2416,7 @@ struct PlaybackControlsView: View {
 
     private func setBoost(_ enabled: Bool) {
         if enabled {
-            guard !locked, !showList, settingsPage == nil, panKind == nil, playback.playing else { return }
+            guard !locked, !showList, settingsPage == nil, popover == nil, panKind == nil, playback.playing else { return }
             boosting = true
             lastAdjustment = "长按 \(String(format: "%g", PlaybackController.boostRate))×"
             playback.setBoost(true)
@@ -1980,7 +2445,7 @@ struct PlaybackControlsView: View {
             revealControls()
             return
         }
-        guard !locked, !showList, settingsPage == nil, !showAspect, !closing, size.width > 0, size.height > 0 else {
+        guard !locked, !showList, settingsPage == nil, !showAspect, popover == nil, !closing, size.width > 0, size.height > 0 else {
             // 横滑到一半被别的面板打断：进度条别停在半路
             if state == .ended { endPanScrub() }
             return
@@ -2151,6 +2616,8 @@ struct PlaybackControlsView: View {
         playback.setBoost(false)
         playback.pauseForClose()
         PlayerWindowController.shared.willClose()
+        popover = nil
+        popoverCloseTask?.cancel()
         showList = false
         settingsPage = nil
         showAspect = false

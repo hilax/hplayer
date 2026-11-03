@@ -21,7 +21,7 @@ enum AppIcon: String, CaseIterable {
     // MARK: 播放
     case play, playCircle, pause, stop, previous, next, skip, seek, fullscreen, exitFullscreen
     case lock, unlock, screenshot, subtitle, audio, aspect, aspectFit, aspectFill, aspectStretch
-    case speed, playlist
+    case speed, playlist, decoder, sleepTimer, nowPlaying
     case brightnessLow, brightnessHigh
     case volumeMute, volumeLow, volumeMedium, volumeHigh
     case playback
@@ -99,6 +99,10 @@ enum AppIcon: String, CaseIterable {
         case .aspectStretch: return "arrow.left.and.right.square"
         case .speed: return "speedometer"
         case .playlist: return "list.bullet"
+        case .decoder: return "cpu"
+        case .sleepTimer: return "timer"
+        // 选集里「正在播放」的标记：实心款只用在正在发生的状态上
+        case .nowPlaying: return "chart.bar.fill"
         case .brightnessLow: return "sun.min.fill"
         case .brightnessHigh: return "sun.max.fill"
         case .volumeMute: return "speaker.slash.fill"

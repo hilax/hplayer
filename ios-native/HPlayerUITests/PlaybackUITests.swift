@@ -79,18 +79,22 @@ final class PlaybackUITests: XCTestCase {
 
         pause.tap()
         XCTAssertTrue(wait { (pause.value as? String) == "paused" })
-        // 倍速点开是气泡，选一档后气泡收起、倍速生效
+        // 倍速点开是一条玻璃分段条，停在进度条上方；选一档后自己收起、倍速生效
         app.buttons["playback.speed"].tap()
         let fast = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "1.5×")).firstMatch
-        XCTAssertTrue(fast.waitForExistence(timeout: 5), "Speed options open as a bubble beside the button")
-        XCTAssertLessThan(fast.frame.width, 130, "The bubble is as wide as its options, not a fixed-width panel")
-        XCTAssertLessThanOrEqual(fast.frame.maxY, app.buttons["playback.speed"].frame.minY + 4, "The bubble opens above its button")
+        XCTAssertTrue(fast.waitForExistence(timeout: 5), "Speed options open beside the button")
+        XCTAssertLessThan(fast.frame.width, 130, "Each speed is a compact segment, not a fixed-width panel")
+        snapshot("Popover-speed")
+        XCTAssertLessThanOrEqual(fast.frame.maxY, slider.frame.minY + 4, "The speed bar sits above the timeline")
         fast.tap()
         XCTAssertTrue(wait { (surface.value as? String)?.contains("rate=1.5") == true }, "Picking a speed applies it")
-        XCTAssertTrue(wait { !fast.exists }, "The bubble closes after picking")
+        XCTAssertTrue(wait { !fast.exists }, "The speed bar closes after picking")
         app.buttons["playback.speed"].tap()
-        app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "1×")).firstMatch.tap()
+        let normal = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "1.0×")).firstMatch
+        XCTAssertTrue(normal.waitForExistence(timeout: 5))
+        normal.tap()
         XCTAssertTrue(wait { (surface.value as? String)?.contains("rate=1;") == true }, "Back to normal speed")
+        XCTAssertTrue(wait { !normal.exists }, "The speed bar closes by itself before the gestures below")
         let before = seconds(elapsed.label)
         swipe(surface, from: CGVector(dx: 0.4, dy: 0.32), to: CGVector(dx: 0.65, dy: 0.32))
         XCTAssertTrue(wait { (surface.value as? String)?.contains("快进") == true })
@@ -136,9 +140,57 @@ final class PlaybackUITests: XCTestCase {
         app.buttons["playback.unlock"].tap()
         XCTAssertTrue(pause.waitForExistence(timeout: 3))
 
+        // 字幕与音轨：字幕、音轨、样式三栏，停在进度条上方；点样式会打勾，点空白处收起
+        app.buttons["playback.subtitles"].tap()
+        let largeSubtitles = app.buttons["字幕样式：大字"]
+        XCTAssertTrue(largeSubtitles.waitForExistence(timeout: 5), "Subtitles open with a style column")
+        XCTAssertTrue(app.staticTexts["音轨"].exists)
+        XCTAssertLessThanOrEqual(largeSubtitles.frame.maxY, slider.frame.minY + 4, "The tracks panel sits above the timeline")
+        snapshot("Popover-tracks")
+        largeSubtitles.tap()
+        XCTAssertTrue(wait { largeSubtitles.isSelected }, "Picking a subtitle style marks it")
+        let outlineSubtitles = app.buttons["字幕样式：描边"]
+        outlineSubtitles.tap()
+        XCTAssertTrue(wait { outlineSubtitles.isSelected }, "Back to the default style")
+        surface.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.25)).tap()
+        XCTAssertTrue(wait { !largeSubtitles.exists }, "Tapping outside closes the panel")
+
+        // 更多：解码、提前缓存、定时关闭可以点进二级页再返回
+        app.buttons["playback.more"].tap()
+        let sleepRow = app.buttons["playback.more.sleep"]
+        XCTAssertTrue(sleepRow.waitForExistence(timeout: 5), "More opens as a menu under its button")
+        snapshot("Popover-more")
+        sleepRow.tap()
+        XCTAssertTrue(app.buttons["本集结束"].waitForExistence(timeout: 3), "Sleep timer opens as a submenu")
+        snapshot("Popover-more-sleep")
+        app.buttons["返回"].tap()
+        XCTAssertTrue(sleepRow.waitForExistence(timeout: 3), "Back returns to the main menu")
+        surface.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5)).tap()
+        XCTAssertTrue(wait { !sleepRow.exists })
+
+        // 画面比例从顶栏按钮下面长出来
+        app.buttons["playback.aspect"].tap()
+        let fillAspect = app.buttons["铺满裁切"]
+        XCTAssertTrue(fillAspect.waitForExistence(timeout: 5), "Aspect options drop down from the top bar")
+        snapshot("Popover-aspect")
+        surface.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5)).tap()
+        XCTAssertTrue(wait { !fillAspect.exists })
+
+        // 画质从 HD 图标长出来；测试视频不是 115 文件，只有原画
+        app.buttons["playback.quality"].tap()
+        let original = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "原画")).firstMatch
+        XCTAssertTrue(original.waitForExistence(timeout: 5), "Quality opens above the HD icon")
+        XCTAssertLessThanOrEqual(original.frame.maxY, slider.frame.minY + 4)
+        snapshot("Popover-quality")
+        // 画质面板在左下，点右边的空白处收起
+        surface.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.3)).tap()
+        XCTAssertTrue(wait { !original.exists }, "Tapping outside closes the quality menu")
+
+        // 选集是右侧的玻璃面板
         app.buttons["playback.playlist"].tap()
         let next = app.buttons["playback.item.direct|测试下一集|http://127.0.0.1:8765/hls-fixture/index.m3u8"]
         XCTAssertTrue(next.waitForExistence(timeout: 3))
+        snapshot("Popover-episodes")
         next.tap()
         XCTAssertTrue(app.staticTexts["测试下一集"].waitForExistence(timeout: 5))
         XCTAssertTrue(wait { (pause.value as? String) == "playing" })
@@ -371,6 +423,15 @@ final class PlaybackUITests: XCTestCase {
     private func isLandscape(_ app: XCUIApplication) -> Bool {
         let frame = app.windows.firstMatch.frame
         return frame.width > frame.height
+    }
+
+    /// 弹出层的弹簧动画走完再截图，云端构建产物里能直接看到真机渲染的效果
+    private func snapshot(_ name: String) {
+        Thread.sleep(forTimeInterval: 0.7)
+        let shot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        shot.name = name
+        shot.lifetime = .keepAlways
+        add(shot)
     }
 
     private func debugText(_ app: XCUIApplication) -> String {
