@@ -79,7 +79,7 @@ struct HomeTab: View {
 
     /// 横幅每一页的大图和货架开头的海报提前下载好，滑到时直接有图；顺便把每一页的取色算好。
     private func prefetchArtwork(_ library: HomeSnapshot) {
-        ImagePipeline.shared.prefetch(HomeArtwork.prefetchRequests(library, selection: heroState.selection))
+        ImagePipeline.shared.prefetch(HomeArtwork.prefetchRequests(library, selection: heroState.realIndex(count: library.featured.count)))
         heroState.palette.prepare(library.featured)
     }
 
@@ -131,7 +131,7 @@ struct HomeTab: View {
                 }
             }
             .background {
-                HomeHeroBackdrop(items: library.featured, motion: heroState.motion, palette: heroState.palette)
+                HomeHeroBackdrop(items: HeroLoop.pages(library.featured), motion: heroState.motion, palette: heroState.palette)
             }
             .navigationDestination(for: PerformerListRoute.self) { _ in
                 PerformerGridView(groups: library.performers)
@@ -184,8 +184,10 @@ struct HomeTab: View {
             .task { localStore.refresh() }
             .task(id: snapshotKey) { await rebuildSnapshot() }
             .onChange(of: library.featured.count) { count in
-                if heroState.selection >= count { heroState.selection = 0 }
-                heroState.motion.reset(to: heroState.selection)
+                // 精选换了一批：回到第一张（循环时它在第 1 页，前面是最后一张的复制页）
+                heroState.count = count
+                heroState.jump(to: HeroLoop.page(forReal: 0, count: count))
+                heroState.motion.reset(to: heroState.page)
             }
         }
         .designScreen(library.featured.isEmpty ? "home-empty" : "home")
@@ -301,11 +303,12 @@ struct HomeTab: View {
             // 下拉时图片向上拉伸，顶部不会露出空白
             let stretch = max(0, minY)
             HeroObserver(state: heroState) { state in
-                heroPager(library, selection: state.selection, originX: proxy.frame(in: .global).minX)
+                heroPager(library, page: state.page, originX: proxy.frame(in: .global).minX)
             }
             .onPreferenceChange(HeroPagePositionKey.self) { samples in
                 heroState.motion.update(samples: samples, originX: proxy.frame(in: .global).minX,
-                                        width: proxy.size.width, count: library.featured.count)
+                                        width: proxy.size.width, count: HeroLoop.pages(library.featured).count)
+                heroState.positionChanged()
             }
             .frame(width: proxy.size.width, height: height + stretch)
             .offset(y: -stretch)
@@ -346,14 +349,18 @@ struct HomeTab: View {
         .accessibilityIdentifier("home.heroBar")
     }
 
-    /// 翻页时图片不动、片名跟着页面滑，播放和更多两个按钮固定在原处，作用于当前这一页
-    private func heroPager(_ library: HomeSnapshot, selection: Int, originX: CGFloat) -> some View {
+    /// 翻页时图片不动、片名跟着页面滑，播放和更多两个按钮固定在原处，作用于当前这一页。
+    /// 首尾各多放一张复制页（最后一张放在最前、第一张放在最后），滑到复制页停稳后无动画换回真的那页，
+    /// 所以第一张往右滑是最后一张、最后一张往左滑回到第一张，可以一直循环。
+    private func heroPager(_ library: HomeSnapshot, page: Int, originX: CGFloat) -> some View {
         let featured = library.featured
+        let pages = HeroLoop.pages(featured)
+        let selection = HeroLoop.real(page, count: featured.count)
         let current = currentHero(library, selection: selection)
-        let binding = Binding<Int>(get: { selection }, set: { heroState.selection = $0 })
+        let binding = Binding<Int>(get: { page }, set: { heroState.page = $0 })
         return TabView(selection: binding) {
-            ForEach(Array(featured.enumerated()), id: \.element.id) { index, item in
-                HeroPage(item: item, index: index, originX: originX, featured: featured,
+            ForEach(Array(pages.enumerated()), id: \.offset) { index, item in
+                HeroPage(item: item, index: index, originX: originX, featured: pages,
                          motion: heroState.motion, palette: heroState.palette)
                     .tag(index)
             }
@@ -412,7 +419,9 @@ struct HomeTab: View {
                     .frame(width: index == selection ? 14 : 4, height: 4)
                     .contentShape(Rectangle().inset(by: -8))
                     .onTapGesture {
-                        withAnimation(reduceMotion ? nil : Motion.smooth) { heroState.selection = index }
+                        withAnimation(reduceMotion ? nil : Motion.smooth) {
+                            heroState.page = HeroLoop.page(forReal: index, count: count)
+                        }
                     }
             }
         }
@@ -425,8 +434,8 @@ struct HomeTab: View {
         .accessibilityValue("第 \(selection + 1) 张，共 \(count) 张")
         .accessibilityAdjustableAction { direction in
             switch direction {
-            case .increment: heroState.selection = min(selection + 1, count - 1)
-            case .decrement: heroState.selection = max(selection - 1, 0)
+            case .increment: heroState.page = HeroLoop.page(forReal: (selection + 1) % count, count: count)
+            case .decrement: heroState.page = HeroLoop.page(forReal: (selection + count - 1) % count, count: count)
             @unknown default: break
             }
         }
@@ -813,13 +822,75 @@ struct HomeTab: View {
 /// 只比较数量和状态，不比较整份片库。扫描中每新增 300 个视频才重新匹配一次，
 /// 否则每扫一页就把整个片库重新过一遍，界面会卡死。
 final class HeroState: ObservableObject {
-    @Published var selection = 0 {
-        // 页面位置报上来之前，底色先跟着选中项走
-        didSet { motion.follow(selection: selection) }
+    /// TabView 里的页码（含首尾两张复制页，见 HeroLoop）。
+    @Published var page = 0 {
+        didSet {
+            // 页面位置报上来之前，底色先跟着选中项走
+            motion.follow(selection: page)
+            wrapWhenSettled()
+        }
     }
+    /// 精选的张数（不含复制页）
+    var count = 0
     let motion = HeroMotionState()
     /// 每一页的封面取色
     let palette = HeroPalette()
+
+    /// 当前是第几张精选（0 起，不含复制页）
+    func realIndex(count: Int) -> Int { HeroLoop.real(page, count: count) }
+
+    /// 无动画换页：复制页换回真页、换了一批精选时用。两页画面一样，看不出跳了一下。
+    func jump(to page: Int) {
+        guard self.page != page else { return }
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { self.page = page }
+    }
+
+    /// 页面位置更新后调用：停稳在复制页上就换回真页。
+    func positionChanged() { wrapWhenSettled() }
+
+    private func wrapWhenSettled() {
+        guard let target = HeroLoop.wrapTarget(page, count: count) else { return }
+        if let position = motion.position {
+            // 还在滑动的话等它停稳；停稳时页面位置会再报一次
+            if abs(position - CGFloat(page)) < 0.001 { jump(to: target) }
+            return
+        }
+        // 拿不到页面位置时，等翻页动画结束再换
+        let sentinel = page
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in
+            guard let self, self.page == sentinel, self.motion.position == nil else { return }
+            self.jump(to: target)
+        }
+    }
+}
+
+/// 轮播首尾相接：把最后一张复制到最前、第一张复制到最后。只有一张时不循环。
+enum HeroLoop {
+    static func pages<Item>(_ items: [Item]) -> [Item] {
+        guard items.count > 1, let first = items.first, let last = items.last else { return items }
+        return [last] + items + [first]
+    }
+
+    /// 页码 → 第几张精选
+    static func real(_ page: Int, count: Int) -> Int {
+        guard count > 1 else { return min(max(page, 0), max(count - 1, 0)) }
+        return ((page - 1) % count + count) % count
+    }
+
+    /// 第几张精选 → 页码
+    static func page(forReal index: Int, count: Int) -> Int {
+        count > 1 ? index + 1 : index
+    }
+
+    /// 停在复制页上时要换回的真页页码；不在复制页上返回 nil。
+    static func wrapTarget(_ page: Int, count: Int) -> Int? {
+        guard count > 1 else { return nil }
+        if page == 0 { return count }
+        if page == count + 1 { return 1 }
+        return nil
+    }
 }
 
 /// 只在横幅状态变化时重算自己的内容，父页面不订阅这个对象。

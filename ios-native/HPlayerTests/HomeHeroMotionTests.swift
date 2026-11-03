@@ -62,6 +62,44 @@ final class HomeHeroMotionTests: XCTestCase {
         XCTAssertNil(HeroPagePosition.position(samples: [:], originX: 0, width: 400, count: 0))
     }
 
+    // MARK: 循环
+
+    func testCarouselWrapsBothWays() {
+        // a b c → c' a b c a'
+        XCTAssertEqual(HeroLoop.pages(["a", "b", "c"]), ["c", "a", "b", "c", "a"])
+        XCTAssertEqual(HeroLoop.pages(["a"]), ["a"], "A single artwork does not loop")
+        XCTAssertEqual(HeroLoop.page(forReal: 0, count: 3), 1)
+        XCTAssertEqual(HeroLoop.real(0, count: 3), 2, "The copy before the first page is the last artwork")
+        XCTAssertEqual(HeroLoop.real(4, count: 3), 0, "The copy after the last page is the first artwork")
+        XCTAssertEqual(HeroLoop.real(2, count: 3), 1)
+        XCTAssertEqual(HeroLoop.wrapTarget(0, count: 3), 3)
+        XCTAssertEqual(HeroLoop.wrapTarget(4, count: 3), 1)
+        XCTAssertNil(HeroLoop.wrapTarget(2, count: 3))
+        XCTAssertNil(HeroLoop.wrapTarget(0, count: 1))
+        XCTAssertEqual(HeroLoop.real(0, count: 1), 0)
+    }
+
+    func testSettlingOnACopyJumpsToTheRealPage() {
+        let state = HeroState()
+        state.count = 3
+        state.jump(to: 1)
+        // Swipe right from the first artwork onto the copy of the last one.
+        state.page = 0
+        state.motion.update(samples: [0: 0], originX: 0, width: 400, count: 5)
+        state.positionChanged()
+        XCTAssertEqual(state.page, 3)
+        XCTAssertEqual(state.realIndex(count: 3), 2)
+
+        // Still sliding onto the copy after the last artwork: wait until it settles.
+        state.page = 4
+        state.motion.update(samples: [4: 120], originX: 0, width: 400, count: 5)
+        state.positionChanged()
+        XCTAssertEqual(state.page, 4)
+        state.motion.update(samples: [4: 0], originX: 0, width: 400, count: 5)
+        state.positionChanged()
+        XCTAssertEqual(state.page, 1)
+    }
+
     // MARK: 封面取色
 
     func testPageTintKeepsTheHueButCapsBrightnessAndSaturation() {
