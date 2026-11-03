@@ -25,9 +25,9 @@ final class RedesignFlowUITests: XCTestCase {
         let firstColor = try backgroundSample(before)
         let secondColor = try backgroundSample(after)
         let difference = zip(firstColor, secondColor).reduce(0) { $0 + abs($1.0 - $1.1) }
-        XCTAssertGreaterThan(difference, 10, "The frosted background should follow the selected artwork")
+        XCTAssertGreaterThan(difference, 10, "The page colour should follow the selected artwork")
 
-        for (name, screenshot) in [("Home ambient first cover", before), ("Home ambient next cover", after)] {
+        for (name, screenshot) in [("Home artwork tint first cover", before), ("Home artwork tint next cover", after)] {
             let attachment = XCTAttachment(screenshot: screenshot)
             attachment.name = name
             attachment.lifetime = .keepAlways
@@ -61,12 +61,12 @@ final class RedesignFlowUITests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [changed], timeout: 10), .completed)
         let probe = app.descendants(matching: .any)["home.motionProbe"].firstMatch
         XCTAssertTrue(probe.waitForExistence(timeout: 5))
-        XCTAssertEqual(probe.value as? String, "interactive", "Backdrop progress must follow the drag before a page settles")
+        XCTAssertEqual(probe.value as? String, "interactive", "The carousel position must follow the drag before a page settles")
         XCTAssertEqual(play.frame.minX, playFrame.minX, accuracy: 1)
         XCTAssertEqual(play.frame.minY, playFrame.minY, accuracy: 1)
         XCTAssertEqual(movies.frame.minY, shelfFrame.minY, accuracy: 1)
         let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
-        screenshot.name = "Home continuous artwork backdrop"
+        screenshot.name = "Home artwork tint after swipe"
         screenshot.lifetime = .keepAlways
         add(screenshot)
     }

@@ -377,7 +377,7 @@ struct PosterCard: View {
                         .lineLimit(1)
                     Text(item.year.isEmpty ? item.sourceLabel : "\(item.year) · \(item.sourceLabel)")
                         .font(.system(size: 11))
-                        .foregroundStyle(Theme.textSecondary)
+                        .secondaryTextStyle()
                         .lineLimit(1)
                 }
                 .frame(width: width, alignment: .leading)
@@ -417,7 +417,7 @@ struct SeriesPosterCard: View {
                     .lineLimit(1)
                 Text(group.detailText)
                     .font(.system(size: 11))
-                    .foregroundStyle(Theme.textSecondary)
+                    .secondaryTextStyle()
                     .lineLimit(1)
             }
             .frame(width: width, alignment: .leading)
@@ -463,7 +463,7 @@ struct ContinueCard: View {
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
             VStack(alignment: .leading, spacing: 2) {
                 Text(entry.title).font(.system(size: 13, weight: .medium)).lineLimit(1)
-                Text(entry.subtitle).font(.system(size: 11)).foregroundStyle(Theme.textSecondary).lineLimit(1)
+                Text(entry.subtitle).font(.system(size: 11)).secondaryTextStyle().lineLimit(1)
             }
             .frame(width: width, alignment: .leading)
         }
@@ -802,55 +802,9 @@ enum HomeArtwork {
     }
 }
 
-// MARK: - 首页底色
+// MARK: - 首页卡片
 
-/// 首页整页的底色：把当前精选图放大模糊铺满全屏，再盖一层半透明的浅色或深色，
-/// 横幅和货架共用一片连续的封面色调，拖动时由 HomeHeroBackdrop 混合相邻两页。
-struct AmbientBackdrop: View {
-    let urlString: String
-    var fallbackURLString = ""
-
-    @Environment(\.colorScheme) private var colorScheme
-
-    var body: some View {
-        GeometryReader { proxy in
-            ZStack {
-                Theme.pageBackground
-                if !urlString.isEmpty || !fallbackURLString.isEmpty {
-                    // 全屏大半径模糊每帧都很贵：在 1/8 大小上模糊，再放大铺满，视觉几乎一样。
-                    // 图还没到、或者加载失败时什么都不画，只露出底色，不要闪一下蓝色的默认图。
-                    ArtworkView(urlString: urlString, fallbackURLString: fallbackURLString, title: "", letterSize: 1,
-                                maxPixel: ArtworkSize.backdrop, loading: .clear, drawsFallback: false)
-                        .scaledToFill()
-                        .frame(width: proxy.size.width / 8, height: proxy.size.height / 8)
-                        .clipped()
-                        .blur(radius: 11)
-                        .scaleEffect(9)
-                        .frame(width: proxy.size.width, height: proxy.size.height)
-                        .clipped()
-                        .saturation(1.05)
-                        .opacity(colorScheme == .dark ? 0.85 : 0.8)
-                }
-                veil
-            }
-            .frame(width: proxy.size.width, height: proxy.size.height)
-            .clipped()
-        }
-        .ignoresSafeArea()
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-    }
-
-    /// 半透明的一层：留住图片的颜色，又让文字看得清
-    private var veil: some View {
-        let color = colorScheme == .dark ? Color.black : Color.white
-        return LinearGradient(stops: [
-            .init(color: color.opacity(colorScheme == .dark ? 0.25 : 0.4), location: 0),
-            .init(color: color.opacity(colorScheme == .dark ? 0.38 : 0.54), location: 0.55),
-            .init(color: color.opacity(colorScheme == .dark ? 0.52 : 0.66), location: 1),
-        ], startPoint: .top, endPoint: .bottom)
-    }
-}
+// 首页整页的底色是精选封面的取色，见 HomeHeroMotion.swift 里的 HomeHeroBackdrop。
 
 extension View {
     /// 首页列表里的卡片：半透明磨砂，透出下面精选图的颜色

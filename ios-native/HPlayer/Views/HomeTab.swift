@@ -7,6 +7,8 @@ struct HomeTab: View {
     var onSearch: () -> Void = {}
     var onOpenCatalog: (CatalogKind, CatalogSort) -> Void = { _, _ in }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// 系统（或「外观」设置）的深浅色。首页内容强制按深色显示，从首页推出去的页面要恢复成这个。
+    @Environment(\.colorScheme) private var colorScheme
     @Namespace private var seriesTransition
     @EnvironmentObject private var recents: RecentStore
     @EnvironmentObject private var appState: AppState
@@ -75,9 +77,10 @@ struct HomeTab: View {
         }
     }
 
-    /// 横幅每一页的大图和货架开头的海报提前下载好，滑到时直接有图。
+    /// 横幅每一页的大图和货架开头的海报提前下载好，滑到时直接有图；顺便把每一页的取色算好。
     private func prefetchArtwork(_ library: HomeSnapshot) {
         ImagePipeline.shared.prefetch(HomeArtwork.prefetchRequests(library, selection: heroState.selection))
+        heroState.palette.prepare(library.featured)
     }
 
 
@@ -107,9 +110,14 @@ struct HomeTab: View {
                             }
                             .padding(.bottom, 40)
                         } else {
-                            heroCard(library, continueItems: continueItems,
-                                     width: viewport.size.width, safeTop: viewport.safeAreaInsets.top)
-                            sections(library, continueItems: continueItems)
+                            Group {
+                                heroCard(library, continueItems: continueItems,
+                                         width: viewport.size.width, safeTop: viewport.safeAreaInsets.top)
+                                sections(library, continueItems: continueItems)
+                            }
+                            // 整页铺的是封面取色的深底：文字和卡片一律按深色显示，浅色模式下也一样（和参考视频一致）。
+                            .environment(\.colorScheme, .dark)
+                            .environment(\.artworkTinted, true)
                         }
                     }
                 }
@@ -123,24 +131,26 @@ struct HomeTab: View {
                 }
             }
             .background {
-                HeroObserver(state: heroState) { state in
-                    HomeHeroBackdrop(items: library.featured, selection: state.selection, motion: state.motion)
-                }
+                HomeHeroBackdrop(items: library.featured, motion: heroState.motion, palette: heroState.palette)
             }
             .navigationDestination(for: PerformerListRoute.self) { _ in
                 PerformerGridView(groups: library.performers)
+                    .restoringAppearance(colorScheme)
             }
             .navigationDestination(for: PerformerRoute.self) { route in
-                if let group = library.performers.first(where: { $0.id == route.id }) {
-                    PerformerCollectionView(group: group)
-                        .id(route.id)
-                } else {
-                    VStack(spacing: 10) {
-                        Image(systemName: AppIcon.people.name)
-                        Text("演员合集已更新").font(.headline)
-                        Text("返回首页后重新进入演员合集。").foregroundStyle(.secondary)
+                Group {
+                    if let group = library.performers.first(where: { $0.id == route.id }) {
+                        PerformerCollectionView(group: group)
+                            .id(route.id)
+                    } else {
+                        VStack(spacing: 10) {
+                            Image(systemName: AppIcon.people.name)
+                            Text("演员合集已更新").font(.headline)
+                            Text("返回首页后重新进入演员合集。").foregroundStyle(.secondary)
+                        }
                     }
                 }
+                .restoringAppearance(colorScheme)
             }
             .toolbar(.hidden, for: .navigationBar)
             .fileImporter(
@@ -321,6 +331,7 @@ struct HomeTab: View {
                 .accessibilityIdentifier("home.search")
             NavigationLink {
                 ContinueHistoryView(entries: continueItems, onOpen: openEntry, onRemove: remove)
+                    .restoringAppearance(colorScheme)
             } label: { floatingButton(.history) }
                 .buttonStyle(.pressable(scale: 0.88))
                 .accessibilityLabel("观看历史")
@@ -335,14 +346,15 @@ struct HomeTab: View {
         .accessibilityIdentifier("home.heroBar")
     }
 
-    /// 翻页时只有图片和片名跟着滑，播放和更多两个按钮固定在原处，作用于当前这一页
+    /// 翻页时图片不动、片名跟着页面滑，播放和更多两个按钮固定在原处，作用于当前这一页
     private func heroPager(_ library: HomeSnapshot, selection: Int, originX: CGFloat) -> some View {
         let featured = library.featured
         let current = currentHero(library, selection: selection)
         let binding = Binding<Int>(get: { selection }, set: { heroState.selection = $0 })
         return TabView(selection: binding) {
             ForEach(Array(featured.enumerated()), id: \.element.id) { index, item in
-                HeroPage(item: item, index: index, originX: originX)
+                HeroPage(item: item, index: index, originX: originX, featured: featured,
+                         motion: heroState.motion, palette: heroState.palette)
                     .tag(index)
             }
         }
@@ -481,9 +493,10 @@ struct HomeTab: View {
             HStack(spacing: 10) {
                 Text(detail)
                     .font(.system(size: 12))
-                    .foregroundStyle(Theme.textTertiary)
+                    .tertiaryTextStyle()
                 NavigationLink {
                     destination()
+                        .restoringAppearance(colorScheme)
                 } label: {
                     ShelfLinkLabel(text: "全部")
                         .frame(minWidth: 44, minHeight: 44, alignment: .trailing)
@@ -504,7 +517,7 @@ struct HomeTab: View {
             HStack(spacing: 10) {
                 Text(detail)
                     .font(.system(size: 12))
-                    .foregroundStyle(Theme.textTertiary)
+                    .tertiaryTextStyle()
                 NavigationLink(value: value) {
                     ShelfLinkLabel(text: "全部")
                         .frame(minWidth: 44, minHeight: 44, alignment: .trailing)
@@ -733,6 +746,7 @@ struct HomeTab: View {
         let sourceID = "\(scope)|\(group.id)"
         return NavigationLink {
             SeriesDetailView(seriesID: group.id)
+                .restoringAppearance(colorScheme)
                 .modifier(SeriesTransitionDestination(id: sourceID, namespace: seriesTransition, reduceMotion: reduceMotion))
         } label: {
             SeriesPosterCard(group: group, width: width)
@@ -799,8 +813,13 @@ struct HomeTab: View {
 /// 只比较数量和状态，不比较整份片库。扫描中每新增 300 个视频才重新匹配一次，
 /// 否则每扫一页就把整个片库重新过一遍，界面会卡死。
 final class HeroState: ObservableObject {
-    @Published var selection = 0
+    @Published var selection = 0 {
+        // 页面位置报上来之前，底色先跟着选中项走
+        didSet { motion.follow(selection: selection) }
+    }
     let motion = HeroMotionState()
+    /// 每一页的封面取色
+    let palette = HeroPalette()
 }
 
 /// 只在横幅状态变化时重算自己的内容，父页面不订阅这个对象。
@@ -823,79 +842,66 @@ private struct HomeSnapshotKey: Equatable {
 
 // MARK: - 横幅单页
 
-/// 精选横幅的一页：下半部逐渐柔化，配合整张轮播末端的透明度融进页面底色。
-/// 卡片上的文字固定用白色，浅色和深色模式下都一样清楚。
+/// 精选横幅的一页（参考视频的效果）：翻页时图片钉在屏幕上不动，页面边缘像一扇窗从图上扫过去，
+/// 新的一页就这样被「揭」出来；片名跟着页面一起走。画面下半截先柔化，再融进封面取色，和整页底色连成一片。
+/// 卡片上的文字固定用白色：首页整页都是封面色的深底。
 private struct HeroPage: View {
     let item: HomeMediaItem
     let index: Int
     let originX: CGFloat
+    let featured: [HomeMediaItem]
+    let motion: HeroMotionState
+    let palette: HeroPalette
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    private static let scrim = Theme.brandNight
 
     var body: some View {
         GeometryReader { geometry in
             let width = max(geometry.size.width, 1)
             let rawX = geometry.frame(in: .global).minX
+            // 这一页离开原位多少。打开「减少动态效果」时不做窗口效果，图片跟着页面一起平移。
             let pageX = reduceMotion ? 0 : max(-width, min(width, rawX - originX))
             ZStack(alignment: .bottomLeading) {
-                // 滑到这一页时图通常已经预取好；还没到就先露出底色，不画默认图。
-                ArtworkView(
-                    urlString: HomeArtwork.heroURL(item),
-                    fallbackURLString: item.posterURL,
-                    title: item.title,
-                    maxPixel: ArtworkSize.hero,
-                    loading: .clear
-                )
-                .scaledToFill()
-                .frame(width: width * 1.4, height: geometry.size.height)
-                .clipped()
-                .offset(x: -pageX * 0.18)
-                .frame(width: width, height: geometry.size.height)
-                .clipped()
+                ZStack {
+                    // 滑到这一页时图通常已经预取好；还没到就先露出底色，不画默认图。
+                    ArtworkView(
+                        urlString: HomeArtwork.heroURL(item),
+                        fallbackURLString: item.posterURL,
+                        title: item.title,
+                        maxPixel: ArtworkSize.hero,
+                        loading: .clear
+                    )
+                    .scaledToFill()
+                    .frame(width: width, height: geometry.size.height)
+                    .clipped()
 
-                softenedArtwork(size: geometry.size, pageX: pageX)
+                    softenedArtwork(size: geometry.size)
+                }
+                // 反向抵消页面的位移，图片停在原地；露出多少由这一页的边界（下面的 clipped）决定。
+                .offset(x: -pageX)
 
-                LinearGradient(
-                    stops: [
-                        .init(color: Self.scrim.opacity(0), location: 0.1),
-                        .init(color: Self.scrim.opacity(0.16), location: 0.3),
-                        .init(color: Self.scrim.opacity(0.43), location: 0.48),
-                        .init(color: Self.scrim.opacity(0.63), location: 0.62),
-                        .init(color: Self.scrim.opacity(0.78), location: 0.76),
-                        .init(color: Self.scrim.opacity(0.83), location: 0.9),
-                        .init(color: Self.scrim.opacity(0.84), location: 1),
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
+                HeroTintOverlay(items: featured, motion: motion, palette: palette)
 
                 content
                     .padding(.horizontal, 16)
                     .padding(.bottom, 62 + 92)
-                    .offset(x: pageX * 0.12)
-                    .opacity(1 - min(1, abs(pageX) / width) * 0.35)
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
             .clipped()
             .preference(key: HeroPagePositionKey.self, value: [index: rawX])
         }
-        .background(Theme.surface)
     }
 
-    /// 同一张图先失去细节再淡出；小尺寸模糊后放大，避免对每页做全尺寸模糊。
-    /// 裁切比例与视差偏移和清晰图保持一致，柔化时不会出现第二个轮廓。
-    private func softenedArtwork(size: CGSize, pageX: CGFloat) -> some View {
+    /// 同一张图先失去细节再融进底色；小尺寸模糊后放大，避免对每页做全尺寸模糊。
+    /// 裁切比例和清晰图一致，并跟清晰图一起钉在原地，柔化时不会出现第二个轮廓。
+    private func softenedArtwork(size: CGSize) -> some View {
         let width = max(size.width, 1)
         return ArtworkView(urlString: HomeArtwork.heroURL(item), fallbackURLString: item.posterURL,
                            title: "", maxPixel: ArtworkSize.backdrop, loading: .clear, drawsFallback: false)
             .scaledToFill()
-            .frame(width: width * 1.4 / 4, height: size.height / 4)
+            .frame(width: width / 4, height: size.height / 4)
             .clipped()
             .blur(radius: 10)
             .scaleEffect(4)
-            .frame(width: width * 1.4, height: size.height)
-            .offset(x: -pageX * 0.18)
             .frame(width: width, height: size.height)
             .clipped()
             .mask {
@@ -984,5 +990,13 @@ private struct HeroActions: View {
             .buttonStyle(.pressable)
             .accessibilityLabel("影片选项")
         }
+    }
+}
+
+private extension View {
+    /// 首页内容强制按深色显示；从首页进入的页面恢复成系统（或「外观」设置）的深浅色，次要文字也恢复主题灰。
+    func restoringAppearance(_ scheme: ColorScheme) -> some View {
+        environment(\.colorScheme, scheme)
+            .environment(\.artworkTinted, false)
     }
 }

@@ -16,8 +16,9 @@ enum Motion {
     static let bouncy = Animation.spring(response: 0.42, dampingFraction: 0.62)
     /// 淡入淡出
     static let fade = Animation.easeInOut(duration: 0.28)
-    /// 封面取色背景：翻页后缓缓过渡到新画面的颜色。
-    static let artworkFade = Animation.easeInOut(duration: 0.65)
+    /// 封面取色背景：精选翻过一半后，整页底色用 0.3 秒过渡到新封面的颜色（参考视频里的节奏）。
+    /// 颜色变化不属于位移和缩放，「减少动态效果」下也保留。
+    static let artworkFade = Animation.easeInOut(duration: 0.3)
     static let quick = Animation.easeOut(duration: 0.16)
 
     /// 一排卡片依次出现：越靠后越晚，最多延后 `limit` 个台阶，后面的一起出现。

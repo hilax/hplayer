@@ -94,7 +94,7 @@ struct ShelfLinkLabel: View {
             Image(systemName: AppIcon.forward.name).font(.system(size: 10, weight: .bold))
         }
         .font(.caption)
-        .foregroundStyle(Theme.textSecondary)
+        .secondaryTextStyle()
         .contentShape(Rectangle())
     }
 }

@@ -98,6 +98,9 @@ enum Theme {
     static let textPrimary = Color(uiColor: .adaptive(light: UIColor(hex: 0x1B1D24), dark: UIColor(hex: 0xF2F3F5)))
     static let textSecondary = Color(uiColor: .adaptive(light: UIColor(hex: 0x5E6371), dark: UIColor(hex: 0xA1A6B3)))
     static let textTertiary = Color(uiColor: .adaptive(light: UIColor(hex: 0x8B90A0), dark: UIColor(hex: 0x6B7080)))
+    /// 首页铺的是封面取色的底：上面的灰色次要文字会发闷，改用半透明白，底色偏亮偏暗都看得清。
+    static let textSecondaryOnArtwork = Color.white.opacity(0.78)
+    static let textTertiaryOnArtwork = Color.white.opacity(0.56)
 
     static let hairline = Color(uiColor: .adaptive(
         light: UIColor(white: 0, alpha: 0.07),
@@ -146,6 +149,41 @@ enum Theme {
             endPoint: .bottomTrailing
         )
     }
+}
+
+// MARK: - 封面色底上的文字
+
+private struct ArtworkTintedKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    /// 这一块铺在封面取色的底上（首页）。卡片、货架标题据此换用 `textSecondaryOnArtwork` 这一组颜色。
+    var artworkTinted: Bool {
+        get { self[ArtworkTintedKey.self] }
+        set { self[ArtworkTintedKey.self] = newValue }
+    }
+}
+
+private struct TintAwareForeground: ViewModifier {
+    let tertiary: Bool
+    @Environment(\.artworkTinted) private var artworkTinted
+
+    private var color: Color {
+        if artworkTinted { return tertiary ? Theme.textTertiaryOnArtwork : Theme.textSecondaryOnArtwork }
+        return tertiary ? Theme.textTertiary : Theme.textSecondary
+    }
+
+    func body(content: Content) -> some View {
+        content.foregroundStyle(color)
+    }
+}
+
+extension View {
+    /// 次要文字：普通页面用主题灰，铺了封面色的首页用半透明白。
+    func secondaryTextStyle() -> some View { modifier(TintAwareForeground(tertiary: false)) }
+    /// 三级文字（数量、注释）：同上。
+    func tertiaryTextStyle() -> some View { modifier(TintAwareForeground(tertiary: true)) }
 }
 
 extension Font {
