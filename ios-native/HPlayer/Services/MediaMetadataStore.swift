@@ -130,10 +130,20 @@ final class MediaMetadataStore: ObservableObject {
 
     /// 启动时恢复已有封面：片名解析（十几个正则 × 整个片库）放到后台线程，
     /// 回到主线程后 hydrate 只剩字典查询，首页不会被卡住。
+    /// 上次启动存下的解析结果先读回来，只解析新加入的文件名，首页不用等整个片库重新解析。
     func restore(files: [LibraryMedia]) async {
-        await prewarmNames(files.map(\.name))
+        let names = files.map(\.name)
+        let saved = await Task.detached(priority: .userInitiated) { ParsedNameDiskCache.load() }.value
+        MediaNameParser.seed(saved)
+        await prewarmNames(names)
         hydrate(files: files)
         finishRestoring()
+        // 有新文件名（或换了版本、缓存作废）才重写，片库没变时不写盘
+        if names.contains(where: { saved[$0] == nil }) {
+            Task.detached(priority: .utility) {
+                ParsedNameDiskCache.save(MediaNameParser.parsed(names))
+            }
+        }
     }
 
     func finishRestoring() {
@@ -773,7 +783,8 @@ enum MediaFingerprint {
 }
 
 enum MediaNameParser {
-    struct ParsedName {
+    /// Codable：解析结果会存到磁盘（ParsedNameDiskCache），下次启动直接读。
+    struct ParsedName: Codable, Equatable {
         let title: String
         let year: String?
         let season: Int?
@@ -814,6 +825,22 @@ enum MediaNameParser {
 
     private static let cacheLock = NSLock()
     nonisolated(unsafe) private static var parseCache: [String: ParsedName] = [:]
+
+    /// 把上次启动存下的解析结果放回内存缓存，已经有的不覆盖。
+    static func seed(_ entries: [String: ParsedName]) {
+        guard !entries.isEmpty else { return }
+        cacheLock.lock()
+        for (name, value) in entries where parseCache[name] == nil { parseCache[name] = value }
+        cacheLock.unlock()
+    }
+
+    /// 这些文件名的解析结果（没解析过的现在解析），用来存盘。
+    static func parsed(_ names: [String]) -> [String: ParsedName] {
+        var result: [String: ParsedName] = [:]
+        result.reserveCapacity(names.count)
+        for name in names { result[name] = parse(name) }
+        return result
+    }
 
     /// 解析要跑十几个正则，首页每次刷新都会对整个片库调用；结果按文件名缓存。
     static func parse(_ filename: String) -> ParsedName {
@@ -920,8 +947,22 @@ enum MediaNameParser {
             .replacingOccurrences(of: #"[^a-z0-9\p{Han}]+"#, with: "", options: .regularExpression)
     }
 
+    private static let regexLock = NSLock()
+    nonisolated(unsafe) private static var regexCache: [String: NSRegularExpression] = [:]
+
+    /// 编译好的正则按模式缓存：解析一个文件名要匹配好几次，每次重新编译会拖慢启动时对整个片库的解析。
+    /// 这里的模式都是代码里写死的，数量固定。
+    private static func regex(_ pattern: String) -> NSRegularExpression? {
+        regexLock.lock()
+        defer { regexLock.unlock() }
+        if let cached = regexCache[pattern] { return cached }
+        guard let made = try? NSRegularExpression(pattern: pattern) else { return nil }
+        regexCache[pattern] = made
+        return made
+    }
+
     private static func capture(_ pattern: String, in value: String) -> [String] {
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        guard let regex = regex(pattern) else { return [] }
         let range = NSRange(value.startIndex..<value.endIndex, in: value)
         guard let match = regex.firstMatch(in: value, range: range) else { return [] }
         return (1..<match.numberOfRanges).compactMap { index in

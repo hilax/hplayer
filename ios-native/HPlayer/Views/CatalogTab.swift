@@ -138,14 +138,15 @@ struct CatalogTab: View {
     @Namespace private var pillRegion
     @Namespace private var pillYear
     @Namespace private var pillSort
-    @EnvironmentObject private var recents: RecentStore
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var mediaLibrary: MediaLibraryStore
     @EnvironmentObject private var localStore: LocalMediaStore
     @EnvironmentObject private var metadataStore: MediaMetadataStore
 
-    @State private var snapshot = HomeSnapshot(items: [])
-    @State private var entries: [CatalogEntry] = []
+    /// 分组和网格条目由 HomeView 在后台算好（见 LibrarySnapshotStore），第一次打开片库不用再在主线程重算。
+    @EnvironmentObject private var librarySnapshots: LibrarySnapshotStore
+    private var snapshot: HomeSnapshot { librarySnapshots.home }
+    private var entries: [CatalogEntry] { librarySnapshots.catalogEntries }
     @State private var kind: CatalogKind = .all
     @State private var region: CatalogRegion = .all
     @State private var year: CatalogYear = .all
@@ -157,12 +158,6 @@ struct CatalogTab: View {
     init(onSearch: @escaping () -> Void = {}, preset: Binding<CatalogPreset?> = .constant(nil)) {
         self.onSearch = onSearch
         _preset = preset
-    }
-
-    private var snapshotKey: CatalogSnapshotKey {
-        CatalogSnapshotKey(local: localStore.files.count, cloudRevision: mediaLibrary.revision,
-                           metadataRevision: metadataStore.revision, account: appState.libraryAccountID,
-                           recents: recents.items.count)
     }
 
     var body: some View {
@@ -191,7 +186,6 @@ struct CatalogTab: View {
                     EmptyStateView(icon: AppIcon.people.name, title: "演员合集已更新", message: "返回片库后重新进入演员合集。")
                 }
             }
-            .task(id: snapshotKey) { await rebuild() }
             .onChange(of: preset) { value in
                 guard let value else { return }
                 apply(value)
@@ -227,29 +221,8 @@ struct CatalogTab: View {
 
     // MARK: 数据
 
-    private func rebuild() async {
-        let files = HomeLibrary.media(local: localStore, cloud: mediaLibrary, appState: appState)
-        let matches = metadataStore.metadataByMediaID
-        let recentItems = recents.items
-        if snapshot.items.isEmpty {
-            let first = HomeSnapshot(items: files.map { HomeMediaItem(media: $0, metadata: matches[$0.id]) })
-            snapshot = first
-            entries = Self.makeEntries(first, recents: recentItems)
-            return
-        }
-        try? await Task.sleep(nanoseconds: 300_000_000)
-        guard !Task.isCancelled else { return }
-        let result = await Task.detached(priority: .userInitiated) { () -> (HomeSnapshot, [CatalogEntry]) in
-            let snapshot = HomeSnapshot(items: files.map { HomeMediaItem(media: $0, metadata: matches[$0.id]) })
-            return (snapshot, Self.makeEntries(snapshot, recents: recentItems))
-        }.value
-        if !Task.isCancelled {
-            snapshot = result.0
-            entries = result.1
-        }
-    }
-
-    nonisolated private static func makeEntries(_ snapshot: HomeSnapshot, recents: [RecentItem]) -> [CatalogEntry] {
+    /// 网格条目由 LibrarySnapshotStore 在后台调用生成。
+    nonisolated static func makeEntries(_ snapshot: HomeSnapshot, recents: [RecentItem]) -> [CatalogEntry] {
         // 最近播放的先后：按记录顺序给每个片库文件编号
         var rank: [String: Int] = [:]
         let localByName = Dictionary(snapshot.items.filter { $0.media.localURL != nil }.map { ($0.media.name, $0.id) },
@@ -398,7 +371,10 @@ struct CatalogTab: View {
     @ViewBuilder
     private func grid(width: CGFloat) -> some View {
         let list = visible
-        if list.isEmpty {
+        if !librarySnapshots.catalogReady {
+            // 条目还在后台准备（刚启动就切过来时），先留出位置，不闪「片库还是空的」
+            Color.clear.frame(height: 320)
+        } else if list.isEmpty {
             EmptyStateView(
                 icon: AppIcon.library.name,
                 title: entries.isEmpty ? "片库还是空的" : "没有符合条件的影片",
@@ -420,8 +396,9 @@ struct CatalogTab: View {
                         .transition(.scale(scale: 0.92).combined(with: .opacity))
                 }
             }
+            // 换筛选时的增删动画由筛选胶囊的 withAnimation 带出来；这里不再对整个 id 列表做隐式动画，
+            // 否则第一次填进上千张卡片时每张都要做一次插入动画，标签栏的液态玻璃也跟着卡在半路。
             .padding(.horizontal, Theme.contentInset)
-            .animation(reduceMotion ? nil : Motion.smooth, value: list.map(\.id))
         }
     }
 
@@ -472,12 +449,4 @@ struct CatalogTab: View {
 struct CatalogPreset: Equatable {
     var kind: CatalogKind = .all
     var sort: CatalogSort = .recentlyAdded
-}
-
-private struct CatalogSnapshotKey: Equatable {
-    let local: Int
-    let cloudRevision: Int
-    let metadataRevision: Int
-    let account: String?
-    let recents: Int
 }

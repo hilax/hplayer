@@ -12,6 +12,8 @@ struct HomeView: View {
     })
     @StateObject private var scanner = CloudLibraryScanner()
     @StateObject private var accountInfo = P115AccountInfoStore()
+    /// 首页和片库共用的分组结果，在这里算一次，两个页面直接读。
+    @StateObject private var librarySnapshots = LibrarySnapshotStore()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// 当前标签（系统原生 TabView 的选中项）。
     @State private var selection: HomeSection = .home
@@ -92,6 +94,15 @@ struct HomeView: View {
                     metadataStore.sync(files: libraryFiles)
                 }
             }
+            .task(id: snapshotKey) {
+                // 先等封面缓存恢复完，第一屏直接带封面，不会先出现一屏没封面的画面。
+                await metadataStore.waitUntilRestored()
+                guard !Task.isCancelled else { return }
+                await librarySnapshots.rebuild(files: libraryFiles, matches: metadataStore.metadataByMediaID)
+            }
+            .task(id: CatalogEntriesKey(revision: librarySnapshots.revision, recents: recents.items.count)) {
+                await librarySnapshots.rebuildEntries(recents: recents.items)
+            }
             .onChange(of: automaticMatching) { enabled in
                 if enabled && scenePhase != .background {
                     metadataStore.resumeAutomatic()
@@ -115,6 +126,7 @@ struct HomeView: View {
             .environmentObject(metadataStore)
             .environmentObject(scanner)
             .environmentObject(accountInfo)
+            .environmentObject(librarySnapshots)
             .tint(Theme.accent)
     }
 
@@ -136,6 +148,11 @@ struct HomeView: View {
 
     private var libraryFiles: [LibraryMedia] {
         HomeLibrary.media(local: localStore, cloud: mediaLibrary, appState: appState)
+    }
+
+    private var snapshotKey: LibrarySnapshotKey {
+        LibrarySnapshotKey(local: localStore.files.count, cloudRevision: mediaLibrary.revision,
+                           metadataRevision: metadataStore.revision, account: appState.libraryAccountID)
     }
 
     /// Keep scanning/matching alive when moving between tabs; coalesce scan batches.
@@ -212,4 +229,16 @@ private struct LibrarySyncInput: Equatable {
     let accountID: String?
     let background: Bool
     let scanning: Bool
+}
+
+private struct LibrarySnapshotKey: Equatable {
+    let local: Int
+    let cloudRevision: Int
+    let metadataRevision: Int
+    let account: String?
+}
+
+private struct CatalogEntriesKey: Equatable {
+    let revision: Int
+    let recents: Int
 }

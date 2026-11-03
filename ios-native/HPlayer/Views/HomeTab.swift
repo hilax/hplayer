@@ -32,50 +32,12 @@ struct HomeTab: View {
     @State private var showCloudBrowser = false
     @State private var matching: MatchRequest?
     @State private var magnetLaunch: MagnetLaunch?
-    /// 首页的分组结果。在后台线程算好再换上，匹配、扫描期间界面不会被整页重算拖住。
-    @State private var snapshot = HomeSnapshot(items: [])
+    /// 首页和片库共用的分组结果：HomeView 在后台算好（先等封面缓存恢复完，第一屏直接带封面），
+    /// 匹配、扫描期间界面不会被整页重算拖住。见 LibrarySnapshotStore。
+    @EnvironmentObject private var librarySnapshots: LibrarySnapshotStore
+    private var snapshot: HomeSnapshot { librarySnapshots.home }
     /// 第一份首页分组算好之前不显示内容（也不先闪空状态），算好后淡入。
-    @State private var snapshotReady = false
-
-    private var snapshotKey: HomeSnapshotKey {
-        HomeSnapshotKey(local: localStore.files.count, cloudRevision: mediaLibrary.revision,
-                        metadataRevision: metadataStore.revision, account: appState.libraryAccountID)
-    }
-
-    private func rebuildSnapshot() async {
-        // 启动时先等封面缓存恢复完，第一屏直接带封面，不会先出现一屏没封面的画面。
-        await metadataStore.waitUntilRestored()
-        guard !Task.isCancelled else { return }
-        let files = libraryFiles
-        let matches = metadataStore.metadataByMediaID
-        if snapshot.items.isEmpty {
-            let first: HomeSnapshot
-            if files.count > 400 {
-                // 片库很大时分组、排序放到后台，主线程不被卡住
-                first = await Task.detached(priority: .userInitiated) {
-                    HomeSnapshot(items: files.map { HomeMediaItem(media: $0, metadata: matches[$0.id]) })
-                }.value
-                guard !Task.isCancelled else { return }
-            } else {
-                first = HomeSnapshot(items: files.map { HomeMediaItem(media: $0, metadata: matches[$0.id]) })
-            }
-            snapshot = first
-            prefetchArtwork(first)
-            if !snapshotReady {
-                withAnimation(reduceMotion ? nil : Motion.fade) { snapshotReady = true }
-            }
-            return
-        }
-        try? await Task.sleep(nanoseconds: 300_000_000)
-        guard !Task.isCancelled else { return }
-        let result = await Task.detached(priority: .userInitiated) {
-            HomeSnapshot(items: files.map { HomeMediaItem(media: $0, metadata: matches[$0.id]) })
-        }.value
-        if !Task.isCancelled {
-            snapshot = result
-            prefetchArtwork(result)
-        }
-    }
+    private var snapshotReady: Bool { librarySnapshots.ready }
 
     /// 横幅每一页的大图和货架开头的海报提前下载好，滑到时直接有图；顺便把每一页的取色算好。
     private func prefetchArtwork(_ library: HomeSnapshot) {
@@ -182,7 +144,8 @@ struct HomeTab: View {
                 Text(playError)
             }
             .task { localStore.refresh() }
-            .task(id: snapshotKey) { await rebuildSnapshot() }
+            .onChange(of: librarySnapshots.revision) { _ in prefetchArtwork(snapshot) }
+            .onAppear { if snapshotReady { prefetchArtwork(snapshot) } }
             .onChange(of: library.featured.count) { count in
                 // 精选换了一批：回到第一张（循环时它在第 1 页，前面是最后一张的复制页）
                 heroState.count = count
@@ -902,13 +865,6 @@ private struct HeroObserver<Content: View>: View {
         self.content = content
     }
     var body: some View { content(state) }
-}
-
-private struct HomeSnapshotKey: Equatable {
-    let local: Int
-    let cloudRevision: Int
-    let metadataRevision: Int
-    let account: String?
 }
 
 // MARK: - 横幅单页
