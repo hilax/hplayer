@@ -172,6 +172,10 @@ struct HomeView: View {
             TabView(selection: $selection) {
                 ForEach(HomeSection.tabs, id: \.self) { section in
                     page(for: section)
+                        // 搜索页打开时键盘弹出，底下的页面不该跟着键盘改变尺寸：
+                        // 不然从搜索页返回、键盘收起时，片库、网盘会跟着弹回去。
+                        // 「我的」里有带输入框的二级页，需要保留键盘避让，所以不包括它。
+                        .ignoresSafeArea(keyboardRegions(for: section), edges: .bottom)
                         .tabItem {
                             // 系统 TabView 会把标签栏里所有符号自动换成实心款（四个图标都是实心的）。
                             // 关掉它，由图标表决定：没选中是线框，选中才是实心，和应用其余图标一致。
@@ -215,6 +219,10 @@ struct HomeView: View {
         let color = Theme.textSecondaryUIColor.resolvedColor(with: traits)
         guard let image = UIImage(systemName: icon.name) else { return UIImage() }
         return image.withTintColor(color, renderingMode: .alwaysOriginal)
+    }
+
+    private func keyboardRegions(for section: HomeSection) -> SafeAreaRegions {
+        section == .mine ? [] : .keyboard
     }
 
     private func openSearch() {
