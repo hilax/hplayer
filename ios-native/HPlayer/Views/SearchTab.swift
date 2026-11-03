@@ -5,10 +5,13 @@ struct SearchTab: View {
     var initialResults: [P115File] = []
     /// 搜索页当前是否在前台；回到前台时自动弹出键盘，离开时收起。
     var isActive = true
+    /// HomeView 在后台算好的片库分组。搜索页留在后台时每次刷新都要用到片库，
+    /// 直接读这份现成的，不要在主线程把整个片库重新分组一遍。
+    var library: HomeSnapshot?
     var onClose: () -> Void = {}
     var body: some View {
         NavigationStack {
-            SearchView(initialQuery: initialQuery, initialResults: initialResults, isActive: isActive, onClose: onClose)
+            SearchView(initialQuery: initialQuery, initialResults: initialResults, isActive: isActive, library: library, onClose: onClose)
         }
     }
 }
@@ -35,6 +38,8 @@ struct SearchView: View {
     @EnvironmentObject private var metadataStore: MediaMetadataStore
 
     var isActive = true
+    /// 现成的片库分组；没有（还没算好）时才自己算一遍。
+    var sharedLibrary: HomeSnapshot?
     var onClose: () -> Void = {}
     @Namespace private var scopeNamespace
     @FocusState private var searchFocused: Bool
@@ -49,8 +54,10 @@ struct SearchView: View {
     @State private var playing: PlaybackQueue?
     @State private var openSeriesID: String?
 
-    init(initialQuery: String = "", initialResults: [P115File] = [], isActive: Bool = true, onClose: @escaping () -> Void = {}) {
+    init(initialQuery: String = "", initialResults: [P115File] = [], isActive: Bool = true,
+         library: HomeSnapshot? = nil, onClose: @escaping () -> Void = {}) {
         self.isActive = isActive
+        self.sharedLibrary = library
         self.onClose = onClose
         _keyword = State(initialValue: initialQuery)
         _cloudSearch = StateObject(wrappedValue: CloudSearchStore(initialQuery: initialQuery, initialResults: initialResults))
@@ -61,7 +68,7 @@ struct SearchView: View {
     }
 
     var body: some View {
-        let library = HomeLibrary.snapshot(local: localStore, cloud: mediaLibrary, metadata: metadataStore, appState: appState)
+        let library = sharedLibrary ?? HomeLibrary.snapshot(local: localStore, cloud: mediaLibrary, metadata: metadataStore, appState: appState)
         let hits = libraryMatches(library)
 
         VStack(spacing: 0) {

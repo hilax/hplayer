@@ -196,6 +196,7 @@ struct HomeView: View {
 
             if searchCreated {
                 SearchTab(initialQuery: initialSearch, initialResults: searchFiles, isActive: searchOpen,
+                          library: librarySnapshots.ready ? librarySnapshots.home : nil,
                           onClose: { closeSearch() })
                     .background(Theme.pageBackground.ignoresSafeArea())
                     .opacity(searchOpen ? 1 : 0)
