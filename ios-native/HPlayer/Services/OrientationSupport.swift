@@ -12,9 +12,18 @@ final class HPlayerAppDelegate: NSObject, UIApplicationDelegate {
         _ application: UIApplication,
         supportedInterfaceOrientationsFor window: UIWindow?
     ) -> UIInterfaceOrientationMask {
-        if let player = window as? PlayerWindow { return player.allowedOrientations }
-        // 没有指明窗口时（系统偶尔这样问），播放器在前台就按播放器来
-        if window == nil, let player = PlayerWindowController.shared.window { return player.allowedOrientations }
-        return .portrait
+        let answer: UIInterfaceOrientationMask
+        if let player = window as? PlayerWindow {
+            answer = player.allowedOrientations
+        } else if window == nil, let player = PlayerWindowController.shared.window {
+            // 没有指明窗口时（系统偶尔这样问），播放器在前台就按播放器来
+            answer = player.allowedOrientations
+        } else {
+            answer = .portrait
+        }
+        if PlayerWindowController.shared.isPresented {
+            PlayerWindowController.shared.logOrientationQuery(window: window, answer: answer)
+        }
+        return answer
     }
 }

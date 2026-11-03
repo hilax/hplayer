@@ -14,7 +14,7 @@ final class PlaybackUITests: XCTestCase {
         let orientation = app.buttons["playback.orientation"]
         let surface = app.otherElements["playback.surface"]
         XCTAssertTrue(wait { close.exists && surface.exists && orientation.exists && orientation.label == "竖屏" },
-                      "Player should open in landscape")
+                      "Player should open in landscape; debug=\(debugText(app)); window=\(surface.frame)")
         XCTAssertTrue(wait { self.isLandscape(surface) }, "The player window should be in real landscape")
         close.tap()
         XCTAssertTrue(wait { !surface.exists && previousPage.exists && reopen.isHittable && self.isPortraitWindow(app) },
@@ -54,7 +54,7 @@ final class PlaybackUITests: XCTestCase {
         let orientation = app.buttons["playback.orientation"]
         let pause = app.buttons["playback.playPause"]
         let elapsed = app.staticTexts["playback.elapsed"]
-        XCTAssertTrue(wait { surface.exists && orientation.exists && orientation.label == "竖屏" }, "Player should open in landscape")
+        XCTAssertTrue(wait { surface.exists && orientation.exists && orientation.label == "竖屏" }, "Player should open in landscape; debug=\(debugText(app)); window=\(surface.frame)")
         XCTAssertFalse(app.alerts.firstMatch.exists)
         XCTAssertTrue(wait { self.isLandscape(surface) }, "The player window should be in real landscape")
         let frame = surface.frame
@@ -345,6 +345,10 @@ final class PlaybackUITests: XCTestCase {
     private func isLandscape(_ surface: XCUIElement) -> Bool {
         let frame = surface.frame
         return frame.width > frame.height
+    }
+
+    private func debugText(_ app: XCUIApplication) -> String {
+        app.staticTexts["player.debug"].exists ? app.staticTexts["player.debug"].label : "(no debug label)"
     }
 
     private func isPortraitWindow(_ app: XCUIApplication) -> Bool {
