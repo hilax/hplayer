@@ -433,44 +433,42 @@ private extension View {
 }
 
 /// 未识别文件不占用首页，但仍可以从扫描页播放或手动校正封面。
+///
+/// 列表直接读首页后台算好的分组结果（LibrarySnapshotStore.unmatched），不在界面里重新解析整个片库的文件名；
+/// 用懒加载列表，只画屏幕上看得到的行。以前每次刷新要把全部文件名解析好几遍、再一次性画出全部行，
+/// 片库大时点进来会卡很久，匹配期间还会一直卡。
 struct HomeUnmatchedMediaView: View {
-    @EnvironmentObject private var library: MediaLibraryStore
-    @EnvironmentObject private var local: LocalMediaStore
     @EnvironmentObject private var metadata: MediaMetadataStore
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var librarySnapshots: LibrarySnapshotStore
     @State private var matching: MatchRequest?
     @State private var playing: PlaybackQueue?
 
-    private var items: [HomeMediaItem] {
-        HomeLibrary.items(HomeLibrary.media(local: local, cloud: library, appState: appState), metadata: metadata.metadataByMediaID)
-            .filter { $0.metadata?.hasUsablePoster != true }
-    }
-
     var body: some View {
-        DesignPage(eyebrow: "A little attention", title: "未匹配影片", subtitle: "\(items.count) 个视频可以手动补充资料，也可以直接播放。") {
-            if items.isEmpty {
-                EmptyStateView(icon: AppIcon.success.name, title: "片库已经整理好了", message: "当前没有待匹配影片。")
+        let items = librarySnapshots.home.unmatched
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 20) {
+                PageIntroduction(eyebrow: "A little attention", title: "未匹配影片",
+                                 subtitle: "\(items.count) 个视频可以手动补充资料，也可以直接播放。", showsTitle: false)
+                if items.isEmpty {
+                    EmptyStateView(icon: AppIcon.success.name, title: "片库已经整理好了", message: "当前没有待匹配影片。")
+                }
+                ForEach(items) { item in
+                    UnmatchedRow(item: item,
+                                 onMatch: { matching = MatchRequest(item: item) },
+                                 onPlay: { playing = PlaybackQueue(source: item.media.source, items: [item.media.source]) })
+                }
             }
-            ForEach(items) { item in
-                VStack(alignment: .leading, spacing: 16) {
-                    HStack(spacing: 14) {
-                        Image(systemName: AppIcon.video.name).font(.title).foregroundStyle(Theme.accent)
-                            .frame(width: 52, height: 68).background(Theme.tileTint, in: RoundedRectangle(cornerRadius: 12))
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(item.media.name).font(.subheadline.weight(.medium)).lineLimit(2)
-                            Text([item.sourceLabel, formatSize(item.media.size)].filter { !$0.isEmpty }.joined(separator: " · "))
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                    HStack(spacing: 10) {
-                        Button { matching = MatchRequest(item: item) } label: { Label("匹配封面", systemImage: AppIcon.poster.name) }
-                            .buttonStyle(PrimaryActionStyle())
-                        Button { playing = PlaybackQueue(source: item.media.source, items: [item.media.source]) } label: { Label("直接播放", systemImage: AppIcon.play.name) }
-                            .buttonStyle(SecondaryActionStyle())
-                    }
-                }.padding(16).surfaceCard()
-            }
+            .frame(maxWidth: 680)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, Theme.contentInset)
+            .padding(.top, 14)
+            .padding(.bottom, 36)
         }
+        .scrollIndicators(.hidden)
+        .background(Theme.pageBackground.ignoresSafeArea())
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
         .navigationTitle("未匹配影片")
         .designScreen("unmatched")
         .sheet(item: $matching) { request in
@@ -481,5 +479,32 @@ struct HomeUnmatchedMediaView: View {
         .playerWindow(item: $playing) { queue in
             PlayerView(source: queue.source, playlist: queue.items).environmentObject(appState)
         }
+    }
+}
+
+private struct UnmatchedRow: View {
+    let item: HomeMediaItem
+    let onMatch: () -> Void
+    let onPlay: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 14) {
+                Image(systemName: AppIcon.video.name).font(.title).foregroundStyle(Theme.accent)
+                    .frame(width: 52, height: 68).background(Theme.tileTint, in: RoundedRectangle(cornerRadius: 12))
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(item.media.name).font(.subheadline.weight(.medium)).lineLimit(2)
+                    Text([item.sourceLabel, formatSize(item.media.size)].filter { !$0.isEmpty }.joined(separator: " · "))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            HStack(spacing: 10) {
+                Button(action: onMatch) { Label("匹配封面", systemImage: AppIcon.poster.name) }
+                    .buttonStyle(PrimaryActionStyle())
+                Button(action: onPlay) { Label("直接播放", systemImage: AppIcon.play.name) }
+                    .buttonStyle(SecondaryActionStyle())
+            }
+        }
+        .padding(16).surfaceCard()
     }
 }
