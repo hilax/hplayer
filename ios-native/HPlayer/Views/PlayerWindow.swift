@@ -33,6 +33,8 @@ final class PlayerWindowController {
     private var host: PlayerHostingController?
     private var onDismissed: (() -> Void)?
     private var revealed = false
+    /// 打开时要不要横屏：要横屏的话，窗口真的转成横屏以后才淡入，避免先露出竖屏那一帧
+    private var wantsLandscape = false
     private var revealTask: Task<Void, Never>?
     /// 播放期间暂时隐藏的主窗口：系统校验「支持的方向」时会把它也算进去，它只支持竖屏，横屏请求就被拒绝
     private var hiddenMain: UIWindow?
@@ -61,6 +63,7 @@ final class PlayerWindowController {
         guard let scene = activeScene() else { onDismissed(); return }
         self.onDismissed = onDismissed
         revealed = false
+        wantsLandscape = landscape
 
         let player = PlayerWindow(windowScene: scene)
         player.allowedOrientations = landscape ? .landscape : .portrait
@@ -72,7 +75,7 @@ final class PlayerWindowController {
 
         let host = PlayerHostingController(rootView: root)
         host.view.backgroundColor = .clear
-        host.onRotated = { [weak self] in self?.reveal() }
+        host.onRotated = { [weak self] in self?.revealWhenReady() }
         player.rootViewController = host
         player.alpha = 0
         player.makeKeyAndVisible()
@@ -94,8 +97,8 @@ final class PlayerWindowController {
         }
         // 兜底：方向没变化（已经是横屏、模拟器不转、系统拒绝）时也要显示出来
         revealTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 800_000_000)
-            self?.reveal()
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            self?.reveal()   // 兜底：转屏一直没成功（被系统拒绝、主线程被占住）时，也不能一直黑着
         }
     }
 
@@ -144,6 +147,13 @@ final class PlayerWindowController {
 
     // MARK: 内部
 
+    /// 窗口已经是要的方向才显示；否则等转屏完成后再来
+    private func revealWhenReady() {
+        guard let window else { return }
+        let isLandscape = window.bounds.width > window.bounds.height
+        if !wantsLandscape || isLandscape { reveal() }
+    }
+
     private func reveal() {
         guard !revealed, let window else { return }
         revealed = true
@@ -167,7 +177,7 @@ final class PlayerWindowController {
             guard let self, self.window != nil else { return }
             let landscape = scene.interfaceOrientation.isLandscape
             self.debug("结果 scene=\(scene.interfaceOrientation.rawValue) 窗口=\(Int(self.window?.bounds.width ?? 0))×\(Int(self.window?.bounds.height ?? 0))")
-            if landscape == wantLandscape { self.reveal(); return }
+            if landscape == wantLandscape { self.revealWhenReady(); return }
             if attempt < 2 {
                 self.requestOrientation(mask, in: scene, attempt: attempt + 1)
             } else {
@@ -193,6 +203,8 @@ final class PlayerWindowController {
 
     // MARK: 原型调试信息（验证通过后删掉）
 
+    /// 验证通过，不再在播放页上显示调试文字；排查问题时改成 true
+    private static let showsDebugLabel = false
     private var debugLabel: UILabel?
     private var debugLines: [String] = []
     private var pendingDebug: [String] = []
@@ -207,7 +219,7 @@ final class PlayerWindowController {
     private func debug(_ text: String) {
         pendingDebug.append(text)
         if pendingDebug.count > 8 { pendingDebug.removeFirst() }
-        guard let window else { return }
+        guard Self.showsDebugLabel, let window else { return }
         debugLines = pendingDebug
         let label: UILabel
         if let existing = debugLabel { label = existing } else {
