@@ -1806,6 +1806,7 @@ struct PlaybackControlsView: View {
         hideTask?.cancel()
         playback.setBoost(false)
         playback.pauseForClose()
+        PlayerWindowController.shared.willClose()
         showList = false
         settingsPage = nil
         showAspect = false

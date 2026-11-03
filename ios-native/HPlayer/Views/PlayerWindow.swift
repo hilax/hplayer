@@ -34,6 +34,8 @@ final class PlayerWindowController {
     private var onDismissed: (() -> Void)?
     private var revealed = false
     private var revealTask: Task<Void, Never>?
+    /// 播放期间暂时隐藏的主窗口：系统校验「支持的方向」时会把它也算进去，它只支持竖屏，横屏请求就被拒绝
+    private var hiddenMain: UIWindow?
 
     var isPresented: Bool { window != nil }
 
@@ -84,6 +86,7 @@ final class PlayerWindowController {
             Task { @MainActor [weak self] in
                 try? await Task.sleep(nanoseconds: 80_000_000)
                 guard let self, self.window != nil else { return }
+                self.hideMain(in: scene)
                 self.requestOrientation(Self.preferredLandscape(), in: scene)
             }
         } else {
@@ -103,6 +106,20 @@ final class PlayerWindowController {
         requestOrientation(landscape ? Self.preferredLandscape() : .portrait, in: scene)
     }
 
+    private func hideMain(in scene: UIWindowScene) {
+        guard hiddenMain == nil, let main = mainWindow(in: scene) else { return }
+        main.isHidden = true
+        hiddenMain = main
+        debug("隐藏主窗")
+    }
+
+    /// 播放页开始淡出时先把主窗口放回来，淡出时露出的是它
+    func willClose() {
+        guard let main = hiddenMain else { return }
+        main.isHidden = false
+        hiddenMain = nil
+    }
+
     /// 关闭：窗口移除，系统方向回到竖屏。主窗口一直是竖屏，不会有翻转。
     func dismiss() {
         guard let player = window else { return }
@@ -118,6 +135,7 @@ final class PlayerWindowController {
         pendingDebug = []
         UIDevice.current.endGeneratingDeviceOrientationNotifications()
 
+        willClose()
         let main = mainWindow(in: scene)
         main?.makeKey()
         main?.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
@@ -139,6 +157,7 @@ final class PlayerWindowController {
         let wantLandscape = !mask.contains(.portrait)
         host?.setNeedsUpdateOfSupportedInterfaceOrientations()
         window?.makeKey()
+        debug("windows=\(scene.windows.map { "\(type(of: $0))\($0.isHidden ? "H" : "")\(Int($0.windowLevel.rawValue))\($0.isKeyWindow ? "K" : "")" }.joined(separator: ","))")
         debug("请求\(Self.name(mask)) #\(attempt) 窗口=\(window.map { Self.name($0.allowedOrientations) } ?? "-")")
         scene.requestGeometryUpdate(.iOS(interfaceOrientations: mask)) { [weak self] error in
             Task { @MainActor in self?.debug("系统拒绝：\(error.localizedDescription)") }
