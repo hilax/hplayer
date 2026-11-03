@@ -262,7 +262,7 @@ struct SearchView: View {
                 .accessibilityIdentifier("search.performer.\(group.id)")
                 .buttonStyle(.pressable(scale: 0.98))
                 .searchRow()
-                .reveal(0)
+                .reveal(0, id: group.id)
             }
 
             ForEach(Array(hits.series.enumerated()), id: \.element.id) { index, group in
@@ -279,7 +279,7 @@ struct SearchView: View {
                 }
                 .buttonStyle(.pressable(scale: 0.98))
                 .searchRow()
-                .reveal(index)
+                .reveal(index, id: group.id)
             }
 
             ForEach(Array(hits.movies.enumerated()), id: \.element.id) { index, item in
@@ -299,7 +299,7 @@ struct SearchView: View {
                 }
                 .buttonStyle(.pressable(scale: 0.98))
                 .searchRow()
-                .reveal(index)
+                .reveal(index, id: item.id)
             }
         }
     }
@@ -356,7 +356,7 @@ struct SearchView: View {
                 }
                 .buttonStyle(.pressable(scale: 0.98))
                 .searchRow(top: 7, bottom: 7)
-                .reveal(index)
+                .reveal(index, id: file.id)
             }
         }
     }

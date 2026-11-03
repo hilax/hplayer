@@ -312,7 +312,7 @@ struct SeriesDetailView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.pressable(scale: 0.92))
-        .reveal(index)
+        .reveal(index, id: episode.id)
         .accessibilityLabel(episode.episodeTitle)
         .accessibilityValue(finished ? "已看完" : (recent?.position).map { "看到 \(playbackTimeText($0))" } ?? "")
         .contextMenu {

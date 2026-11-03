@@ -138,7 +138,7 @@ struct DirectoryView: View {
                     FileRow(file: file, selecting: selecting, selected: selection.contains(file.id))
                 }
                 .buttonStyle(.pressable(scale: 0.98))
-                .reveal(index)
+                .reveal(index, id: file.id)
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.visible)
                 .listRowSeparatorTint(Theme.hairline)

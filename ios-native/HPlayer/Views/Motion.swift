@@ -70,12 +70,70 @@ extension ButtonStyle where Self == PressableStyle {
 
 // MARK: - 依次出现
 
-/// 第一次出现时从下方 14pt 淡入。`index` 越大出现得越晚；
+/// 记录哪些卡片已经浮现过，以及一组卡片（一个货架、一张网格）是什么时候开始浮现的。
+///
+/// 横向货架、网格和列表都是懒加载的：卡片滑出屏幕后会被销毁，滑回来时重新创建，视图里的 `@State` 也跟着丢掉。
+/// 如果「是否已浮现」只存在 `@State` 里，快速滑动时每张重新出现的卡片都会先变透明，再等一个台阶的延迟才淡入，
+/// 看起来就是格子消失又冒出来。所以这个记录放在视图外面：
+/// - 浮现过的卡片，重建时第一帧就是完全显示；
+/// - 只有一组卡片刚出现的头半秒（也就是第一屏）才播放依次浮现，之后滑进来的新卡片直接显示；
+/// - 这一组里第一张从没出现过的卡片重新出现（换了筛选、换了搜索词），算新的一屏，重新计时。
+final class RevealLedger: @unchecked Sendable {
+    static let shared = RevealLedger()
+    /// 一组卡片开始浮现后，多长时间内出现的新卡片还会播放浮现动画。
+    static let window: TimeInterval = 0.5
+
+    static func now() -> TimeInterval { ProcessInfo.processInfo.systemUptime }
+
+    private let lock = NSLock()
+    private var revealed = Set<String>()
+    private var opened: [String: TimeInterval] = [:]
+
+    init() {}
+
+    /// 这张卡片创建时是否应该先藏起来等浮现。只读，不改变记录，所以可以放心在视图 init 里调用。
+    func startsHidden(id: String, scope: String, index: Int, now: TimeInterval = RevealLedger.now()) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if revealed.contains(Self.key(scope, id)) { return false }
+        if index == 0 { return true }
+        guard let start = opened[scope] else { return true }
+        return now - start < Self.window
+    }
+
+    /// 卡片出现在屏幕上时记一笔。
+    func markRevealed(id: String, scope: String, index: Int, now: TimeInterval = RevealLedger.now()) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard revealed.insert(Self.key(scope, id)).inserted else { return }
+        if index == 0 || opened[scope] == nil { opened[scope] = now }
+    }
+
+    func reset() {
+        lock.lock()
+        defer { lock.unlock() }
+        revealed.removeAll()
+        opened.removeAll()
+    }
+
+    private static func key(_ scope: String, _ id: String) -> String { scope + "|" + id }
+}
+
+/// 第一次出现时从下方淡入。`index` 越大出现得越晚；
 /// 超过前几个台阶的卡片（一般已经在屏幕外）直接显示，滑回来时不会重复播放。
+/// 带 `id` 的卡片（懒加载容器里的）由 `RevealLedger` 记住是否浮现过，被回收重建后不会再变透明。
 private struct RevealOnAppear: ViewModifier {
     let index: Int
+    let ledgerKey: (id: String, scope: String)?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var shown = false
+    @State private var shown: Bool
+
+    init(index: Int, id: String?, scope: String) {
+        self.index = index
+        ledgerKey = id.map { (id: $0, scope: scope) }
+        let hidden = id.map { RevealLedger.shared.startsHidden(id: $0, scope: scope, index: index) } ?? true
+        _shown = State(initialValue: !hidden)
+    }
 
     func body(content: Content) -> some View {
         let visible = shown || reduceMotion || index > 5
@@ -83,6 +141,9 @@ private struct RevealOnAppear: ViewModifier {
             .opacity(visible ? 1 : 0)
             .scaleEffect(visible ? 1 : 0.97)
             .onAppear {
+                if let ledgerKey {
+                    RevealLedger.shared.markRevealed(id: ledgerKey.id, scope: ledgerKey.scope, index: index)
+                }
                 guard !shown else { return }
                 if reduceMotion || index > 5 {
                     shown = true
@@ -94,9 +155,16 @@ private struct RevealOnAppear: ViewModifier {
 }
 
 extension View {
-    /// 列表、货架、网格里的卡片依次浮现。
+    /// 固定的几块内容（不在懒加载容器里）依次浮现。
     func reveal(_ index: Int = 0) -> some View {
-        modifier(RevealOnAppear(index: index))
+        modifier(RevealOnAppear(index: index, id: nil, scope: ""))
+    }
+
+    /// 货架、网格、列表里的卡片依次浮现。这些容器会回收滑出屏幕的卡片，
+    /// 所以必须带上卡片自己的 `id`，让已经浮现过的卡片重建后直接显示，而不是又淡入一遍。
+    /// `file` 和 `line` 取调用处的位置，区分不同的货架和网格，不用手写。
+    func reveal<ID: Hashable>(_ index: Int, id: ID, file: String = #fileID, line: Int = #line) -> some View {
+        modifier(RevealOnAppear(index: index, id: "\(id)", scope: "\(file):\(line)"))
     }
 
     /// 值变化时让 SF Symbol 弹一下（iOS 17 起；低版本无动画）。

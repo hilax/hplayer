@@ -47,7 +47,7 @@
 3. **打开"减少动态效果"时**，位移和缩放全部变成瞬间完成，只保留颜色变化。
 4. 常用效果：
    - 按压：`.buttonStyle(.pressable)`，按下缩小并压暗，松手弹回。
-   - 列表、货架、网格里的卡片依次浮现：`.reveal(index)`。
+   - 货架、网格、列表里的卡片依次浮现：`.reveal(index, id: 卡片id)`。这些容器会回收滑出屏幕的卡片，浮现记录放在 `RevealLedger`（视图外面），所以只有一组卡片刚出现的头半秒（第一屏）会播放浮现，滑回来或滑进来的卡片直接显示，快速滑动时不会出现格子消失又冒出来。固定的几块内容（不在懒加载容器里）才用不带 `id` 的 `.reveal(index)`。
    - 标签栏、筛选胶囊的选中底座在选项之间滑动（`matchedGeometryEffect`）。
    - 数字变化逐位滚动：`.rollingNumber()`；播放⇄暂停图标变形：`.morphSymbol()`；选中时图标弹一下：`.bounceSymbol(on:)`。
    - 勾选圆圈 `CheckBadge`、环形进度 `ProgressRing`。
@@ -71,5 +71,5 @@
 
 1. 用 `DesignPage` / `ScreenTitleBar` / `DesignGroup` / `LibraryActionRow` / `PrimaryActionStyle` 搭，不要自己写背景和字号。
 2. 图标只从 `AppIcon` 取；弹层右上角用 `SheetCloseButton`。
-3. 列表和网格里的卡片加 `.reveal(index)`，可点的东西加 `.buttonStyle(.pressable)`。
+3. 列表和网格里的卡片加 `.reveal(index, id: 卡片id)`（一定要带 id），可点的东西加 `.buttonStyle(.pressable)`。
 4. 二级页面加 `.hidesTabBar()`；页面根视图加 `.designScreen("名字")`，并在 `docs/prototype-coverage.json` 和 `ScreenCatalogUITests` 里登记。

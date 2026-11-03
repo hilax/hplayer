@@ -416,7 +416,7 @@ struct CatalogTab: View {
             ) {
                 ForEach(Array(list.enumerated()), id: \.element.id) { index, entry in
                     card(entry, width: cell)
-                        .reveal(index)
+                        .reveal(index, id: entry.id)
                         .transition(.scale(scale: 0.92).combined(with: .opacity))
                 }
             }

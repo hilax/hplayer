@@ -34,7 +34,7 @@ struct LocalVideosView: View {
                             LocalVideoRow(file: file, artwork: metadataStore.metadataByMediaID[LibraryMedia(local: file).id]?.posterURL ?? "")
                         }
                         .buttonStyle(.pressable(scale: 0.98))
-                        .reveal(index)
+                        .reveal(index, id: file.id)
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
                         .listRowInsets(EdgeInsets(top: 7, leading: 16, bottom: 7, trailing: 16))

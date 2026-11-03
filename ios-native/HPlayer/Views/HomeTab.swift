@@ -553,7 +553,7 @@ struct HomeTab: View {
                             ContinueCard(entry: entry)
                         }
                         .buttonStyle(PosterButtonStyle())
-                        .reveal(index)
+                        .reveal(index, id: entry.id)
                         .contextMenu {
                             Button("从继续观看移除", systemImage: AppIcon.remove.name, role: .destructive) {
                                 remove(entry)
@@ -679,7 +679,7 @@ struct HomeTab: View {
                 LazyHStack(alignment: .top, spacing: 14) {
                     ForEach(Array(library.movies.enumerated()), id: \.element.id) { index, item in
                         posterCard(item, library: library, width: 108)
-                            .reveal(index)
+                            .reveal(index, id: item.id)
                     }
                 }
                 .padding(.horizontal, Theme.contentInset)
@@ -708,7 +708,7 @@ struct HomeTab: View {
                 LazyHStack(alignment: .top, spacing: 14) {
                     ForEach(Array(library.performers.enumerated()), id: \.element.id) { index, group in
                         performerLink(group, width: 200)
-                            .reveal(index)
+                            .reveal(index, id: group.id)
                     }
                 }
                 .padding(.horizontal, Theme.contentInset)
@@ -740,7 +740,7 @@ struct HomeTab: View {
                 LazyHStack(alignment: .top, spacing: 14) {
                     ForEach(Array(library.series.enumerated()), id: \.element.id) { index, group in
                         seriesLink(group, width: 108, scope: "shelf")
-                            .reveal(index)
+                            .reveal(index, id: group.id)
                     }
                 }
                 .padding(.horizontal, Theme.contentInset)
