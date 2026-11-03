@@ -478,7 +478,7 @@ struct HomeUnmatchedMediaView: View {
                 await metadata.match(result, to: request.file)
             }, onClear: nil)
         }
-        .fullScreenCover(item: $playing) { queue in
+        .playerWindow(item: $playing) { queue in
             PlayerView(source: queue.source, playlist: queue.items).environmentObject(appState)
         }
     }

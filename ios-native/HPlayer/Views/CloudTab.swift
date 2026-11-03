@@ -52,7 +52,7 @@ struct CloudTab: View {
                 .hidesTabBar()
             }
         }
-        .fullScreenCover(item: $playing) { queue in
+        .playerWindow(item: $playing) { queue in
             PlayerView(source: queue.source, playlist: queue.items).environmentObject(appState)
         }
         .fullScreenCover(isPresented: $showManagement) { LibraryManagementView() }

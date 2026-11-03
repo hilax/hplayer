@@ -59,7 +59,7 @@ struct PerformerCollectionView: View {
         .navigationTitle(group.name)
         .navigationBarTitleDisplayMode(.inline)
         .id(group.id)
-        .fullScreenCover(item: $playing) { queue in
+        .playerWindow(item: $playing) { queue in
             PlayerView(source: queue.source, playlist: queue.items).environmentObject(appState)
         }
     }

@@ -3,6 +3,7 @@ import SwiftUI
 struct PlayerView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.dismissPlayerWindow) private var dismissPlayerWindow
     @StateObject private var playback = PlaybackController()
     @State private var current: PlaybackSource
     private let playlist: [PlaybackSource]
@@ -41,7 +42,7 @@ struct PlayerView: View {
                 let source = current
                 Task { await load(source) }
             },
-            onClose: { dismiss() }
+            onClose: { if let dismissPlayerWindow { dismissPlayerWindow() } else { dismiss() } }
         )
         .task(id: current.id) { await load(current) }
         .onChange(of: playback.currentTime) { _ in saveProgress(force: false) }
