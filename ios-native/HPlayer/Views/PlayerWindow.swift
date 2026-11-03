@@ -312,6 +312,12 @@ final class PlayerWindowController {
         }
     }
 
+    /// 播放页把加载进度（拿到播放地址等）记进同一份诊断，方便和转屏时间对照
+    func note(_ text: String) {
+        guard window != nil else { return }
+        debug(text)
+    }
+
     private func debug(_ text: String) {
         let line = String(format: "%5.2fs ", Date().timeIntervalSince(presentedAt)) + text
         // 系统反复询问支持方向时同一句会连着出现很多次，只记一次

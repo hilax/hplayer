@@ -45,9 +45,8 @@ struct PlayerView: View {
             onClose: { if let dismissPlayerWindow { dismissPlayerWindow() } else { dismiss() } }
         )
         .task(id: current.id) {
-            await PlayerWindowController.shared.waitUntilRevealed()
-            // 等转屏期间切了集（或页面已经关掉），这一轮就不再加载，交给新的一轮
-            guard !Task.isCancelled else { return }
+            // 不等转屏：要播放地址是网络请求，不占主线程，和转屏同时进行；
+            // load 里只有真正打开视频那一步才等转屏结束。
             await load(current)
         }
         .onChange(of: playback.currentTime) { _ in saveProgress(force: false) }
@@ -116,6 +115,7 @@ struct PlayerView: View {
                 let use115Headers = false
                 let testCookie = ""
                 #endif
+                guard await openAfterReveal(request, source: source, session: session) else { return }
                 playback.open(url, direct115: use115Headers, directCookie: testCookie, startTime: resume)
             case .p115(_, let pickCode):
                 do {
@@ -125,7 +125,8 @@ struct PlayerView: View {
                     var originalError: Error?
                     do {
                         let original = try await client.originalURL(pickCode: pickCode)
-                        guard isCurrentRequest(request, source: source, session: session), !Task.isCancelled else { return }
+                        PlayerWindowController.shared.note("拿到原画地址")
+                        guard await openAfterReveal(request, source: source, session: session) else { return }
                         playback.open(original, direct115: true, directCookie: client.cookie, startTime: resume,
                                       refreshURL: Self.originalRefresher(client, pickCode: pickCode))
                         loading = false
@@ -150,6 +151,13 @@ struct PlayerView: View {
                 self.error = error.localizedDescription
             }
         }
+    }
+
+    /// 打开视频前等播放器窗口转好屏：转屏期间主线程不被解码、建连接占住，转得更干净。
+    /// 已经转好（或者是重试、没有播放器窗口）时立即返回。等待期间切了集、关了页面就不再打开。
+    private func openAfterReveal(_ request: UUID, source: PlaybackSource, session: UUID) async -> Bool {
+        await PlayerWindowController.shared.waitUntilRevealed()
+        return isCurrentRequest(request, source: source, session: session) && !Task.isCancelled
     }
 
     /// 旧的同集加载、重试或画质请求也可能晚到；只有当前请求可以更新播放器。
