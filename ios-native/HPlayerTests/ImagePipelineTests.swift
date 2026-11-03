@@ -88,7 +88,8 @@ final class ImagePipelineTests: XCTestCase {
         let urls = try (0..<5).map { try XCTUnwrap(URL(string: "https://images.example/p\($0).png")) }
         let pipeline = makePipeline()
         pipeline.prefetch(urls.map { ImageRequest(url: $0, maxPixel: 600) })
-        for _ in 0..<200 {
+        // 云端模拟器很慢：最多等 6 秒（之前 2 秒，偶尔没等完就判失败）
+        for _ in 0..<600 {
             if urls.allSatisfy({ pipeline.cached($0, maxPixel: 600) != nil }) { break }
             try await Task.sleep(nanoseconds: 10_000_000)
         }
