@@ -2219,32 +2219,30 @@ struct PlaybackControlsView: View {
         .accessibilityIdentifier("playback.cacheStatus")
     }
 
+    /// 长按快进：顶部的玻璃胶囊，和亮度、音量提示在同一个位置
     private var boostPill: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 8) {
             Image(systemName: AppIcon.skip.name)
-                .font(.system(size: 11, weight: .bold))
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(Theme.gold)
             Text("\(String(format: "%g", PlaybackController.boostRate))× 快进中")
-                .font(.footnote.weight(.semibold))
-            if !speedLabel.isEmpty {
-                Text(speedLabel)
-                    .font(.footnote.weight(.medium).monospacedDigit())
-                    .foregroundStyle(.white.opacity(0.7))
-            }
+                .font(.system(size: 13, weight: .bold))
         }
-        .padding(.horizontal, 13)
-        .padding(.vertical, 7)
+        .foregroundStyle(.white)
+        .padding(.horizontal, 16)
+        .frame(height: 36)
         .glassCapsule()
         .accessibilityElement(children: .combine)
     }
 
-    /// 亮度、音量提示在画面上方，只有小图标和百分比；拖动进度提示在正中间。
+    /// 亮度、音量、长按快进的提示都在画面上方同一个位置（手势不会同时进行）；拖动进度提示在正中间。
     @ViewBuilder
     private func hudLayer(insets: EdgeInsets) -> some View {
         ZStack {
             if let adjustment {
                 switch adjustment.kind {
                 case .seek:
-                    SeekHUD(adjustment: adjustment)
+                    SeekHUD(time: timeText(adjustment.targetTime ?? 0), delta: adjustment.valueText)
                         .transition(.opacity)
                 case .brightness, .volume:
                     LevelHUD(adjustment: adjustment)
@@ -2416,7 +2414,8 @@ struct PlaybackControlsView: View {
 
     private func setBoost(_ enabled: Bool) {
         if enabled {
-            guard !locked, !showList, settingsPage == nil, popover == nil, panKind == nil, playback.playing else { return }
+            // 锁定后也能长按快进；锁定时其他面板都已收起
+            guard !showList, settingsPage == nil, popover == nil, panKind == nil, playback.playing else { return }
             boosting = true
             lastAdjustment = "长按 \(String(format: "%g", PlaybackController.boostRate))×"
             playback.setBoost(true)
@@ -2445,7 +2444,7 @@ struct PlaybackControlsView: View {
             revealControls()
             return
         }
-        guard !locked, !showList, settingsPage == nil, !showAspect, popover == nil, !closing, size.width > 0, size.height > 0 else {
+        guard !showList, settingsPage == nil, !showAspect, popover == nil, !closing, size.width > 0, size.height > 0 else {
             // 横滑到一半被别的面板打断：进度条别停在半路
             if state == .ended { endPanScrub() }
             return
@@ -2476,6 +2475,11 @@ struct PlaybackControlsView: View {
                 return
             }
             panBase = translation
+            // 锁定后只留横滑快进快退，竖滑不调亮度和音量，免得躺着看时误碰
+            if locked && dx <= dy {
+                panActive = false
+                return
+            }
             // 以 45° 为界：更偏横就快进快退，更偏竖就调亮度（左半边）或音量（右半边）
             if dx > dy {
                 guard playback.seekable, playback.duration > 0 else {
@@ -2760,21 +2764,27 @@ private enum ScreenBrightness {
 
 // MARK: - 提示视图
 
-/// 亮度、音量：只有一个小图标和百分比，不加底板，靠阴影在亮画面上也看得清
+/// 亮度、音量：顶部一条玻璃胶囊，左边图标、中间细进度条、右边百分比
 private struct LevelHUD: View {
     let adjustment: PlaybackAdjustment
 
     private var value: Double { min(max(adjustment.progress, 0), 1) }
 
     var body: some View {
-        HStack(spacing: 5) {
+        HStack(spacing: 12) {
             Image(systemName: icon)
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: 16, weight: .semibold))
+                .frame(width: 22)
+            LevelBar(value: value)
+                .frame(height: 6)
             Text("\(Int((value * 100).rounded()))%")
-                .font(.footnote.weight(.semibold).monospacedDigit())
+                .font(.system(size: 13, weight: .bold).monospacedDigit())
+                .frame(width: 40, alignment: .trailing)
         }
         .foregroundStyle(.white)
-        .shadow(color: .black.opacity(0.6), radius: 4, y: 1)
+        .padding(.horizontal, 16)
+        .frame(width: 280, height: 44)
+        .glassCapsule()
     }
 
     private var icon: String {
@@ -2813,22 +2823,22 @@ private struct NoticeHUD: View {
     }
 }
 
-/// 拖动进度：目标时间 / 总时长、一条小进度、跳转了多少
+/// 左右滑快进快退：画面正中，不加底板；上面是目标时间，下面是跳了多少（金色）
 private struct SeekHUD: View {
-    let adjustment: PlaybackAdjustment
+    let time: String
+    let delta: String
 
     var body: some View {
-        VStack(spacing: 8) {
-            Text(adjustment.detail)
-                .font(.system(size: 22, weight: .bold).monospacedDigit())
-            LevelBar(value: adjustment.progress)
-                .frame(width: 150, height: 3)
-            Text(adjustment.valueText)
-                .font(.subheadline.weight(.semibold).monospacedDigit())
-                .foregroundStyle(.white.opacity(0.85))
+        VStack(spacing: 2) {
+            Text(time)
+                .font(.system(size: 34, weight: .bold).monospacedDigit())
+            Text(delta)
+                .font(.system(size: 15, weight: .bold).monospacedDigit())
+                .foregroundStyle(Theme.gold)
         }
         .foregroundStyle(.white)
-        .shadow(color: .black.opacity(0.55), radius: 6, y: 1)
+        .shadow(color: .black.opacity(0.75), radius: 8, y: 1)
+        .shadow(color: .black.opacity(0.5), radius: 1)
     }
 }
 
