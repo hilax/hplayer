@@ -254,8 +254,9 @@ struct MagnetPlayerView: View {
                     Circle().stroke(Theme.accent.opacity(0.12), lineWidth: 1).frame(width: 132, height: 132)
                     Circle().stroke(Theme.accent.opacity(0.25), lineWidth: 1).frame(width: 96, height: 96)
                     Image(systemName: AppIcon.link.name).font(.system(size: 32, weight: .light)).foregroundStyle(Theme.accent)
-                    ProgressView().scaleEffect(1.5).offset(y: 66)
-                }.frame(height: 158)
+                }.frame(height: 132)
+                // 转圈放在圆环下面单独一行，不再压在圆环边上
+                ProgressView().scaleEffect(1.2)
                 Text(controller.usesCloud ? "115 云下载" : "本机 BT 引擎")
                     .font(.caption.weight(.semibold)).tracking(2).foregroundStyle(.secondary)
                 Text("正在获取影片目录").font(.title2.bold())
