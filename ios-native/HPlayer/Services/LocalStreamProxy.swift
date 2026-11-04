@@ -30,10 +30,22 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
     private var tasks: [Int: ProxyConnection] = [:]
     private var connections: [ObjectIdentifier: ProxyConnection] = [:]
     private var lastProblem = ""
+    /// 最近几次上游出错的记录（带时间）。自动重试好几次之后，最初的出错原因不会被后面的覆盖掉。
+    private var problemHistory: [String] = []
+    /// 上游连不上、或下载到一半断了时，每次重试前等多久；用完了才把错误交给 mpv。
+    /// 115 的服务器偶尔会掐掉连接再拒绝紧接着的新连接，隔一小会儿就恢复了。
+    fileprivate var retryDelays: [TimeInterval] = [0.3, 0.8, 1.6, 3.0]
+    private static let historyClock: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+        return formatter
+    }()
 
-    override init() {
+    init(protocolClasses: [AnyClass]? = nil) {
         super.init()
         let configuration = URLSessionConfiguration.ephemeral
+        // 测试里换成假的上游
+        if let protocolClasses { configuration.protocolClasses = protocolClasses }
         // 30 秒一个字节都没有才算超时；整个请求不限时（一部电影要读很久）
         configuration.timeoutIntervalForRequest = 30
         configuration.timeoutIntervalForResource = 7 * 24 * 3600
@@ -132,6 +144,26 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
         queue.sync { lastProblem }
     }
 
+    /// 最近几次上游出错的完整记录（时间、错误码、已转发多少字节、第几次重试），放进诊断信息
+    var problemHistoryLines: [String] {
+        queue.sync { problemHistory }
+    }
+
+    /// 把系统的网络错误写成一行：说明、错误码，以及底层的系统错误号。
+    /// 排查「连不上 115」到底是被拒绝、不可达还是超时，要看后面这几个数字。
+    static func summary(of error: Error) -> String {
+        let nsError = error as NSError
+        var text = "\(nsError.localizedDescription)（\(nsError.domain) \(nsError.code)"
+        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError {
+            text += "，底层 \(underlying.domain) \(underlying.code)"
+        }
+        if let domain = nsError.userInfo["_kCFStreamErrorDomainKey"] as? Int,
+           let code = nsError.userInfo["_kCFStreamErrorCodeKey"] as? Int {
+            text += "，流错误 \(domain)/\(code)"
+        }
+        return text + "）"
+    }
+
     /// 诊断信息里的最近一次自检结果；诊断不能在主线程重新等待 socket。
     var statusText: String {
         queue.sync {
@@ -153,6 +185,10 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
 
     func listenerWaiterCountForTesting() -> Int {
         queue.sync { listenerWaiters.count }
+    }
+
+    func setRetryDelaysForTesting(_ delays: [TimeInterval]) {
+        queue.sync { retryDelays = delays }
     }
     #endif
 
@@ -330,6 +366,13 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
 
     fileprivate func note(_ text: String) {
         lastProblem = text
+        problemHistory.append("\(Self.historyClock.string(from: Date())) \(text)")
+        if problemHistory.count > 12 { problemHistory.removeFirst(problemHistory.count - 12) }
+    }
+
+    /// 这个下载任务要重试了：它之后的回调（包括被取消的通知）都直接丢掉，不要再找到原来的连接
+    fileprivate func detach(_ task: URLSessionDataTask) {
+        tasks.removeValue(forKey: task.taskIdentifier)
     }
 }
 
@@ -356,8 +399,7 @@ extension LocalStreamProxy: URLSessionDataDelegate {
             completionHandler(.cancel)
             return
         }
-        handler.didReceive(response)
-        completionHandler(.allow)
+        completionHandler(handler.didReceive(response, from: dataTask) ? .allow : .cancel)
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
@@ -390,6 +432,21 @@ private final class ProxyConnection {
     private var pending = 0
     private var suspended = false
     private var closed = false
+
+    // 上游连不上或下载到一半断了：自己等一会儿重试，下载到一半的就从断开的位置接着下，
+    // mpv 那边看到的仍是一条不间断的响应。
+    private var baseRequest: URLRequest?
+    /// 已经交给 mpv 的响应内容有多少字节（不含响应头）
+    private var deliveredBody: Int64 = 0
+    /// 这条响应的内容在文件里从第几个字节开始、到第几个字节结束（206 或带长度的 200 才知道，续传靠这个）
+    private var bodyStart: Int64 = 0
+    private var bodyEnd: Int64?
+    private var validator: String?
+    /// 正在进行的这次请求是续传，要求上游从这个位置接上
+    private var resumeFrom: Int64?
+    private var retryCount = 0
+    private var retryProgressMark: Int64 = 0
+    private var retryWork: DispatchWorkItem?
 
     init(connection: NWConnection, proxy: LocalStreamProxy) {
         self.connection = connection
@@ -460,26 +517,52 @@ private final class ProxyConnection {
         }
         // 不要压缩：视频的字节位置要和 Range 对得上
         request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
+        baseRequest = request
         task = proxy.startTask(request, for: self)
     }
 
-    func didReceive(_ response: URLResponse) {
-        guard !closed else { return }
+    /// 返回 false：这次响应不要了（已经安排好重试，或者连接已经关了），系统会取消这个下载
+    func didReceive(_ response: URLResponse, from dataTask: URLSessionDataTask) -> Bool {
+        guard !closed else { return false }
         guard let http = response as? HTTPURLResponse else {
             respond(status: 502, text: "Bad Gateway")
-            return
+            return false
+        }
+        if let start = resumeFrom {
+            // 续传：响应头早就发给 mpv 了，这里只确认上游真的从断开的位置接上，而且还是同一个文件
+            resumeFrom = nil
+            let newValidator = http.value(forHTTPHeaderField: "ETag")
+            let sameFile = validator == nil || newValidator == nil || validator == newValidator
+            guard http.statusCode == 206, Self.contentRange(of: http)?.start == start, sameFile else {
+                proxy.note("续传失败：上游返回 HTTP \(http.statusCode)，没能从 \(start) 字节接上")
+                close()
+                return false
+            }
+            return true
         }
         responseURL = http.url
+        if Self.isTransient(status: http.statusCode),
+           scheduleRetry("上游返回 HTTP \(http.statusCode)（\(http.url?.host ?? "")）", cancelling: dataTask) {
+            return false
+        }
         if http.statusCode >= 400 {
             proxy.note("上游返回 HTTP \(http.statusCode)：\(http.url?.host ?? "")")
         }
+        if http.statusCode == 206, let range = Self.contentRange(of: http) {
+            bodyStart = range.start
+            bodyEnd = range.end
+        } else if http.statusCode == 200, let length = http.value(forHTTPHeaderField: "Content-Length").flatMap({ Int64($0) }), length > 0 {
+            bodyStart = 0
+            bodyEnd = length - 1
+        }
+        validator = http.value(forHTTPHeaderField: "ETag")
         let type = (http.value(forHTTPHeaderField: "Content-Type") ?? "").lowercased()
         let path = (http.url?.path ?? upstreamURL?.path ?? "").lowercased()
         if (200..<300).contains(http.statusCode), type.contains("mpegurl") || path.hasSuffix(".m3u8") || path.hasSuffix(".m3u") {
             // 播放列表整份收完，改好地址再发
             isPlaylist = true
             playlistStatus = http.statusCode
-            return
+            return true
         }
         var head = "HTTP/1.1 \(http.statusCode) \(Self.reason(http.statusCode))\r\n"
         for name in ["Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "Last-Modified", "ETag"] {
@@ -488,6 +571,7 @@ private final class ProxyConnection {
         head += "Connection: close\r\n\r\n"
         headersSent = true
         write(Data(head.utf8))
+        return true
     }
 
     func didReceive(_ data: Data) {
@@ -495,6 +579,7 @@ private final class ProxyConnection {
         if isPlaylist {
             playlistData.append(data)
         } else if !isHead {
+            deliveredBody += Int64(data.count)
             write(data)
         }
     }
@@ -503,8 +588,18 @@ private final class ProxyConnection {
         task = nil
         guard !closed else { return }
         if let error {
-            proxy.note("上游连接失败：\(error.localizedDescription)（\(upstreamURL?.host ?? "")）")
-            // 已经开始传数据了就直接断开，FFmpeg 会带着 Range 自己重新请求
+            let detail = "上游连接失败：\(LocalStreamProxy.summary(of: error))（\(upstreamURL?.host ?? "")），已转发 \(deliveredBody) 字节"
+            // 数据其实已经全部交给 mpv 了，只是收尾时断开：当作正常结束
+            if bodyComplete {
+                finish()
+                return
+            }
+            if Self.isTransient(error) {
+                if scheduleRetry(detail, cancelling: nil) { return }
+            } else {
+                proxy.note("\(detail)；这种错误重试没有用")
+            }
+            // 重试也没用：已经开始传数据了就直接断开，FFmpeg 会带着 Range 自己重新请求
             if headersSent { close() } else { respond(status: 502, text: "Bad Gateway") }
             return
         }
@@ -513,6 +608,92 @@ private final class ProxyConnection {
         } else {
             finish()
         }
+    }
+
+    // MARK: 上游出错时重试、续传
+
+    /// 响应内容已经全部交给 mpv
+    private var bodyComplete: Bool {
+        guard headersSent, !isHead, !isPlaylist, let end = bodyEnd else { return false }
+        return bodyStart + deliveredBody > end
+    }
+
+    /// 等一会儿再向上游发一次请求。响应头已经发给 mpv 的，从断开的位置接着下；还没发的，原样重发。
+    /// 返回 false：不能重试，或者重试的次数用完了，由调用方把错误交给 mpv。
+    private func scheduleRetry(_ detail: String, cancelling running: URLSessionDataTask?) -> Bool {
+        // 上次重试之后又传了数据，说明中间连上过：重新计数，长时间播放偶尔断一次不会把次数用光
+        if deliveredBody > retryProgressMark {
+            retryCount = 0
+            retryProgressMark = deliveredBody
+        }
+        var resume: Int64?
+        if headersSent {
+            // 响应头已经发出去了：只有知道文件范围的普通下载才能接上
+            guard !isHead, !isPlaylist, let end = bodyEnd, bodyStart + deliveredBody <= end else {
+                proxy.note("\(detail)；这种响应没法续传")
+                return false
+            }
+            resume = bodyStart + deliveredBody
+        }
+        let delays = proxy.retryDelays
+        guard retryCount < delays.count else {
+            proxy.note("\(detail)；重试 \(delays.count) 次都没成功")
+            return false
+        }
+        let delay = delays[retryCount]
+        retryCount += 1
+        proxy.note("\(detail)；\(delay) 秒后第 \(retryCount) 次重试" + (resume.map { "，从 \($0) 字节接着下" } ?? ""))
+        if let running { proxy.detach(running) }
+        task = nil
+        if !headersSent {
+            // 播放列表只收了一半：丢掉重来
+            playlistData = Data()
+            isPlaylist = false
+        }
+        let resumePoint = resume
+        let work = DispatchWorkItem { [weak self] in self?.relaunch(resumingAt: resumePoint) }
+        retryWork = work
+        proxy.queue.asyncAfter(deadline: .now() + delay, execute: work)
+        return true
+    }
+
+    private func relaunch(resumingAt start: Int64?) {
+        retryWork = nil
+        guard !closed, var request = baseRequest else { return }
+        if let start {
+            request.setValue("bytes=\(start)-" + (bodyEnd.map { String($0) } ?? ""), forHTTPHeaderField: "Range")
+            resumeFrom = start
+        }
+        // 旧的下载已经没了，积压的数据发完之后别去恢复它
+        suspended = false
+        task = proxy.startTask(request, for: self)
+    }
+
+    /// 这些错误过一会儿再试多半就好了（对方掐断连接、暂时连不上、超时）
+    private static func isTransient(_ error: Error) -> Bool {
+        guard let urlError = error as? URLError else { return false }
+        switch urlError.code {
+        case .timedOut, .cannotFindHost, .cannotConnectToHost, .networkConnectionLost,
+             .dnsLookupFailed, .notConnectedToInternet, .secureConnectionFailed:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func isTransient(status: Int) -> Bool {
+        status == 500 || status == 502 || status == 503 || status == 504
+    }
+
+    /// 解析 `Content-Range: bytes 100-199/1000`
+    private static func contentRange(of response: HTTPURLResponse) -> (start: Int64, end: Int64)? {
+        guard let value = response.value(forHTTPHeaderField: "Content-Range") else { return nil }
+        let parts = value.split(separator: " ")
+        guard parts.count == 2, parts[0].lowercased() == "bytes" else { return nil }
+        guard let span = parts[1].split(separator: "/", maxSplits: 1).first else { return nil }
+        let bounds = span.split(separator: "-")
+        guard bounds.count == 2, let start = Int64(bounds[0]), let end = Int64(bounds[1]), end >= start else { return nil }
+        return (start, end)
     }
 
     private func sendPlaylist() {
@@ -573,6 +754,8 @@ private final class ProxyConnection {
     private func close() {
         guard !closed else { return }
         closed = true
+        retryWork?.cancel()
+        retryWork = nil
         task?.cancel()
         task = nil
         connection.cancel()

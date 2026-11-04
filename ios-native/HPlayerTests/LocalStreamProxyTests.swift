@@ -100,4 +100,197 @@ final class LocalStreamProxyTests: XCTestCase {
         let otherResult = await other.value
         XCTAssertNotNil(otherResult, "Cancelling one open must not cancel another open sharing the listener")
     }
+
+    // MARK: 上游出错：重试和续传
+
+    private struct Fetched {
+        var status = 0
+        var head = ""
+        var body = Data()
+    }
+
+    /// 像 mpv 一样直接向中转发一个 HTTP 请求，读到对方关闭连接为止（读不到数据 15 秒后放弃）。
+    private func fetch(_ url: URL, range: String?) throws -> Fetched {
+        let descriptor = socket(AF_INET, SOCK_STREAM, 0)
+        XCTAssertGreaterThanOrEqual(descriptor, 0)
+        defer { close(descriptor) }
+        var timeout = timeval(tv_sec: 15, tv_usec: 0)
+        setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = UInt16(try XCTUnwrap(url.port)).bigEndian
+        address.sin_addr = in_addr(s_addr: UInt32(0x7F00_0001).bigEndian)
+        let connected = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        XCTAssertEqual(connected, 0)
+        var request = "GET \(url.path) HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+        if let range { request += "Range: \(range)\r\n" }
+        request += "\r\n"
+        let bytes = Array(request.utf8)
+        XCTAssertEqual(send(descriptor, bytes, bytes.count, 0), bytes.count)
+
+        var received = Data()
+        var buffer = [UInt8](repeating: 0, count: 65536)
+        let capacity = buffer.count
+        while true {
+            let count = recv(descriptor, &buffer, capacity, 0)
+            if count <= 0 { break }
+            received.append(contentsOf: buffer[0..<count])
+        }
+        let separator = try XCTUnwrap(received.range(of: Data("\r\n\r\n".utf8)), "中转没有返回完整的响应头")
+        let head = String(decoding: received[..<separator.lowerBound], as: UTF8.self)
+        let status = head.split(separator: " ").dropFirst().first.flatMap { Int($0) } ?? 0
+        return Fetched(status: status, head: head, body: Data(received[separator.upperBound...]))
+    }
+
+    private func relayURL(_ proxy: LocalStreamProxy) async throws -> URL {
+        let upstream = try XCTUnwrap(URL(string: "https://example.com/a/video.mp4"))
+        let local = await proxy.localURL(for: upstream, headers: [:])
+        return try XCTUnwrap(local)
+    }
+
+    private func pattern(_ count: Int) -> Data {
+        Data((0..<count).map { UInt8($0 % 251) })
+    }
+
+    /// 下载到一半被对方掐断：中转自己带上 Range 从断开的位置接着下，mpv 收到的是一条完整的响应
+    func testResumesFromTheBreakPointWhenUpstreamDropsMidDownload() async throws {
+        let full = pattern(1000)
+        ScriptedUpstream.install([
+            .reply(status: 206, headers: ["Content-Range": "bytes 0-999/1000", "Content-Length": "1000"],
+                   body: Data(full.prefix(400)), thenFail: .networkConnectionLost),
+            .reply(status: 206, headers: ["Content-Range": "bytes 400-999/1000", "Content-Length": "600"],
+                   body: Data(full.suffix(600)), thenFail: nil),
+        ])
+        let proxy = LocalStreamProxy(protocolClasses: [ScriptedUpstream.self])
+        proxy.setRetryDelaysForTesting([0.05, 0.05])
+
+        let local = try await relayURL(proxy)
+        let fetched = try fetch(local, range: "bytes=0-999")
+        XCTAssertEqual(fetched.status, 206)
+        XCTAssertEqual(fetched.body, full, "断开前后的数据要接得上，不多不少")
+        XCTAssertEqual(ScriptedUpstream.receivedRanges(), ["bytes=0-999", "bytes=400-999"])
+        XCTAssertTrue(proxy.problemHistoryLines.joined().contains("从 400 字节接着下"))
+    }
+
+    /// 连不上（对方拒绝连接）：等一会儿再试，不要马上给 mpv 一个 502
+    func testRetriesWhenUpstreamRefusesTheConnection() async throws {
+        let body = pattern(300)
+        ScriptedUpstream.install([
+            .fail(.cannotConnectToHost),
+            .fail(.cannotConnectToHost),
+            .reply(status: 200, headers: ["Content-Length": "300"], body: body, thenFail: nil),
+        ])
+        let proxy = LocalStreamProxy(protocolClasses: [ScriptedUpstream.self])
+        proxy.setRetryDelaysForTesting([0.05, 0.05, 0.05])
+
+        let local = try await relayURL(proxy)
+        let fetched = try fetch(local, range: nil)
+        XCTAssertEqual(fetched.status, 200)
+        XCTAssertEqual(fetched.body, body)
+        XCTAssertEqual(ScriptedUpstream.receivedRanges().count, 3)
+    }
+
+    /// 一直连不上：重试用完才给 mpv 502，诊断里要有错误码（排查是被拒绝、不可达还是超时）
+    func testGivesUpAfterTheRetriesAreUsedUpAndRecordsWhy() async throws {
+        ScriptedUpstream.install([.fail(.cannotConnectToHost), .fail(.cannotConnectToHost), .fail(.cannotConnectToHost)])
+        let proxy = LocalStreamProxy(protocolClasses: [ScriptedUpstream.self])
+        proxy.setRetryDelaysForTesting([0.02, 0.02])
+
+        let local = try await relayURL(proxy)
+        let fetched = try fetch(local, range: nil)
+        XCTAssertEqual(fetched.status, 502)
+        XCTAssertEqual(ScriptedUpstream.receivedRanges().count, 3, "第一次加两次重试")
+        let history = proxy.problemHistoryLines.joined(separator: "\n")
+        XCTAssertTrue(history.contains("NSURLErrorDomain -1004"), history)
+        XCTAssertTrue(history.contains("重试 2 次都没成功"), history)
+    }
+
+    /// 115 偶尔返回 503/502：重试，不把错误页当成视频交给 mpv
+    func testRetriesGatewayErrorsBeforeAnswering() async throws {
+        ScriptedUpstream.install([
+            .reply(status: 503, headers: [:], body: Data("busy".utf8), thenFail: nil),
+            .reply(status: 200, headers: ["Content-Length": "5"], body: Data("hello".utf8), thenFail: nil),
+        ])
+        let proxy = LocalStreamProxy(protocolClasses: [ScriptedUpstream.self])
+        proxy.setRetryDelaysForTesting([0.05, 0.05])
+
+        let local = try await relayURL(proxy)
+        let fetched = try fetch(local, range: nil)
+        XCTAssertEqual(fetched.status, 200)
+        XCTAssertEqual(fetched.body, Data("hello".utf8))
+    }
+
+    /// 上游不肯从断开的位置接上（直接重发了整个文件）：不能把重复的数据拼进去，断开让 mpv 自己处理
+    func testRefusesToSpliceWhenUpstreamCannotResumeAtTheBreakPoint() async throws {
+        let full = pattern(1000)
+        ScriptedUpstream.install([
+            .reply(status: 206, headers: ["Content-Range": "bytes 0-999/1000", "Content-Length": "1000"],
+                   body: Data(full.prefix(400)), thenFail: .networkConnectionLost),
+            .reply(status: 200, headers: ["Content-Length": "1000"], body: full, thenFail: nil),
+        ])
+        let proxy = LocalStreamProxy(protocolClasses: [ScriptedUpstream.self])
+        proxy.setRetryDelaysForTesting([0.05])
+
+        let local = try await relayURL(proxy)
+        let fetched = try fetch(local, range: "bytes=0-999")
+        XCTAssertEqual(fetched.body, Data(full.prefix(400)), "只该有断开之前那 400 字节")
+        XCTAssertTrue(proxy.problemHistoryLines.joined().contains("续传失败"))
+    }
+}
+
+/// 假的 115 服务器：按顺序给每个请求一个剧本（连不上、返回状态码、发一半就断开……），并记下每次请求带的 Range。
+private final class ScriptedUpstream: URLProtocol {
+    enum Step {
+        case fail(URLError.Code)
+        case reply(status: Int, headers: [String: String], body: Data, thenFail: URLError.Code?)
+    }
+
+    private static let lock = NSLock()
+    private static var steps: [Step] = []
+    private static var ranges: [String?] = []
+
+    static func install(_ steps: [Step]) {
+        lock.lock(); defer { lock.unlock() }
+        self.steps = steps
+        ranges = []
+    }
+
+    static func receivedRanges() -> [String?] {
+        lock.lock(); defer { lock.unlock() }
+        return ranges
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        Self.lock.lock()
+        Self.ranges.append(request.value(forHTTPHeaderField: "Range"))
+        let step: Step? = Self.steps.isEmpty ? nil : Self.steps.removeFirst()
+        Self.lock.unlock()
+        guard let step else {
+            client?.urlProtocol(self, didFailWithError: URLError(.cannotConnectToHost))
+            return
+        }
+        switch step {
+        case .fail(let code):
+            client?.urlProtocol(self, didFailWithError: URLError(code))
+        case .reply(let status, let headers, let body, let thenFail):
+            let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers)!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            if !body.isEmpty { client?.urlProtocol(self, didLoad: body) }
+            if let thenFail {
+                client?.urlProtocol(self, didFailWithError: URLError(thenFail))
+            } else {
+                client?.urlProtocolDidFinishLoading(self)
+            }
+        }
+    }
+
+    override func stopLoading() {}
 }

@@ -1151,11 +1151,11 @@ final class PlaybackController: ObservableObject {
         guard let url = currentURL, recoveryTask == nil else { return }
         cancelAddressResolution()
         let now = Date()
-        // 播过之后断了：90 秒内最多试 3 次；一次都没播出来：总共只再试 2 次，免得一直转圈
+        // 播过之后断了：90 秒内最多试 3 次；一次都没播出来：总共也只再试 3 次，免得一直转圈
         if playedThisSession {
             recoveryAttempts = recoveryAttempts.filter { now.timeIntervalSince($0) < 90 }
         }
-        guard recoveryAttempts.count < (playedThisSession ? 3 : 2) else {
+        guard recoveryAttempts.count < 3 else {
             engine?.command(["stop"])
             giveUp(reason.isEmpty ? "网络连接中断" : reason)
             return
@@ -1175,7 +1175,12 @@ final class PlaybackController: ObservableObject {
             statusNote = reason.isEmpty ? "正在重新连接…" : "\(reason)，正在重新连接…"
         }
         engine?.command(["stop"])
+        // 第一次马上重连；再失败说明对方（115 的服务器、网络）当时正忙或在掐连接，隔几秒再来，
+        // 不要 1 秒内连着撞三次就放弃
+        let backoff: [Double] = [0, 2, 5]
+        let wait = backoff[min(recoveryAttempts.count - 1, backoff.count - 1)]
         recoveryTask = Task { @MainActor [weak self] in
+            if wait > 0 { try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000)) }
             var target = url
             if let refresher, let fresh = try? await refresher() { target = fresh }
             guard let self, !Task.isCancelled, self.session == currentSession else { return }
@@ -1227,6 +1232,11 @@ final class PlaybackController: ObservableObject {
             "—— 播放事件 ——",
         ]
         lines += eventLines
+        let relayLog = LocalStreamProxy.shared.problemHistoryLines
+        if !relayLog.isEmpty {
+            lines.append("—— 中转记录（上游出错与重试）——")
+            lines += relayLog
+        }
         lines.append("—— 内核日志 ——")
         lines += logLines
         return lines.joined(separator: "\n")
