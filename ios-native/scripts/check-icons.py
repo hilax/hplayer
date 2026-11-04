@@ -24,7 +24,7 @@ def main() -> int:
     for path in sorted((ROOT / "Views").glob("*.swift")):
         if path.name in ALLOWED:
             continue
-        for number, line in enumerate(path.read_text().splitlines(), 1):
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             if "accessibilityIdentifier" in line or "designScreen" in line:
                 continue
             if not ARGUMENT.search(line):

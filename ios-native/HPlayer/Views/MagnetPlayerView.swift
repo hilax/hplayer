@@ -74,6 +74,17 @@ struct MagnetPlayerView: View {
                 Spacer()
                 Button("完成") { inputFocused = false }
             }
+            ToolbarItem(placement: .primaryAction) {
+                NavigationLink {
+                    MagnetSearchView { selectedMagnet in
+                        input = selectedMagnet
+                        submit()
+                    }
+                } label: {
+                    Image(systemName: AppIcon.search.name)
+                        .foregroundStyle(Theme.accent)
+                }
+            }
             if !initialMagnet.isEmpty {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("关闭") { dismiss() }
@@ -135,7 +146,22 @@ struct MagnetPlayerView: View {
 
                 Spacer(minLength: 0)
 
-
+                NavigationLink {
+                    MagnetSearchView { selectedMagnet in
+                        input = selectedMagnet
+                        submit()
+                    }
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: AppIcon.search.name)
+                        Text("在线搜番号")
+                    }
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(Theme.accent)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .background(Theme.accent.opacity(0.12), in: Capsule())
+                }
             }
 
             if cloudAvailable {
