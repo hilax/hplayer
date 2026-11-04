@@ -201,6 +201,10 @@ struct HomeView: View {
                 }
             }
             .tint(Theme.accent)
+            // 键盘只该让上面的搜索页避让：TabView 自己（连同悬浮的标签栏）整体不跟着键盘缩小，
+            // 否则搜索页弹出、收起键盘时，底下的页面和标签栏会被顶起来再落下去。
+            // 各页里带输入框的二级页（「我的」里的设置）由它们自己的页面处理键盘避让。
+            .ignoresSafeArea(.keyboard, edges: .bottom)
             .accessibilityHidden(searchOpen)
 
             if searchCreated {
