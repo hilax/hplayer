@@ -370,7 +370,7 @@ final class JavBusSource: MagnetSearchSource, @unchecked Sendable {
                 for (offset, star) in slice.enumerated() {
                     group.addTask { [self] in
                         do {
-                            return (base + offset, .success(try await fetchLeadMovies(starName: star.name)))
+                            return (base + offset, .success(try await fetchLeadMovies(starName: star.name).map { $0.withStars([star]) }))
                         } catch {
                             return (base + offset, .failure(error))
                         }

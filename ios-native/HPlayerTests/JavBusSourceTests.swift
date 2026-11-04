@@ -556,6 +556,8 @@ final class JavBusSourceTests: XCTestCase {
         let first = try await source.fetchHot(now: Self.hotNow)
         // 女优人气排名优先：甲（第 1）在前，哪怕乙的片更新
         XCTAssertEqual(first.map(\.code), ["AAA-001", "BBB-001"])
+        // 每部片记着是哪位女优带来的，最热榜的影片行要显示她的名字
+        XCTAssertEqual(first.map { $0.stars.first?.name }, ["甲", "乙"])
         XCTAssertEqual(RoutedURLProtocol.requests().count, 3)
 
         let second = try await source.fetchHot(now: Self.hotNow.addingTimeInterval(60))
@@ -589,6 +591,17 @@ final class JavBusSourceTests: XCTestCase {
         } catch {
             XCTFail("错误类型不对: \(error)")
         }
+    }
+
+    func testWithStarsKeepsEverythingElse() {
+        let item = MagnetSearchItem(code: "ABC-001", title: "t", coverURL: nil, releaseDate: "2026-11-01", detailPath: "/ABC-001")
+        let star = MagnetStarItem(name: "甲", avatarURL: nil, detailPath: "/star/aaa")
+        let tagged = item.withStars([star])
+        XCTAssertEqual(tagged.id, item.id)
+        XCTAssertEqual(tagged.code, "ABC-001")
+        XCTAssertEqual(tagged.releaseDate, "2026-11-01")
+        XCTAssertEqual(tagged.detailPath, "/ABC-001")
+        XCTAssertEqual(tagged.stars, [star])
     }
 
     // MARK: - 女优主演作品（按名字搜索，不含合集）

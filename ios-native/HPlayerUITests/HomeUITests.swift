@@ -94,6 +94,16 @@ final class HomeUITests: XCTestCase {
         if !magnet.isHittable { app.swipeUp() }
         XCTAssertTrue(magnet.waitForExistence(timeout: 5), "Cloud tab offers the magnet aggregation entry")
         XCTAssertFalse(app.buttons["library.manage"].exists, "Library management lives in the Mine tab only")
+        // 磁力聚合：搜索框 + 四个分类标签；专题是固定的片商入口，不依赖网络
+        magnet.tap()
+        XCTAssertTrue(app.textFields["magnet.search"].waitForExistence(timeout: 5), "Magnet page offers one search field")
+        for key in ["latest", "topics", "actresses", "hot"] {
+            XCTAssertTrue(app.buttons["magnet.category.\(key)"].exists, "Category tab \(key) exists")
+        }
+        app.buttons["magnet.category.topics"].tap()
+        XCTAssertTrue(app.buttons["magnet.studio.s1"].waitForExistence(timeout: 5), "Topics lists the studios")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.buttons["library.magnet"].waitForExistence(timeout: 5), "Back returns to the Cloud tab")
         capture("Resources - redesign", in: app)
         // 媒体库管理只留在「我的」页
         app.tabButton("我的").tap()

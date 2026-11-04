@@ -124,6 +124,19 @@ struct MagnetSearchItem: Identifiable, Equatable, Hashable, Sendable {
         self.detailPath = detailPath
         self.stars = stars
     }
+
+    /// 换上已知的主演名单（最热榜用它标出这部片是哪位女优带来的）。
+    func withStars(_ stars: [MagnetStarItem]) -> MagnetSearchItem {
+        MagnetSearchItem(
+            id: id,
+            code: code,
+            title: title,
+            coverURL: coverURL,
+            releaseDate: releaseDate,
+            detailPath: detailPath,
+            stars: stars
+        )
+    }
 }
 
 /// 某部影片下的具体磁力资源。
