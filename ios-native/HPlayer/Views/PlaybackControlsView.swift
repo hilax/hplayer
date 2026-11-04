@@ -1419,7 +1419,7 @@ struct PlaybackControlsView: View {
             if boosting {
                 boostPill
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                    .padding(.top, hudInsets.top + (controlsVisible && !locked ? (landscape ? 70 : 48) : 18))
+                    .padding(.top, hudInsets.top + Self.hudTopInset)
                     .transition(.opacity)
                     .allowsHitTesting(false)
                     .zIndex(5)
@@ -2235,6 +2235,10 @@ struct PlaybackControlsView: View {
         .accessibilityElement(children: .combine)
     }
 
+    /// 提示条离画面顶部的距离。固定值：不管进度条等控制栏显示不显示，提示条都在同一个位置，
+    /// 不能随控制栏的出现和消失上下挪动。
+    private static let hudTopInset: CGFloat = 18
+
     /// 亮度、音量、长按快进的提示都在画面上方同一个位置（手势不会同时进行）；拖动进度提示在正中间。
     @ViewBuilder
     private func hudLayer(insets: EdgeInsets) -> some View {
@@ -2247,12 +2251,12 @@ struct PlaybackControlsView: View {
                 case .brightness, .volume:
                     LevelHUD(adjustment: adjustment)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                        .padding(.top, insets.top + (controlsVisible && !locked ? 70 : 18))
+                        .padding(.top, insets.top + Self.hudTopInset)
                         .transition(.opacity)
                 case .notice:
                     NoticeHUD(text: adjustment.valueText)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                        .padding(.top, insets.top + (controlsVisible && !locked ? 70 : 18))
+                        .padding(.top, insets.top + Self.hudTopInset)
                         .transition(.opacity)
                 }
             }

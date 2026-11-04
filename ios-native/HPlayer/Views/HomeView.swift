@@ -219,6 +219,9 @@ struct HomeView: View {
                     .animation(reduceMotion ? nil : Motion.fade, value: searchOpen)
                     .allowsHitTesting(searchOpen)
                     .accessibilityHidden(!searchOpen)
+                    // 搜索页也不跟系统的键盘避让：它的大小、位置在键盘弹出收起时一点都不变，
+                    // 列表底部为键盘留的空白由搜索页自己量（见 SearchView.keyboardHeight）。
+                    .ignoresSafeArea(.keyboard, edges: .bottom)
                     .zIndex(1)
             }
         }

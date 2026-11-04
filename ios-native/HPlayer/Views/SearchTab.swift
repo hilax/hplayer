@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct SearchTab: View {
     var initialQuery = ""
@@ -53,6 +54,10 @@ struct SearchView: View {
     private var error: String { cloudSearch.error }
     @State private var playing: PlaybackQueue?
     @State private var openSeriesID: String?
+    /// 键盘占掉的高度。搜索页整体不跟系统的键盘避让（那样它的布局会随键盘收起被拖着变），
+    /// 改成自己量键盘高度、只给列表底部留白；退出时冻结，收起键盘不再引起任何布局变化。
+    @State private var keyboardHeight: CGFloat = 0
+    @State private var keyboardFrozen = false
 
     init(initialQuery: String = "", initialResults: [P115File] = [], isActive: Bool = true,
          library: HomeSnapshot? = nil, onClose: @escaping () -> Void = {}) {
@@ -98,9 +103,19 @@ struct SearchView: View {
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .scrollDismissesKeyboard(.interactively)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            Color.clear.frame(height: keyboardHeight)
+        }
         }
         .background(Theme.pageBackground.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
+            guard isActive, !keyboardFrozen,
+                  let frame = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
+            let duration = note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double ?? 0.25
+            let covered = max(0, UIScreen.main.bounds.height - frame.minY - Self.windowBottomInset)
+            withAnimation(.easeOut(duration: duration)) { keyboardHeight = covered }
+        }
         .task {
             guard isActive, query.isEmpty, !InterfacePreview.active else { return }
             try? await Task.sleep(nanoseconds: 300_000_000)
@@ -108,8 +123,13 @@ struct SearchView: View {
         }
         .onChange(of: isActive) { active in
             if active {
+                keyboardFrozen = false
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) { keyboardHeight = 0 }
                 if !InterfacePreview.active { searchFocused = true }
             } else {
+                keyboardFrozen = true
                 // 收起键盘不带动画：键盘有自己的动画，SwiftUI 再叠一层会让页面抖一下。
                 var transaction = Transaction()
                 transaction.disablesAnimations = true
@@ -157,11 +177,22 @@ struct SearchView: View {
         }
     }
 
+    /// 屏幕底部的安全区（Home 条）：键盘高度里已经包含它，列表底部本来就留着这一段。
+    private static var windowBottomInset: CGFloat {
+        let window = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .first(where: \.isKeyWindow)
+        return window?.safeAreaInsets.bottom ?? 0
+    }
+
     // MARK: 顶部搜索栏
 
     private var searchBar: some View {
         HStack(spacing: 2) {
             BarIconButton(icon: .back, label: "返回", identifier: "search.back") {
+                // 先冻结键盘高度再收键盘：键盘收起的通知会在这一步里同步到达。
+                keyboardFrozen = true
                 searchFocused = false
                 onClose()
             }
