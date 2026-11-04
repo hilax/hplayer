@@ -3,6 +3,8 @@ import Foundation
 enum JavBusError: LocalizedError {
     case invalidURL
     case cloudflareBlocked
+    case ageVerificationRequired
+    case notFound
     case serverError(Int)
     case network(Error)
     case parseFailed
@@ -14,6 +16,10 @@ enum JavBusError: LocalizedError {
             return "无效的请求地址"
         case .cloudflareBlocked:
             return "受到网络防护拦截（Cloudflare），请检查代理或更换镜像域名"
+        case .ageVerificationRequired:
+            return "站点要求年龄验证，自动验证未通过，请更换镜像域名后重试"
+        case .notFound:
+            return "未找到对应页面 (404)"
         case let .serverError(code):
             return "服务器响应异常 (\(code))"
         case let .network(err):
@@ -30,10 +36,23 @@ enum JavBusError: LocalizedError {
 final class JavBusSource: MagnetSearchSource, @unchecked Sendable {
     static let shared = JavBusSource()
 
+    static let defaultHost = "https://www.javbus.com"
+    static let hostDefaultsKey = "hplayer.magnet.javbus_host"
+
+    /// 磁力列表的 AJAX 接口，依次尝试，直到拿到磁力为止。
+    static let magnetAjaxEndpoints = ["uncensoredcors.php", "uncledatoolsbyajax.php"]
+
+    /// existmag=all：显示全部磁力；age=verified、dv=1：跳过「年龄验证」页。
+    /// 不带后两个 Cookie 时，站点会把所有页面都换成年龄验证页，解析不到任何数据。
+    static let requiredCookies: [(name: String, value: String)] = [
+        ("existmag", "all"),
+        ("age", "verified"),
+        ("dv", "1"),
+    ]
+
     let name = "JavBus"
 
     private let session: URLSession
-    private let defaultHost = "https://www.javbus.com"
 
     init(session: URLSession? = nil) {
         if let session {
@@ -46,25 +65,73 @@ final class JavBusSource: MagnetSearchSource, @unchecked Sendable {
         }
     }
 
+    // MARK: - 域名
+
+    /// 把用户输入整理成 `scheme://host[:port]`；缺少 scheme 时补 https，非法输入返回 nil。
+    static func normalizedHost(_ raw: String) -> String? {
+        var text = trim(raw)
+        guard !text.isEmpty else { return nil }
+        let lower = text.lowercased()
+        if !lower.hasPrefix("http://") && !lower.hasPrefix("https://") {
+            text = "https://" + text
+        }
+        guard let components = URLComponents(string: text),
+              let scheme = components.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              let host = components.host,
+              host.contains(".") else {
+            return nil
+        }
+        var result = "\(scheme)://\(host)"
+        if let port = components.port {
+            result += ":\(port)"
+        }
+        return result
+    }
+
     /// 当前配置的基础访问域名（支持用户在设置中自定义镜像站）。
     var currentHost: String {
-        let custom = UserDefaults.standard.string(forKey: "hplayer.magnet.javbus_host")?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !custom.isEmpty {
-            return custom.hasSuffix("/") ? String(custom.dropLast()) : custom
-        }
-        return defaultHost
+        let custom = UserDefaults.standard.string(forKey: Self.hostDefaultsKey) ?? ""
+        return Self.normalizedHost(custom) ?? Self.defaultHost
     }
+
+    private func makeURL(path: String) -> URL? {
+        let clean = path.hasPrefix("/") ? String(path.dropFirst()) : path
+        return URL(string: "\(currentHost)/\(clean)")
+    }
+
+    // MARK: - 网络请求
 
     private var mobileUserAgent: String {
         "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
+    }
+
+    private static func installCookies(in storage: HTTPCookieStorage, for url: URL) {
+        guard let host = url.host else { return }
+        for cookie in requiredCookies {
+            let properties: [HTTPCookiePropertyKey: Any] = [
+                .name: cookie.name,
+                .value: cookie.value,
+                .domain: host,
+                .path: "/",
+                .expires: Date(timeIntervalSinceNow: 60 * 60 * 24 * 30),
+            ]
+            if let httpCookie = HTTPCookie(properties: properties) {
+                storage.setCookie(httpCookie)
+            }
+        }
     }
 
     private func makeRequest(url: URL, referer: String? = nil, isAJAX: Bool = false) -> URLRequest {
         var req = URLRequest(url: url)
         req.setValue(mobileUserAgent, forHTTPHeaderField: "User-Agent")
         req.setValue("zh-CN,zh-Hans;q=0.9,ja;q=0.8,en;q=0.7", forHTTPHeaderField: "Accept-Language")
-        req.setValue("existmag=all", forHTTPHeaderField: "Cookie")
+        if let storage = session.configuration.httpCookieStorage {
+            Self.installCookies(in: storage, for: url)
+        } else {
+            let header = Self.requiredCookies.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
+            req.setValue(header, forHTTPHeaderField: "Cookie")
+        }
         if let referer {
             req.setValue(referer, forHTTPHeaderField: "Referer")
         }
@@ -74,142 +141,236 @@ final class JavBusSource: MagnetSearchSource, @unchecked Sendable {
         return req
     }
 
-    private func fetchData(from url: URL, referer: String? = nil, isAJAX: Bool = false) async throws -> (Data, String) {
-        let req = makeRequest(url: url, referer: referer, isAJAX: isAJAX)
-        let (data, response): (Data, URLResponse)
+    /// 发一次请求并检查状态码：404 → `.notFound`，403/503 → Cloudflare 拦截。任务被取消时抛 `CancellationError`。
+    private func send(_ req: URLRequest) async throws -> (html: String, finalURL: URL?) {
+        let data: Data
+        let response: URLResponse
         do {
             (data, response) = try await session.data(for: req)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let urlError as URLError where urlError.code == .cancelled {
+            throw CancellationError()
         } catch {
             throw JavBusError.network(error)
         }
 
         if let http = response as? HTTPURLResponse {
-            if http.statusCode == 403 || http.statusCode == 503 {
+            switch http.statusCode {
+            case 200...299:
+                break
+            case 404:
+                throw JavBusError.notFound
+            case 403, 503:
                 throw JavBusError.cloudflareBlocked
-            }
-            guard (200...299).contains(http.statusCode) else {
+            default:
                 throw JavBusError.serverError(http.statusCode)
             }
         }
 
         let html = String(data: data, encoding: .utf8) ?? String(decoding: data, as: UTF8.self)
-        if html.contains("cf-browser-verification") || html.contains("cf-challenge") {
+        if Self.isCloudflareChallenge(html) {
             throw JavBusError.cloudflareBlocked
         }
-        return (data, html)
+        return (html, response.url)
+    }
+
+    static func isCloudflareChallenge(_ html: String) -> Bool {
+        html.contains("cf-browser-verification") || html.contains("cf-challenge")
+    }
+
+    /// JavBus 的「你是否已經成年?」页面（地区年龄检测）。
+    static func isAgeVerificationPage(_ html: String) -> Bool {
+        html.contains("id=\"ageVerify\"")
+    }
+
+    private func fetchData(from url: URL, referer: String? = nil, isAJAX: Bool = false) async throws -> String {
+        let first = try await send(makeRequest(url: url, referer: referer, isAJAX: isAJAX))
+        guard Self.isAgeVerificationPage(first.html) else {
+            return first.html
+        }
+
+        // Cookie 没能跳过验证页时，提交一次「我已成年」表单再重试。
+        await submitAgeVerification(verifyURL: first.finalURL, originalURL: url)
+        let second = try await send(makeRequest(url: url, referer: referer, isAJAX: isAJAX))
+        if Self.isAgeVerificationPage(second.html) {
+            throw JavBusError.ageVerificationRequired
+        }
+        return second.html
+    }
+
+    private func submitAgeVerification(verifyURL: URL?, originalURL: URL) async {
+        let target: URL
+        if let verifyURL, verifyURL.path.contains("driver-verify") {
+            target = verifyURL
+        } else {
+            var components = URLComponents(string: currentHost)
+            components?.path = "/doc/driver-verify"
+            components?.queryItems = [URLQueryItem(name: "referer", value: originalURL.absoluteString)]
+            guard let built = components?.url else { return }
+            target = built
+        }
+
+        var req = makeRequest(url: target, referer: target.absoluteString)
+        req.httpMethod = "POST"
+        req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        req.httpBody = Data("Submit=%E7%A2%BA%E8%AA%8D".utf8)
+        _ = try? await send(req)
+    }
+
+    /// 404 视为「没有内容」（搜索无结果、翻页翻过头），返回 nil。
+    private func fetchHTMLOrNil(_ url: URL) async throws -> String? {
+        do {
+            return try await fetchData(from: url)
+        } catch JavBusError.notFound {
+            return nil
+        }
+    }
+
+    // MARK: - 路径编码
+
+    private static let pathSegmentAllowed: CharacterSet = {
+        var set = CharacterSet.urlPathAllowed
+        set.remove(charactersIn: "/?#")
+        return set
+    }()
+
+    static func encodePathSegment(_ text: String) -> String {
+        text.addingPercentEncoding(withAllowedCharacters: pathSegmentAllowed) ?? text
     }
 
     // MARK: - 搜索影片
 
     func search(keyword: String, page: Int = 1) async throws -> [MagnetSearchItem] {
-        let trimmed = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = Self.trim(keyword)
         guard !trimmed.isEmpty else { return [] }
 
-        let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? trimmed
-        let urlString = page > 1
-            ? "\(currentHost)/search/\(encoded)/\(page)"
-            : "\(currentHost)/search/\(encoded)"
-
-        guard let url = URL(string: urlString) else {
+        let encoded = Self.encodePathSegment(trimmed)
+        let path = page > 1 ? "search/\(encoded)/\(page)" : "search/\(encoded)"
+        guard let url = makeURL(path: path) else {
             throw JavBusError.invalidURL
         }
 
-        let (_, html) = try await fetchData(from: url)
+        guard let html = try await fetchHTMLOrNil(url) else { return [] }
         return Self.parseSearchItems(from: html, baseURLString: currentHost)
+    }
+
+    /// 同时搜影片和女优。女优搜索失败（番号搜不到女优、404 等）不影响影片结果。
+    func searchAll(keyword: String, page: Int = 1) async throws -> (movies: [MagnetSearchItem], stars: [MagnetStarItem]) {
+        async let movies = search(keyword: keyword, page: page)
+        async let stars = searchActressesOrEmpty(keyword)
+        return try await (movies, stars)
+    }
+
+    private func searchActressesOrEmpty(_ name: String) async -> [MagnetStarItem] {
+        (try? await searchActresses(name: name)) ?? []
     }
 
     // MARK: - 分类列表浏览（最新、无码）
 
     func fetchCategory(_ category: MagnetCategory, page: Int = 1) async throws -> [MagnetSearchItem] {
-        let urlString: String
+        let path: String
         switch category {
         case .latest:
-            urlString = page > 1 ? "\(currentHost)/page/\(page)" : "\(currentHost)/"
+            path = page > 1 ? "page/\(page)" : ""
         case .uncensored:
-            urlString = page > 1 ? "\(currentHost)/uncensored/page/\(page)" : "\(currentHost)/uncensored"
+            path = page > 1 ? "uncensored/page/\(page)" : "uncensored"
         case .actresses:
             return []
         }
 
-        guard let url = URL(string: urlString) else {
+        guard let url = makeURL(path: path) else {
             throw JavBusError.invalidURL
         }
 
-        let (_, html) = try await fetchData(from: url)
+        guard let html = try await fetchHTMLOrNil(url) else { return [] }
         return Self.parseSearchItems(from: html, baseURLString: currentHost)
     }
 
     // MARK: - 女优浏览与搜索
 
     func fetchActresses(page: Int = 1) async throws -> [MagnetStarItem] {
-        let urlString = page > 1 ? "\(currentHost)/actresses/\(page)" : "\(currentHost)/actresses"
-        guard let url = URL(string: urlString) else {
+        let path = page > 1 ? "actresses/\(page)" : "actresses"
+        guard let url = makeURL(path: path) else {
             throw JavBusError.invalidURL
         }
 
-        let (_, html) = try await fetchData(from: url)
+        guard let html = try await fetchHTMLOrNil(url) else { return [] }
         return Self.parseStarItems(from: html, baseURLString: currentHost)
     }
 
     func searchActresses(name: String) async throws -> [MagnetStarItem] {
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = Self.trim(name)
         guard !trimmed.isEmpty else { return [] }
 
-        let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? trimmed
-        let urlString = "\(currentHost)/searchstar/\(encoded)"
-        guard let url = URL(string: urlString) else {
+        let encoded = Self.encodePathSegment(trimmed)
+        guard let url = makeURL(path: "searchstar/\(encoded)") else {
             throw JavBusError.invalidURL
         }
 
-        let (_, html) = try await fetchData(from: url)
+        guard let html = try await fetchHTMLOrNil(url) else { return [] }
         return Self.parseStarItems(from: html, baseURLString: currentHost)
     }
 
     // MARK: - 女优专属作品列表
 
     func fetchStarDetail(starPath: String, page: Int = 1) async throws -> (star: MagnetStarItem?, movies: [MagnetSearchItem]) {
-        let clean = starPath.hasPrefix("/") ? String(starPath.dropFirst()) : starPath
-        let urlString = page > 1 ? "\(currentHost)/\(clean)/\(page)" : "\(currentHost)/\(clean)"
-        guard let url = URL(string: urlString) else {
+        let clean = starPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let path = page > 1 ? "\(clean)/\(page)" : clean
+        guard let url = makeURL(path: path) else {
             throw JavBusError.invalidURL
         }
 
-        let (_, html) = try await fetchData(from: url)
-        let star = Self.parseStarHeader(from: html, detailPath: "/\(clean)", baseURLString: currentHost)
-        let movies = Self.parseSearchItems(from: html, baseURLString: currentHost)
+        let host = currentHost
+        if page > 1 {
+            // 翻过最后一页时站点返回 404，当作没有更多作品。
+            guard let html = try await fetchHTMLOrNil(url) else { return (nil, []) }
+            return (nil, Self.parseSearchItems(from: html, baseURLString: host))
+        }
+
+        let html = try await fetchData(from: url)
+        let star = Self.parseStarHeader(from: html, detailPath: "/\(clean)", baseURLString: host)
+        let movies = Self.parseSearchItems(from: html, baseURLString: host)
         return (star, movies)
     }
 
     // MARK: - 获取影片详情（含参演女优与磁力列表）
 
     func fetchDetailInfo(for item: MagnetSearchItem) async throws -> (stars: [MagnetStarItem], magnets: [MagnetTorrentItem]) {
-        let cleanPath = item.detailPath.hasPrefix("/") ? String(item.detailPath.dropFirst()) : item.detailPath
-        let detailURLString = "\(currentHost)/\(cleanPath)"
-        guard let detailURL = URL(string: detailURLString) else {
+        guard let detailURL = makeURL(path: item.detailPath) else {
             throw JavBusError.invalidURL
         }
 
-        let (_, detailHTML) = try await fetchData(from: detailURL)
-        let stars = Self.parseStarsFromMovieDetail(detailHTML, baseURLString: currentHost)
+        let host = currentHost
+        let detailHTML = try await fetchData(from: detailURL)
+        let stars = Self.parseStarsFromMovieDetail(detailHTML, baseURLString: host)
 
         // 解析详情页里的 AJAX 参数：gid, uc, img
         guard let gid = Self.extractRegex(pattern: #"var\s+gid\s*=\s*(\d+);"#, text: detailHTML),
               let uc = Self.extractRegex(pattern: #"var\s+uc\s*=\s*(\d+);"#, text: detailHTML) else {
-            let staticMagnets = Self.parseMagnetsFromHTML(detailHTML)
-            return (stars, Self.sortMagnets(staticMagnets))
+            return (stars, Self.sortMagnets(Self.parseMagnetsFromHTML(detailHTML)))
         }
 
         let img = Self.extractRegex(pattern: #"var\s+img\s*=\s*'([^']*)';"#, text: detailHTML) ?? ""
         let floor = Int.random(in: 100...999)
 
-        let ajaxURLString = "\(currentHost)/ajax/uncensoredcors.php?gid=\(gid)&lang=zh&img=\(img)&uc=\(uc)&floor=\(floor)"
-        guard let ajaxURL = URL(string: ajaxURLString) else {
-            throw JavBusError.invalidURL
+        for endpoint in Self.magnetAjaxEndpoints {
+            guard let ajaxURL = Self.makeAjaxURL(host: host, endpoint: endpoint, gid: gid, uc: uc, img: img, floor: floor) else {
+                continue
+            }
+            do {
+                let ajaxHTML = try await fetchData(from: ajaxURL, referer: detailURL.absoluteString, isAJAX: true)
+                let parsed = Self.parseMagnetsFromHTML(ajaxHTML)
+                if !parsed.isEmpty {
+                    return (stars, Self.sortMagnets(parsed))
+                }
+            } catch JavBusError.notFound {
+                continue
+            }
         }
 
-        let (_, ajaxHTML) = try await fetchData(from: ajaxURL, referer: detailURLString, isAJAX: true)
-        let parsed = Self.parseMagnetsFromHTML(ajaxHTML)
-        return (stars, Self.sortMagnets(parsed))
+        // AJAX 都没有结果时，退回详情页里直接写着的磁力。
+        return (stars, Self.sortMagnets(Self.parseMagnetsFromHTML(detailHTML)))
     }
 
     func fetchMagnets(for item: MagnetSearchItem) async throws -> [MagnetTorrentItem] {
@@ -217,160 +378,230 @@ final class JavBusSource: MagnetSearchSource, @unchecked Sendable {
         return magnets
     }
 
+    static func makeAjaxURL(host: String, endpoint: String, gid: String, uc: String, img: String, floor: Int) -> URL? {
+        guard var components = URLComponents(string: host) else { return nil }
+        components.path = "/ajax/\(endpoint)"
+        components.queryItems = [
+            URLQueryItem(name: "gid", value: gid),
+            URLQueryItem(name: "lang", value: "zh"),
+            URLQueryItem(name: "img", value: img),
+            URLQueryItem(name: "uc", value: uc),
+            URLQueryItem(name: "floor", value: String(floor)),
+        ]
+        return components.url
+    }
+
+    // MARK: - 解析辅助
+
+    private static func trim(_ text: String) -> String {
+        text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// 去掉标签、解码实体、把连续空白压成一个空格。
+    private static func plainText(_ html: String) -> String {
+        let stripped = html.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
+        return decodeHTMLEntities(stripped)
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
+    private static func makeRegex(_ pattern: String, caseInsensitive: Bool = false) -> NSRegularExpression? {
+        try? NSRegularExpression(pattern: pattern, options: caseInsensitive ? [.caseInsensitive] : [])
+    }
+
+    private static func fullRange(_ text: NSString) -> NSRange {
+        NSRange(location: 0, length: text.length)
+    }
+
+    private static func capture(_ match: NSTextCheckingResult, _ index: Int, in text: NSString) -> String? {
+        guard index < match.numberOfRanges else { return nil }
+        let range = match.range(at: index)
+        guard range.location != NSNotFound else { return nil }
+        return text.substring(with: range)
+    }
+
+    /// 解码常见 HTML 实体（&amp; &quot; &#39; &#x27; 等）。
+    static func decodeHTMLEntities(_ text: String) -> String {
+        guard text.contains("&") else { return text }
+        var result = text
+
+        if let regex = makeRegex("&#([xX]?)([0-9a-fA-F]+);") {
+            let ns = result as NSString
+            // 从后往前替换，前面的匹配位置不受影响。
+            for match in regex.matches(in: result, options: [], range: fullRange(ns)).reversed() {
+                guard let prefix = capture(match, 1, in: ns),
+                      let digits = capture(match, 2, in: ns),
+                      let value = UInt32(digits, radix: prefix.isEmpty ? 10 : 16),
+                      let scalar = Unicode.Scalar(value),
+                      let range = Range(match.range, in: result) else {
+                    continue
+                }
+                result.replaceSubrange(range, with: String(Character(scalar)))
+            }
+        }
+
+        let named: [(String, String)] = [
+            ("&quot;", "\""), ("&apos;", "'"), ("&lt;", "<"), ("&gt;", ">"), ("&nbsp;", " "),
+        ]
+        for (entity, replacement) in named {
+            result = result.replacingOccurrences(of: entity, with: replacement)
+        }
+        // &amp; 放最后，避免 &amp;lt; 被解码两次。
+        return result.replacingOccurrences(of: "&amp;", with: "&")
+    }
+
+    /// 把页面里的地址补成绝对地址：支持绝对、`//host/x`、`/x`、`x` 四种写法。
+    /// 注意 `URL(string: "/x")` 不会返回 nil 而是相对 URL，所以必须显式拼上域名。
+    static func resolveURL(_ raw: String, baseURLString: String) -> URL? {
+        let text = trim(decodeHTMLEntities(raw))
+        guard !text.isEmpty else { return nil }
+
+        let base = URL(string: baseURLString)
+        if text.hasPrefix("//") {
+            return URL(string: "\(base?.scheme ?? "https"):\(text)")
+        }
+        if let url = URL(string: text), url.scheme != nil, url.host != nil {
+            return url
+        }
+        guard let base else { return URL(string: text) }
+        return URL(string: text, relativeTo: base)?.absoluteURL
+    }
+
+    /// 取链接的路径部分（去掉域名和查询串），作为站内详情页路径。
+    static func detailPath(from href: String) -> String {
+        let decoded = trim(decodeHTMLEntities(href))
+        if let url = URL(string: decoded), !url.path.isEmpty {
+            return url.path
+        }
+        return decoded
+    }
+
     // MARK: - HTML 解析逻辑
 
     static func parseSearchItems(from html: String, baseURLString: String) -> [MagnetSearchItem] {
-        var items: [MagnetSearchItem] = []
-        let boxPattern = #"<a\s+class="movie-box"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>"#
-        guard let regex = try? NSRegularExpression(pattern: boxPattern, options: []) else {
+        guard let boxRegex = makeRegex(#"<a\s+class="movie-box[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>"#),
+              let imgRegex = makeRegex(#"<img[^>]*src="([^"]+)"[^>]*title="([^"]*)""#),
+              let dateRegex = makeRegex(#"<date>([^<]+)<\/date>"#) else {
             return []
         }
 
-        let nsString = html as NSString
-        let matches = regex.matches(in: html, options: [], range: NSRange(location: 0, length: nsString.length))
+        let nsHTML = html as NSString
+        var items: [MagnetSearchItem] = []
+        var seen = Set<String>()
 
-        for match in matches where match.numberOfRanges >= 3 {
-            let href = nsString.substring(with: match.range(at: 1))
-            let innerContent = nsString.substring(with: match.range(at: 2))
+        for match in boxRegex.matches(in: html, options: [], range: fullRange(nsHTML)) {
+            guard let href = capture(match, 1, in: nsHTML),
+                  let inner = capture(match, 2, in: nsHTML) else {
+                continue
+            }
+            let nsInner = inner as NSString
 
-            let imgPattern = #"<img[^>]*src="([^"]+)"[^>]*title="([^"]*)""#
             var coverURL: URL?
             var title = ""
-            if let imgRegex = try? NSRegularExpression(pattern: imgPattern, options: []),
-               let imgMatch = imgRegex.firstMatch(in: innerContent, options: [], range: NSRange(location: 0, length: (innerContent as NSString).length)) {
-                let imgSrc = (innerContent as NSString).substring(with: imgMatch.range(at: 1))
-                let imgTitle = (innerContent as NSString).substring(with: imgMatch.range(at: 2))
-                title = imgTitle
-                if let parsed = URL(string: imgSrc) {
-                    coverURL = parsed
-                } else if let parsed = URL(string: baseURLString + (imgSrc.hasPrefix("/") ? "" : "/") + imgSrc) {
-                    coverURL = parsed
+            if let imgMatch = imgRegex.firstMatch(in: inner, options: [], range: fullRange(nsInner)) {
+                if let src = capture(imgMatch, 1, in: nsInner) {
+                    coverURL = resolveURL(src, baseURLString: baseURLString)
                 }
+                title = trim(decodeHTMLEntities(capture(imgMatch, 2, in: nsInner) ?? ""))
             }
 
-            let datePattern = #"<date>([^<]+)<\/date>"#
             var dates: [String] = []
-            if let dateRegex = try? NSRegularExpression(pattern: datePattern, options: []) {
-                let dateMatches = dateRegex.matches(in: innerContent, options: [], range: NSRange(location: 0, length: (innerContent as NSString).length))
-                for dMatch in dateMatches where dMatch.numberOfRanges >= 2 {
-                    dates.append((innerContent as NSString).substring(with: dMatch.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines))
+            for dateMatch in dateRegex.matches(in: inner, options: [], range: fullRange(nsInner)) {
+                if let value = capture(dateMatch, 1, in: nsInner) {
+                    dates.append(trim(value))
                 }
             }
 
             let code = dates.first ?? ""
             let releaseDate = dates.count > 1 ? dates[1] : nil
+            let path = detailPath(from: href)
 
-            var detailPath = href
-            if let url = URL(string: href), !url.path.isEmpty {
-                detailPath = url.path
-            }
-
-            if !code.isEmpty || !title.isEmpty {
-                items.append(MagnetSearchItem(
-                    id: detailPath,
-                    code: code,
-                    title: title.isEmpty ? code : title,
-                    coverURL: coverURL,
-                    releaseDate: releaseDate,
-                    detailPath: detailPath
-                ))
-            }
+            guard !code.isEmpty || !title.isEmpty, seen.insert(path).inserted else { continue }
+            items.append(MagnetSearchItem(
+                id: path,
+                code: code,
+                title: title.isEmpty ? code : title,
+                coverURL: coverURL,
+                releaseDate: releaseDate,
+                detailPath: path
+            ))
         }
 
         return items
     }
 
     static func parseStarItems(from html: String, baseURLString: String) -> [MagnetStarItem] {
-        var stars: [MagnetStarItem] = []
         // <a class="avatar-box..." href="https://www.javbus.com/star/xxx"> ... <img src="yyy" title="name"> ... <span>name</span>
-        let starPattern = #"<a\s+class="avatar-box[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>"#
-        guard let regex = try? NSRegularExpression(pattern: starPattern, options: []) else {
+        guard let starRegex = makeRegex(#"<a\s+class="avatar-box[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>"#),
+              let imgRegex = makeRegex(#"<img[^>]*src="([^"]+)"(?:[^>]*title="([^"]*)")?"#),
+              let spanRegex = makeRegex(#"<span>([^<]+)<\/span>"#) else {
             return []
         }
 
-        let nsString = html as NSString
-        let matches = regex.matches(in: html, options: [], range: NSRange(location: 0, length: nsString.length))
+        let nsHTML = html as NSString
+        var stars: [MagnetStarItem] = []
+        var seen = Set<String>()
 
-        for match in matches where match.numberOfRanges >= 3 {
-            let href = nsString.substring(with: match.range(at: 1))
-            let inner = nsString.substring(with: match.range(at: 2))
+        for match in starRegex.matches(in: html, options: [], range: fullRange(nsHTML)) {
+            guard let href = capture(match, 1, in: nsHTML),
+                  let inner = capture(match, 2, in: nsHTML) else {
+                continue
+            }
+            let nsInner = inner as NSString
 
             var avatarURL: URL?
             var name = ""
-
-            let imgPattern = #"<img[^>]*src="([^"]+)"(?:[^>]*title="([^"]*)")?"#
-            if let imgRegex = try? NSRegularExpression(pattern: imgPattern, options: []),
-               let imgMatch = imgRegex.firstMatch(in: inner, options: [], range: NSRange(location: 0, length: (inner as NSString).length)) {
-                let src = (inner as NSString).substring(with: imgMatch.range(at: 1))
-                if imgMatch.numberOfRanges >= 3, imgMatch.range(at: 2).location != NSNotFound {
-                    name = (inner as NSString).substring(with: imgMatch.range(at: 2))
+            if let imgMatch = imgRegex.firstMatch(in: inner, options: [], range: fullRange(nsInner)) {
+                if let src = capture(imgMatch, 1, in: nsInner) {
+                    avatarURL = resolveURL(src, baseURLString: baseURLString)
                 }
-                if let url = URL(string: src) {
-                    avatarURL = url
-                } else if let url = URL(string: baseURLString + (src.hasPrefix("/") ? "" : "/") + src) {
-                    avatarURL = url
-                }
+                name = trim(decodeHTMLEntities(capture(imgMatch, 2, in: nsInner) ?? ""))
+            }
+            if name.isEmpty,
+               let spanMatch = spanRegex.firstMatch(in: inner, options: [], range: fullRange(nsInner)),
+               let text = capture(spanMatch, 1, in: nsInner) {
+                name = trim(decodeHTMLEntities(text))
             }
 
-            if name.isEmpty {
-                let namePattern = #"<span>([^<]+)<\/span>"#
-                if let nameRegex = try? NSRegularExpression(pattern: namePattern, options: []),
-                   let nameMatch = nameRegex.firstMatch(in: inner, options: [], range: NSRange(location: 0, length: (inner as NSString).length)) {
-                    name = (inner as NSString).substring(with: nameMatch.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
-                }
-            }
-
-            var detailPath = href
-            if let url = URL(string: href), !url.path.isEmpty {
-                detailPath = url.path
-            }
-
-            if !name.isEmpty {
-                stars.append(MagnetStarItem(
-                    id: detailPath,
-                    name: name,
-                    avatarURL: avatarURL,
-                    detailPath: detailPath
-                ))
-            }
+            let path = detailPath(from: href)
+            guard !name.isEmpty, seen.insert(path).inserted else { continue }
+            stars.append(MagnetStarItem(id: path, name: name, avatarURL: avatarURL, detailPath: path))
         }
 
         return stars
     }
 
     static func parseStarHeader(from html: String, detailPath: String, baseURLString: String) -> MagnetStarItem? {
-        let avatarPattern = #"<div\s+class="avatar-box"[^>]*>[\s\S]*?<img\s+src="([^"]+)"(?:[^>]*title="([^"]*)")?"#
+        let nsHTML = html as NSString
         var avatarURL: URL?
         var name = ""
 
-        if let regex = try? NSRegularExpression(pattern: avatarPattern, options: []),
-           let match = regex.firstMatch(in: html, options: [], range: NSRange(location: 0, length: (html as NSString).length)) {
-            let src = (html as NSString).substring(with: match.range(at: 1))
-            if match.numberOfRanges >= 3, match.range(at: 2).location != NSNotFound {
-                name = (html as NSString).substring(with: match.range(at: 2))
+        if let avatarRegex = makeRegex(#"<div\s+class="avatar-box"[^>]*>[\s\S]*?<img\s+src="([^"]+)"(?:[^>]*title="([^"]*)")?"#),
+           let match = avatarRegex.firstMatch(in: html, options: [], range: fullRange(nsHTML)) {
+            if let src = capture(match, 1, in: nsHTML) {
+                avatarURL = resolveURL(src, baseURLString: baseURLString)
             }
-            if let url = URL(string: src) {
-                avatarURL = url
-            } else if let url = URL(string: baseURLString + (src.hasPrefix("/") ? "" : "/") + src) {
-                avatarURL = url
-            }
+            name = trim(decodeHTMLEntities(capture(match, 2, in: nsHTML) ?? ""))
         }
 
-        if name.isEmpty {
-            let namePattern = #"<span\s+class="pb10">([^<]+)<\/span>"#
-            if let nameRegex = try? NSRegularExpression(pattern: namePattern, options: []),
-               let nameMatch = nameRegex.firstMatch(in: html, options: [], range: NSRange(location: 0, length: (html as NSString).length)) {
-                name = (html as NSString).substring(with: nameMatch.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
-            }
+        if name.isEmpty,
+           let nameRegex = makeRegex(#"<span\s+class="pb10">([^<]+)<\/span>"#),
+           let match = nameRegex.firstMatch(in: html, options: [], range: fullRange(nsHTML)),
+           let text = capture(match, 1, in: nsHTML) {
+            name = trim(decodeHTMLEntities(text))
         }
 
-        // 提取个人资料段落
+        // 个人资料段落，形如 <p>生日: 1993-08-16</p>；冒号前的字段名不会很长，借此过滤掉页面里别的 <p>。
         var bioLines: [String] = []
-        let pPattern = #"<p>([^<]+:[^<]+)<\/p>"#
-        if let pRegex = try? NSRegularExpression(pattern: pPattern, options: []) {
-            let matches = pRegex.matches(in: html, options: [], range: NSRange(location: 0, length: (html as NSString).length))
-            for m in matches where m.numberOfRanges >= 2 {
-                let text = (html as NSString).substring(with: m.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
+        if let bioRegex = makeRegex(#"<p>([^<]*[:：][^<]*)<\/p>"#) {
+            for match in bioRegex.matches(in: html, options: [], range: fullRange(nsHTML)) {
+                guard let raw = capture(match, 1, in: nsHTML) else { continue }
+                let text = trim(decodeHTMLEntities(raw))
+                guard let colon = text.firstIndex(where: { $0 == ":" || $0 == "：" }),
+                      text.distance(from: text.startIndex, to: colon) <= 8 else {
+                    continue
+                }
                 bioLines.append(text)
             }
         }
@@ -386,83 +617,91 @@ final class JavBusSource: MagnetSearchSource, @unchecked Sendable {
     }
 
     static func parseStarsFromMovieDetail(_ html: String, baseURLString: String) -> [MagnetStarItem] {
-        var stars: [MagnetStarItem] = []
         // <span class="genre"><a href="https://www.javbus.com/star/xxx">演员名</a></span>
-        let pattern = #"<a[^>]*href="([^"]*(?:\/star\/)[^"]+)"[^>]*>([^<]+)<\/a>"#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else {
+        guard let regex = makeRegex(#"<a[^>]*href="([^"]*(?:\/star\/)[^"]+)"[^>]*>([^<]+)<\/a>"#) else {
             return []
         }
 
         let ns = html as NSString
-        let matches = regex.matches(in: html, options: [], range: NSRange(location: 0, length: ns.length))
+        var stars: [MagnetStarItem] = []
 
-        for m in matches where m.numberOfRanges >= 3 {
-            let href = ns.substring(with: m.range(at: 1))
-            let name = ns.substring(with: m.range(at: 2)).trimmingCharacters(in: .whitespacesAndNewlines)
+        for match in regex.matches(in: html, options: [], range: fullRange(ns)) {
+            guard let href = capture(match, 1, in: ns),
+                  let rawName = capture(match, 2, in: ns) else {
+                continue
+            }
+            let name = trim(decodeHTMLEntities(rawName))
             guard !name.isEmpty else { continue }
 
-            var path = href
-            if let u = URL(string: href), !u.path.isEmpty {
-                path = u.path
-            }
-
+            let path = detailPath(from: href)
             if !stars.contains(where: { $0.name == name || $0.detailPath == path }) {
-                stars.append(MagnetStarItem(
-                    name: name,
-                    avatarURL: nil,
-                    detailPath: path
-                ))
+                stars.append(MagnetStarItem(name: name, avatarURL: nil, detailPath: path))
             }
         }
         return stars
     }
 
     static func parseMagnetsFromHTML(_ html: String) -> [MagnetTorrentItem] {
-        var results: [MagnetTorrentItem] = []
-
-        let trPattern = #"<tr[^>]*>([\s\S]*?)<\/tr>"#
-        guard let trRegex = try? NSRegularExpression(pattern: trPattern, options: []) else {
+        guard let rowRegex = makeRegex(#"<tr[^>]*>([\s\S]*?)<\/tr>"#),
+              let cellRegex = makeRegex(#"<td[^>]*>([\s\S]*?)<\/td>"#),
+              let magnetRegex = makeRegex(#"href="(magnet:\?[^"]+)""#),
+              let nameRegex = makeRegex(#"<a[^>]*href="magnet:[^"]*"[^>]*>([\s\S]*?)<\/a>"#),
+              let sizeRegex = makeRegex(#"(\d+(?:\.\d+)?\s*(?:TB|GB|MB|KB|G|M))(?![A-Za-z0-9])"#, caseInsensitive: true),
+              let dateRegex = makeRegex(#"(\d{4}-\d{2}-\d{2})"#),
+              let hdRegex = makeRegex(#"(?<![A-Za-z0-9])(?:F|U)?HD(?![A-Za-z0-9])"#, caseInsensitive: true) else {
             return []
         }
 
-        let nsString = html as NSString
-        let trMatches = trRegex.matches(in: html, options: [], range: NSRange(location: 0, length: nsString.length))
+        /// 先去掉 href="magnet:..."：磁力地址里的哈希、dn 参数不能当成大小、日期或 HD 标记。
+        func withoutHrefs(_ text: String) -> String {
+            text.replacingOccurrences(of: #"href="magnet:[^"]*""#, with: "", options: .regularExpression)
+        }
 
-        for trMatch in trMatches where trMatch.numberOfRanges >= 2 {
-            let rowContent = nsString.substring(with: trMatch.range(at: 1))
+        func firstCapture(_ regex: NSRegularExpression, in text: String) -> String? {
+            let ns = text as NSString
+            guard let match = regex.firstMatch(in: text, options: [], range: fullRange(ns)) else { return nil }
+            return capture(match, 1, in: ns)
+        }
 
-            let magnetPattern = #"href="(magnet:\?[^"]+)""#
-            guard let magRegex = try? NSRegularExpression(pattern: magnetPattern, options: []),
-                  let magMatch = magRegex.firstMatch(in: rowContent, options: [], range: NSRange(location: 0, length: (rowContent as NSString).length)) else {
+        let nsHTML = html as NSString
+        var results: [MagnetTorrentItem] = []
+        var seen = Set<String>()
+
+        for rowMatch in rowRegex.matches(in: html, options: [], range: fullRange(nsHTML)) {
+            guard let row = capture(rowMatch, 1, in: nsHTML) else { continue }
+            let nsRow = row as NSString
+
+            guard let magnetMatch = magnetRegex.firstMatch(in: row, options: [], range: fullRange(nsRow)),
+                  let rawMagnet = capture(magnetMatch, 1, in: nsRow) else {
                 continue
             }
-            let magnetURL = (rowContent as NSString).substring(with: magMatch.range(at: 1))
+            let magnetURL = decodeHTMLEntities(rawMagnet)
+            guard seen.insert(magnetURL).inserted else { continue }
 
-            let namePattern = #"<a[^>]*href="magnet:[^"]*"[^>]*>([\s\S]*?)<\/a>"#
+            // 第 1 格：名称 + 高清/字幕标签；第 2 格：大小；第 3 格：日期。
+            let cells = cellRegex.matches(in: row, options: [], range: fullRange(nsRow))
+                .compactMap { capture($0, 1, in: nsRow) }
+            let infoCell = cells.first ?? row
+
             var torrentName = ""
-            if let nameRegex = try? NSRegularExpression(pattern: namePattern, options: []),
-               let nameMatch = nameRegex.firstMatch(in: rowContent, options: [], range: NSRange(location: 0, length: (rowContent as NSString).length)) {
-                let rawName = (rowContent as NSString).substring(with: nameMatch.range(at: 1))
-                torrentName = rawName.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            if let rawName = firstCapture(nameRegex, in: infoCell) {
+                torrentName = plainText(rawName)
             }
 
-            let sizePattern = #"(\d+(?:\.\d+)?\s*(?:GB|MB|KB|G|M))"#
-            var size = "未知大小"
-            if let sizeRegex = try? NSRegularExpression(pattern: sizePattern, options: [.caseInsensitive]),
-               let sizeMatch = sizeRegex.firstMatch(in: rowContent, options: [], range: NSRange(location: 0, length: (rowContent as NSString).length)) {
-                size = (rowContent as NSString).substring(with: sizeMatch.range(at: 1))
-            }
+            let infoFlat = withoutHrefs(infoCell)
+            let infoText = plainText(infoFlat)
+            let isHD = infoFlat.contains("btn-warning")
+                || infoText.contains("高清")
+                || hdRegex.firstMatch(in: infoText, options: [], range: fullRange(infoText as NSString)) != nil
+            let hasSubtitles = infoFlat.contains("btn-primary")
+                || infoText.contains("字幕")
+                || infoText.contains("中字")
 
-            let datePattern = #"(\d{4}-\d{2}-\d{2})"#
-            var date: String?
-            if let dateRegex = try? NSRegularExpression(pattern: datePattern, options: []),
-               let dateMatch = dateRegex.firstMatch(in: rowContent, options: [], range: NSRange(location: 0, length: (rowContent as NSString).length)) {
-                date = (rowContent as NSString).substring(with: dateMatch.range(at: 1))
-            }
-
-            let isHD = rowContent.contains("btn-warning") || rowContent.localizedCaseInsensitiveContains("高清") || rowContent.localizedCaseInsensitiveContains("HD")
-            let hasSubtitles = rowContent.contains("btn-primary") || rowContent.contains("字幕") || rowContent.contains("中字")
+            let rowText = plainText(withoutHrefs(row))
+            let sizeText = cells.count > 1 ? plainText(withoutHrefs(cells[1])) : rowText
+            let dateText = cells.count > 2 ? plainText(withoutHrefs(cells[2])) : rowText
+            let size = firstCapture(sizeRegex, in: sizeText) ?? firstCapture(sizeRegex, in: rowText) ?? "未知大小"
+            let date = firstCapture(dateRegex, in: dateText) ?? firstCapture(dateRegex, in: rowText)
 
             results.append(MagnetTorrentItem(
                 magnetURL: magnetURL,
@@ -490,12 +729,9 @@ final class JavBusSource: MagnetSearchSource, @unchecked Sendable {
     }
 
     private static func extractRegex(pattern: String, text: String) -> String? {
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return nil }
+        guard let regex = makeRegex(pattern) else { return nil }
         let ns = text as NSString
-        guard let match = regex.firstMatch(in: text, options: [], range: NSRange(location: 0, length: ns.length)),
-              match.numberOfRanges >= 2 else {
-            return nil
-        }
-        return ns.substring(with: match.range(at: 1))
+        guard let match = regex.firstMatch(in: text, options: [], range: fullRange(ns)) else { return nil }
+        return capture(match, 1, in: ns)
     }
 }
