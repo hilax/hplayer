@@ -1,6 +1,13 @@
 import Combine
 import Foundation
 
+/// 扫描时看到的文件夹：它的上一级和名字。
+/// 文件夹被删掉以后，靠这份记录还能知道它原来在哪个目录下面（清理已失效文件用）。
+struct CloudFolderEntry: Codable, Equatable {
+    let parent: String
+    let name: String
+}
+
 /// Checkpointed, account-isolated directory traversal. Credentials only live in the fetch closure.
 /// Call selectAccount when authentication changes and pause when the app leaves the foreground.
 @MainActor
@@ -27,6 +34,8 @@ final class CloudLibraryScanner: ObservableObject {
     @Published private(set) var lastError = ""
     /// 当前扫描范围：nil 为全盘，否则是所选文件夹的名称
     @Published private(set) var scopeName: String?
+    /// 每读完一页，把这一页里的子文件夹交出去（文件夹编号 → 上一级和名字），在这一页的视频和进度发布之前调用。
+    var onFolders: (@MainActor ([String: CloudFolderEntry]) -> Void)?
 
     var canResume: Bool { phase == .paused || phase == .failed }
 
@@ -197,6 +206,24 @@ final class CloudLibraryScanner: ObservableObject {
         publish(saved)
     }
 
+    /// 扫描结果用完以后丢掉：停下任务、删掉存盘的进度和视频清单，回到空闲。
+    /// 只给「用完即弃」的扫描器用（清理已失效文件）；片库的扫描要保留进度，不能调它。
+    func discardSavedState() {
+        invalidateTask()
+        if let saved = checkpoint { removeInventory(saved) }
+        if let accountID { defaults.removeObject(forKey: checkpointKey(accountID)) }
+        checkpoint = nil
+        knownFolders = []
+        knownVideos = []
+        discoveredFiles = []
+        progress = Progress()
+        phase = .idle
+        currentFolderName = ""
+        lastError = ""
+        scopeName = nil
+        damagedCheckpoint = false
+    }
+
     private func invalidateTask() {
         generation &+= 1
         task?.cancel()
@@ -237,9 +264,11 @@ final class CloudLibraryScanner: ObservableObject {
                 var newVideos: [P115File] = []
                 var newFolderIDs = Set<String>()
                 var newVideoIDs = Set<String>()
+                var pageFolders: [String: CloudFolderEntry] = [:]
                 for file in page.files {
                     if file.isDir {
                         guard !file.id.isEmpty, file.id.allSatisfy(\.isNumber) else { throw ScanError.invalidFolder }
+                        pageFolders[file.id] = CloudFolderEntry(parent: folder.id, name: file.name)
                         if !knownFolders.contains(file.id), newFolderIDs.insert(file.id).inserted {
                             saved.pendingFolders.append(Folder(id: file.id, name: file.name))
                         }
@@ -266,6 +295,7 @@ final class CloudLibraryScanner: ObservableObject {
                 knownFolders.formUnion(newFolderIDs)
                 knownVideos.formUnion(newVideoIDs)
                 discoveredFiles.append(contentsOf: newVideos)
+                if !pageFolders.isEmpty { onFolders?(pageFolders) }
                 publish(saved)
                 // There is no suspension between the account check, checkpoint commit and callback.
                 guard isCurrent(token, accountID) else { return }

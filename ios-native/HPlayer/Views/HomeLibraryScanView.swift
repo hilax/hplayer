@@ -24,6 +24,7 @@ struct HomeLibraryScanView: View {
 
     @State private var totalVideos = 0
     @State private var confirmClearHistory = false
+    @State private var showCleanup = false
     @State private var matchedVideos = 0
     @State private var performerStats = (have: 0, total: 0)
 
@@ -159,6 +160,9 @@ struct HomeLibraryScanView: View {
         }
         .sheet(isPresented: $pickingFolder) {
             ScanFolderPicker(onSelect: onStartFolder).environmentObject(appState)
+        }
+        .sheet(isPresented: $showCleanup) {
+            LibraryCleanupView(appState: appState, library: library).environmentObject(appState)
         }
     }
 
@@ -484,6 +488,14 @@ struct HomeLibraryScanView: View {
                 LibraryActionRow(symbol: AppIcon.refresh.name, title: "刷新媒体库", subtitle: "重新读取本机和云端的影片列表", showsChevron: false)
             }
             .buttonStyle(.pressable(scale: 0.985))
+            rowDivider
+            Button { showCleanup = true } label: {
+                LibraryActionRow(symbol: AppIcon.checklist.name, title: "清理已失效文件",
+                                 subtitle: "网盘里已经删掉的视频，从首页和片库里一并去掉", showsChevron: false)
+            }
+            .buttonStyle(.pressable(scale: 0.985))
+            .disabled(!appState.isAuthenticated)
+            .accessibilityIdentifier("scan.cleanup")
             if !featuredStore.hidden.isEmpty {
                 rowDivider
                 Button { featuredStore.restoreAll() } label: {

@@ -43,6 +43,29 @@ final class CloudLibraryScannerTests: XCTestCase {
         XCTAssertEqual(restored.scopeName, "电影")
     }
 
+    func testReportsEveryFolderWithItsParentAndCanDiscardItsSavedState() async {
+        let scanner = scanner()
+        var folders: [String: CloudFolderEntry] = [:]
+        scanner.onFolders = { folders.merge($0) { _, new in new } }
+        scanner.start(accountID: "device:1", fetchPage: { [self] cid, _ in
+            switch cid {
+            case "0": return Direct115FilePage(files: [file("10", directory: true), file("1")], nextOffset: nil)
+            case "10": return Direct115FilePage(files: [file("11", parent: "10", directory: true)], nextOffset: nil)
+            default: return Direct115FilePage(files: [], nextOffset: nil)
+            }
+        }, onBatch: { _ in }, restart: true)
+        await waitUntil { scanner.phase == .completed }
+        XCTAssertEqual(folders["10"], CloudFolderEntry(parent: "0", name: "Folder 10"))
+        XCTAssertEqual(folders["11"], CloudFolderEntry(parent: "10", name: "Folder 11"))
+        XCTAssertEqual(scanner.discoveredFiles.map(\.pickCode), ["pc1"])
+        scanner.discardSavedState()
+        XCTAssertEqual(scanner.phase, .idle)
+        XCTAssertTrue(scanner.discoveredFiles.isEmpty)
+        let restored = self.scanner()
+        restored.selectAccount("device:1")
+        XCTAssertEqual(restored.phase, .idle, "A discarded scan must not come back after a restart")
+    }
+
     func testRecursesEveryDirectoryAndPageWithoutDuplicateVideosOrCycles() async {
         let scanner = scanner()
         var requests: [String] = []

@@ -19,6 +19,11 @@ struct LibraryManagementView: View {
         guard let accountID = appState.libraryAccountID, appState.isAuthenticated,
               let client = appState.directClient() else { return }
         metadata.resumeAutomatic()
+        // 记下扫描时见到的文件夹，清理已失效文件时要靠它知道被删的文件夹原来在哪
+        scanner.onFolders = { folders in
+            guard appState.isAuthenticated, appState.libraryAccountID == accountID else { return }
+            library.recordFolders(folders, for: appState)
+        }
         scanner.start(accountID: accountID, root: root, fetchPage: { cid, offset in
             try await client.filesPage(cid: cid, offset: offset)
         }, onBatch: { batch in

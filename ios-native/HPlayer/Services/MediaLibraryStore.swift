@@ -29,6 +29,10 @@ struct LibraryMedia: Identifiable, Hashable {
 final class MediaLibraryStore: ObservableObject {
     @Published private var cloudByAccount: [String: [P115File]]
     private let storageKey = "hplayer.posterLibrary.cloud.v1"
+    private let foldersKey = "hplayer.posterLibrary.folders.v1"
+    /// 扫描时见过的文件夹（按账号：文件夹编号 → 上一级和名字）。不显示在界面上，所以不发布。
+    private var foldersByAccount: [String: [String: CloudFolderEntry]] = [:]
+    private var needsFolderSave = false
     private let defaults: UserDefaults
     private var saveTask: Task<Void, Never>?
     private var needsSave = false
@@ -40,6 +44,10 @@ final class MediaLibraryStore: ObservableObject {
             cloudByAccount = decoded
         } else {
             cloudByAccount = [:]
+        }
+        if let data = defaults.data(forKey: foldersKey),
+           let decoded = try? JSONDecoder().decode([String: [String: CloudFolderEntry]].self, from: data) {
+            foldersByAccount = decoded
         }
     }
 
@@ -87,6 +95,47 @@ final class MediaLibraryStore: ObservableObject {
         save()
     }
 
+    /// 批量移除；清理已失效文件用。
+    func remove(pickCodes: Set<String>, for appState: AppState) {
+        guard !pickCodes.isEmpty, let scope = appState.libraryAccountID, var files = cloudByAccount[scope] else { return }
+        let before = files.count
+        files.removeAll { pickCodes.contains($0.pickCode) }
+        guard files.count != before else { return }
+        cloudByAccount[scope] = files
+        revision += 1
+        save()
+    }
+
+    /// 当前账号扫描时见过的文件夹
+    func folders(for appState: AppState) -> [String: CloudFolderEntry] {
+        guard appState.isAuthenticated, let scope = appState.libraryAccountID else { return [:] }
+        return foldersByAccount[scope] ?? [:]
+    }
+
+    func recordFolders(_ entries: [String: CloudFolderEntry], for appState: AppState) {
+        guard !entries.isEmpty, appState.isAuthenticated, let scope = appState.libraryAccountID else { return }
+        var current = foldersByAccount[scope] ?? [:]
+        var changed = false
+        for (id, entry) in entries where current[id] != entry {
+            current[id] = entry
+            changed = true
+        }
+        guard changed else { return }
+        foldersByAccount[scope] = current
+        needsFolderSave = true
+        save()
+    }
+
+    func forgetFolders(_ ids: Set<String>, for appState: AppState) {
+        guard !ids.isEmpty, let scope = appState.libraryAccountID, var current = foldersByAccount[scope] else { return }
+        let before = current.count
+        for id in ids { current[id] = nil }
+        guard current.count != before else { return }
+        foldersByAccount[scope] = current
+        needsFolderSave = true
+        save()
+    }
+
     private func save() {
         needsSave = true
         saveTask?.cancel()
@@ -106,11 +155,14 @@ final class MediaLibraryStore: ObservableObject {
         guard needsSave else { return }
         needsSave = false
         let snapshot = cloudByAccount
+        let folders = needsFolderSave ? foldersByAccount : nil
+        needsFolderSave = false
         let defaults = defaults
         let key = storageKey
+        let foldersKey = foldersKey
         let write = {
-            guard let data = try? JSONEncoder().encode(snapshot) else { return }
-            defaults.set(data, forKey: key)
+            if let data = try? JSONEncoder().encode(snapshot) { defaults.set(data, forKey: key) }
+            if let folders, let data = try? JSONEncoder().encode(folders) { defaults.set(data, forKey: foldersKey) }
         }
         // 定时保存在后台编码；退出、暂停时的保存等写完再返回。
         if background { Self.ioQueue.async(execute: write) } else { Self.ioQueue.sync(execute: write) }
