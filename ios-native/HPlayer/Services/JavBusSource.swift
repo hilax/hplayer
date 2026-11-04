@@ -27,7 +27,7 @@ enum JavBusError: LocalizedError {
 }
 
 /// JavBus 磁力抓取与解析引擎。
-actor JavBusSource: MagnetSearchSource {
+final class JavBusSource: MagnetSearchSource, @unchecked Sendable {
     static let shared = JavBusSource()
 
     let name = "JavBus"
@@ -177,9 +177,9 @@ actor JavBusSource: MagnetSearchSource {
         return Self.sortMagnets(parsed)
     }
 
-    // MARK: - HTML 解析逻辑（非隔离静态方法，便于测试）
+    // MARK: - HTML 解析逻辑（静态方法，便于测试）
 
-    nonisolated static func parseSearchItems(from html: String, baseURLString: String) -> [MagnetSearchItem] {
+    static func parseSearchItems(from html: String, baseURLString: String) -> [MagnetSearchItem] {
         var items: [MagnetSearchItem] = []
 
         // 匹配每个 movie-box：<a class="movie-box" href="https://www.javbus.com/xxx"> ... </a>
@@ -245,7 +245,7 @@ actor JavBusSource: MagnetSearchSource {
         return items
     }
 
-    nonisolated static func parseMagnetsFromHTML(_ html: String) -> [MagnetTorrentItem] {
+    static func parseMagnetsFromHTML(_ html: String) -> [MagnetTorrentItem] {
         var results: [MagnetTorrentItem] = []
 
         // 磁力表格行：<tr onmouseover... >...</tr>
@@ -313,7 +313,7 @@ actor JavBusSource: MagnetSearchSource {
     }
 
     /// 智能排序：有字幕优先 > 高清优先
-    nonisolated static func sortMagnets(_ magnets: [MagnetTorrentItem]) -> [MagnetTorrentItem] {
+    static func sortMagnets(_ magnets: [MagnetTorrentItem]) -> [MagnetTorrentItem] {
         magnets.sorted { a, b in
             if a.hasSubtitles != b.hasSubtitles {
                 return a.hasSubtitles && !b.hasSubtitles
@@ -325,7 +325,7 @@ actor JavBusSource: MagnetSearchSource {
         }
     }
 
-    nonisolated private static func extractRegex(pattern: String, text: String) -> String? {
+    private static func extractRegex(pattern: String, text: String) -> String? {
         guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return nil }
         let ns = text as NSString
         guard let match = regex.firstMatch(in: text, options: [], range: NSRange(location: 0, length: ns.length)),
