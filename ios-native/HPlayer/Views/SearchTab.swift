@@ -107,7 +107,14 @@ struct SearchView: View {
             searchFocused = true
         }
         .onChange(of: isActive) { active in
-            if active { if !InterfacePreview.active { searchFocused = true } } else { searchFocused = false }
+            if active {
+                if !InterfacePreview.active { searchFocused = true }
+            } else {
+                // 收起键盘不带动画：键盘有自己的动画，SwiftUI 再叠一层会让页面抖一下。
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) { searchFocused = false }
+            }
         }
         .designScreen(query.isEmpty ? "search" : hits.count == 0 && results.isEmpty && !loading && error.isEmpty ? "search-empty" : "search-results")
         .navigationDestination(for: PerformerRoute.self) { route in

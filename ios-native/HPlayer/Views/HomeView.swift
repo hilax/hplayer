@@ -212,13 +212,16 @@ struct HomeView: View {
                           library: librarySnapshots.ready ? librarySnapshots.home : nil,
                           onClose: { closeSearch() })
                     .background(Theme.pageBackground.ignoresSafeArea())
+                    // 淡入淡出只作用在透明度上：搜索页内部的布局（键盘收起时它跟着变高）
+                    // 不能被这个淡出动画接管，否则它和键盘自己的动画叠在一起，页面会先被带下去再弹回来。
+                    .transaction { $0.animation = nil }
                     .opacity(searchOpen ? 1 : 0)
+                    .animation(reduceMotion ? nil : Motion.fade, value: searchOpen)
                     .allowsHitTesting(searchOpen)
                     .accessibilityHidden(!searchOpen)
                     .zIndex(1)
             }
         }
-        .animation(reduceMotion ? nil : Motion.fade, value: searchOpen)
         .background(Theme.pageBackground.ignoresSafeArea())
     }
 
