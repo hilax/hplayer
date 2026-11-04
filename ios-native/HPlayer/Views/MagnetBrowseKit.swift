@@ -49,6 +49,84 @@ struct MagnetArtwork: View {
     }
 }
 
+/// 影片封面。JavBus 列表页给的是 147×200 的小图，放大到两列海报里会很糊；
+/// 这里换成同一部片的大封面（`pics/cover/xxx_b.jpg`，800 像素宽），按版式裁出正面：
+/// - 竖版单封面（宽高比 < 0.9）：整张显示；
+/// - 左背右正的横版封面（宽高比约 1.49）：取右边 47.5%，和站点自己做小图的取法一致；
+/// - 其他版式（正面的位置不固定）：不冒险裁剪，继续用小图。
+/// 大图加载期间和加载失败时都先显示小图，大图到了再换上。
+struct MagnetCover: View {
+    /// 列表页里的封面地址（小图）。
+    let url: URL?
+
+    enum Crop: Equatable {
+        case full
+        case trailing
+    }
+
+    /// 横版封面里「正面」占的宽度比例。
+    static let frontFraction: CGFloat = 0.475
+
+    /// 小图地址 → 同一部片的大封面地址；不是 JavBus 小图的地址返回 nil。
+    static func highResURL(for url: URL?) -> URL? {
+        guard let url else { return nil }
+        let text = url.absoluteString
+        guard text.contains("/pics/thumb/"), text.hasSuffix(".jpg") else { return nil }
+        let cover = text.replacingOccurrences(of: "/pics/thumb/", with: "/pics/cover/")
+        return URL(string: String(cover.dropLast(".jpg".count)) + "_b.jpg")
+    }
+
+    /// 按大图的宽高比决定怎么取正面；nil 表示不裁，回退到小图。
+    static func crop(for size: CGSize) -> Crop? {
+        guard size.width > 0, size.height > 0 else { return nil }
+        let ratio = size.width / size.height
+        if ratio < 0.9 { return .full }
+        if ratio >= 1.45, ratio <= 1.52 { return .trailing }
+        return nil
+    }
+
+    var body: some View {
+        if let hires = Self.highResURL(for: url) {
+            PipelineImage(url: hires, maxPixel: 800) { phase in
+                if case let .loaded(image) = phase, let crop = Self.crop(for: image.size) {
+                    front(of: image, crop: crop)
+                } else {
+                    thumbnail
+                }
+            }
+        } else {
+            thumbnail
+        }
+    }
+
+    private var thumbnail: some View {
+        MagnetArtwork(url: url, maxPixel: 420, placeholder: AppIcon.poster.name)
+    }
+
+    private func front(of image: UIImage, crop: Crop) -> some View {
+        GeometryReader { proxy in
+            let aspect = image.size.width / image.size.height
+            let width: CGFloat = {
+                switch crop {
+                case .full:
+                    return max(proxy.size.width, proxy.size.height * aspect)
+                case .trailing:
+                    return max(proxy.size.width / Self.frontFraction, proxy.size.height * aspect)
+                }
+            }()
+            Image(uiImage: image)
+                .resizable()
+                .frame(width: width, height: width / aspect)
+                .frame(
+                    width: proxy.size.width,
+                    height: proxy.size.height,
+                    alignment: crop == .trailing ? .trailing : .center
+                )
+                .clipped()
+        }
+    }
+}
+
 /// 浮在封面上的番号小标签。
 struct MagnetCodeChip: View {
     let code: String
@@ -96,7 +174,7 @@ struct MagnetPosterCard: View {
                 Color.clear
                     .aspectRatio(MagnetLayout.posterRatio, contentMode: .fit)
                     .overlay {
-                        MagnetArtwork(url: movie.coverURL, maxPixel: 420, placeholder: AppIcon.poster.name)
+                        MagnetCover(url: movie.coverURL)
                     }
                     .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
                     .overlay {
@@ -163,7 +241,7 @@ struct MagnetListRow: View {
                         .accessibilityLabel("第 \(rank) 名")
                 }
 
-                MagnetArtwork(url: movie.coverURL, maxPixel: 288, placeholder: AppIcon.poster.name)
+                MagnetCover(url: movie.coverURL)
                     .frame(width: 72, height: 96)
                     .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
                     .overlay {
