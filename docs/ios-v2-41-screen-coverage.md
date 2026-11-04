@@ -40,7 +40,7 @@
 | 18 | 搜索 · 初始 | 搜索 | [SearchTab](../ios-native/HPlayer/Views/SearchTab.swift) |
 | 19 | 搜索 · 聚合结果 | 搜索 → 输入关键词 | [SearchTab](../ios-native/HPlayer/Views/SearchTab.swift) |
 | 20 | 搜索 · 无结果 | 搜索 → 无匹配结果 | [SearchTab](../ios-native/HPlayer/Views/SearchTab.swift) |
-| 21 | 媒体库管理 | 网盘 → 媒体库管理 | [HomeLibraryScanView](../ios-native/HPlayer/Views/HomeLibraryScanView.swift) |
+| 21 | 媒体库管理 | 我的 → 媒体库管理 | [HomeLibraryScanView](../ios-native/HPlayer/Views/HomeLibraryScanView.swift) |
 | 22 | 选择扫描目录 | 媒体库管理 → 选择文件夹扫描 | [ScanFolderPicker](../ios-native/HPlayer/Views/ScanFolderPicker.swift) |
 | 23 | 未匹配影片 | 媒体库管理 → 未匹配影片 | [HomeLibraryScanView](../ios-native/HPlayer/Views/HomeLibraryScanView.swift) |
 | 24 | 匹配封面与资料 | 影片菜单 / 未匹配影片 → 匹配封面 | [MetadataMatchView](../ios-native/HPlayer/Views/MetadataMatchView.swift) |

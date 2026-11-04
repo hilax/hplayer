@@ -137,7 +137,7 @@ struct MagnetSearchView: View {
         }
         .scrollDismissesKeyboard(.interactively)
         .background(Theme.pageBackground.ignoresSafeArea())
-        .navigationTitle("磁力聚合与分类")
+        .navigationTitle("磁力聚合")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {

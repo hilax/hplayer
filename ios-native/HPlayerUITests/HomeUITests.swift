@@ -90,10 +90,16 @@ final class HomeUITests: XCTestCase {
         XCTAssertFalse(app.buttons["home.scanStatus"].exists, "Home never shows scan or matching maintenance")
         XCTAssertFalse(app.otherElements["home.matchingState"].exists)
         app.tabButton("网盘").tap()
-        let manage = app.buttons["library.manage"]
+        let magnet = app.buttons["library.magnet"]
+        if !magnet.isHittable { app.swipeUp() }
+        XCTAssertTrue(magnet.waitForExistence(timeout: 5), "Cloud tab offers the magnet aggregation entry")
+        XCTAssertFalse(app.buttons["library.manage"].exists, "Library management lives in the Mine tab only")
+        capture("Resources - redesign", in: app)
+        // 媒体库管理只留在「我的」页
+        app.tabButton("我的").tap()
+        let manage = app.buttons["mine.manage"]
         if !manage.isHittable { app.swipeUp() }
         XCTAssertTrue(manage.waitForExistence(timeout: 5))
-        capture("Resources - redesign", in: app)
         manage.tap()
         XCTAssertTrue(app.navigationBars["媒体库管理"].waitForExistence(timeout: 5))
         capture("Library management - redesign", in: app)
