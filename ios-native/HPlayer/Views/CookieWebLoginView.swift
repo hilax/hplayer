@@ -45,13 +45,6 @@ struct CookieWebLoginView: View {
                 } label: { Label("打开官方登录页面", systemImage: AppIcon.openExternal.name) }
                     .buttonStyle(SecondaryActionStyle()).accessibilityIdentifier("connect115.openWeb")
             }.frame(maxWidth: .infinity).padding(20).surfaceCard()
-            DesignGroup {
-                LibraryActionRow(symbol: AppIcon.folder.name, title: "浏览网盘文件", subtitle: "按目录查找你的影片")
-                Divider().padding(.leading, 62)
-                LibraryActionRow(symbol: AppIcon.playback.name, title: "直接播放原文件", subtitle: "播放时读取所需的视频数据")
-                Divider().padding(.leading, 62)
-                LibraryActionRow(symbol: AppIcon.library.name, title: "建立自己的片库", subtitle: "将选中的文件整理到首页")
-            }
             DesignNotice(symbol: AppIcon.privacy.name, text: "登录凭证仅保存在本机钥匙串。退出账号会移除本机凭证，不会删除你的网盘文件。")
             if !error.isEmpty { DesignNotice(symbol: AppIcon.alert.name, text: error, warning: true) }
         }

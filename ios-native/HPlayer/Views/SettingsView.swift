@@ -50,11 +50,6 @@ struct SettingsView: View {
             .background(Theme.pageBackground.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
             .designScreen("settings")
-            .confirmationDialog("退出后将断开 115 网盘连接", isPresented: $confirmLogout, titleVisibility: .visible) {
-                Button("退出 115", role: .destructive) { appState.logout() }
-                    .accessibilityIdentifier("settings.account.confirmLogout")
-                Button("取消", role: .cancel) {}
-            }
         }
         .fullScreenCover(isPresented: $showManagement) { LibraryManagementView() }
     }
@@ -122,6 +117,12 @@ struct SettingsView: View {
                     .buttonStyle(.pressable(scale: 0.88)).foregroundStyle(Theme.danger)
                     .accessibilityLabel("退出 115")
                     .accessibilityIdentifier("settings.account.logout")
+                    // 弹窗挂在按钮自己身上，才会从按钮处弹出；挂在整个页面上会被当成锚在页面底部
+                    .confirmationDialog("退出后将断开 115 网盘连接", isPresented: $confirmLogout, titleVisibility: .visible) {
+                        Button("退出 115", role: .destructive) { appState.logout() }
+                            .accessibilityIdentifier("settings.account.confirmLogout")
+                        Button("取消", role: .cancel) {}
+                    }
                     .transition(.scale.combined(with: .opacity))
                 }
             }
