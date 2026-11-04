@@ -89,17 +89,8 @@ struct DirectoryView: View {
         .toolbar(.visible, for: .navigationBar)
         .navigationBarTitleDisplayMode(.inline)
         .safeAreaInset(edge: .bottom, spacing: 0) {
+            // 「加入首页」和「选择」都在右上角的更多菜单里，底部只在选择模式下显示操作栏
             if selecting { selectionBar }
-            else if !loading && !items.isEmpty {
-                VStack(spacing: 8) {
-                    Button(action: addAllToHome) { Label("将当前目录视频加入首页", systemImage: AppIcon.add.name) }
-                        .buttonStyle(SecondaryActionStyle())
-                        .disabled(!files.contains { $0.isVideo && !$0.pickCode.isEmpty })
-                    Text("只加入当前文件夹中的视频，不修改网盘文件。")
-                        .font(.caption2).foregroundStyle(.secondary)
-                }.padding(.horizontal, Theme.contentInset).padding(.vertical, 12)
-                    .background(Theme.pageBackground)
-            }
         }
         .task(id: "\(cid)|\(appState.sessionID.uuidString)") {
             if !InterfacePreview.active { await load() }
