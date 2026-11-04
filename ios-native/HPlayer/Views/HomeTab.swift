@@ -164,8 +164,12 @@ struct HomeTab: View {
         }) { item in
             MediaActionSheet(item: item, position: recents.position(for: item.media.source), onPlay: {
                 pendingPlayback = HomeLibrary.queue(for: item, in: snapshot.items); actionItem = nil
-            }, onMatch: { pendingMatch = item; actionItem = nil }, onRemove: { delete(item); actionItem = nil })
-            .presentationDetents([.height(590)])
+            }, onMatch: { pendingMatch = item; actionItem = nil }, onRemove: { delete(item); actionItem = nil },
+            onHideFeatured: canHideFromFeatured(item) ? {
+                if let id = item.metadata?.imdbID { FeaturedStore.shared.hide(id) }
+                actionItem = nil
+            } : nil)
+            .presentationDetents([.height(canHideFromFeatured(item) ? 664 : 590)])
             .presentationDragIndicator(.visible)
         }
         .playerWindow(item: $playing) { queue in
@@ -367,6 +371,12 @@ struct HomeTab: View {
                     .padding(.bottom, 16 + Self.heroControlsLift)
             }
         }
+    }
+
+    /// 这部正在精选里、而且不是精选里的最后一部，才给「不在精选中显示」（精选至少留一部，首页不会变成空的）
+    private func canHideFromFeatured(_ item: HomeMediaItem) -> Bool {
+        guard let id = item.metadata?.imdbID, snapshot.featured.count > 1 else { return false }
+        return snapshot.featured.contains { $0.metadata?.imdbID == id }
     }
 
     private func heroPlayTitle(_ item: HomeMediaItem) -> String {

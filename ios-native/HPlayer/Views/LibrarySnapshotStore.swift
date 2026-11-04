@@ -19,21 +19,21 @@ final class LibrarySnapshotStore: ObservableObject {
     /// 片库不大时直接在主线程算，第一帧就有内容；再大就放到后台，主线程不被卡住。
     static let inlineLimit = 400
 
-    func rebuild(files: [LibraryMedia], matches: [String: MediaMetadata]) async {
+    func rebuild(files: [LibraryMedia], matches: [String: MediaMetadata], hiddenFeatured: Set<String> = []) async {
         let snapshot: HomeSnapshot
         if ready {
             // 匹配、扫描期间结果一批批到，攒 0.3 秒再算一次
             try? await Task.sleep(nanoseconds: 300_000_000)
             guard !Task.isCancelled else { return }
             snapshot = await Task.detached(priority: .userInitiated) {
-                LibrarySnapshotStore.make(files, matches)
+                LibrarySnapshotStore.make(files, matches, hiddenFeatured)
             }.value
         } else if files.count > Self.inlineLimit {
             snapshot = await Task.detached(priority: .userInitiated) {
-                LibrarySnapshotStore.make(files, matches)
+                LibrarySnapshotStore.make(files, matches, hiddenFeatured)
             }.value
         } else {
-            snapshot = Self.make(files, matches)
+            snapshot = Self.make(files, matches, hiddenFeatured)
         }
         guard !Task.isCancelled else { return }
         home = snapshot
@@ -67,7 +67,8 @@ final class LibrarySnapshotStore: ObservableObject {
         ready = true
     }
 
-    nonisolated static func make(_ files: [LibraryMedia], _ matches: [String: MediaMetadata]) -> HomeSnapshot {
-        HomeSnapshot(items: files.map { HomeMediaItem(media: $0, metadata: matches[$0.id]) })
+    nonisolated static func make(_ files: [LibraryMedia], _ matches: [String: MediaMetadata],
+                                 _ hiddenFeatured: Set<String> = []) -> HomeSnapshot {
+        HomeSnapshot(items: files.map { HomeMediaItem(media: $0, metadata: matches[$0.id]) }, hiddenFeatured: hiddenFeatured)
     }
 }

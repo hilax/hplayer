@@ -110,7 +110,8 @@ struct HomeSnapshot {
     let featured: [HomeMediaItem]
     let performers: [PerformerGroup]
 
-    init(items: [HomeMediaItem]) {
+    /// `hiddenFeatured`：用户标记过「不在精选中显示」的资料编号。
+    init(items: [HomeMediaItem], hiddenFeatured: Set<String> = []) {
         self.items = items
         let matched = items.filter { $0.metadata?.hasUsablePoster == true }
         movies = matched.filter { $0.metadata?.isSeries == false }
@@ -138,19 +139,26 @@ struct HomeSnapshot {
         let groups = HomeLibrary.seriesGroups(matched)
         series = groups
 
-        // 精选：每部影片只出现一次，剧集用第一集代表
-        var seen = Set<String>()
-        var picks: [HomeMediaItem] = []
-        for item in matched {
-            guard let metadata = item.metadata, seen.insert(metadata.imdbID).inserted else { continue }
-            if metadata.isSeries, let first = groups.first(where: { $0.id == metadata.imdbID })?.episodes.first {
-                picks.append(first)
-            } else {
-                picks.append(item)
+        // 精选：每部影片只出现一次，剧集用第一集代表。
+        // 有横版背景图的排在前面（只有竖版海报的会被硬裁成横幅，很难看），
+        // 用户标记过「不在精选中显示」的跳过；全被标记了就不套用，免得首页被当成没有影片。
+        let episodesByID = Dictionary(groups.compactMap { group in group.episodes.first.map { (group.id, $0) } },
+                                      uniquingKeysWith: { first, _ in first })
+        func pick(skipping hidden: Set<String>) -> [HomeMediaItem] {
+            var seen = Set<String>()
+            var landscape: [HomeMediaItem] = []
+            var portrait: [HomeMediaItem] = []
+            for item in matched {
+                guard let metadata = item.metadata, seen.insert(metadata.imdbID).inserted,
+                      !hidden.contains(metadata.imdbID) else { continue }
+                let representative = metadata.isSeries ? (episodesByID[metadata.imdbID] ?? item) : item
+                if metadata.backgroundURL.isEmpty { portrait.append(representative) } else { landscape.append(representative) }
+                if landscape.count == 6 { break }
             }
-            if picks.count == 6 { break }
+            return Array((landscape + portrait).prefix(6))
         }
-        featured = picks
+        let picks = pick(skipping: hiddenFeatured)
+        featured = picks.isEmpty && !hiddenFeatured.isEmpty ? pick(skipping: []) : picks
     }
 
 }

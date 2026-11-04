@@ -67,12 +67,55 @@ final class HomeSnapshotTests: XCTestCase {
         XCTAssertTrue(HomeArtwork.prefetchRequests(HomeSnapshot(items: [item("none.mp4", metadata: nil)])).isEmpty)
     }
 
+    func testFeaturedPrefersLandscapeBackdropsAndKeepsLibraryOrderOtherwise() {
+        let items = [
+            item("p0.mp4", metadata: makeMetadata(id: "p0", poster: "https://images.example.org/p0.jpg")),
+            item("l1.mp4", metadata: makeMetadata(id: "l1", poster: "https://images.example.org/l1.jpg", background: "https://images.example.org/l1-bg.jpg")),
+            item("p2.mp4", metadata: makeMetadata(id: "p2", poster: "https://images.example.org/p2.jpg")),
+            item("l3.mp4", metadata: makeMetadata(id: "l3", poster: "https://images.example.org/l3.jpg", background: "https://images.example.org/l3-bg.jpg")),
+        ]
+        XCTAssertEqual(HomeSnapshot(items: items).featured.map(\.metadata?.imdbID), ["l1", "l3", "p0", "p2"],
+                       "Titles with a landscape backdrop come first; poster-only titles keep their library order after them")
+    }
+
+    func testHiddenTitlesLeaveTheFeaturedBannerButStayInTheLibrary() {
+        let items = ["a", "b", "c"].map {
+            item("\($0).mp4", metadata: makeMetadata(id: $0, poster: "https://images.example.org/\($0).jpg"))
+        }
+        let snapshot = HomeSnapshot(items: items, hiddenFeatured: ["b"])
+        XCTAssertEqual(snapshot.featured.map(\.metadata?.imdbID), ["a", "c"])
+        XCTAssertEqual(snapshot.movies.count, 3, "Hiding from the banner must not hide the title from the shelves")
+        XCTAssertEqual(snapshot.items.count, 3)
+    }
+
+    func testHidingEveryTitleFallsBackToTheFullBanner() {
+        let items = ["a", "b"].map {
+            item("\($0).mp4", metadata: makeMetadata(id: $0, poster: "https://images.example.org/\($0).jpg"))
+        }
+        let snapshot = HomeSnapshot(items: items, hiddenFeatured: ["a", "b"])
+        XCTAssertEqual(snapshot.featured.map(\.metadata?.imdbID), ["a", "b"],
+                       "An empty banner would make the home page look like an empty library")
+    }
+
+    @MainActor
+    func testFeaturedStorePersistsHiddenTitles() {
+        let suite = "FeaturedStoreTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = FeaturedStore(defaults: defaults)
+        store.hide("tt1"); store.hide("tt1"); store.hide("")
+        XCTAssertEqual(store.hidden, ["tt1"])
+        XCTAssertEqual(FeaturedStore(defaults: defaults).hidden, ["tt1"])
+        store.restoreAll()
+        XCTAssertTrue(FeaturedStore(defaults: defaults).hidden.isEmpty)
+    }
+
     private func item(_ name: String, metadata: MediaMetadata?) -> HomeMediaItem {
         HomeMediaItem(media: LibraryMedia(local: LocalMedia(url: URL(fileURLWithPath: "/tmp/\(name)"), size: 100, modified: .distantPast)), metadata: metadata)
     }
 
-    private func makeMetadata(id: String, poster: String) -> MediaMetadata {
+    private func makeMetadata(id: String, poster: String, background: String = "") -> MediaMetadata {
         MediaMetadata(imdbID: id, type: "movie", title: "Fixture", year: "2026", posterURL: poster,
-                      backgroundURL: "", logoURL: "", overview: "", rating: "", genres: [], country: "", season: nil, episode: nil)
+                      backgroundURL: background, logoURL: "", overview: "", rating: "", genres: [], country: "", season: nil, episode: nil)
     }
 }

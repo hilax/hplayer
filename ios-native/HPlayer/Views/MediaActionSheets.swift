@@ -40,6 +40,8 @@ struct MediaActionSheet: View {
     let onPlay: () -> Void
     let onMatch: () -> Void
     let onRemove: () -> Void
+    /// 影片正在首页精选里时才有：不再让它出现在精选大图里（影片本身不受影响）
+    var onHideFeatured: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var confirmRemove = false
 
@@ -62,6 +64,14 @@ struct MediaActionSheet: View {
                 Button(action: onMatch) {
                     LibraryActionRow(symbol: AppIcon.poster.name, title: "匹配封面", subtitle: "选择或更正影片资料")
                 }.buttonStyle(.plain)
+                if let onHideFeatured {
+                    Divider().padding(.leading, 62)
+                    Button(action: onHideFeatured) {
+                        LibraryActionRow(symbol: AppIcon.hidden.name, title: "不在精选中显示", subtitle: "首页大图不再出现它，影片仍在片库里")
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("film.hideFeatured")
+                }
                 Divider().padding(.leading, 62)
                 Button { confirmRemove = true } label: {
                     LibraryActionRow(symbol: AppIcon.trash.name, title: item.isCloud ? "从首页移除" : "删除本机文件",

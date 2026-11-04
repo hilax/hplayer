@@ -14,6 +14,8 @@ struct HomeView: View {
     @StateObject private var accountInfo = P115AccountInfoStore()
     /// 首页和片库共用的分组结果，在这里算一次，两个页面直接读。
     @StateObject private var librarySnapshots = LibrarySnapshotStore()
+    /// 标记过「不在精选中显示」的影片，变化时精选要重新挑。
+    @ObservedObject private var featuredStore = FeaturedStore.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
     /// 当前标签（系统原生 TabView 的选中项）。
@@ -99,7 +101,8 @@ struct HomeView: View {
                 // 先等封面缓存恢复完，第一屏直接带封面，不会先出现一屏没封面的画面。
                 await metadataStore.waitUntilRestored()
                 guard !Task.isCancelled else { return }
-                await librarySnapshots.rebuild(files: libraryFiles, matches: metadataStore.metadataByMediaID)
+                await librarySnapshots.rebuild(files: libraryFiles, matches: metadataStore.metadataByMediaID,
+                                               hiddenFeatured: featuredStore.hidden)
             }
             // 按记录的先后排序：重看旧片、记录满 30 条后再看新片时条数不变，所以要比较整串 id，不能只看条数
             .task(id: CatalogEntriesKey(revision: librarySnapshots.revision, recents: recents.items.map(\.id))) {
@@ -154,7 +157,8 @@ struct HomeView: View {
 
     private var snapshotKey: LibrarySnapshotKey {
         LibrarySnapshotKey(local: localStore.files.count, cloudRevision: mediaLibrary.revision,
-                           metadataRevision: metadataStore.revision, account: appState.libraryAccountID)
+                           metadataRevision: metadataStore.revision, account: appState.libraryAccountID,
+                           hiddenFeatured: featuredStore.hidden)
     }
 
     /// Keep scanning/matching alive when moving between tabs; coalesce scan batches.
@@ -267,6 +271,7 @@ private struct LibrarySnapshotKey: Equatable {
     let cloudRevision: Int
     let metadataRevision: Int
     let account: String?
+    let hiddenFeatured: Set<String>
 }
 
 private struct CatalogEntriesKey: Equatable {

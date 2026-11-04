@@ -9,6 +9,7 @@ struct HomeLibraryScanView: View {
     @EnvironmentObject private var appState: AppState
     @ObservedObject private var recents = RecentStore.shared
     @ObservedObject private var magnetHistory = MagnetHistoryStore.shared
+    @ObservedObject private var featuredStore = FeaturedStore.shared
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage(AdultMetadataSettings.enabledKey) private var adultMatching = false
@@ -483,6 +484,15 @@ struct HomeLibraryScanView: View {
                 LibraryActionRow(symbol: AppIcon.refresh.name, title: "刷新媒体库", subtitle: "重新读取本机和云端的影片列表", showsChevron: false)
             }
             .buttonStyle(.pressable(scale: 0.985))
+            if !featuredStore.hidden.isEmpty {
+                rowDivider
+                Button { featuredStore.restoreAll() } label: {
+                    LibraryActionRow(symbol: AppIcon.hidden.name, title: "恢复精选中隐藏的影片",
+                                     subtitle: "已隐藏 \(featuredStore.hidden.count) 部，恢复后可能再次出现在首页大图", showsChevron: false)
+                }
+                .buttonStyle(.pressable(scale: 0.985))
+                .accessibilityIdentifier("manage.restoreFeatured")
+            }
             rowDivider
             Button { copyDiagnostics() } label: {
                 LibraryActionRow(symbol: copiedDiagnostics ? AppIcon.success.name : AppIcon.copy.name,

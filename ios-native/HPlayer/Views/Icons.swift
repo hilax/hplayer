@@ -16,7 +16,7 @@ enum AppIcon: String, CaseIterable {
     case search, back, forward, expand, collapse, close, clear, more, add, remove
     case check, selected, unselected, success, alert, info, help, addCircle
     case refresh, history, clock, sortAscending, sortDescending, tune, settings
-    case copy, trash, openExternal, returnKey, sparkles
+    case copy, trash, openExternal, returnKey, sparkles, hidden
 
     // MARK: 播放
     case play, playCircle, pause, stop, previous, next, skip, seek, fullscreen, exitFullscreen
@@ -74,6 +74,7 @@ enum AppIcon: String, CaseIterable {
         case .settings: return "gearshape"
         case .copy: return "doc.on.doc"
         case .trash: return "trash"
+        case .hidden: return "eye.slash"
         case .openExternal: return "arrow.up.right.square"
         case .returnKey: return "return"
         case .sparkles: return "sparkles"
