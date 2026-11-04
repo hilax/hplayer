@@ -164,8 +164,11 @@ struct CatalogTab: View {
             GeometryReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
-                        ScreenTitleBar(title: "片库", subtitle: subtitle) {
-                            BarIconButton(icon: .search, label: "搜索片库", identifier: "catalog.search", action: onSearch)
+                        if !subtitle.isEmpty {
+                            Text(subtitle)
+                                .font(.footnote)
+                                .foregroundStyle(Theme.textSecondary)
+                                .padding(.horizontal, Theme.contentInset)
                         }
                         filterRows
                         if !snapshot.unmatched.isEmpty { unmatchedBanner }
@@ -177,7 +180,8 @@ struct CatalogTab: View {
                 .scrollIndicators(.hidden)
             }
             .background(Theme.pageBackground.ignoresSafeArea())
-            .toolbar(.hidden, for: .navigationBar)
+            .largeTitleNavigationBar("片库")
+            .toolbar { NavigationSearchButton(label: "搜索片库", identifier: "catalog.search", action: onSearch) }
             .navigationDestination(for: PerformerRoute.self) { route in
                 if let group = snapshot.performers.first(where: { $0.id == route.id }) {
                     PerformerCollectionView(group: group).id(route.id)

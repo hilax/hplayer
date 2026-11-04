@@ -40,6 +40,7 @@ struct MetadataSourcesView: View {
             DesignNotice(text: "关闭资料来源不会删除已经匹配的封面与资料。")
         }
         .navigationTitle("资料来源")
+        .navigationBarTitleDisplayMode(.inline)
         .designScreen("metadata")
         .toolbar {
             if showsCloseButton { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } }

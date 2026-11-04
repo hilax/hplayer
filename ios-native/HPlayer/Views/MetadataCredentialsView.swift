@@ -45,6 +45,7 @@ struct MetadataCredentialsView: View {
             DesignNotice(symbol: AppIcon.privacy.name, text: "凭证仅保存在本机钥匙串，不上传到 HPlayer 或 115。")
         }
         .navigationTitle("资料接口凭证")
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } }
             ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("完成") { focusedField = nil } }

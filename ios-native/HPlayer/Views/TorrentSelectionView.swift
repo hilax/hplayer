@@ -68,6 +68,7 @@ struct TorrentSelectionView: View {
         }
         .toolbar { ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("完成") { focusedField = nil } } }
         .navigationTitle("选择下载文件")
+        .navigationBarTitleDisplayMode(.inline)
         .designScreen("torrent-files")
     }
 }

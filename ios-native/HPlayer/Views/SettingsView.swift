@@ -25,12 +25,6 @@ struct SettingsView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-            // 标题栏固定在顶部，内容在它下面滚动
-            ScreenTitleBar("我的")
-                .padding(.top, 6)
-                .frame(maxWidth: 620)
-                .frame(maxWidth: .infinity)
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     profileCard.reveal(0)
@@ -46,9 +40,8 @@ struct SettingsView: View {
                 .padding(.bottom, 36)
             }
             .scrollIndicators(.hidden)
-            }
             .background(Theme.pageBackground.ignoresSafeArea())
-            .toolbar(.hidden, for: .navigationBar)
+            .largeTitleNavigationBar("我的")
             .designScreen("settings")
         }
         .fullScreenCover(isPresented: $showManagement) { LibraryManagementView() }
@@ -345,6 +338,7 @@ struct LicensesView: View {
         }
         .designScreen("licenses")
         .navigationTitle("开源许可")
+        .navigationBarTitleDisplayMode(.inline)
     }
 
     private func entryDetail(_ id: String) -> String {
