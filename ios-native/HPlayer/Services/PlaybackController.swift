@@ -166,8 +166,23 @@ final class PlaybackController: ObservableObject {
     @Published private(set) var errorDetail = ""
     /// 需要在画面上方短暂提示的一句话，显示后由界面清空
     @Published var notice = ""
-    /// 内核报告的真实播放时间（不含正在跳转的目标），给 UI 测试读
-    @Published private(set) var engineTime: Double = 0
+    /// 内核报告的真实播放时间（不含正在跳转的目标），给 UI 测试读。
+    /// 它每一帧都在变：不能用 @Published，否则整个播放页（连同下面的信息页、选集）会跟着视频帧率
+    /// 每秒重算几十次，CPU 一直闲不下来，长时间播放手机发烫。变化超过 0.25 秒才通知界面刷新一次。
+    private(set) var engineTime: Double = 0 {
+        didSet {
+            guard abs(engineTime - notifiedEngineTime) >= 0.25 || engineTime < notifiedEngineTime else { return }
+            notifiedEngineTime = engineTime
+            objectWillChange.send()
+        }
+    }
+    private var notifiedEngineTime = -1.0
+    /// 内核当前缓存了多少秒（原值）；界面上的 cachedSeconds 只在变化超过半秒时才更新
+    private var rawCachedSeconds: Double = 0
+    /// 内核实际用的解码方式：videotoolbox 是硬解码，no 是软解码；视频解码器还没起来时为空
+    private var activeHwdec = ""
+    /// 这个视频已经提示过「不支持硬解码、改用软解码」
+    private var softwareFallbackNoticed = false
     /// Only a confirmed playback position may be written to viewing history.
     private(set) var confirmedTime: Double?
 
@@ -334,6 +349,15 @@ final class PlaybackController: ObservableObject {
             ("gpu-api", "vulkan"),
             ("gpu-context", "moltenvk"),
             ("hwdec", decoding == .hardware ? "videotoolbox" : "no"),
+            // 画面处理用 mpv 给低功耗设备准备的省电档（内置的 fast 档，只保留抖动）。mpv 的默认值是给电脑显卡的：
+            // lanczos 放大再加 sigmoid、线性光 + 抗锯齿缩小、每帧算 HDR 峰值，一帧要跑好几遍全屏着色器，
+            // 手机 GPU 长时间满负荷就会发烫。手机屏幕像素很密，换成双线性看不出区别，GPU 的活少一大截。
+            ("scale", "bilinear"),
+            ("dscale", "bilinear"),
+            ("correct-downscaling", "no"),
+            ("linear-downscaling", "no"),
+            ("sigmoid-upscaling", "no"),
+            ("hdr-compute-peak", "no"),
             ("video-rotate", "no"),
             ("audio-display", "no"),
             ("sub-auto", "fuzzy"),
@@ -381,6 +405,7 @@ final class PlaybackController: ObservableObject {
         ("video-params/h", MPV_FORMAT_INT64),
         ("video-params/sig-peak", MPV_FORMAT_DOUBLE),
         ("mute", MPV_FORMAT_FLAG),
+        ("hwdec-current", MPV_FORMAT_STRING),
     ]
 
     // MARK: 打开
@@ -397,7 +422,10 @@ final class PlaybackController: ObservableObject {
     ) {
         guard !closingPlayback else { return }
         session += 1
-        if !preservingPosition { playedThisSession = false }
+        if !preservingPosition {
+            playedThisSession = false
+            softwareFallbackNoticed = false
+        }
         recoveryTask?.cancel()
         recoveryTask = nil
         recoveryAttempts = []
@@ -506,8 +534,11 @@ final class PlaybackController: ObservableObject {
         seekable = false
         bufferedUntil = 0
         cachedSeconds = 0
+        rawCachedSeconds = 0
         downloadSpeed = 0
         lastPublishedTime = -1
+        notifiedEngineTime = -1
+        activeHwdec = ""
         if !keepDuration {
             duration = 0
             currentTime = 0
@@ -886,12 +917,19 @@ final class PlaybackController: ObservableObject {
         case ("seekable", .flag(let value)):
             seekable = value
         case ("demuxer-cache-time", .double(let value)):
-            bufferedUntil = value
+            // 进度条上的浅色缓存段：差不到半秒画不出区别，不必每次都让播放页重算
+            if value != bufferedUntil, abs(value - bufferedUntil) >= 0.5 || value < bufferedUntil { bufferedUntil = value }
         case ("demuxer-cache-duration", .double(let value)):
-            if value > cachedSeconds + 0.01 { dataSinceTick = true }
-            cachedSeconds = value
+            // 看门狗按原值判断有没有新数据进来；界面上「已缓冲 N 秒」变化超过半秒才更新
+            if value > rawCachedSeconds + 0.01 { dataSinceTick = true }
+            rawCachedSeconds = value
+            if abs(value - cachedSeconds) >= 0.5 || (value < 1 && cachedSeconds >= 1) { cachedSeconds = value }
         case ("cache-speed", .int(let value)):
-            downloadSpeed = Double(max(0, value))
+            let speed = Double(max(0, value))
+            // 网速显示到小数点后一位，变化不到 5% 看不出来
+            if speed != downloadSpeed, speed == 0 || downloadSpeed == 0 || abs(speed - downloadSpeed) >= downloadSpeed * 0.05 {
+                downloadSpeed = speed
+            }
             if value > 0 { dataSinceTick = true }
         case ("track-list/count", .int):
             refreshTracks()
@@ -911,8 +949,30 @@ final class PlaybackController: ObservableObject {
             updateBadges()
         case ("mute", .flag(let value)):
             muted = value
+        case ("hwdec-current", .string(let value)):
+            guard value != activeHwdec else { return }
+            activeHwdec = value
+            logEvent(value == "no" ? "解码：软解码（CPU）" : "解码：硬解码（\(value)）")
+            if value == "no", decoding == .hardware { warnSoftwareFallback() }
+        case ("hwdec-current", .none):
+            activeHwdec = ""
         default:
             break
+        }
+    }
+
+    /// 选的是硬解码，但这个视频的编码手机的视频芯片解不了（例如老的 WMV / RMVB、10bit 的 H.264），
+    /// 内核自动退回了 CPU 软解码。软解码比硬解码费电得多，手机会明显发热：每个视频提示一次，让用户知道原因。
+    /// 等两秒再确认一次，避开解码器初始化时可能出现的短暂状态。
+    private func warnSoftwareFallback() {
+        guard !softwareFallbackNoticed else { return }
+        let current = session
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard let self, self.session == current, self.activeHwdec == "no", self.decoding == .hardware,
+                  !self.softwareFallbackNoticed, self.error.isEmpty else { return }
+            self.softwareFallbackNoticed = true
+            self.notice = "这个视频的编码手机不能硬件解码，已改用软解码，会比平时更耗电、发热"
         }
     }
 
@@ -1159,7 +1219,7 @@ final class PlaybackController: ObservableObject {
         var lines = [
             "HPlayer 播放诊断",
             "地址：\(currentURL.map { "\($0.scheme ?? "")://\($0.host ?? "")\($0.path.suffix(40))" } ?? "无")",
-            "115：\(currentDirect115) 解码：\(decoding.rawValue) 缓存：\(readahead.rawValue)s",
+            "115：\(currentDirect115) 解码：\(decoding.rawValue)（实际：\(activeHwdec.isEmpty ? "未知" : activeHwdec)） 缓存：\(readahead.rawValue)s",
             "状态：loaded=\(loaded) opening=\(opening) playedOnce=\(hasPlayed) cache=\(pausedForCache) seeking=\(seeking) speed=\(Int(downloadSpeed)) cached=\(Int(cachedSeconds))s",
             "位置：\(Self.clock(engineTime)) / \(Self.clock(duration)) 可跳转=\(seekable) 播完=\(ended) eof=\(eofReached) 暂停=\(userPaused)",
             "错误：\(error)",

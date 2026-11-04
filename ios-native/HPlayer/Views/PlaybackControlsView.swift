@@ -1883,7 +1883,7 @@ struct PlaybackControlsView: View {
                 if let rate = Float(value) { playback.setRate(rate) }
             }
         }
-        settingGroup("解码") {
+        settingGroup("解码", footer: "硬解码交给手机的视频芯片，省电、不容易发热；软解码全靠 CPU，很耗电，只在硬解码画面不正常时临时换用。") {
             chipRow(VideoDecoding.allCases.map { ($0.rawValue, $0.title) }, selected: playback.decoding.rawValue) { value in
                 if let option = VideoDecoding(rawValue: value) { playback.setDecoding(option) }
             }
@@ -2393,10 +2393,22 @@ struct PlaybackControlsView: View {
             return
         }
 #endif
-        hideTask = Task {
-            try? await Task.sleep(nanoseconds: 5_000_000_000)
-            if !Task.isCancelled && !showList && settingsPage == nil && !showAspect && popover == nil && !dragging && !boosting && adjustment == nil && !playback.buffering {
-                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.25)) { controlsVisible = false }
+        // 没人操作满 5 秒就收起控制栏。数的过程中在缓冲、拖进度、调亮度音量、长按快进或开着面板，就从头再数。
+        // 以前只在第 5 秒检查一次：那一刻正好在缓冲（打开 115 的视频常常要超过 5 秒）就再也不收起，
+        // 液态玻璃的控制栏一直盖在画面上，每一帧都要重新模糊下面的视频，GPU 白白多干活、手机发烫。
+        hideTask = Task { @MainActor in
+            let step: UInt64 = 500_000_000
+            var idle: UInt64 = 0
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: step)
+                guard !Task.isCancelled, controlsVisible else { return }
+                let busy = showList || settingsPage != nil || showAspect || popover != nil || dragging || boosting
+                    || adjustment != nil || playback.buffering
+                idle = busy ? 0 : idle + step
+                if idle >= 5_000_000_000 {
+                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.25)) { controlsVisible = false }
+                    return
+                }
             }
         }
     }
