@@ -58,6 +58,11 @@ struct SearchView: View {
     /// 改成自己量键盘高度、只给列表底部留白；退出时冻结，收起键盘不再引起任何布局变化。
     @State private var keyboardHeight: CGFloat = 0
     @State private var keyboardFrozen = false
+    /// 每次打开 / 关闭加一：关闭后延迟收键盘时，用它判断期间有没有又重新打开
+    @State private var focusGeneration = 0
+
+    /// 关闭时搜索页淡出的时长；键盘等搜索页完全看不见之后才收起（见 onChange(of: isActive)）
+    static let closeFadeDuration = 0.18
 
     init(initialQuery: String = "", initialResults: [P115File] = [], isActive: Bool = true,
          library: HomeSnapshot? = nil, onClose: @escaping () -> Void = {}) {
@@ -107,6 +112,9 @@ struct SearchView: View {
             Color.clear.frame(height: keyboardHeight)
         }
         }
+        // 在导航容器里面再声明一次不跟键盘避让：外面的声明管不到导航容器自己的键盘处理，
+        // 只在外面写的话列表底部会被系统和上面的 keyboardHeight 各让一次。
+        .ignoresSafeArea(.keyboard, edges: .bottom)
         .background(Theme.pageBackground.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
@@ -122,6 +130,7 @@ struct SearchView: View {
             searchFocused = true
         }
         .onChange(of: isActive) { active in
+            focusGeneration += 1
             if active {
                 keyboardFrozen = false
                 var transaction = Transaction()
@@ -130,10 +139,18 @@ struct SearchView: View {
                 if !InterfacePreview.active { searchFocused = true }
             } else {
                 keyboardFrozen = true
-                // 收起键盘不带动画：键盘有自己的动画，SwiftUI 再叠一层会让页面抖一下。
-                var transaction = Transaction()
-                transaction.disablesAnimations = true
-                withTransaction(transaction) { searchFocused = false }
+                // 返回时先让搜索页淡出，键盘留在原处；等搜索页完全看不见了再收键盘。
+                // 录屏逐帧看过：键盘开始收起的那一帧，搜索页的内容（搜索框、范围标签、空状态）会被整体
+                // 往下推约 56pt，再跟着键盘动画弹回来——这就是返回时看到的「跳一下」。底下的页面不跟键盘变化，
+                // 所以先把搜索页淡掉再收键盘，这一下就发生在看不见的时候，用户只看到搜索页淡出、键盘落下。
+                let generation = focusGeneration
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: UInt64((Self.closeFadeDuration + 0.04) * 1_000_000_000))
+                    guard generation == focusGeneration else { return }
+                    var transaction = Transaction()
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) { searchFocused = false }
+                }
             }
         }
         .designScreen(query.isEmpty ? "search" : hits.count == 0 && results.isEmpty && !loading && error.isEmpty ? "search-empty" : "search-results")
@@ -191,9 +208,8 @@ struct SearchView: View {
     private var searchBar: some View {
         HStack(spacing: 2) {
             BarIconButton(icon: .back, label: "返回", identifier: "search.back") {
-                // 先冻结键盘高度再收键盘：键盘收起的通知会在这一步里同步到达。
+                // 这里不收键盘：等搜索页淡出之后再收（见 onChange(of: isActive)）
                 keyboardFrozen = true
-                searchFocused = false
                 onClose()
             }
             HStack(spacing: 8) {

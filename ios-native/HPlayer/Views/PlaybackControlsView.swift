@@ -1419,7 +1419,7 @@ struct PlaybackControlsView: View {
             if boosting {
                 boostPill
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                    .padding(.top, hudInsets.top + Self.hudTopInset)
+                    .padding(.top, hudInsets.top + (controlsVisible && !locked ? (landscape ? 70 : 48) : Self.hudTopInset))
                     .transition(.opacity)
                     .allowsHitTesting(false)
                     .zIndex(5)
@@ -1435,6 +1435,7 @@ struct PlaybackControlsView: View {
     private func landscapeControls(insets: EdgeInsets, width: CGFloat) -> some View {
         VStack(spacing: 0) {
             topBar(landscape: true)
+                .yieldingToLevelHUD(levelHUDShowing, reduceMotion: reduceMotion)
             Spacer(minLength: 0)
             bottomBar(landscape: true)
         }
@@ -1487,6 +1488,7 @@ struct PlaybackControlsView: View {
                 Button { openSettings(.playback) } label: { controlIcon(AppIcon.more.name, label: "更多设置", size: 19) }
                     .accessibilityIdentifier("playback.more")
             }
+            .yieldingToLevelHUD(levelHUDShowing, reduceMotion: reduceMotion)
             Spacer(minLength: 0)
             HStack(spacing: 2) {
                 Button { playback.toggle(); revealControls() } label: {
@@ -2235,11 +2237,20 @@ struct PlaybackControlsView: View {
         .accessibilityElement(children: .combine)
     }
 
-    /// 提示条离画面顶部的距离。固定值：不管进度条等控制栏显示不显示，提示条都在同一个位置，
-    /// 不能随控制栏的出现和消失上下挪动。
+    /// 提示条离画面顶部的距离（控制栏收起时的位置）。
     private static let hudTopInset: CGFloat = 18
 
-    /// 亮度、音量、长按快进的提示都在画面上方同一个位置（手势不会同时进行）；拖动进度提示在正中间。
+    /// 亮度、音量的玻璃条正在显示：它固定在画面最上面，顶栏这时先淡出让位，
+    /// 不管控制栏出没出来，玻璃条都在同一个位置，也不会叠在片名上。
+    private var levelHUDShowing: Bool {
+        switch adjustment?.kind {
+        case .brightness?, .volume?: return true
+        default: return false
+        }
+    }
+
+    /// 亮度、音量的玻璃条永远在画面最上面同一个位置（控制栏出来时顶栏让开）；
+    /// 文字提示和长按快进的提示在控制栏出来时放在顶栏下面；拖动进度提示在正中间。
     @ViewBuilder
     private func hudLayer(insets: EdgeInsets) -> some View {
         ZStack {
@@ -2256,7 +2267,7 @@ struct PlaybackControlsView: View {
                 case .notice:
                     NoticeHUD(text: adjustment.valueText)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                        .padding(.top, insets.top + Self.hudTopInset)
+                        .padding(.top, insets.top + (controlsVisible && !locked ? 70 : Self.hudTopInset))
                         .transition(.opacity)
                 }
             }
@@ -2668,6 +2679,15 @@ struct PlaybackControlsView: View {
 // MARK: - 液态玻璃按钮
 
 /// 播放页的玻璃圆钮：iOS 26 用系统的液态玻璃按钮样式（按下会有弹性和高光），低版本降级成毛玻璃圆钮
+private extension View {
+    /// 亮度、音量的玻璃条出现时，顶栏淡出让位（也不接收点按），玻璃条消失后再淡回来。
+    func yieldingToLevelHUD(_ yielding: Bool, reduceMotion: Bool) -> some View {
+        opacity(yielding ? 0 : 1)
+            .allowsHitTesting(!yielding)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: yielding)
+    }
+}
+
 private struct GlassIconButton: View {
     let systemImage: String
     let label: String

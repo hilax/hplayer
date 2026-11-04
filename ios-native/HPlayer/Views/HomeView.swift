@@ -216,7 +216,9 @@ struct HomeView: View {
                     // 不能被这个淡出动画接管，否则它和键盘自己的动画叠在一起，页面会先被带下去再弹回来。
                     .transaction { $0.animation = nil }
                     .opacity(searchOpen ? 1 : 0)
-                    .animation(reduceMotion ? nil : Motion.fade, value: searchOpen)
+                    // 打开时柔和淡入；返回时快一点淡出，淡完之后搜索页才收键盘（见 SearchView）
+                    .animation(reduceMotion ? nil : (searchOpen ? Motion.fade : .easeOut(duration: SearchView.closeFadeDuration)),
+                               value: searchOpen)
                     .allowsHitTesting(searchOpen)
                     .accessibilityHidden(!searchOpen)
                     // 搜索页也不跟系统的键盘避让：它的大小、位置在键盘弹出收起时一点都不变，
