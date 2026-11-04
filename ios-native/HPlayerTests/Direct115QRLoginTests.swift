@@ -2,6 +2,7 @@ import XCTest
 @testable import HPlayer
 
 final class Direct115QRLoginTests: XCTestCase {
+    @MainActor
     func testCookieHeaderPutsLoginFieldsFirstAndDropsUnsafeValues() {
         let header = Direct115QRLogin.cookieHeader([
             "SEID": "seid", "KID": "kid", "UID": "123_A1_1700000000", "CID": "cid",
