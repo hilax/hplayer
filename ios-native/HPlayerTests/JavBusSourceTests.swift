@@ -43,6 +43,77 @@ final class JavBusSourceTests: XCTestCase {
         XCTAssertEqual(second.detailPath, "/IPX-123")
     }
 
+    func testParseStarItems() {
+        let sampleHTML = """
+        <div class="row">
+          <a class="avatar-box text-center" href="https://www.javbus.com/star/2js">
+            <div class="photo-frame">
+              <img src="https://pics.javbus.com/actress/2js_a.jpg" title="三上悠亚">
+            </div>
+            <span>三上悠亚</span>
+          </a>
+          <a class="avatar-box text-center" href="/star/3v0">
+            <div class="photo-frame">
+              <img src="/actress/3v0.jpg">
+            </div>
+            <span>河北彩花</span>
+          </a>
+        </div>
+        """
+
+        let stars = JavBusSource.parseStarItems(from: sampleHTML, baseURLString: "https://www.javbus.com")
+        XCTAssertEqual(stars.count, 2)
+
+        let first = stars[0]
+        XCTAssertEqual(first.name, "三上悠亚")
+        XCTAssertEqual(first.detailPath, "/star/2js")
+        XCTAssertEqual(first.avatarURL?.absoluteString, "https://pics.javbus.com/actress/2js_a.jpg")
+
+        let second = stars[1]
+        XCTAssertEqual(second.name, "河北彩花")
+        XCTAssertEqual(second.detailPath, "/star/3v0")
+        XCTAssertEqual(second.avatarURL?.absoluteString, "https://www.javbus.com/actress/3v0.jpg")
+    }
+
+    func testParseStarHeader() {
+        let sampleDetailHTML = """
+        <div class="avatar-box">
+          <img src="https://pics.javbus.com/actress/2js_a.jpg" title="三上悠亚">
+          <span class="pb10">三上悠亚</span>
+        </div>
+        <div class="photo-info">
+          <p>生日: 1993-08-16</p>
+          <p>年龄: 31</p>
+          <p>身高: 159cm</p>
+          <p>罩杯: F</p>
+        </div>
+        """
+
+        let star = JavBusSource.parseStarHeader(from: sampleDetailHTML, detailPath: "/star/2js", baseURLString: "https://www.javbus.com")
+        XCTAssertNotNil(star)
+        XCTAssertEqual(star?.name, "三上悠亚")
+        XCTAssertEqual(star?.detailPath, "/star/2js")
+        XCTAssertTrue(star?.bio?.contains("1993-08-16") == true)
+        XCTAssertTrue(star?.bio?.contains("罩杯: F") == true)
+    }
+
+    func testParseStarsFromMovieDetail() {
+        let sampleMovieHTML = """
+        <div class="info">
+          <p class="header">演员:</p>
+          <span class="genre"><a href="https://www.javbus.com/star/2js">三上悠亚</a></span>
+          <span class="genre"><a href="/star/3v0">河北彩花</a></span>
+        </div>
+        """
+
+        let stars = JavBusSource.parseStarsFromMovieDetail(sampleMovieHTML, baseURLString: "https://www.javbus.com")
+        XCTAssertEqual(stars.count, 2)
+        XCTAssertEqual(stars[0].name, "三上悠亚")
+        XCTAssertEqual(stars[0].detailPath, "/star/2js")
+        XCTAssertEqual(stars[1].name, "河北彩花")
+        XCTAssertEqual(stars[1].detailPath, "/star/3v0")
+    }
+
     func testParseMagnetsFromHTML() {
         let sampleAJAXHTML = """
         <table>
