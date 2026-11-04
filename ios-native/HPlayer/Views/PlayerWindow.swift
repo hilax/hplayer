@@ -1,3 +1,4 @@
+import MediaPlayer
 import SwiftUI
 import UIKit
 
@@ -7,6 +8,23 @@ import UIKit
 /// 横屏播放时是 `.landscape`，切回竖屏小窗时是 `.portrait`。
 final class PlayerWindow: UIWindow {
     var allowedOrientations: UIInterfaceOrientationMask = .landscape
+
+    private var volumeHUDGuard: MPVolumeView?
+
+    /// 调音量（滑动手势、音量键）时，系统只有在 App 里有一个「看得见」的 MPVolumeView 才不弹自带的音量条。
+    /// 播放器窗口刚创建时 alpha 是 0（要等转好屏才淡入），那时登记的音量控件会被系统当成不可见，
+    /// 结果音量条照样弹出来、盖在播放页自己的音量提示上面。
+    /// 所以窗口真正可见之后（以及 App 回到前台后）再放一个新的；它几乎透明、不接收触摸，只是让系统知道「播放页自己管音量」。
+    func installVolumeHUDGuard() {
+        volumeHUDGuard?.removeFromSuperview()
+        let view = MPVolumeView(frame: CGRect(x: 0, y: 0, width: 100, height: 30))
+        view.alpha = 0.01
+        view.isUserInteractionEnabled = false
+        view.isAccessibilityElement = false
+        view.accessibilityElementsHidden = true
+        addSubview(view)
+        volumeHUDGuard = view
+    }
 }
 
 final class PlayerHostingController: UIHostingController<AnyView> {
@@ -28,6 +46,16 @@ final class PlayerHostingController: UIHostingController<AnyView> {
 @MainActor
 final class PlayerWindowController {
     static let shared = PlayerWindowController()
+
+    private init() {
+        // 从后台回来后系统会重新判断哪些音量控件在屏幕上，窗口已经可见时重新放一个
+        NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let window = self?.window, window.alpha > 0.5, !window.isHidden else { return }
+                window.installVolumeHUDGuard()
+            }
+        }
+    }
 
     private(set) var window: PlayerWindow?
     private var host: PlayerHostingController?
@@ -217,7 +245,12 @@ final class PlayerWindowController {
         revealed = true
         revealTask?.cancel()
         resumeRevealWaiters()
-        UIView.animate(withDuration: 0.25, delay: 0, options: [.curveEaseOut]) { window.alpha = 1 }
+        UIView.animate(withDuration: 0.25, delay: 0, options: [.curveEaseOut]) {
+            window.alpha = 1
+        } completion: { [weak window] _ in
+            // 窗口淡入完成、真正可见以后再登记音量控件，系统才不会弹自带的音量条
+            window?.installVolumeHUDGuard()
+        }
     }
 
     /// 请求系统把界面转到指定方向，开始新的一轮（旧一轮的重试随之停下）。
