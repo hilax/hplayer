@@ -68,6 +68,18 @@ final class Direct115PaginationTests: XCTestCase {
         XCTAssertEqual(files.map(\.id), ["1", "2", "3"])
     }
 
+    func testOverlappingPagesKeepEachFileOnce() async throws {
+        // 第二页开头和第一页结尾重叠（翻页期间文件夹里加了文件）
+        let pages: [Int: [String]] = [0: ["1", "2"], 2: ["2", "3"]]
+        let files = try await Direct115Client.collectFiles(pageDelayNanoseconds: 0) { offset in
+            let ids = pages[offset] ?? []
+            return Direct115FilePage(files: ids.map { P115File(id: $0, parentId: "0", name: "\($0).mkv", isDir: false,
+                kind: "video", size: 1, pickCode: "p\($0)", sha1: "", updatedAt: "", thumbUrl: "") },
+                nextOffset: offset == 0 ? 2 : nil)
+        }
+        XCTAssertEqual(files.map(\.id), ["1", "2", "3"])
+    }
+
     func testCollectorRejectsRepeatedTerminalPageInsteadOfReturningIncompleteList() async {
         var requests: [Int] = []
         do {

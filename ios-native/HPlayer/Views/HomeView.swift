@@ -101,7 +101,8 @@ struct HomeView: View {
                 guard !Task.isCancelled else { return }
                 await librarySnapshots.rebuild(files: libraryFiles, matches: metadataStore.metadataByMediaID)
             }
-            .task(id: CatalogEntriesKey(revision: librarySnapshots.revision, recents: recents.items.count)) {
+            // 按记录的先后排序：重看旧片、记录满 30 条后再看新片时条数不变，所以要比较整串 id，不能只看条数
+            .task(id: CatalogEntriesKey(revision: librarySnapshots.revision, recents: recents.items.map(\.id))) {
                 await librarySnapshots.rebuildEntries(recents: recents.items)
             }
             .onChange(of: automaticMatching) { enabled in
@@ -270,5 +271,5 @@ private struct LibrarySnapshotKey: Equatable {
 
 private struct CatalogEntriesKey: Equatable {
     let revision: Int
-    let recents: Int
+    let recents: [String]
 }

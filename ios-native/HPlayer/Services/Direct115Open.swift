@@ -230,7 +230,7 @@ actor Direct115Open {
         guard page > 0 else { throw APIError.server("页码无效") }
         let json = try await api("/open/offline/get_task_list", query: ["page": String(page)])
         let data = json["data"] as? [String: Any] ?? [:]
-        let tasks = (data["tasks"] as? [[String: Any]] ?? []).map { t in ["id": Self.string(t["info_hash"]), "name": Self.string(t["name"]), "progress": Self.integer(t["percentDone"]), "size": Self.integer(t["size"]), "status": Self.integer(t["status"])] as [String: Any] }
+        let tasks = (data["tasks"] as? [[String: Any]] ?? []).map { t in ["id": Self.string(t["info_hash"]), "name": Self.string(t["name"]), "progress": Double(Self.string(t["percentDone"])) ?? 0, "size": Self.integer(t["size"]), "status": Self.integer(t["status"])] as [String: Any] }
         return ["page": Self.integer(data["page"]), "pageCount": Self.integer(data["page_count"]), "count": Self.integer(data["count"]), "tasks": tasks]
     }
 

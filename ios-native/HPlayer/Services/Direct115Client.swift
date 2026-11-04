@@ -70,6 +70,9 @@ struct Direct115Client {
         fetchPage: (Int) async throws -> Direct115FilePage
     ) async throws -> [P115File] {
         var result: [P115File] = []
+        // 翻页期间文件夹内容变了（比如离线下载正往里加文件），前后两页会有重叠；同一个文件只留一份，
+        // 否则列表里会出现 id 相同的两行
+        var seen = Set<String>()
         var offset = 0
         var previousSignature = ""
         repeat {
@@ -80,7 +83,7 @@ struct Direct115Client {
             guard offset == 0 || page.files.isEmpty || signature != previousSignature else {
                 throw APIError.server("115 返回了重复的文件分页，请稍后重试")
             }
-            result.append(contentsOf: page.files)
+            result.append(contentsOf: page.files.filter { $0.id.isEmpty || seen.insert("\($0.isDir ? "d" : "f"):\($0.id)").inserted })
             guard let next = page.nextOffset else { break }
             guard next > offset, !page.files.isEmpty else { throw APIError.server("115 文件分页未前进，请稍后重试") }
             offset = next

@@ -207,9 +207,12 @@ private struct ScanUITestHost: View {
     @StateObject private var metadata = MediaMetadataStore()
     @StateObject private var library = MediaLibraryStore()
     @StateObject private var local = LocalMediaStore()
+    /// 「未匹配影片」读这里的分组结果
+    @StateObject private var snapshots = LibrarySnapshotStore()
 
     var body: some View {
         HomeLibraryScanView(onStart: { _ in }, onStartFolder: { _, _ in }, onRetryMatching: {})
+            .environmentObject(snapshots)
             .environmentObject(scanner)
             .environmentObject(metadata)
             .environmentObject(library)
