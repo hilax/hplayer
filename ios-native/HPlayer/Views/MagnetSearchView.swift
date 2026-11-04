@@ -45,6 +45,31 @@ private func mergeUnique<T: Identifiable>(_ existing: [T], with new: [T]) -> (me
     return (merged, added)
 }
 
+/// 封面/头像：走 ImagePipeline（带防盗链请求头、磁盘缓存、后台缩小解码）。
+/// 加载中只显示底色，加载失败才显示占位图标。
+private struct MagnetArtwork: View {
+    let url: URL?
+    let maxPixel: Int
+    let placeholder: String
+
+    var body: some View {
+        PipelineImage(url: url, maxPixel: maxPixel) { phase in
+            switch phase {
+            case let .loaded(image):
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            case .loading:
+                Rectangle().fill(Theme.surfaceRaised)
+            case .failed:
+                Rectangle()
+                    .fill(Theme.surfaceRaised)
+                    .overlay { Image(systemName: placeholder).foregroundStyle(.secondary) }
+            }
+        }
+    }
+}
+
 /// 磁力在线搜索与分类聚合页面（支持按番号/女优搜索、最新发布、无码专区与女优专属作品库）。
 struct MagnetSearchView: View {
     var onSelectMagnet: (String) -> Void = { _ in }
@@ -417,24 +442,9 @@ struct MagnetSearchView: View {
 
     private func movieCard(item: MagnetSearchItem) -> some View {
         HStack(alignment: .top, spacing: 14) {
-            AsyncImage(url: item.coverURL) { phase in
-                switch phase {
-                case .empty:
-                    Rectangle()
-                        .fill(Theme.surfaceRaised)
-                        .overlay { ProgressView().scaleEffect(0.8) }
-                case let .success(image):
-                    image.resizable().scaledToFill()
-                case .failure:
-                    Rectangle()
-                        .fill(Theme.surfaceRaised)
-                        .overlay { Image(systemName: AppIcon.poster.name).foregroundStyle(.secondary) }
-                @unknown default:
-                    EmptyView()
-                }
-            }
-            .frame(width: 86, height: 118)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            MagnetArtwork(url: item.coverURL, maxPixel: 354, placeholder: AppIcon.poster.name)
+                .frame(width: 86, height: 118)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
             VStack(alignment: .leading, spacing: 6) {
                 if !item.code.isEmpty {
@@ -481,16 +491,9 @@ struct MagnetSearchView: View {
 
     private func starBadge(star: MagnetStarItem) -> some View {
         HStack(spacing: 10) {
-            AsyncImage(url: star.avatarURL) { phase in
-                if let image = phase.image {
-                    image.resizable().scaledToFill()
-                } else {
-                    Circle().fill(Theme.surfaceRaised)
-                        .overlay { Image(systemName: AppIcon.mine.name).foregroundStyle(.secondary) }
-                }
-            }
-            .frame(width: 44, height: 44)
-            .clipShape(Circle())
+            MagnetArtwork(url: star.avatarURL, maxPixel: 132, placeholder: AppIcon.mine.name)
+                .frame(width: 44, height: 44)
+                .clipShape(Circle())
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(star.name)
@@ -511,16 +514,9 @@ struct MagnetSearchView: View {
 
     private func starGridCard(star: MagnetStarItem) -> some View {
         VStack(spacing: 8) {
-            AsyncImage(url: star.avatarURL) { phase in
-                if let image = phase.image {
-                    image.resizable().scaledToFill()
-                } else {
-                    Rectangle().fill(Theme.surfaceRaised)
-                        .overlay { Image(systemName: AppIcon.mine.name).foregroundStyle(.secondary) }
-                }
-            }
-            .frame(width: 80, height: 80)
-            .clipShape(Circle())
+            MagnetArtwork(url: star.avatarURL, maxPixel: 240, placeholder: AppIcon.mine.name)
+                .frame(width: 80, height: 80)
+                .clipShape(Circle())
 
             Text(star.name)
                 .font(.caption.weight(.semibold))
@@ -874,17 +870,10 @@ struct StarMoviesView: View {
 
     private var starHeader: some View {
         VStack(spacing: 12) {
-            AsyncImage(url: (detailedStar ?? star).avatarURL) { phase in
-                if let image = phase.image {
-                    image.resizable().scaledToFill()
-                } else {
-                    Circle().fill(Theme.surfaceRaised)
-                        .overlay { Image(systemName: AppIcon.mine.name).foregroundStyle(.secondary) }
-                }
-            }
-            .frame(width: 90, height: 90)
-            .clipShape(Circle())
-            .overlay(Circle().stroke(Theme.accent.opacity(0.3), lineWidth: 2))
+            MagnetArtwork(url: (detailedStar ?? star).avatarURL, maxPixel: 270, placeholder: AppIcon.mine.name)
+                .frame(width: 90, height: 90)
+                .clipShape(Circle())
+                .overlay(Circle().stroke(Theme.accent.opacity(0.3), lineWidth: 2))
 
             Text((detailedStar ?? star).name)
                 .font(.title3.weight(.bold))
@@ -906,16 +895,9 @@ struct StarMoviesView: View {
 
     private func movieRow(movie: MagnetSearchItem) -> some View {
         HStack(alignment: .top, spacing: 14) {
-            AsyncImage(url: movie.coverURL) { phase in
-                if let image = phase.image {
-                    image.resizable().scaledToFill()
-                } else {
-                    Rectangle().fill(Theme.surfaceRaised)
-                        .overlay { Image(systemName: AppIcon.poster.name).foregroundStyle(.secondary) }
-                }
-            }
-            .frame(width: 76, height: 104)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            MagnetArtwork(url: movie.coverURL, maxPixel: 312, placeholder: AppIcon.poster.name)
+                .frame(width: 76, height: 104)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
 
             VStack(alignment: .leading, spacing: 6) {
                 if !movie.code.isEmpty {
@@ -1076,15 +1058,9 @@ struct MagnetDetailSheet: View {
     private var headerCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 14) {
-                AsyncImage(url: item.coverURL) { phase in
-                    if let image = phase.image {
-                        image.resizable().scaledToFill()
-                    } else {
-                        Rectangle().fill(Theme.surfaceRaised)
-                    }
-                }
-                .frame(width: 58, height: 80)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                MagnetArtwork(url: item.coverURL, maxPixel: 240, placeholder: AppIcon.poster.name)
+                    .frame(width: 58, height: 80)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
                 VStack(alignment: .leading, spacing: 4) {
                     if !item.code.isEmpty {

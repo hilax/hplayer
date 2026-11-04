@@ -44,6 +44,20 @@ final class ImagePipelineTests: XCTestCase {
         XCTAssertNil(pipeline.cached(url, maxPixel: 600))
     }
 
+    func testHeaderProviderIsAppliedToDownloads() async throws {
+        let data = png(width: 20, height: 20)
+        RoutedURLProtocol.install { _ in .init(status: 200, headers: ["Content-Type": "image/png"], body: data) }
+        let url = try XCTUnwrap(URL(string: "https://images.example/guarded.png"))
+        let pipeline = ImagePipeline(
+            directory: directory,
+            session: RoutedURLProtocol.session(),
+            headers: { _ in ["Referer": "https://site.example/"] }
+        )
+        let image = await pipeline.image(url, maxPixel: 50)
+        XCTAssertNotNil(image)
+        XCTAssertEqual(RoutedURLProtocol.requests().first?.value(forHTTPHeaderField: "Referer"), "https://site.example/")
+    }
+
     func testDownloadedImagesSurviveARestartWithoutTheNetwork() async throws {
         let data = png(width: 80, height: 120)
         RoutedURLProtocol.install { _ in .init(status: 200, headers: ["Content-Type": "image/png"], body: data) }

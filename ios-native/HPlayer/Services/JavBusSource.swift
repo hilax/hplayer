@@ -102,8 +102,28 @@ final class JavBusSource: MagnetSearchSource, @unchecked Sendable {
 
     // MARK: - 网络请求
 
-    private var mobileUserAgent: String {
-        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
+    static let userAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
+
+    private var mobileUserAgent: String { Self.userAgent }
+
+    /// 取封面、头像时要带的请求头：站点的图片做了防盗链，没有 Referer / 浏览器 UA 会被拒绝（403）。
+    /// 只对 JavBus 自己的域名（默认域名和当前配置的镜像域名及其子域名）生效，别的图床不加。
+    static func imageHeaders(for url: URL) -> [String: String] {
+        guard let host = url.host?.lowercased() else { return [:] }
+
+        func registrable(_ host: String) -> String {
+            host.split(separator: ".").suffix(2).joined(separator: ".")
+        }
+
+        let base = JavBusSource.shared.currentHost
+        let known = [URL(string: base)?.host, URL(string: defaultHost)?.host].compactMap { $0?.lowercased() }
+        guard known.contains(where: { $0 == host || registrable($0) == registrable(host) }) else { return [:] }
+
+        return [
+            "Referer": base + "/",
+            "User-Agent": userAgent,
+            "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+        ]
     }
 
     private static func installCookies(in storage: HTTPCookieStorage, for url: URL) {

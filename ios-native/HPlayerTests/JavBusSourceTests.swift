@@ -445,6 +445,27 @@ final class JavBusSourceTests: XCTestCase {
         XCTAssertEqual(magnets.count, 1)
         XCTAssertEqual(magnets.first?.size, "1.00GB")
     }
+
+    // MARK: - 修复回归：图片防盗链请求头
+
+    func testImageHeadersAddRefererForJavBusDomainsOnly() throws {
+        let cover = try XCTUnwrap(URL(string: "https://www.javbus.com/pics/thumb/a.jpg"))
+        let headers = JavBusSource.imageHeaders(for: cover)
+        XCTAssertEqual(headers["Referer"], "https://www.javbus.com/")
+        XCTAssertEqual(headers["User-Agent"], JavBusSource.userAgent)
+
+        let subdomain = try XCTUnwrap(URL(string: "https://pics.javbus.com/a.jpg"))
+        XCTAssertEqual(JavBusSource.imageHeaders(for: subdomain)["Referer"], "https://www.javbus.com/")
+
+        let other = try XCTUnwrap(URL(string: "https://images.example/a.jpg"))
+        XCTAssertTrue(JavBusSource.imageHeaders(for: other).isEmpty)
+    }
+
+    func testImageHeadersFollowTheConfiguredMirror() throws {
+        UserDefaults.standard.set("https://mirror.example.com", forKey: JavBusSource.hostDefaultsKey)
+        let cover = try XCTUnwrap(URL(string: "https://img.example.com/pics/a.jpg"))
+        XCTAssertEqual(JavBusSource.imageHeaders(for: cover)["Referer"], "https://mirror.example.com/")
+    }
 }
 
 /// 假网络回调跑在别的线程上，计数要加锁。
