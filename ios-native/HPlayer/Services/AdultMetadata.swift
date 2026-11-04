@@ -11,14 +11,55 @@ enum AVCatalogCode {
         "UHD", "FHD", "DV", "FLAC", "OPUS", "MP", "AC",
     ]
 
+    /// 数字后面紧跟的版本标记：ABF-159C、ABF-159CH（中文字幕）、ABF-159UC / U（无码）、ABF-159A / B（分段）、ABF-159HD。
+    /// 只认这几种；别的字母（abc123def）仍然不当作番号。
+    private static let versionSuffix = "(?:ch|uc|hd|c|u|a|b)"
+
+    /// 域名很多：.com/.net 这类一定去掉；下面这些更常见于普通单词（.to、.in、.me、.one……），
+    /// 只在文件名里出现了多个番号、需要分辨哪个是站点名时才去掉，免得误删「ABC-123.To.Be」这样的真番号。
+    private static let extraDomainSuffixes =
+        "xyz|top|vip|club|info|app|biz|live|site|fun|cn|ru|tk|pw|ws|xxx|work|link|online|store|red|me|to|in|co|io|us|la|one|pro|jp|tw|hk"
+
     static func extract(_ text: String) -> String? {
         // 文件名里的站点水印可能也含有数字，先去掉域名和链接，再识别番号。
         let value = text.replacingOccurrences(
             of: #"(?i)(?:https?://[^\s\]】)）]+|(?:www\.)?[a-z0-9-]+\.(?:com|net|org|cc|tv)(?:/[^\s\]】)）]*)?)"#,
             with: " ", options: .regularExpression
         )
-        let pattern = #"(?i)(?<![a-z0-9])([a-z]{2,8})([-_. ]?)([0-9]{3,5})(?![a-z0-9])"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let direct = codes(in: value)
+        if direct.count == 1 { return direct.first }
+        guard direct.count > 1 else { return nil }
+        // 出现多个番号样子的字符串：可能其中有站点名（avmoo123@abf-159、xxx168.xyz-abf-159）。
+        // 去掉站点名的写法再看，只剩一个才认；两个都是真番号（[ABC-123] [DEF-456]）时仍然不猜。
+        let withoutTags = strippingSiteTags(value)
+        let withoutDomains = value.replacingOccurrences(
+            of: "(?i)[a-z0-9-]+\\.(?:\(extraDomainSuffixes))(?![a-z0-9])", with: " ", options: .regularExpression)
+        for reduced in [withoutTags, withoutDomains, strippingSiteTags(withoutDomains)] {
+            let found = codes(in: reduced)
+            if found.count == 1 { return found.first }
+        }
+        return nil
+    }
+
+    /// 「站点名@番号」：去掉 @ 前面连在一起的那段站点名。那一段本身带着「ABC-123」这样的番号时不动，
+    /// 因为分不清哪边是站点名（ABC-123@DEF-456）。
+    private static func strippingSiteTags(_ value: String) -> String {
+        guard let regex = try? NSRegularExpression(pattern: #"[^\s@\[\]【】()（）]+@"#) else { return value }
+        let nsValue = value as NSString
+        var result = value as NSString
+        // 从后往前换，前面的位置不会因为替换而错位
+        for match in regex.matches(in: value, range: NSRange(location: 0, length: nsValue.length)).reversed() {
+            let token = nsValue.substring(with: match.range)
+            if token.range(of: #"(?i)[a-z]{2,8}-[0-9]{3,5}"#, options: .regularExpression) != nil { continue }
+            result = result.replacingCharacters(in: match.range, with: " ") as NSString
+        }
+        return result as String
+    }
+
+    /// 文本里所有番号样子的字符串，统一写成「ABC-123」。
+    private static func codes(in value: String) -> Set<String> {
+        let pattern = "(?i)(?<![a-z0-9])([a-z]{2,8})([-_. ]?)([0-9]{3,5})\(versionSuffix)?(?![a-z0-9])"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
         let range = NSRange(value.startIndex..<value.endIndex, in: value)
         var codes = Set<String>()
         for match in regex.matches(in: value, range: range) {
@@ -37,7 +78,7 @@ enum AVCatalogCode {
             let padded = String(repeating: "0", count: max(0, 3 - normalized.count)) + normalized
             codes.insert("\(prefix)-\(padded)")
         }
-        return codes.count == 1 ? codes.first : nil
+        return codes
     }
 
     /// 来源的 content_id 必须完整地表示同一个番号，不能只匹配其中一部分。

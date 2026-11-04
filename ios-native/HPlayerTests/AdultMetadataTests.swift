@@ -18,6 +18,29 @@ final class AdultMetadataTests: XCTestCase {
         }
     }
 
+    func testExtractsCodesWithVersionSuffixes() {
+        // 数字后面紧跟字幕、无码、分段等标记
+        for name in ["abf-159ch.mp4", "abf-159c.mp4", "ABF-159UC.mkv", "abf159u.mp4", "ABF-159A.mp4", "ABF-159HD.mp4",
+                     "ABF-159-C.mp4", "abf_159ch.mp4"] {
+            XCTAssertEqual(AVCatalogCode.extract(name), "ABF-159", name)
+        }
+        XCTAssertEqual(MediaNameParser.parse("abf-159ch.mp4").catalogCode, "ABF-159")
+        // 别的字母跟在数字后面仍然不是番号
+        XCTAssertNil(AVCatalogCode.extract("abc123def.mp4"))
+        XCTAssertNil(AVCatalogCode.extract("BD1080p.mkv"))
+    }
+
+    func testExtractsCodeWhenASiteNameIsMixedIntoTheFilename() {
+        for name in ["xxxx.com@abf-159.mp4", "hhd800.com@ABF-159-C.mp4", "avmoo123@abf-159.mp4",
+                     "avmoo123.xyz@abf-159ch.mp4", "xxx168.vip-abf-159.mp4", "www.site99.me@abf-159.mp4",
+                     "abf-159@avmoo123.com.mp4", "ABF-159.To.Be.mp4"] {
+            XCTAssertEqual(AVCatalogCode.extract(name), "ABF-159", name)
+        }
+        // 两边都像真番号时不猜
+        XCTAssertNil(AVCatalogCode.extract("ABC-123@DEF-456.mp4"))
+        XCTAssertNil(AVCatalogCode.extract("[ABC-123] [DEF-456].mp4"))
+    }
+
     func testDecodesCurrentR18DevFormatWithDigitPrefixedContentID() throws {
         let body: [String: Any] = [
             "content_id": "1start00656", "dvd_id": "START-656", "title_en": "English title", "title_ja": "日本語",
