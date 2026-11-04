@@ -352,7 +352,7 @@ final class JavBusSource: MagnetSearchSource, @unchecked Sendable {
 
     /// 「最热」：JavBus 没有榜单页，也抓不到第三方月榜（JavDB 对国内网络禁止访问，
     /// JavLibrary / Jable 有 Cloudflare 验证），所以用站点自己的人气排序来凑：
-    /// 取人气靠前的女优，合并她们最近 30 天的新作，按女优人气排序。
+    /// 取人气靠前的女优，合并她们最近 30 天的主演新作（不含合集），按女优人气排序。
     func fetchHot(now: Date) async throws -> [MagnetSearchItem] {
         let host = currentHost
         if let cached = cachedHot(host: host, now: now) { return cached }
@@ -370,7 +370,7 @@ final class JavBusSource: MagnetSearchSource, @unchecked Sendable {
                 for (offset, star) in slice.enumerated() {
                     group.addTask { [self] in
                         do {
-                            return (base + offset, .success(try await fetchStarMovies(starPath: star.detailPath)))
+                            return (base + offset, .success(try await fetchLeadMovies(starName: star.name)))
                         } catch {
                             return (base + offset, .failure(error))
                         }
@@ -395,17 +395,28 @@ final class JavBusSource: MagnetSearchSource, @unchecked Sendable {
         return items
     }
 
-    /// 某位女优的作品（只取影片，不解析头部资料）。
-    private func fetchStarMovies(starPath: String, page: Int = 1) async throws -> [MagnetSearchItem] {
-        let clean = starPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        guard let url = makeURL(path: page > 1 ? "\(clean)/\(page)" : clean) else {
-            throw JavBusError.invalidURL
+    /// 站点搜索用的女优名：去掉括号里的别名（「森沢かな（飯岡かなこ）」→「森沢かな」）。
+    static func searchName(for starName: String) -> String {
+        var name = starName
+        for open in ["（", "("] {
+            if let range = name.range(of: open) {
+                name = String(name[..<range.lowerBound])
+            }
         }
-        guard let html = try await fetchHTMLOrNil(url) else { return [] }
-        return Self.parseSearchItems(from: html, baseURLString: currentHost)
+        return trim(name)
     }
 
-    /// 把各位女优的作品合并成榜单：只留已发行、且在窗口内的；女优人气排名（rank 越小越靠前）优先，
+    /// 女优的主演作品：用站点搜索按名字找。
+    /// 女优页（`/star/xxx`）会把她参演过的所有合集（BEST、4 小时以上、几十位女优一起出演）
+    /// 也列在名下，而且按日期排在最前面，看起来全是别人；按名字搜索得到的才是她本人主演的片子，
+    /// 新片在前。
+    func fetchLeadMovies(starName: String, page: Int = 1) async throws -> [MagnetSearchItem] {
+        let name = Self.searchName(for: starName)
+        guard !name.isEmpty else { return [] }
+        return try await search(keyword: name, page: page)
+    }
+
+    /// 把各位女优的主演作品合并成榜单：只留已发行、且在窗口内的；女优人气排名（rank 越小越靠前）优先，
     /// 同一位女优内新片在前；同一部片出现在几位女优名下时只保留排名最靠前的那一次。
     static func rankHot(_ batches: [(rank: Int, movies: [MagnetSearchItem])], now: Date, windowDays: Int = JavBusSource.hotWindowDays) -> [MagnetSearchItem] {
         var calendar = Calendar(identifier: .gregorian)

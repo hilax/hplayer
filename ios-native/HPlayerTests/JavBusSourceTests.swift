@@ -546,8 +546,8 @@ final class JavBusSourceTests: XCTestCase {
         RoutedURLProtocol.install { request in
             switch request.url?.path ?? "" {
             case "/actresses": return .init(status: 200, body: Data(Self.hotActressesHTML.utf8))
-            case "/star/aaa": return .init(status: 200, body: Data(Self.starMoviesHTML(code: "AAA-001", date: "2026-10-30").utf8))
-            case "/star/bbb": return .init(status: 200, body: Data(Self.starMoviesHTML(code: "BBB-001", date: "2026-11-02").utf8))
+            case "/search/甲": return .init(status: 200, body: Data(Self.starMoviesHTML(code: "AAA-001", date: "2026-10-30").utf8))
+            case "/search/乙": return .init(status: 200, body: Data(Self.starMoviesHTML(code: "BBB-001", date: "2026-11-02").utf8))
             default: return .init(status: 404)
             }
         }
@@ -567,7 +567,7 @@ final class JavBusSourceTests: XCTestCase {
         RoutedURLProtocol.install { request in
             switch request.url?.path ?? "" {
             case "/actresses": return .init(status: 200, body: Data(Self.hotActressesHTML.utf8))
-            case "/star/bbb": return .init(status: 200, body: Data(Self.starMoviesHTML(code: "BBB-001", date: "2026-11-02").utf8))
+            case "/search/乙": return .init(status: 200, body: Data(Self.starMoviesHTML(code: "BBB-001", date: "2026-11-02").utf8))
             default: return .init(status: 500)
             }
         }
@@ -589,6 +589,36 @@ final class JavBusSourceTests: XCTestCase {
         } catch {
             XCTFail("错误类型不对: \(error)")
         }
+    }
+
+    // MARK: - 女优主演作品（按名字搜索，不含合集）
+
+    func testSearchNameDropsParentheticalAlias() {
+        XCTAssertEqual(JavBusSource.searchName(for: "森沢かな（飯岡かなこ）"), "森沢かな")
+        XCTAssertEqual(JavBusSource.searchName(for: "めぐり(藤浦めぐ)"), "めぐり")
+        XCTAssertEqual(JavBusSource.searchName(for: "  深田えいみ "), "深田えいみ")
+        XCTAssertEqual(JavBusSource.searchName(for: "（别名）"), "")
+    }
+
+    func testFetchLeadMoviesSearchesByNameWithPaging() async throws {
+        RoutedURLProtocol.install { _ in .init(status: 200, body: Data(Self.movieListHTML.utf8)) }
+        let source = makeSource()
+
+        let items = try await source.fetchLeadMovies(starName: "深田えいみ")
+        XCTAssertEqual(items.count, 1)
+        XCTAssertEqual(RoutedURLProtocol.requests().last?.url?.path, "/search/深田えいみ")
+        // 不是女优页：女优页会把她出镜的合集也列进来
+        XCTAssertFalse(RoutedURLProtocol.requests().contains { $0.url?.path.hasPrefix("/star/") == true })
+
+        _ = try await source.fetchLeadMovies(starName: "森沢かな（飯岡かなこ）", page: 2)
+        XCTAssertEqual(RoutedURLProtocol.requests().last?.url?.path, "/search/森沢かな/2")
+    }
+
+    func testFetchLeadMoviesWithEmptyNameDoesNotRequest() async throws {
+        RoutedURLProtocol.install { _ in .init(status: 500) }
+        let items = try await makeSource().fetchLeadMovies(starName: "（别名）")
+        XCTAssertTrue(items.isEmpty)
+        XCTAssertTrue(RoutedURLProtocol.requests().isEmpty)
     }
 
     // MARK: - 修复回归：图片防盗链请求头

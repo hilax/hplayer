@@ -434,7 +434,7 @@ struct MagnetSearchView: View {
                 }
                 if selectedCategory == .hot {
                     // 说明口径：站点没有榜单页，这里是按女优人气排的近期新作。
-                    Text("站点没有月榜：这里取人气靠前的女优，合并她们近 \(JavBusSource.hotWindowDays) 天已发行的新作（作品太少时自动放宽），按女优人气排序。")
+                    Text("站点没有月榜：这里取人气靠前的女优，合并她们近 \(JavBusSource.hotWindowDays) 天已发行的主演新作（不含合集，作品太少时自动放宽），按女优人气排序。")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                 }
@@ -967,9 +967,27 @@ private struct MagnetMovieFeed: View {
 
 // MARK: - 女优作品列表页 (StarMoviesView)
 
+/// 女优页的作品范围。
+private enum StarWorksMode: String, CaseIterable, Identifiable {
+    /// 她本人主演的片子（按名字搜索）。
+    case lead
+    /// 女优页列出的全部参演作品，包含她出镜的合集、BEST、多人作品。
+    case all
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .lead: return "主演作品"
+        case .all: return "全部参演"
+        }
+    }
+}
+
 struct StarMoviesView: View {
     let star: MagnetStarItem
 
+    @State private var mode: StarWorksMode = .lead
     @State private var movies: [MagnetSearchItem] = []
     @State private var detailedStar: MagnetStarItem?
     @State private var isLoading = true
@@ -981,9 +999,17 @@ struct StarMoviesView: View {
             VStack(spacing: 16) {
                 starHeader
 
+                Picker("作品范围", selection: $mode) {
+                    ForEach(StarWorksMode.allCases) { option in
+                        Text(option.title).tag(option)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, Theme.contentInset)
+
                 MagnetMovieFeed(
-                    title: "参演作品",
-                    emptyText: "暂无参演作品",
+                    title: mode == .lead ? "主演作品" : "全部参演（含合集）",
+                    emptyText: mode == .lead ? "没有找到她主演的作品，可以切换到「全部参演」查看" : "暂无参演作品",
                     movies: movies,
                     isLoading: isLoading,
                     errorText: errorText,
@@ -999,10 +1025,15 @@ struct StarMoviesView: View {
         .navigationTitle(star.name)
         .navigationBarTitleDisplayMode(.inline)
         .hidesTabBar()
+        .onChange(of: mode) { _ in
+            Task { await loadFirstPage() }
+        }
         .task {
             // 从下一层返回时页面会再次出现，已经加载好的内容不重新加载。
             guard movies.isEmpty, errorText == nil else { return }
+            async let header: Void = loadHeader()
             await loadFirstPage()
+            await header
         }
     }
 
@@ -1031,20 +1062,33 @@ struct StarMoviesView: View {
         .padding(.horizontal, Theme.contentInset)
     }
 
+    /// 头部资料（身高、罩杯等）来自女优页；取不到不影响作品列表。
+    @MainActor
+    private func loadHeader() async {
+        guard detailedStar == nil else { return }
+        if let result = try? await JavBusSource.shared.fetchStarDetail(starPath: star.detailPath, page: 1) {
+            detailedStar = result.star
+        }
+    }
+
     @MainActor
     private func loadFirstPage() async {
+        let requested = mode
         isLoading = true
         errorText = nil
         paging = PagingState()
+        movies = []
         do {
-            let (info, list) = try await JavBusSource.shared.fetchStarDetail(starPath: star.detailPath, page: 1)
-            detailedStar = info
+            let list = try await fetch(page: 1, mode: requested)
+            // 加载期间切换了范围：结果作废，由新范围的加载来写。
+            guard requested == mode else { return }
             movies = mergeUnique([], with: list).merged
             paging.hasMore = !list.isEmpty
             isLoading = false
         } catch {
             // 页面被关闭时任务会被取消，不用再更新界面。
             if error is CancellationError { return }
+            guard requested == mode else { return }
             errorText = error.localizedDescription
             isLoading = false
         }
@@ -1053,20 +1097,35 @@ struct StarMoviesView: View {
     @MainActor
     private func loadMore() async {
         guard !isLoading, paging.hasMore, !paging.isLoadingMore else { return }
+        let requested = mode
         paging.isLoadingMore = true
         paging.loadMoreFailed = false
         let nextPage = paging.page + 1
         do {
-            let (_, list) = try await JavBusSource.shared.fetchStarDetail(starPath: star.detailPath, page: nextPage)
+            let list = try await fetch(page: nextPage, mode: requested)
+            guard requested == mode else { return }
             let result = mergeUnique(movies, with: list)
             movies = result.merged
             paging.hasMore = result.added > 0
             paging.page = nextPage
             paging.isLoadingMore = false
         } catch {
+            if error is CancellationError { paging.isLoadingMore = false; return }
+            guard requested == mode else { return }
             paging.isLoadingMore = false
-            if error is CancellationError { return }
             paging.loadMoreFailed = true
+        }
+    }
+
+    @MainActor
+    private func fetch(page: Int, mode: StarWorksMode) async throws -> [MagnetSearchItem] {
+        switch mode {
+        case .lead:
+            return try await JavBusSource.shared.fetchLeadMovies(starName: star.name, page: page)
+        case .all:
+            let (info, list) = try await JavBusSource.shared.fetchStarDetail(starPath: star.detailPath, page: page)
+            if detailedStar == nil, let info { detailedStar = info }
+            return list
         }
     }
 }
