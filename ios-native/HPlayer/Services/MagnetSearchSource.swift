@@ -1,18 +1,75 @@
 import Foundation
 
-/// 分类浏览类型。
+/// 分类浏览类型：最新、专题（按片商）、女优、最热。
 enum MagnetCategory: String, CaseIterable, Identifiable, Sendable {
     case latest
-    case uncensored
+    case topics
     case actresses
+    case hot
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .latest: return "最新发布"
-        case .uncensored: return "无码最新"
-        case .actresses: return "女优演员"
+        case .latest: return "最新"
+        case .topics: return "专题"
+        case .actresses: return "女优"
+        case .hot: return "最热"
+        }
+    }
+}
+
+/// 专题：JavBus 上的五家主流片商。`javbusPath` 是站点的片商页地址（用真实页面核对过，
+/// 比用番号前缀去搜更完整：同一片商的各个系列都在里面）。
+enum MagnetStudio: String, CaseIterable, Identifiable, Sendable {
+    case s1
+    case moodyz
+    case ideaPocket
+    case sod
+    case prestige
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .s1: return "S1"
+        case .moodyz: return "MOODYZ"
+        case .ideaPocket: return "IdeaPocket"
+        case .sod: return "SOD"
+        case .prestige: return "PRESTIGE"
+        }
+    }
+
+    /// 卡片左边方块里的字样。
+    var monogram: String {
+        switch self {
+        case .s1: return "S1"
+        case .moodyz: return "M"
+        case .ideaPocket: return "IP"
+        case .sod: return "SOD"
+        case .prestige: return "P"
+        }
+    }
+
+    /// 站点里的片商页路径（不带域名和页码）。
+    var javbusPath: String {
+        switch self {
+        case .s1: return "studio/7q"
+        case .moodyz: return "studio/4v"
+        case .ideaPocket: return "studio/1"
+        case .sod: return "studio/ca"
+        case .prestige: return "studio/75"
+        }
+    }
+
+    /// 卡片上的副标题：这家常见的番号前缀，帮助认人。
+    var codeHint: String {
+        switch self {
+        case .s1: return "SONE · SSIS · SNOS"
+        case .moodyz: return "MIDA · MIMK · MIDV"
+        case .ideaPocket: return "IPZZ · IPX · IPBZ"
+        case .sod: return "STARS · START · SDAB"
+        case .prestige: return "ABF · ABW · ABP"
         }
     }
 }
@@ -105,6 +162,8 @@ protocol MagnetSearchSource: Sendable {
     func search(keyword: String, page: Int) async throws -> [MagnetSearchItem]
     func fetchMagnets(for item: MagnetSearchItem) async throws -> [MagnetTorrentItem]
     func fetchCategory(_ category: MagnetCategory, page: Int) async throws -> [MagnetSearchItem]
+    func fetchStudio(_ studio: MagnetStudio, page: Int) async throws -> [MagnetSearchItem]
+    func fetchHot() async throws -> [MagnetSearchItem]
     func fetchActresses(page: Int) async throws -> [MagnetStarItem]
     func searchActresses(name: String) async throws -> [MagnetStarItem]
     func fetchStarDetail(starPath: String, page: Int) async throws -> (star: MagnetStarItem?, movies: [MagnetSearchItem])

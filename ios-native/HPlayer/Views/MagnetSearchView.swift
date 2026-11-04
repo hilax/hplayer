@@ -70,11 +70,10 @@ private struct MagnetArtwork: View {
     }
 }
 
-/// 磁力在线搜索与分类聚合页面（支持按番号/女优搜索、最新发布、无码专区与女优专属作品库）。
+/// 磁力聚合页面：按番号/女优搜索，按「最新 / 专题 / 女优 / 最热」分类浏览。
+/// 影片、女优、片商都是普通的逐层跳转（左上角返回上一层）；在磁力详情页点播放，
+/// 播放页盖在详情页上面，关掉就回到详情页。
 struct MagnetSearchView: View {
-    var onSelectMagnet: (String) -> Void = { _ in }
-
-    @Environment(\.dismiss) private var dismiss
     // 镜像域名变化时（在设置里保存后）自动重新加载。
     @AppStorage(JavBusSource.hostDefaultsKey) private var customHost = ""
 
@@ -101,12 +100,6 @@ struct MagnetSearchView: View {
     @State private var matchedStars: [MagnetStarItem] = []
     @State private var searchPaging = PagingState()
     @State private var searchTask: Task<Void, Never>?
-
-    // 详情选择；pending* 用来等上一个 sheet 完全关闭后再弹下一个。
-    @State private var selectedMovie: MagnetSearchItem?
-    @State private var selectedStar: MagnetStarItem?
-    @State private var pendingStar: MagnetStarItem?
-    @State private var pendingMovie: MagnetSearchItem?
 
     private var trimmedKeyword: String {
         keyword.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -148,23 +141,6 @@ struct MagnetSearchView: View {
                         .foregroundStyle(Theme.accent)
                 }
             }
-        }
-        .sheet(item: $selectedMovie, onDismiss: presentPendingStar) { item in
-            MagnetDetailSheet(item: item, onSelectStar: { star in
-                pendingStar = star
-                selectedMovie = nil
-            }) { chosenMagnet in
-                pendingStar = nil
-                selectedMovie = nil
-                dismiss()
-                onSelectMagnet(chosenMagnet)
-            }
-        }
-        .sheet(item: $selectedStar, onDismiss: presentPendingMovie) { star in
-            StarMoviesView(star: star, onSelectMovie: { movie in
-                pendingMovie = movie
-                selectedStar = nil
-            })
         }
         .sheet(isPresented: $showingSettingsSheet) {
             JavBusHostSettingsSheet()
@@ -265,7 +241,7 @@ struct MagnetSearchView: View {
                     selectedCategory = cat
                 } label: {
                     HStack(spacing: 5) {
-                        Image(systemName: cat == .actresses ? AppIcon.people.name : AppIcon.sparkles.name)
+                        Image(systemName: icon(for: cat).name)
                             .font(.system(size: 12))
                         Text(cat.title)
                             .font(.subheadline.weight(isSelected ? .bold : .medium))
@@ -278,6 +254,15 @@ struct MagnetSearchView: View {
                 .buttonStyle(.plain)
             }
             Spacer()
+        }
+    }
+
+    private func icon(for category: MagnetCategory) -> AppIcon {
+        switch category {
+        case .latest: return .sparkles
+        case .topics: return .topics
+        case .actresses: return .people
+        case .hot: return .hot
         }
     }
 
@@ -319,10 +304,12 @@ struct MagnetSearchView: View {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 12) {
                             ForEach(matchedStars) { star in
-                                starBadge(star: star)
-                                    .onTapGesture {
-                                        selectedStar = star
-                                    }
+                                NavigationLink {
+                                    StarMoviesView(star: star)
+                                } label: {
+                                    starBadge(star: star)
+                                }
+                                .buttonStyle(.pressable(scale: 0.97))
                             }
                         }
                     }
@@ -343,10 +330,7 @@ struct MagnetSearchView: View {
 
                     LazyVStack(spacing: 12) {
                         ForEach(searchMovies) { movie in
-                            movieCard(item: movie)
-                                .onTapGesture {
-                                    selectedMovie = movie
-                                }
+                            movieLink(movie)
                                 .onAppear {
                                     if movie.id == searchMovies.last?.id {
                                         loadMoreSearch()
@@ -371,74 +355,155 @@ struct MagnetSearchView: View {
 
     @ViewBuilder
     private var categoryBrowseContent: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            if selectedCategory == .actresses {
-                Text("热门女优演员")
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.secondary)
+        switch selectedCategory {
+        case .topics:
+            topicsContent
+        case .actresses:
+            actressesContent
+        case .latest, .hot:
+            movieCategoryContent
+        }
+    }
 
-                if categoryStars.isEmpty {
-                    emptyCategoryView
-                } else {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 100), spacing: 14)], spacing: 16) {
-                        ForEach(categoryStars) { star in
-                            starGridCard(star: star)
-                                .onTapGesture {
-                                    selectedStar = star
-                                }
-                                .onAppear {
-                                    if star.id == categoryStars.last?.id {
-                                        loadMoreCategory()
-                                    }
-                                }
-                        }
+    /// 专题：五家片商，点进去看这家的作品。
+    private var topicsContent: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("按片商浏览")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.secondary)
+
+            VStack(spacing: 12) {
+                ForEach(MagnetStudio.allCases) { studio in
+                    NavigationLink {
+                        StudioMoviesView(studio: studio)
+                    } label: {
+                        studioCard(studio)
                     }
-
-                    PagingFooter(
-                        isLoading: categoryPaging.isLoadingMore,
-                        failed: categoryPaging.loadMoreFailed,
-                        retry: loadMoreCategory
-                    )
-                }
-            } else {
-                HStack {
-                    Text(selectedCategory == .latest ? "最新发布影片" : "无码最新影片")
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Text("实时更新")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                }
-
-                if categoryMovies.isEmpty {
-                    emptyCategoryView
-                } else {
-                    LazyVStack(spacing: 12) {
-                        ForEach(categoryMovies) { movie in
-                            movieCard(item: movie)
-                                .onTapGesture {
-                                    selectedMovie = movie
-                                }
-                                .onAppear {
-                                    if movie.id == categoryMovies.last?.id {
-                                        loadMoreCategory()
-                                    }
-                                }
-                        }
-                    }
-
-                    PagingFooter(
-                        isLoading: categoryPaging.isLoadingMore,
-                        failed: categoryPaging.loadMoreFailed,
-                        retry: loadMoreCategory
-                    )
+                    .buttonStyle(.pressable(scale: 0.985))
                 }
             }
         }
     }
 
+    private var actressesContent: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("热门女优演员")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.secondary)
+
+            if categoryStars.isEmpty {
+                emptyCategoryView
+            } else {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 100), spacing: 14)], spacing: 16) {
+                    ForEach(categoryStars) { star in
+                        NavigationLink {
+                            StarMoviesView(star: star)
+                        } label: {
+                            starGridCard(star: star)
+                        }
+                        .buttonStyle(.pressable(scale: 0.97))
+                        .onAppear {
+                            if star.id == categoryStars.last?.id {
+                                loadMoreCategory()
+                            }
+                        }
+                    }
+                }
+
+                PagingFooter(
+                    isLoading: categoryPaging.isLoadingMore,
+                    failed: categoryPaging.loadMoreFailed,
+                    retry: loadMoreCategory
+                )
+            }
+        }
+    }
+
+    /// 最新（分页加载）和最热（一次算好、不分页）共用的影片列表。
+    private var movieCategoryContent: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text(selectedCategory == .hot ? "最热影片" : "最新发布影片")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text(selectedCategory == .hot ? "近期新作" : "实时更新")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+                if selectedCategory == .hot {
+                    // 说明口径：站点没有榜单页，这里是按女优人气排的近期新作。
+                    Text("站点没有月榜：这里取人气靠前的女优，合并她们近 \(JavBusSource.hotWindowDays) 天已发行的新作（作品太少时自动放宽），按女优人气排序。")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+
+            if categoryMovies.isEmpty {
+                emptyCategoryView
+            } else {
+                LazyVStack(spacing: 12) {
+                    ForEach(categoryMovies) { movie in
+                        movieLink(movie)
+                            .onAppear {
+                                if movie.id == categoryMovies.last?.id {
+                                    loadMoreCategory()
+                                }
+                            }
+                    }
+                }
+
+                PagingFooter(
+                    isLoading: categoryPaging.isLoadingMore,
+                    failed: categoryPaging.loadMoreFailed,
+                    retry: loadMoreCategory
+                )
+            }
+        }
+    }
+
+    // MARK: - 片商卡片
+
+    private func studioCard(_ studio: MagnetStudio) -> some View {
+        HStack(spacing: 14) {
+            Text(studio.monogram)
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(Theme.accent)
+                .frame(width: 52, height: 52)
+                .background(Theme.accent.opacity(0.14), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(studio.title)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                Text(studio.codeHint)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 0)
+
+            Image(systemName: AppIcon.forward.name)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .surfaceCard(cornerRadius: 16)
+    }
+
     // MARK: - 影片卡片组件
+
+    /// 点击进入这部片的磁力详情页。
+    private func movieLink(_ movie: MagnetSearchItem) -> some View {
+        NavigationLink {
+            MagnetDetailView(item: movie)
+        } label: {
+            movieCard(item: movie)
+        }
+        .buttonStyle(.pressable(scale: 0.985))
+    }
 
     private func movieCard(item: MagnetSearchItem) -> some View {
         HStack(alignment: .top, spacing: 14) {
@@ -605,42 +670,39 @@ struct MagnetSearchView: View {
         .frame(maxWidth: .infinity, minHeight: 200)
     }
 
-    // MARK: - sheet 串联
-
-    private func presentPendingStar() {
-        guard let star = pendingStar else { return }
-        pendingStar = nil
-        selectedStar = star
-    }
-
-    private func presentPendingMovie() {
-        guard let movie = pendingMovie else { return }
-        pendingMovie = nil
-        selectedMovie = movie
-    }
-
     // MARK: - 数据加载与网络交互
 
     /// 重新加载当前分类的第一页。新请求会取消还在进行的旧请求，旧请求的结果不会再写回界面。
     private func loadCurrentCategory() {
         categoryTask?.cancel()
         categoryPaging = PagingState()
-        isLoadingCategory = true
         categoryError = nil
 
         let category = selectedCategory
+        // 专题是固定的片商入口，没有要加载的内容。
+        guard category != .topics else {
+            categoryPaging.hasMore = false
+            isLoadingCategory = false
+            return
+        }
+
+        isLoadingCategory = true
         categoryTask = Task { @MainActor in
             do {
-                if category == .actresses {
+                switch category {
+                case .actresses:
                     let stars = try await JavBusSource.shared.fetchActresses(page: 1)
                     guard !Task.isCancelled else { return }
                     categoryStars = mergeUnique([], with: stars).merged
                     categoryPaging.hasMore = !stars.isEmpty
-                } else {
+                case .latest, .hot:
                     let movies = try await JavBusSource.shared.fetchCategory(category, page: 1)
                     guard !Task.isCancelled else { return }
                     categoryMovies = mergeUnique([], with: movies).merged
-                    categoryPaging.hasMore = !movies.isEmpty
+                    // 最热是一次算好的榜单，没有下一页。
+                    categoryPaging.hasMore = category == .latest && !movies.isEmpty
+                case .topics:
+                    break
                 }
                 isLoadingCategory = false
             } catch {
@@ -660,18 +722,21 @@ struct MagnetSearchView: View {
         let nextPage = categoryPaging.page + 1
         categoryTask = Task { @MainActor in
             do {
-                if category == .actresses {
+                switch category {
+                case .actresses:
                     let stars = try await JavBusSource.shared.fetchActresses(page: nextPage)
                     guard !Task.isCancelled else { return }
                     let result = mergeUnique(categoryStars, with: stars)
                     categoryStars = result.merged
                     categoryPaging.hasMore = result.added > 0
-                } else {
+                case .latest:
                     let movies = try await JavBusSource.shared.fetchCategory(category, page: nextPage)
                     guard !Task.isCancelled else { return }
                     let result = mergeUnique(categoryMovies, with: movies)
                     categoryMovies = result.merged
                     categoryPaging.hasMore = result.added > 0
+                case .topics, .hot:
+                    categoryPaging.hasMore = false
                 }
                 categoryPaging.page = nextPage
                 categoryPaging.isLoadingMore = false
@@ -772,13 +837,139 @@ struct MagnetSearchView: View {
     }
 }
 
+// MARK: - 影片行与分页列表（女优页、片商页共用）
+
+/// 紧凑的影片行：封面、番号、标题、发行日期。点击进入这部片的磁力详情页。
+private struct MagnetMovieRow: View {
+    let movie: MagnetSearchItem
+
+    var body: some View {
+        NavigationLink {
+            MagnetDetailView(item: movie)
+        } label: {
+            HStack(alignment: .top, spacing: 14) {
+                MagnetArtwork(url: movie.coverURL, maxPixel: 312, placeholder: AppIcon.poster.name)
+                    .frame(width: 76, height: 104)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+                VStack(alignment: .leading, spacing: 6) {
+                    if !movie.code.isEmpty {
+                        Text(movie.code)
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(Theme.accent)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 2)
+                            .background(Theme.accent.opacity(0.14), in: Capsule())
+                    }
+
+                    Text(movie.title)
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+
+                    if let date = movie.releaseDate {
+                        HStack(spacing: 4) {
+                            Image(systemName: AppIcon.clock.name)
+                                .font(.system(size: 10))
+                            Text(date)
+                                .font(.caption2)
+                        }
+                        .foregroundStyle(.secondary)
+                    }
+
+                    Spacer(minLength: 2)
+
+                    HStack {
+                        Spacer()
+                        Label("查看磁力", systemImage: AppIcon.download.name)
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(Theme.accent)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(10)
+            .surfaceCard(cornerRadius: 14)
+        }
+        .buttonStyle(.pressable(scale: 0.985))
+    }
+}
+
+/// 一页页加载的影片列表：加载中、失败重试、空列表、列表加底部翻页提示。
+private struct MagnetMovieFeed: View {
+    let title: String
+    let emptyText: String
+    let movies: [MagnetSearchItem]
+    let isLoading: Bool
+    let errorText: String?
+    let paging: PagingState
+    let retry: () -> Void
+    let loadMore: () -> Void
+
+    var body: some View {
+        if isLoading {
+            VStack(spacing: 12) {
+                ProgressView().tint(Theme.accent)
+                Text("正在加载作品列表...")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, minHeight: 200)
+        } else if let errorText {
+            VStack(spacing: 12) {
+                Image(systemName: AppIcon.alert.name)
+                    .font(.system(size: 32))
+                    .foregroundStyle(Color.orange)
+                Text(errorText)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+                Button("重试", action: retry)
+                    .buttonStyle(.bordered)
+                    .tint(Theme.accent)
+            }
+            .frame(maxWidth: .infinity, minHeight: 200)
+        } else if movies.isEmpty {
+            Text(emptyText)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, minHeight: 180)
+        } else {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("\(title) (\(movies.count)\(paging.hasMore ? "+" : ""))")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, Theme.contentInset)
+
+                LazyVStack(spacing: 12) {
+                    ForEach(movies) { movie in
+                        MagnetMovieRow(movie: movie)
+                            .onAppear {
+                                if movie.id == movies.last?.id {
+                                    loadMore()
+                                }
+                            }
+                    }
+                }
+                .padding(.horizontal, Theme.contentInset)
+
+                PagingFooter(
+                    isLoading: paging.isLoadingMore,
+                    failed: paging.loadMoreFailed,
+                    retry: loadMore
+                )
+            }
+        }
+    }
+}
+
 // MARK: - 女优作品列表页 (StarMoviesView)
 
 struct StarMoviesView: View {
     let star: MagnetStarItem
-    var onSelectMovie: (MagnetSearchItem) -> Void
 
-    @Environment(\.dismiss) private var dismiss
     @State private var movies: [MagnetSearchItem] = []
     @State private var detailedStar: MagnetStarItem?
     @State private var isLoading = true
@@ -786,84 +977,31 @@ struct StarMoviesView: View {
     @State private var paging = PagingState()
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(spacing: 16) {
-                    starHeader
+        ScrollView {
+            VStack(spacing: 16) {
+                starHeader
 
-                    if isLoading {
-                        VStack(spacing: 12) {
-                            ProgressView().tint(Theme.accent)
-                            Text("正在加载作品列表...")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
-                        .frame(maxWidth: .infinity, minHeight: 200)
-                    } else if let error = errorText {
-                        VStack(spacing: 12) {
-                            Image(systemName: AppIcon.alert.name)
-                                .font(.system(size: 32))
-                                .foregroundStyle(Color.orange)
-                            Text(error)
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                                .multilineTextAlignment(.center)
-                                .padding(.horizontal, 24)
-                            Button("重试") {
-                                Task { await loadFirstPage() }
-                            }
-                            .buttonStyle(.bordered)
-                            .tint(Theme.accent)
-                        }
-                        .frame(maxWidth: .infinity, minHeight: 200)
-                    } else if movies.isEmpty {
-                        Text("暂无参演作品")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, minHeight: 180)
-                    } else {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("参演作品 (\(movies.count)\(paging.hasMore ? "+" : ""))")
-                                .font(.subheadline.weight(.medium))
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal, Theme.contentInset)
-
-                            LazyVStack(spacing: 12) {
-                                ForEach(movies) { movie in
-                                    movieRow(movie: movie)
-                                        .onTapGesture {
-                                            onSelectMovie(movie)
-                                        }
-                                        .onAppear {
-                                            if movie.id == movies.last?.id {
-                                                Task { await loadMore() }
-                                            }
-                                        }
-                                }
-                            }
-                            .padding(.horizontal, Theme.contentInset)
-
-                            PagingFooter(
-                                isLoading: paging.isLoadingMore,
-                                failed: paging.loadMoreFailed,
-                                retry: { Task { await loadMore() } }
-                            )
-                        }
-                    }
-                }
-                .padding(.top, 16)
-                .padding(.bottom, 40)
+                MagnetMovieFeed(
+                    title: "参演作品",
+                    emptyText: "暂无参演作品",
+                    movies: movies,
+                    isLoading: isLoading,
+                    errorText: errorText,
+                    paging: paging,
+                    retry: { Task { await loadFirstPage() } },
+                    loadMore: { Task { await loadMore() } }
+                )
             }
-            .background(Theme.pageBackground.ignoresSafeArea())
-            .navigationTitle(star.name)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("关闭") { dismiss() }
-                }
-            }
+            .padding(.top, 16)
+            .padding(.bottom, 40)
         }
+        .background(Theme.pageBackground.ignoresSafeArea())
+        .navigationTitle(star.name)
+        .navigationBarTitleDisplayMode(.inline)
+        .hidesTabBar()
         .task {
+            // 从下一层返回时页面会再次出现，已经加载好的内容不重新加载。
+            guard movies.isEmpty, errorText == nil else { return }
             await loadFirstPage()
         }
     }
@@ -891,52 +1029,6 @@ struct StarMoviesView: View {
         .padding(.vertical, 16)
         .surfaceCard(cornerRadius: 18)
         .padding(.horizontal, Theme.contentInset)
-    }
-
-    private func movieRow(movie: MagnetSearchItem) -> some View {
-        HStack(alignment: .top, spacing: 14) {
-            MagnetArtwork(url: movie.coverURL, maxPixel: 312, placeholder: AppIcon.poster.name)
-                .frame(width: 76, height: 104)
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-
-            VStack(alignment: .leading, spacing: 6) {
-                if !movie.code.isEmpty {
-                    Text(movie.code)
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(Theme.accent)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 2)
-                        .background(Theme.accent.opacity(0.14), in: Capsule())
-                }
-
-                Text(movie.title)
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(2)
-
-                if let date = movie.releaseDate {
-                    HStack(spacing: 4) {
-                        Image(systemName: AppIcon.clock.name)
-                            .font(.system(size: 10))
-                        Text(date)
-                            .font(.caption2)
-                    }
-                    .foregroundStyle(.secondary)
-                }
-
-                Spacer(minLength: 2)
-
-                HStack {
-                    Spacer()
-                    Label("查看磁力", systemImage: AppIcon.download.name)
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(Theme.accent)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(10)
-        .surfaceCard(cornerRadius: 14)
     }
 
     @MainActor
@@ -979,78 +1071,177 @@ struct StarMoviesView: View {
     }
 }
 
-// MARK: - 磁力详情 Sheet (带女优下钻)
+// MARK: - 片商作品列表页 (StudioMoviesView)
 
-struct MagnetDetailSheet: View {
+struct StudioMoviesView: View {
+    let studio: MagnetStudio
+
+    @State private var movies: [MagnetSearchItem] = []
+    @State private var isLoading = true
+    @State private var errorText: String?
+    @State private var paging = PagingState()
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 16) {
+                studioHeader
+
+                MagnetMovieFeed(
+                    title: "片商作品",
+                    emptyText: "暂无作品",
+                    movies: movies,
+                    isLoading: isLoading,
+                    errorText: errorText,
+                    paging: paging,
+                    retry: { Task { await loadFirstPage() } },
+                    loadMore: { Task { await loadMore() } }
+                )
+            }
+            .padding(.top, 16)
+            .padding(.bottom, 40)
+        }
+        .background(Theme.pageBackground.ignoresSafeArea())
+        .navigationTitle(studio.title)
+        .navigationBarTitleDisplayMode(.inline)
+        .hidesTabBar()
+        .task {
+            guard movies.isEmpty, errorText == nil else { return }
+            await loadFirstPage()
+        }
+    }
+
+    private var studioHeader: some View {
+        VStack(spacing: 10) {
+            Text(studio.monogram)
+                .font(.system(size: 22, weight: .bold))
+                .foregroundStyle(Theme.accent)
+                .frame(width: 72, height: 72)
+                .background(Theme.accent.opacity(0.14), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+
+            Text(studio.title)
+                .font(.title3.weight(.bold))
+                .foregroundStyle(.primary)
+
+            Text(studio.codeHint)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 16)
+        .surfaceCard(cornerRadius: 18)
+        .padding(.horizontal, Theme.contentInset)
+    }
+
+    @MainActor
+    private func loadFirstPage() async {
+        isLoading = true
+        errorText = nil
+        paging = PagingState()
+        do {
+            let list = try await JavBusSource.shared.fetchStudio(studio, page: 1)
+            movies = mergeUnique([], with: list).merged
+            paging.hasMore = !list.isEmpty
+            isLoading = false
+        } catch {
+            if error is CancellationError { return }
+            errorText = error.localizedDescription
+            isLoading = false
+        }
+    }
+
+    @MainActor
+    private func loadMore() async {
+        guard !isLoading, paging.hasMore, !paging.isLoadingMore else { return }
+        paging.isLoadingMore = true
+        paging.loadMoreFailed = false
+        let nextPage = paging.page + 1
+        do {
+            let list = try await JavBusSource.shared.fetchStudio(studio, page: nextPage)
+            let result = mergeUnique(movies, with: list)
+            movies = result.merged
+            paging.hasMore = result.added > 0
+            paging.page = nextPage
+            paging.isLoadingMore = false
+        } catch {
+            paging.isLoadingMore = false
+            if error is CancellationError { return }
+            paging.loadMoreFailed = true
+        }
+    }
+}
+
+// MARK: - 磁力详情页 (MagnetDetailView，带女优下钻)
+
+struct MagnetDetailView: View {
     let item: MagnetSearchItem
-    var onSelectStar: (MagnetStarItem) -> Void = { _ in }
-    var onSelectMagnet: (String) -> Void
 
-    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var appState: AppState
     @AppStorage("hplayer.magnet.cloudRelay") private var cloudRelay = true
     @State private var magnets: [MagnetTorrentItem] = []
     @State private var stars: [MagnetStarItem] = []
     @State private var isLoading = true
     @State private var errorText: String?
     @State private var copiedMagnetID: String?
+    /// 点了播放：播放页盖在详情页上面，关掉后仍停留在这一页。
+    @State private var playLaunch: MagnetLaunch?
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                headerCard
+        VStack(spacing: 0) {
+            headerCard
 
-                Divider()
+            Divider()
 
-                if isLoading {
-                    VStack(spacing: 12) {
-                        ProgressView()
-                            .tint(Theme.accent)
-                        Text("正在拉取磁力链接与影片详情...")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if let error = errorText {
-                    VStack(spacing: 12) {
-                        Image(systemName: AppIcon.alert.name)
-                            .font(.system(size: 32))
-                            .foregroundStyle(Color.orange)
-                        Text(error)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 24)
-                        Button("重新获取") {
-                            Task { await fetchDetails() }
-                        }
-                        .buttonStyle(.bordered)
+            if isLoading {
+                VStack(spacing: 12) {
+                    ProgressView()
                         .tint(Theme.accent)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if magnets.isEmpty {
-                    VStack(spacing: 10) {
-                        Image(systemName: AppIcon.archive.name)
-                            .font(.system(size: 32))
-                            .foregroundStyle(.secondary)
-                        Text("该影片暂无可用的磁力链接")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    magnetListView
+                    Text("正在拉取磁力链接与影片详情...")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
-            }
-            .background(Theme.pageBackground.ignoresSafeArea())
-            .navigationTitle("资源与磁力详情")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("关闭") { dismiss() }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let error = errorText {
+                VStack(spacing: 12) {
+                    Image(systemName: AppIcon.alert.name)
+                        .font(.system(size: 32))
+                        .foregroundStyle(Color.orange)
+                    Text(error)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 24)
+                    Button("重新获取") {
+                        Task { await fetchDetails() }
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(Theme.accent)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if magnets.isEmpty {
+                VStack(spacing: 10) {
+                    Image(systemName: AppIcon.archive.name)
+                        .font(.system(size: 32))
+                        .foregroundStyle(.secondary)
+                    Text("该影片暂无可用的磁力链接")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                magnetListView
             }
         }
+        .background(Theme.pageBackground.ignoresSafeArea())
+        .navigationTitle("资源与磁力详情")
+        .navigationBarTitleDisplayMode(.inline)
+        .hidesTabBar()
+        .sheet(item: $playLaunch) { launch in
+            NavigationStack { MagnetPlayerView(initialMagnet: launch.value, closesAfterPlayback: true) }
+                .environmentObject(appState)
+        }
         .task {
+            // 从女优页返回时页面会再次出现，已经取到的磁力不重新拉取。
+            guard magnets.isEmpty, stars.isEmpty, errorText == nil else { return }
             await fetchDetails()
         }
     }
@@ -1088,8 +1279,8 @@ struct MagnetDetailSheet: View {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 6) {
                             ForEach(stars) { star in
-                                Button {
-                                    onSelectStar(star)
+                                NavigationLink {
+                                    StarMoviesView(star: star)
                                 } label: {
                                     HStack(spacing: 4) {
                                         Image(systemName: AppIcon.mine.name)
@@ -1165,7 +1356,7 @@ struct MagnetDetailSheet: View {
 
             HStack(spacing: 10) {
                 Button {
-                    onSelectMagnet(torrent.magnetURL)
+                    playLaunch = MagnetLaunch(value: torrent.magnetURL)
                 } label: {
                     HStack(spacing: 5) {
                         Image(systemName: AppIcon.play.name)

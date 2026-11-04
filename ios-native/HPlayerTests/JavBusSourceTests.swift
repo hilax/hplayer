@@ -394,8 +394,8 @@ final class JavBusSourceTests: XCTestCase {
         _ = try await source.fetchCategory(.latest, page: 2)
         XCTAssertEqual(RoutedURLProtocol.requests().last?.url?.path, "/page/2")
 
-        _ = try await source.fetchCategory(.uncensored, page: 3)
-        XCTAssertEqual(RoutedURLProtocol.requests().last?.url?.path, "/uncensored/page/3")
+        _ = try await source.fetchStudio(.sod, page: 3)
+        XCTAssertEqual(RoutedURLProtocol.requests().last?.url?.path, "/studio/ca/3")
 
         _ = try await source.fetchActresses(page: 2)
         XCTAssertEqual(RoutedURLProtocol.requests().last?.url?.path, "/actresses/2")
@@ -444,6 +444,151 @@ final class JavBusSourceTests: XCTestCase {
         let (_, magnets) = try await makeSource().fetchDetailInfo(for: item)
         XCTAssertEqual(magnets.count, 1)
         XCTAssertEqual(magnets.first?.size, "1.00GB")
+    }
+
+    // MARK: - 分类：最新 / 专题 / 女优 / 最热
+
+    func testCategoriesAreLatestTopicsActressesHot() {
+        XCTAssertEqual(MagnetCategory.allCases.map(\.title), ["最新", "专题", "女优", "最热"])
+    }
+
+    func testTopicsAreTheFiveStudiosWithSitePaths() {
+        XCTAssertEqual(MagnetStudio.allCases.map(\.title), ["S1", "MOODYZ", "IdeaPocket", "SOD", "PRESTIGE"])
+        XCTAssertEqual(MagnetStudio.allCases.map(\.javbusPath),
+                       ["studio/7q", "studio/4v", "studio/1", "studio/ca", "studio/75"])
+        XCTAssertTrue(MagnetStudio.allCases.allSatisfy { !$0.monogram.isEmpty && !$0.codeHint.isEmpty })
+    }
+
+    func testFetchStudioUsesStudioPagePaths() async throws {
+        RoutedURLProtocol.install { _ in .init(status: 200, body: Data(Self.movieListHTML.utf8)) }
+        let source = makeSource()
+
+        let items = try await source.fetchStudio(.s1)
+        XCTAssertEqual(items.count, 1)
+        XCTAssertEqual(RoutedURLProtocol.requests().last?.url?.path, "/studio/7q")
+
+        _ = try await source.fetchStudio(.prestige, page: 2)
+        XCTAssertEqual(RoutedURLProtocol.requests().last?.url?.path, "/studio/75/2")
+    }
+
+    func testFetchStudioBeyondLastPageIsEmpty() async throws {
+        RoutedURLProtocol.install { _ in .init(status: 404) }
+        let items = try await makeSource().fetchStudio(.moodyz, page: 99)
+        XCTAssertTrue(items.isEmpty)
+    }
+
+    func testHotCategoryHasNoSecondPage() async throws {
+        RoutedURLProtocol.install { _ in .init(status: 500) }
+        let items = try await makeSource().fetchCategory(.hot, page: 2)
+        XCTAssertTrue(items.isEmpty)
+        XCTAssertTrue(RoutedURLProtocol.requests().isEmpty)
+    }
+
+    // MARK: - 最热
+
+    private static let hotNow: Date = {
+        var components = DateComponents()
+        components.year = 2026; components.month = 11; components.day = 4; components.hour = 12
+        return Calendar(identifier: .gregorian).date(from: components)!
+    }()
+
+    private func hotItem(_ code: String, _ date: String?) -> MagnetSearchItem {
+        MagnetSearchItem(code: code, title: code, coverURL: nil, releaseDate: date, detailPath: "/\(code)")
+    }
+
+    func testRankHotOrdersByActressRankAndDropsOldFutureAndDuplicates() {
+        let batches: [(rank: Int, movies: [MagnetSearchItem])] = [
+            // 故意乱序传入：排名靠后的先给
+            (2, [hotItem("F-001", "2026-11-03")]),
+            (0, [hotItem("D-001", "2026-08-01"),   // 太旧
+                 hotItem("B-001", "2026-10-20"),
+                 hotItem("C-001", "2026-11-06"),   // 还没发行
+                 hotItem("A-001", "2026-11-01"),
+                 hotItem("N-001", nil)]),           // 没有日期
+            (1, [hotItem("B-001", "2026-10-20"), hotItem("E-001", "2026-10-30")]),
+        ]
+        let ranked = JavBusSource.rankHot(batches, now: Self.hotNow)
+        XCTAssertEqual(ranked.map(\.code), ["A-001", "B-001", "E-001", "F-001"])
+    }
+
+    func testRankHotWidensWindowWhenFewRecentWorks() {
+        let batches: [(rank: Int, movies: [MagnetSearchItem])] = [
+            (0, [hotItem("NEW-1", "2026-10-30"), hotItem("MID-1", "2026-09-20"), hotItem("OLD-1", "2026-07-01")]),
+        ]
+        // 30 天内只有 1 部（少于下限）→ 放宽到 60 天拿到 2 部 → 90 天仍是 2 部，更早的不算
+        let ranked = JavBusSource.rankHot(batches, now: Self.hotNow)
+        XCTAssertEqual(ranked.map(\.code), ["NEW-1", "MID-1"])
+    }
+
+    func testRankHotKeepsOnlyThirtyDaysWhenEnoughWorks() {
+        var movies: [MagnetSearchItem] = (1...12).map { hotItem("HOT-\($0)", "2026-10-2\($0 % 10)") }
+        movies.append(hotItem("MID-1", "2026-09-20"))
+        let ranked = JavBusSource.rankHot([(0, movies)], now: Self.hotNow)
+        XCTAssertEqual(ranked.count, 12)
+        XCTAssertFalse(ranked.contains { $0.code == "MID-1" })
+    }
+
+    private static let hotActressesHTML = """
+    <a class="avatar-box text-center" href="https://www.javbus.com/star/aaa"><img src="/actress/a.jpg" title="甲"><span>甲</span></a>
+    <a class="avatar-box text-center" href="https://www.javbus.com/star/bbb"><img src="/actress/b.jpg" title="乙"><span>乙</span></a>
+    """
+
+    private static func starMoviesHTML(code: String, date: String) -> String {
+        """
+        <a class="movie-box" href="https://www.javbus.com/\(code)">
+          <img src="https://pics.javbus.com/cover/\(code).jpg" title="\(code)">
+          <date>\(code)</date> / <date>\(date)</date>
+        </a>
+        """
+    }
+
+    func testFetchHotMergesPopularActressesAndCachesTheResult() async throws {
+        RoutedURLProtocol.install { request in
+            switch request.url?.path ?? "" {
+            case "/actresses": return .init(status: 200, body: Data(Self.hotActressesHTML.utf8))
+            case "/star/aaa": return .init(status: 200, body: Data(Self.starMoviesHTML(code: "AAA-001", date: "2026-10-30").utf8))
+            case "/star/bbb": return .init(status: 200, body: Data(Self.starMoviesHTML(code: "BBB-001", date: "2026-11-02").utf8))
+            default: return .init(status: 404)
+            }
+        }
+        let source = makeSource()
+
+        let first = try await source.fetchHot(now: Self.hotNow)
+        // 女优人气排名优先：甲（第 1）在前，哪怕乙的片更新
+        XCTAssertEqual(first.map(\.code), ["AAA-001", "BBB-001"])
+        XCTAssertEqual(RoutedURLProtocol.requests().count, 3)
+
+        let second = try await source.fetchHot(now: Self.hotNow.addingTimeInterval(60))
+        XCTAssertEqual(second, first)
+        XCTAssertEqual(RoutedURLProtocol.requests().count, 3, "缓存期内不重复请求")
+    }
+
+    func testFetchHotToleratesOneActressFailing() async throws {
+        RoutedURLProtocol.install { request in
+            switch request.url?.path ?? "" {
+            case "/actresses": return .init(status: 200, body: Data(Self.hotActressesHTML.utf8))
+            case "/star/bbb": return .init(status: 200, body: Data(Self.starMoviesHTML(code: "BBB-001", date: "2026-11-02").utf8))
+            default: return .init(status: 500)
+            }
+        }
+        let items = try await makeSource().fetchHot(now: Self.hotNow)
+        XCTAssertEqual(items.map(\.code), ["BBB-001"])
+    }
+
+    func testFetchHotThrowsWhenNoActressPageLoads() async {
+        RoutedURLProtocol.install { request in
+            request.url?.path == "/actresses"
+                ? .init(status: 200, body: Data(Self.hotActressesHTML.utf8))
+                : .init(status: 500)
+        }
+        do {
+            _ = try await makeSource().fetchHot(now: Self.hotNow)
+            XCTFail("所有女优页都失败时应该报错")
+        } catch JavBusError.serverError {
+            // 期望的结果
+        } catch {
+            XCTFail("错误类型不对: \(error)")
+        }
     }
 
     // MARK: - 修复回归：图片防盗链请求头

@@ -3,6 +3,8 @@ import UIKit
 
 struct MagnetPlayerView: View {
     var initialMagnet = ""
+    /// 从磁力详情页点播放时用：退出播放器后自动关掉这一页，直接回到详情页。
+    var closesAfterPlayback = false
 
     @EnvironmentObject private var appState: AppState
     @StateObject private var controller = MagnetController()
@@ -13,11 +15,13 @@ struct MagnetPlayerView: View {
     @State private var showExtras = false
     @State private var showOthers = false
     @State private var showTips = false
+    @State private var didPlay = false
     @FocusState private var inputFocused: Bool
     @Environment(\.dismiss) private var dismiss
 
-    init(initialMagnet: String = "", controller: MagnetController? = nil) {
+    init(initialMagnet: String = "", closesAfterPlayback: Bool = false, controller: MagnetController? = nil) {
         self.initialMagnet = initialMagnet
+        self.closesAfterPlayback = closesAfterPlayback
         _controller = StateObject(wrappedValue: controller ?? MagnetController())
         if InterfacePreview.active { _input = State(initialValue: initialMagnet) }
     }
@@ -76,10 +80,7 @@ struct MagnetPlayerView: View {
             }
             ToolbarItem(placement: .primaryAction) {
                 NavigationLink {
-                    MagnetSearchView { selectedMagnet in
-                        input = selectedMagnet
-                        submit()
-                    }
+                    MagnetSearchView()
                 } label: {
                     Image(systemName: AppIcon.search.name)
                         .foregroundStyle(Theme.accent)
@@ -100,12 +101,28 @@ struct MagnetPlayerView: View {
             submit()
         }
         .onChange(of: cloudRelay) { _ in configureCloud() }
+        .onChange(of: controller.cloudQueue != nil) { playing in playbackChanged(playing) }
+        .onChange(of: controller.playerVisible) { playing in playbackChanged(playing) }
         .onChange(of: appState.sessionID) { _ in configureCloud() }
         .onDisappear {
             if !controller.playerVisible && controller.cloudQueue == nil { controller.deactivate() }
         }
         .playerWindow(isPresented: $controller.playerVisible) {
             MagnetWatchView(controller: controller)
+        }
+    }
+
+    /// 播放器开了又关了：需要的话（从详情页进来）等播放器淡出后关掉本页。
+    private func playbackChanged(_ playing: Bool) {
+        if playing {
+            didPlay = true
+            return
+        }
+        guard closesAfterPlayback, didPlay, controller.cloudQueue == nil, !controller.playerVisible else { return }
+        didPlay = false
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            dismiss()
         }
     }
 
@@ -147,10 +164,7 @@ struct MagnetPlayerView: View {
                 Spacer(minLength: 0)
 
                 NavigationLink {
-                    MagnetSearchView { selectedMagnet in
-                        input = selectedMagnet
-                        submit()
-                    }
+                    MagnetSearchView()
                 } label: {
                     HStack(spacing: 5) {
                         Image(systemName: AppIcon.search.name)

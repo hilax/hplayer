@@ -9,7 +9,6 @@ struct CloudTab: View {
     @State private var path: [Crumb] = []
     @State private var playing: PlaybackQueue?
     @State private var showDirectLogin = false
-    @State private var magnetLaunch: MagnetLaunch?
     @State private var connecting = false
     @State private var connectionError = ""
     @State private var openRequestID = UUID()
@@ -54,10 +53,6 @@ struct CloudTab: View {
         }
         .playerWindow(item: $playing) { queue in
             PlayerView(source: queue.source, playlist: queue.items).environmentObject(appState)
-        }
-        .sheet(item: $magnetLaunch) { launch in
-            NavigationStack { MagnetPlayerView(initialMagnet: launch.value) }
-                .environmentObject(appState)
         }
         .sheet(isPresented: $showDirectLogin) {
             NavigationStack {
@@ -150,21 +145,12 @@ struct CloudTab: View {
             NavigationLink { LocalVideosView().hidesTabBar() } label: {
                 toolTile(icon: .device, title: "本机视频", badge: localStore.files.isEmpty ? "" : "\(localStore.files.count)")
             }
-            NavigationLink { MagnetSearchView(onSelectMagnet: playMagnet).hidesTabBar() } label: {
+            NavigationLink { MagnetSearchView().hidesTabBar() } label: {
                 toolTile(icon: .search, title: "磁力聚合")
             }
             .accessibilityIdentifier("library.magnet")
         }
         .buttonStyle(.pressable(scale: 0.94))
-    }
-
-    /// 在聚合页里选中磁力后：聚合页先退回网盘页，等返回动画走完再弹出播放页，
-    /// 避免在转场进行中弹 sheet 被系统丢掉。
-    private func playMagnet(_ magnet: String) {
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 450_000_000)
-            magnetLaunch = MagnetLaunch(value: magnet)
-        }
     }
 
     private func toolTile(icon: AppIcon, title: String, badge: String = "") -> some View {

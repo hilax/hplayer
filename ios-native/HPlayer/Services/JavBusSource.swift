@@ -286,25 +286,164 @@ final class JavBusSource: MagnetSearchSource, @unchecked Sendable {
         (try? await searchActresses(name: name)) ?? []
     }
 
-    // MARK: - 分类列表浏览（最新、无码）
+    // MARK: - 分类列表浏览（最新、专题、最热）
 
     func fetchCategory(_ category: MagnetCategory, page: Int = 1) async throws -> [MagnetSearchItem] {
-        let path: String
         switch category {
         case .latest:
-            path = page > 1 ? "page/\(page)" : ""
-        case .uncensored:
-            path = page > 1 ? "uncensored/page/\(page)" : "uncensored"
-        case .actresses:
+            guard let url = makeURL(path: page > 1 ? "page/\(page)" : "") else {
+                throw JavBusError.invalidURL
+            }
+            guard let html = try await fetchHTMLOrNil(url) else { return [] }
+            return Self.parseSearchItems(from: html, baseURLString: currentHost)
+        case .hot:
+            // 最热是一次性算好的榜单，没有下一页。
+            if page > 1 { return [] }
+            return try await fetchHot()
+        case .topics, .actresses:
+            // 专题按片商进入（fetchStudio），女优走 fetchActresses。
             return []
         }
+    }
 
+    /// 某家片商的作品，新片在前；翻过最后一页站点返回 404，当作没有更多。
+    func fetchStudio(_ studio: MagnetStudio, page: Int = 1) async throws -> [MagnetSearchItem] {
+        let path = page > 1 ? "\(studio.javbusPath)/\(page)" : studio.javbusPath
         guard let url = makeURL(path: path) else {
             throw JavBusError.invalidURL
         }
 
         guard let html = try await fetchHTMLOrNil(url) else { return [] }
         return Self.parseSearchItems(from: html, baseURLString: currentHost)
+    }
+
+    // MARK: - 最热
+
+    /// 取女优页最前面的几位：站点默认按人气排序，所以越靠前越红。
+    static let hotActressCount = 20
+    /// 「最热」只看最近这么多天已发行的作品。
+    static let hotWindowDays = 30
+    /// 窗口内作品太少时（比如月初）把窗口放宽到 60、90 天。
+    static let hotMinimumItems = 12
+    static let hotBatchSize = 5
+    static let hotCacheLifetime: TimeInterval = 20 * 60
+
+    private let hotLock = NSLock()
+    private var hotCache: (host: String, time: Date, items: [MagnetSearchItem])?
+
+    private func cachedHot(host: String, now: Date) -> [MagnetSearchItem]? {
+        hotLock.lock()
+        defer { hotLock.unlock() }
+        guard let cache = hotCache, cache.host == host, now.timeIntervalSince(cache.time) < Self.hotCacheLifetime else {
+            return nil
+        }
+        return cache.items
+    }
+
+    private func storeHot(host: String, now: Date, items: [MagnetSearchItem]) {
+        hotLock.lock()
+        defer { hotLock.unlock() }
+        hotCache = (host, now, items)
+    }
+
+    func fetchHot() async throws -> [MagnetSearchItem] {
+        try await fetchHot(now: Date())
+    }
+
+    /// 「最热」：JavBus 没有榜单页，也抓不到第三方月榜（JavDB 对国内网络禁止访问，
+    /// JavLibrary / Jable 有 Cloudflare 验证），所以用站点自己的人气排序来凑：
+    /// 取人气靠前的女优，合并她们最近 30 天的新作，按女优人气排序。
+    func fetchHot(now: Date) async throws -> [MagnetSearchItem] {
+        let host = currentHost
+        if let cached = cachedHot(host: host, now: now) { return cached }
+
+        let stars = Array(try await fetchActresses(page: 1).prefix(Self.hotActressCount))
+        guard !stars.isEmpty else { return [] }
+
+        var batches: [(rank: Int, movies: [MagnetSearchItem])] = []
+        var firstError: Error?
+        var start = 0
+        while start < stars.count {
+            let slice = Array(stars[start ..< min(start + Self.hotBatchSize, stars.count)])
+            let base = start
+            await withTaskGroup(of: (Int, Result<[MagnetSearchItem], Error>).self) { group in
+                for (offset, star) in slice.enumerated() {
+                    group.addTask { [self] in
+                        do {
+                            return (base + offset, .success(try await fetchStarMovies(starPath: star.detailPath)))
+                        } catch {
+                            return (base + offset, .failure(error))
+                        }
+                    }
+                }
+                for await (rank, result) in group {
+                    switch result {
+                    case let .success(movies): batches.append((rank, movies))
+                    case let .failure(error): if firstError == nil { firstError = error }
+                    }
+                }
+            }
+            try Task.checkCancellation()
+            start += Self.hotBatchSize
+        }
+
+        // 个别女优失败不影响榜单；一位都没取到才算失败。
+        if batches.isEmpty, let firstError { throw firstError }
+
+        let items = Self.rankHot(batches, now: now)
+        if !items.isEmpty { storeHot(host: host, now: now, items: items) }
+        return items
+    }
+
+    /// 某位女优的作品（只取影片，不解析头部资料）。
+    private func fetchStarMovies(starPath: String, page: Int = 1) async throws -> [MagnetSearchItem] {
+        let clean = starPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard let url = makeURL(path: page > 1 ? "\(clean)/\(page)" : clean) else {
+            throw JavBusError.invalidURL
+        }
+        guard let html = try await fetchHTMLOrNil(url) else { return [] }
+        return Self.parseSearchItems(from: html, baseURLString: currentHost)
+    }
+
+    /// 把各位女优的作品合并成榜单：只留已发行、且在窗口内的；女优人气排名（rank 越小越靠前）优先，
+    /// 同一位女优内新片在前；同一部片出现在几位女优名下时只保留排名最靠前的那一次。
+    static func rankHot(_ batches: [(rank: Int, movies: [MagnetSearchItem])], now: Date, windowDays: Int = JavBusSource.hotWindowDays) -> [MagnetSearchItem] {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone.current
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = calendar.timeZone
+        formatter.dateFormat = "yyyy-MM-dd"
+        let today = formatter.string(from: now)
+
+        func ranked(window: Int) -> [MagnetSearchItem] {
+            let cutoffDate = calendar.date(byAdding: .day, value: -window, to: now) ?? now
+            let cutoff = formatter.string(from: cutoffDate)
+            var seen = Set<String>()
+            var result: [MagnetSearchItem] = []
+            for batch in batches.sorted(by: { $0.rank < $1.rank }) {
+                let recent = batch.movies.enumerated().filter { pair in
+                    guard let date = pair.element.releaseDate else { return false }
+                    return date >= cutoff && date <= today
+                }
+                let ordered = recent.sorted { lhs, rhs in
+                    let l = lhs.element.releaseDate ?? "", r = rhs.element.releaseDate ?? ""
+                    return l == r ? lhs.offset < rhs.offset : l > r
+                }
+                for (_, movie) in ordered where seen.insert(movie.id).inserted {
+                    result.append(movie)
+                }
+            }
+            return result
+        }
+
+        var result: [MagnetSearchItem] = []
+        for window in [windowDays, windowDays * 2, windowDays * 3] {
+            result = ranked(window: window)
+            if result.count >= Self.hotMinimumItems { break }
+        }
+        return result
     }
 
     // MARK: - 女优浏览与搜索
