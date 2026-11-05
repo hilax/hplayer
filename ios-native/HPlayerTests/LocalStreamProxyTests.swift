@@ -147,8 +147,8 @@ final class LocalStreamProxyTests: XCTestCase {
         return Fetched(status: status, head: head, body: Data(received[separator.upperBound...]))
     }
 
-    private func relayURL(_ proxy: LocalStreamProxy) async throws -> URL {
-        let upstream = try XCTUnwrap(URL(string: "https://example.com/a/video.mp4"))
+    private func relayURL(_ proxy: LocalStreamProxy, upstream: URL? = nil) async throws -> URL {
+        let upstream = try upstream ?? XCTUnwrap(URL(string: "https://example.com/a/video.mp4"))
         let local = await proxy.localURL(for: upstream, headers: [:])
         return try XCTUnwrap(local)
     }
@@ -157,24 +157,25 @@ final class LocalStreamProxyTests: XCTestCase {
         Data((0..<count).map { UInt8($0 % 251) })
     }
 
-    /// 下载到一半被对方掐断：中转自己带上 Range 从断开的位置接着下，mpv 收到的是一条完整的响应
+    /// 下载到一半被对方掐断：中转自己带上 Range 从断开的位置接着下，mpv 收到的是一条完整的响应。
+    /// 用真正的 TCP 连接模拟（发一半就关 socket），走的是和线上一样的 URLSession 网络栈。
     func testResumesFromTheBreakPointWhenUpstreamDropsMidDownload() async throws {
         let full = pattern(1000)
-        ScriptedUpstream.install([
-            .reply(status: 206, headers: ["Content-Range": "bytes 0-999/1000", "Content-Length": "1000"],
-                   body: Data(full.prefix(400)), thenFail: .networkConnectionLost),
-            .reply(status: 206, headers: ["Content-Range": "bytes 400-999/1000", "Content-Length": "600"],
-                   body: Data(full.suffix(600)), thenFail: nil),
+        let server = try ScriptedHTTPServer([
+            .send(status: 206, headers: ["Content-Range": "bytes 0-999/1000", "Content-Length": "1000"], body: Data(full.prefix(400))),
+            .send(status: 206, headers: ["Content-Range": "bytes 400-999/1000", "Content-Length": "600"], body: Data(full.suffix(600))),
         ])
-        let proxy = LocalStreamProxy(protocolClasses: [ScriptedUpstream.self])
+        defer { server.stop() }
+        let proxy = LocalStreamProxy()
         proxy.setRetryDelaysForTesting([0.05, 0.05])
 
-        let local = try await relayURL(proxy)
+        let local = try await relayURL(proxy, upstream: server.url)
         let fetched = try fetch(local, range: "bytes=0-999")
-        XCTAssertEqual(fetched.status, 206)
-        XCTAssertEqual(fetched.body, full, "断开前后的数据要接得上，不多不少")
-        XCTAssertEqual(ScriptedUpstream.receivedRanges(), ["bytes=0-999", "bytes=400-999"])
-        XCTAssertTrue(proxy.problemHistoryLines.joined().contains("从 400 字节接着下"))
+        let history = proxy.problemHistoryLines.joined(separator: "\n")
+        XCTAssertEqual(fetched.status, 206, "head=\(fetched.head)\n\(history)")
+        XCTAssertEqual(fetched.body, full, "断开前后的数据要接得上，不多不少；head=\(fetched.head)\n\(history)")
+        XCTAssertEqual(server.receivedRanges(), ["bytes=0-999", "bytes=400-999"], history)
+        XCTAssertTrue(history.contains("从 400 字节接着下"), history)
     }
 
     /// 连不上（对方拒绝连接）：等一会儿再试，不要马上给 mpv 一个 502
@@ -183,7 +184,7 @@ final class LocalStreamProxyTests: XCTestCase {
         ScriptedUpstream.install([
             .fail(.cannotConnectToHost),
             .fail(.cannotConnectToHost),
-            .reply(status: 200, headers: ["Content-Length": "300"], body: body, thenFail: nil),
+            .reply(status: 200, headers: ["Content-Length": "300"], body: body),
         ])
         let proxy = LocalStreamProxy(protocolClasses: [ScriptedUpstream.self])
         proxy.setRetryDelaysForTesting([0.05, 0.05, 0.05])
@@ -213,8 +214,8 @@ final class LocalStreamProxyTests: XCTestCase {
     /// 115 偶尔返回 503/502：重试，不把错误页当成视频交给 mpv
     func testRetriesGatewayErrorsBeforeAnswering() async throws {
         ScriptedUpstream.install([
-            .reply(status: 503, headers: [:], body: Data("busy".utf8), thenFail: nil),
-            .reply(status: 200, headers: ["Content-Length": "5"], body: Data("hello".utf8), thenFail: nil),
+            .reply(status: 503, headers: [:], body: Data("busy".utf8)),
+            .reply(status: 200, headers: ["Content-Length": "5"], body: Data("hello".utf8)),
         ])
         let proxy = LocalStreamProxy(protocolClasses: [ScriptedUpstream.self])
         proxy.setRetryDelaysForTesting([0.05, 0.05])
@@ -228,26 +229,27 @@ final class LocalStreamProxyTests: XCTestCase {
     /// 上游不肯从断开的位置接上（直接重发了整个文件）：不能把重复的数据拼进去，断开让 mpv 自己处理
     func testRefusesToSpliceWhenUpstreamCannotResumeAtTheBreakPoint() async throws {
         let full = pattern(1000)
-        ScriptedUpstream.install([
-            .reply(status: 206, headers: ["Content-Range": "bytes 0-999/1000", "Content-Length": "1000"],
-                   body: Data(full.prefix(400)), thenFail: .networkConnectionLost),
-            .reply(status: 200, headers: ["Content-Length": "1000"], body: full, thenFail: nil),
+        let server = try ScriptedHTTPServer([
+            .send(status: 206, headers: ["Content-Range": "bytes 0-999/1000", "Content-Length": "1000"], body: Data(full.prefix(400))),
+            .send(status: 200, headers: ["Content-Length": "1000"], body: full),
         ])
-        let proxy = LocalStreamProxy(protocolClasses: [ScriptedUpstream.self])
+        defer { server.stop() }
+        let proxy = LocalStreamProxy()
         proxy.setRetryDelaysForTesting([0.05])
 
-        let local = try await relayURL(proxy)
+        let local = try await relayURL(proxy, upstream: server.url)
         let fetched = try fetch(local, range: "bytes=0-999")
-        XCTAssertEqual(fetched.body, Data(full.prefix(400)), "只该有断开之前那 400 字节")
-        XCTAssertTrue(proxy.problemHistoryLines.joined().contains("续传失败"))
+        let history = proxy.problemHistoryLines.joined(separator: "\n")
+        XCTAssertEqual(fetched.body, Data(full.prefix(400)), "只该有断开之前那 400 字节；head=\(fetched.head)\n\(history)")
+        XCTAssertTrue(history.contains("续传失败"), history)
     }
 }
 
-/// 假的 115 服务器：按顺序给每个请求一个剧本（连不上、返回状态码、发一半就断开……），并记下每次请求带的 Range。
+/// 假的 115 服务器（不经过网络）：按顺序给每个请求一个剧本（连不上、返回状态码），并记下每次请求带的 Range。
 private final class ScriptedUpstream: URLProtocol {
     enum Step {
         case fail(URLError.Code)
-        case reply(status: Int, headers: [String: String], body: Data, thenFail: URLError.Code?)
+        case reply(status: Int, headers: [String: String], body: Data)
     }
 
     private static let lock = NSLock()
@@ -280,20 +282,115 @@ private final class ScriptedUpstream: URLProtocol {
         switch step {
         case .fail(let code):
             client?.urlProtocol(self, didFailWithError: URLError(code))
-        case .reply(let status, let headers, let body, let thenFail):
+        case .reply(let status, let headers, let body):
             let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers)!
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
             if !body.isEmpty { client?.urlProtocol(self, didLoad: body) }
-            if let thenFail {
-                // 数据先到、过一小会儿才断：真实的网络就是这样。马上报错的话，URLSession 会连已经到的响应和数据一起丢掉
-                DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) { [self] in
-                    client?.urlProtocol(self, didFailWithError: URLError(thenFail))
-                }
-            } else {
-                client?.urlProtocolDidFinishLoading(self)
-            }
+            client?.urlProtocolDidFinishLoading(self)
         }
     }
 
     override func stopLoading() {}
+}
+
+/// 本机的假 115 服务器：真正的 TCP 连接，按剧本一次回应一个请求。
+/// 响应内容比 Content-Length 声明的短，再关掉连接，就是「下载到一半被掐断」。
+private final class ScriptedHTTPServer: @unchecked Sendable {
+    enum Reply {
+        case send(status: Int, headers: [String: String], body: Data)
+    }
+
+    private let listener: Int32
+    private let port: UInt16
+    private let lock = NSLock()
+    private var replies: [Reply]
+    private var ranges: [String?] = []
+    private var stopped = false
+
+    var url: URL { URL(string: "http://127.0.0.1:\(port)/a/video.mp4")! }
+
+    init(_ replies: [Reply]) throws {
+        let descriptor = socket(AF_INET, SOCK_STREAM, 0)
+        guard descriptor >= 0 else { throw POSIXError(.EIO) }
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = 0
+        address.sin_addr = in_addr(s_addr: UInt32(0x7F00_0001).bigEndian)
+        let bound = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+        }
+        guard bound == 0, listen(descriptor, 8) == 0 else {
+            close(descriptor)
+            throw POSIXError(.EADDRINUSE)
+        }
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        _ = withUnsafeMutablePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(descriptor, $0, &length) }
+        }
+        self.listener = descriptor
+        self.port = UInt16(bigEndian: address.sin_port)
+        self.replies = replies
+        Thread.detachNewThread { [self] in serve() }
+    }
+
+    func receivedRanges() -> [String?] {
+        lock.lock(); defer { lock.unlock() }
+        return ranges
+    }
+
+    func stop() {
+        lock.lock(); defer { lock.unlock() }
+        stopped = true
+    }
+
+    private var isStopped: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return stopped
+    }
+
+    private func serve() {
+        defer { close(listener) }
+        while !isStopped {
+            var poller = pollfd(fd: listener, events: Int16(POLLIN), revents: 0)
+            guard poll(&poller, 1, 200) > 0 else { continue }
+            let client = accept(listener, nil, nil)
+            if client >= 0 { handle(client) }
+        }
+    }
+
+    private func handle(_ client: Int32) {
+        defer { close(client) }
+        var one: Int32 = 1
+        setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
+        var request = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        let capacity = buffer.count
+        while request.range(of: Data("\r\n\r\n".utf8)) == nil {
+            let count = recv(client, &buffer, capacity, 0)
+            if count <= 0 { return }
+            request.append(contentsOf: buffer[0..<count])
+        }
+        let range = String(decoding: request, as: UTF8.self).components(separatedBy: "\r\n")
+            .first { $0.lowercased().hasPrefix("range:") }
+            .map { String($0.dropFirst(6)).trimmingCharacters(in: .whitespaces) }
+        lock.lock()
+        ranges.append(range)
+        let reply = replies.isEmpty ? nil : replies.removeFirst()
+        lock.unlock()
+        guard let reply else { return }
+        switch reply {
+        case .send(let status, let headers, let body):
+            var head = "HTTP/1.1 \(status) \(status == 206 ? "Partial Content" : "OK")\r\n"
+            for (name, value) in headers { head += "\(name): \(value)\r\n" }
+            head += "Connection: close\r\n\r\n"
+            let bytes = [UInt8](Data(head.utf8) + body)
+            var offset = 0
+            while offset < bytes.count {
+                let sent = bytes.withUnsafeBytes { send(client, $0.baseAddress! + offset, bytes.count - offset, 0) }
+                if sent <= 0 { return }
+                offset += sent
+            }
+        }
+    }
 }
