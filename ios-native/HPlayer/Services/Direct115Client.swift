@@ -27,6 +27,8 @@ struct Direct115HTTPError: LocalizedError {
 /// 115 网页会话直连，Cookie 仅保存在本机 Keychain。
 struct Direct115Client {
     let cookie: String
+    /// 测试用：换成假网络。正常使用时保持 nil。
+    var protocolClasses: [AnyClass]? = nil
     static let userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15"
 
     func user() async throws -> P115Status {
@@ -176,13 +178,14 @@ struct Direct115Client {
     }
 
     /// 发送带登录 Cookie 的请求；传入 form 时用 POST 表单提交
-    func send(_ url: URL, form: [String: String]? = nil, userAgent: String? = nil) async throws -> (Data, HTTPURLResponse) {
+    func send(_ url: URL, form: [String: String]? = nil, userAgent: String? = nil, timeout: TimeInterval = 20) async throws -> (Data, HTTPURLResponse) {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpShouldSetCookies = false
+        if let protocolClasses { configuration.protocolClasses = protocolClasses }
         let session = URLSession(configuration: configuration, delegate: RedirectGuard(), delegateQueue: nil)
         defer { session.finishTasksAndInvalidate() }
         var request = URLRequest(url: url)
-        request.timeoutInterval = 20
+        request.timeoutInterval = timeout
         request.setValue(cookie, forHTTPHeaderField: "Cookie")
         request.setValue(userAgent ?? Self.userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("https://115.com/", forHTTPHeaderField: "Referer")

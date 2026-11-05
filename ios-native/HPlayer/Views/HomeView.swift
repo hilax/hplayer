@@ -54,7 +54,36 @@ struct HomeView: View {
         self.initialSearch = initialSearch; self.searchFiles = searchFiles
     }
 
+    /// 「下载到手机」：下载好的视频放进本地视频库；每次开始或续传时现取 115 的下载地址。
+    private func configureDownloads() {
+        guard !InterfacePreview.active else { return }
+        let manager = DownloadManager.shared
+        manager.media = localStore
+        let state = appState
+        manager.requestProvider = { [weak state] item in
+            guard let state, let client = state.directClient() else {
+                throw APIError.server("请先登录 115")
+            }
+            let address = try await client.originalURL(pickCode: item.pickCode)
+            return client.downloadRequest(for: address)
+        }
+    }
+
+    /// 下载只在 App 打开时进行：切到后台时向系统多要一小段时间，之后自动暂停；回来后继续。
+    private func updateDownloads(for phase: ScenePhase) {
+        guard !InterfacePreview.active else { return }
+        switch phase {
+        case .background:
+            DownloadManager.shared.sceneDidEnterBackground()
+        case .active:
+            DownloadManager.shared.sceneDidBecomeActive()
+        default:
+            break
+        }
+    }
+
     private func restoreOnce() {
+        configureDownloads()
         guard !restored else { return }
         if InterfacePreview.active {
             metadataStore.finishRestoring()
@@ -78,6 +107,7 @@ struct HomeView: View {
             }
             .onChange(of: scenePhase) { phase in
                 if phase == .active { Task { await refreshAccountInfo() } }
+                updateDownloads(for: phase)
             }
             .task(id: syncInput) {
                 guard !InterfacePreview.active else { return }

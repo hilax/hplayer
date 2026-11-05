@@ -113,7 +113,8 @@ final class RedesignFlowUITests: XCTestCase {
     }
 
     func testBatchSelectionExcludesFoldersAndUpdatesPlayCount() {
-        let app = launch("files-select")
+        // 导入流程里的目录选择：只能选视频，文件夹点不了
+        let app = launch("files-import")
         defer { app.terminate() }
         let selected = app.buttons["播放所选 · 2 项"]
         XCTAssertTrue(selected.waitForExistence(timeout: 20))
@@ -128,18 +129,60 @@ final class RedesignFlowUITests: XCTestCase {
         XCTAssertFalse(empty.isEnabled)
     }
 
-    func testTorrentSelectionUpdatesCountAndDisablesEmptySubmission() {
-        let app = launch("torrent-files")
+    func testFileManagementSelectionCountsItemsAndGatesSingleItemActions() {
+        let app = launch("files-select")
         defer { app.terminate() }
-        XCTAssertTrue(app.buttons["torrent.file.0"].waitForExistence(timeout: 20))
-        app.buttons["torrent.file.0"].tap()
-        XCTAssertFalse(app.buttons["torrent.file.0"].isSelected)
+        let title = app.staticTexts["library.selectionTitle"]
+        XCTAssertTrue(title.waitForExistence(timeout: 20))
+        XCTAssertEqual(title.label, "已选 3 项")
+        // 选了多项：能移动、复制、删除，但不能重命名，也不能看单个文件的信息
+        XCTAssertTrue(app.buttons["library.dock.move"].isEnabled)
+        XCTAssertTrue(app.buttons["library.dock.delete"].isEnabled)
+        XCTAssertFalse(app.buttons["library.dock.rename"].isEnabled)
+        XCTAssertFalse(app.buttons["library.dock.info"].isEnabled)
+        // 取消一个视频和文件夹，只剩一个视频：重命名和信息可用
+        app.buttons["library.file.movie-1"].tap()
+        app.buttons["library.file.dir-3"].tap()
+        XCTAssertTrue(wait { title.label == "已选 1 项" })
+        XCTAssertTrue(app.buttons["library.dock.rename"].isEnabled)
+        XCTAssertTrue(app.buttons["library.dock.info"].isEnabled)
+        // 全选之后再全不选：没有选中项时，删除不可用
         app.buttons["全选"].tap()
-        for _ in 0..<3 { app.swipeUp() }
-        XCTAssertTrue(app.staticTexts["已选 6 个文件"].exists)
-        for _ in 0..<3 { app.swipeDown() }
+        XCTAssertTrue(wait { title.label == "已选 7 项" })
         app.buttons["全不选"].tap()
-        XCTAssertFalse(app.buttons["创建云下载任务"].isEnabled)
+        XCTAssertTrue(wait { title.label == "选择项目" })
+        XCTAssertFalse(app.buttons["library.dock.delete"].isEnabled)
+    }
+
+    func testRecycleBinSelectionShowsRestoreAndPermanentDelete() {
+        let app = launch("recycle")
+        defer { app.terminate() }
+        let summary = app.staticTexts["library.recycle.dock.summary"]
+        XCTAssertTrue(summary.waitForExistence(timeout: 20))
+        XCTAssertEqual(summary.label, "已选 2 项")
+        XCTAssertTrue(app.buttons["library.recycle.restore"].isEnabled)
+        XCTAssertTrue(app.buttons["library.recycle.delete"].isEnabled)
+        // 全部取消选择后，底部的操作栏消失
+        app.buttons["library.recycle.row.9003"].tap()
+        app.buttons["library.recycle.row.9004"].tap()
+        XCTAssertTrue(wait { !app.buttons["library.recycle.restore"].exists })
+    }
+
+    func testOfflineTasksSwitchBetweenRunningDoneAndFailed() {
+        let app = launch("offline")
+        defer { app.terminate() }
+        let running = app.buttons["library.offline.segment.running"]
+        XCTAssertTrue(running.waitForExistence(timeout: 20))
+        XCTAssertTrue(running.isSelected)
+        app.buttons["library.offline.segment.done"].tap()
+        XCTAssertTrue(wait { app.buttons["library.offline.segment.done"].isSelected })
+        app.buttons["library.offline.segment.failed"].tap()
+        XCTAssertTrue(wait { app.buttons["library.offline.segment.failed"].isSelected })
+        XCTAssertFalse(running.isSelected)
+    }
+
+    private func wait(_ predicate: @escaping () -> Bool) -> Bool {
+        XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in predicate() }, object: nil)], timeout: 10) == .completed
     }
 
     func testPlayerPanelsCloseBackToPlayback() {

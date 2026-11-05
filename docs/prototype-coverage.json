@@ -1,5 +1,5 @@
 {
-  "expected_screens": 42,
+  "expected_screens": 47,
   "screens": [
     {
       "id": "home",
@@ -115,7 +115,7 @@
     },
     {
       "id": "files",
-      "title": "115 · 文件目录",
+      "title": "115 · 文件目录（完整文件管理）",
       "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/LibraryView.swift",
       "route": "网盘 → 115 → 目录",
@@ -123,11 +123,75 @@
     },
     {
       "id": "files-select",
-      "title": "115 · 批量选择",
+      "title": "115 · 多选与底部操作栏",
       "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/LibraryView.swift",
       "route": "115 目录 → 更多 → 选择",
       "screenshot": "prototype41/files-select-dark.png"
+    },
+    {
+      "id": "files-menu",
+      "title": "115 · 目录更多菜单",
+      "state": "implemented",
+      "native_view": "ios-native/HPlayer/Views/LibraryView.swift",
+      "route": "网盘 → 115 → 目录 → 更多",
+      "screenshot": "prototype41/files-menu-dark.png"
+    },
+    {
+      "id": "files-delete",
+      "title": "115 · 删除确认",
+      "state": "implemented",
+      "native_view": "ios-native/HPlayer/Views/FileManagementViews.swift",
+      "route": "115 目录 → 选择 → 删除",
+      "screenshot": "prototype41/files-delete-dark.png"
+    },
+    {
+      "id": "files-move",
+      "title": "115 · 移动到",
+      "state": "implemented",
+      "native_view": "ios-native/HPlayer/Views/FileManagementViews.swift",
+      "route": "115 目录 → 选择 → 移动 / 复制",
+      "screenshot": "prototype41/files-move-dark.png"
+    },
+    {
+      "id": "file-info",
+      "title": "115 · 文件信息",
+      "state": "implemented",
+      "native_view": "ios-native/HPlayer/Views/FileManagementViews.swift",
+      "route": "115 目录 → 选择 → 信息",
+      "screenshot": "prototype41/file-info-dark.png"
+    },
+    {
+      "id": "recycle",
+      "title": "115 · 回收站",
+      "state": "implemented",
+      "native_view": "ios-native/HPlayer/Views/RecycleBinView.swift",
+      "route": "115 目录 → 更多 → 回收站",
+      "screenshot": "prototype41/recycle-dark.png"
+    },
+    {
+      "id": "offline",
+      "title": "115 · 离线下载",
+      "state": "implemented",
+      "native_view": "ios-native/HPlayer/Views/OfflineTasksView.swift",
+      "route": "网盘 → 离线下载",
+      "screenshot": "prototype41/offline-dark.png"
+    },
+    {
+      "id": "offline-add",
+      "title": "115 · 添加离线任务",
+      "state": "implemented",
+      "native_view": "ios-native/HPlayer/Views/OfflineTasksView.swift",
+      "route": "离线下载 → 添加任务",
+      "screenshot": "prototype41/offline-add-dark.png"
+    },
+    {
+      "id": "downloads",
+      "title": "115 · 下载管理",
+      "state": "implemented",
+      "native_view": "ios-native/HPlayer/Views/DownloadsView.swift",
+      "route": "115 目录 → 更多 → 下载管理",
+      "screenshot": "prototype41/downloads-dark.png"
     },
     {
       "id": "local",
@@ -234,14 +298,6 @@
       "screenshot": "prototype41/connect115-dark.png"
     },
     {
-      "id": "official",
-      "title": "115 官方授权",
-      "state": "implemented",
-      "native_view": "ios-native/HPlayer/Views/Official115SettingsView.swift",
-      "route": "BT 云下载 → 115 云下载授权",
-      "screenshot": "prototype41/official-dark.png"
-    },
-    {
       "id": "licenses",
       "title": "开源许可",
       "state": "implemented",
@@ -272,22 +328,6 @@
       "native_view": "ios-native/HPlayer/Views/MagnetPlayerView.swift",
       "route": "磁力 → 解析完成",
       "screenshot": "prototype41/magnet-files-dark.png"
-    },
-    {
-      "id": "torrent",
-      "title": "BT 种子与云下载",
-      "state": "implemented",
-      "native_view": "ios-native/HPlayer/Views/TorrentView.swift",
-      "route": "网盘 → BT 云下载",
-      "screenshot": "prototype41/torrent-dark.png"
-    },
-    {
-      "id": "torrent-files",
-      "title": "种子文件选择",
-      "state": "implemented",
-      "native_view": "ios-native/HPlayer/Views/TorrentSelectionView.swift",
-      "route": "BT → 导入种子 → 解析完成",
-      "screenshot": "prototype41/torrent-files-dark.png"
     },
     {
       "id": "portrait",

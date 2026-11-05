@@ -97,6 +97,17 @@ final class RecentStore: ObservableObject {
         save()
     }
 
+    /// 网盘里的视频被删除后，清掉它们的续播记录
+    func removeCloud(pickCodes: Set<String>) {
+        guard !pickCodes.isEmpty else { return }
+        let before = items.count
+        items.removeAll { item in
+            guard let code = item.pickCode, !code.isEmpty else { return false }
+            return pickCodes.contains(code)
+        }
+        if items.count != before { save() }
+    }
+
     func remove(at offsets: IndexSet) {
         items.remove(atOffsets: offsets)
         save()

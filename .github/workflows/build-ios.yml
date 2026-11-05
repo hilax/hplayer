@@ -221,7 +221,7 @@ jobs:
           PY
           fi
 
-      - name: Verify all 42 prototype screenshots
+      - name: Verify all 47 prototype screenshots
         if: always() && steps.native-tests.outcome != 'skipped'
         run: |
           python3 ios-native/scripts/verify-interface-coverage.py \

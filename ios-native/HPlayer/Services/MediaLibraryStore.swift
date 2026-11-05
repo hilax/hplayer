@@ -106,6 +106,42 @@ final class MediaLibraryStore: ObservableObject {
         save()
     }
 
+    /// 片库里已有的网盘视频的提取码；目录页用它给视频标上「已入库」。
+    func pickCodes(for appState: AppState) -> Set<String> {
+        guard appState.isAuthenticated, let scope = appState.libraryAccountID else { return [] }
+        return Set((cloudByAccount[scope] ?? []).map(\.pickCode))
+    }
+
+    /// 片库里已有的视频在网盘里被改名或移动后，更新记录（提取码不变，封面和观看记录跟着提取码走）。
+    /// 不在片库里的视频不会被加进来。
+    func update(_ files: [P115File], for appState: AppState) {
+        guard !files.isEmpty, appState.isAuthenticated, let scope = appState.libraryAccountID,
+              var current = cloudByAccount[scope] else { return }
+        let indices = Dictionary(current.enumerated().map { ($0.element.pickCode, $0.offset) }, uniquingKeysWith: { first, _ in first })
+        var changed = false
+        for file in files where !file.pickCode.isEmpty {
+            guard let index = indices[file.pickCode], current[index] != file else { continue }
+            current[index] = file
+            changed = true
+        }
+        guard changed else { return }
+        cloudByAccount[scope] = current
+        revision += 1
+        save()
+    }
+
+    /// 已记录的文件夹被改名或移动后更新；没有记录过的文件夹不新增。
+    func updateFolder(_ id: String, parent: String? = nil, name: String? = nil, for appState: AppState) {
+        guard appState.isAuthenticated, let scope = appState.libraryAccountID,
+              var current = foldersByAccount[scope], let entry = current[id] else { return }
+        let updated = CloudFolderEntry(parent: parent ?? entry.parent, name: name ?? entry.name)
+        guard updated != entry else { return }
+        current[id] = updated
+        foldersByAccount[scope] = current
+        needsFolderSave = true
+        save()
+    }
+
     /// 当前账号扫描时见过的文件夹
     func folders(for appState: AppState) -> [String: CloudFolderEntry] {
         guard appState.isAuthenticated, let scope = appState.libraryAccountID else { return [:] }
