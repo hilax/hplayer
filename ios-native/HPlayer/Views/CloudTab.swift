@@ -20,6 +20,10 @@ struct CloudTab: View {
         NavigationStack(path: $path) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
+                    ScreenTitleBar(title: "网盘") {
+                        BarIconButton(icon: .search, label: "搜索网盘", identifier: "cloud.search", action: onSearch)
+                    }
+                    .padding(.horizontal, -Theme.contentInset)
                     accountCard.reveal(0)
                     toolGrid.reveal(1)
                     browseRow.reveal(2)
@@ -32,8 +36,9 @@ struct CloudTab: View {
             }
             .scrollIndicators(.hidden)
             .background(Theme.pageBackground.ignoresSafeArea())
-            .largeTitleNavigationBar("网盘")
-            .toolbar { NavigationSearchButton(label: "搜索网盘", identifier: "cloud.search", action: onSearch) }
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar(.hidden, for: .navigationBar)
             .designScreen(appState.isAuthenticated ? "library" : "library-empty")
             .navigationDestination(for: Crumb.self) { crumb in
                 DirectoryView(cid: crumb.cid, trail: trail(to: crumb), onJump: { jump(to: $0) },

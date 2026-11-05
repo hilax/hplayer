@@ -98,7 +98,6 @@ struct Official115SettingsView: View {
             DesignNotice(symbol: AppIcon.privacy.name, text: "授权码在有效期内使用。失效后可重新获取，不需要 AppSecret 或回调域名。")
         }
         .navigationTitle("115 官方授权")
-        .navigationBarTitleDisplayMode(.inline)
         .designScreen("official")
         .toolbar { ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("完成") { focusedField = nil } } }
         .task { onScreen = true; if !InterfacePreview.active { await loadStatus() } }

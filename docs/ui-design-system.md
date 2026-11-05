@@ -75,11 +75,10 @@
 - 我的：账号卡片、统计、媒体库 / 外观 / 关于三组设置。
 - 播放器：竖屏是顶部 16:9 小窗（返回、截图、更多、播放、进度、全屏）+ 下方信息页（片名、清晰度/倍速/字幕/画面/解码快捷格、选集横条、接下来、文件信息）；点全屏转横屏，画面铺满，右侧面板分「选集 / 倍速 / 清晰度 / 字幕音轨」四页，选集页带自动连播开关。默认直接横屏播放，点退出全屏键回到竖屏小窗。播放器放在独立的 UIWindow 里（`PlayerWindow`）：主窗口只支持竖屏，播放器窗口才真的横屏，所以控制中心、录屏、系统弹窗方向和旋转锁定都按真实横屏走，其他页面一直是竖屏；关闭时播放页柔和淡出并轻轻缩小后移除窗口，没有翻转，也不用遮罩。所有打开播放器的地方统一用 `.playerWindow(...)`，不要再用 `fullScreenCover`。
 - 进入详情、演员合集、网盘目录、设置子页等二级页面时，标签栏自动收起（`.hidesTabBar()`）。
-- 一级页面（片库、网盘、我的）的标题用系统导航栏的大标题，和系统「设置」一样：大标题靠左、跟着内容滚动，滚上去后收成顶部居中的小标题，状态栏和导航栏区域渐渐出现毛玻璃模糊（iOS 26 上是系统的滚动边缘效果）。用 `.largeTitleNavigationBar("标题")`，右上角搜索用 `NavigationSearchButton`。页面根视图必须是滚动视图；从这些页面推出去的二级页面要写 `.navigationBarTitleDisplayMode(.inline)`，否则会继承大标题。内容不够长、滚不动的页面，系统本来就不会收缩标题。
 
 ## 新增页面时
 
-1. 用 `DesignPage` / `DesignGroup` / `LibraryActionRow` / `PrimaryActionStyle` 搭，不要自己写背景和字号。
+1. 用 `DesignPage` / `ScreenTitleBar` / `DesignGroup` / `LibraryActionRow` / `PrimaryActionStyle` 搭，不要自己写背景和字号。
 2. 图标只从 `AppIcon` 取；弹层右上角用 `SheetCloseButton`。
 3. 列表和网格里的卡片加 `.reveal(index, id: 卡片id)`（一定要带 id），可点的东西加 `.buttonStyle(.pressable)`。
 4. 二级页面加 `.hidesTabBar()`；页面根视图加 `.designScreen("名字")`，并在 `docs/prototype-coverage.json` 和 `ScreenCatalogUITests` 里登记。

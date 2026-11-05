@@ -25,34 +25,36 @@ struct PageIntroduction: View {
     }
 }
 
-/// 一级页面（片库、网盘、我的）用系统导航栏的大标题，和系统「设置」一样：
-/// 大标题靠左、跟着内容滚动；滚上去后收成顶部居中的小标题，状态栏和导航栏区域渐渐出现模糊的毛玻璃
-/// （iOS 26 上是系统的滚动边缘效果，更早的系统是标准的半透明导航栏）。
-/// 页面的根视图必须是滚动视图，系统才能跟踪它的滚动来收缩标题。
-/// 从这些页面推出去的二级页面都要自己写 `.navigationBarTitleDisplayMode(.inline)`，
-/// 否则会继承这里的大标题。
-extension View {
-    func largeTitleNavigationBar(_ title: String) -> some View {
-        navigationTitle(title)
-            .navigationBarTitleDisplayMode(.large)
-            .toolbar(.visible, for: .navigationBar)
+/// 一级页面（片库、网盘、我的）顶部的大标题行，右侧放图标按钮。
+struct ScreenTitleBar<Trailing: View>: View {
+    let title: String
+    var subtitle = ""
+    @ViewBuilder var trailing: () -> Trailing
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text(title)
+                    .font(.system(size: 26, weight: .bold))
+                    .accessibilityAddTraits(.isHeader)
+                if !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(Theme.textSecondary)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 8)
+            HStack(spacing: 0, content: trailing)
+        }
+        .padding(.horizontal, Theme.contentInset)
+        .frame(height: 44)
     }
 }
 
-/// 导航栏右侧的搜索按钮（用系统工具栏按钮，iOS 26 上自带液态玻璃底）。
-struct NavigationSearchButton: ToolbarContent {
-    let label: String
-    let identifier: String
-    let action: () -> Void
-
-    var body: some ToolbarContent {
-        ToolbarItem(placement: .topBarTrailing) {
-            Button(action: action) {
-                Image(systemName: AppIcon.search.name)
-            }
-            .accessibilityLabel(label)
-            .accessibilityIdentifier(identifier)
-        }
+extension ScreenTitleBar where Trailing == EmptyView {
+    init(_ title: String, subtitle: String = "") {
+        self.init(title: title, subtitle: subtitle) { EmptyView() }
     }
 }
 

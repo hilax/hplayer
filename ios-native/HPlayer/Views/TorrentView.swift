@@ -145,7 +145,6 @@ struct TorrentView: View {
             DesignNotice(text: "需要先完成 115 官方授权。手机导入的种子会上传到网盘根目录；创建任务可能使用云下载配额。")
         }
         .navigationTitle("BT 云下载")
-        .navigationBarTitleDisplayMode(.inline)
         .designScreen("torrent")
         .navigationDestination(isPresented: $showingFiles) {
             if let info {
