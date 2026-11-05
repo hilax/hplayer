@@ -391,6 +391,11 @@ private final class ScriptedHTTPServer: @unchecked Sendable {
                 if sent <= 0 { return }
                 offset += sent
             }
+            // 响应头和一部分内容刚发出去、连接就紧跟着关掉的话，系统的网络层往往直接报「连接断了」，
+            // 连已经收到的响应头都不交给 App。真实的断线是传了一阵子才发生的，所以短暂停一下再关，
+            // 让中转先拿到响应头和前半段内容。
+            let declared = headers["Content-Length"].flatMap { Int($0) } ?? body.count
+            if body.count < declared { usleep(500_000) }
         }
     }
 }
