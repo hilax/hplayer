@@ -285,7 +285,10 @@ private final class ScriptedUpstream: URLProtocol {
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
             if !body.isEmpty { client?.urlProtocol(self, didLoad: body) }
             if let thenFail {
-                client?.urlProtocol(self, didFailWithError: URLError(thenFail))
+                // 数据先到、过一小会儿才断：真实的网络就是这样。马上报错的话，URLSession 会连已经到的响应和数据一起丢掉
+                DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) { [self] in
+                    client?.urlProtocol(self, didFailWithError: URLError(thenFail))
+                }
             } else {
                 client?.urlProtocolDidFinishLoading(self)
             }
