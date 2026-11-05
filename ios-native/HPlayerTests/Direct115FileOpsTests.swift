@@ -31,6 +31,14 @@ final class Direct115FileOpsTests: XCTestCase {
         }
     }
 
+    func testRecycleIDsAcceptWhatTheServerGivesButNotSymbols() throws {
+        XCTAssertEqual(try Direct115Client.validatedRecycleID(" 3012345678901 "), "3012345678901")
+        XCTAssertEqual(try Direct115Client.validatedRecycleID("r9_a-1"), "r9_a-1")
+        for bad in ["", "   ", "a b", "1&rid=2", "1/2", "１２", String(repeating: "1", count: 41)] {
+            XCTAssertThrowsError(try Direct115Client.validatedRecycleID(bad), bad)
+        }
+    }
+
     func testSecurityKeyMustBeSixDigits() throws {
         XCTAssertEqual(try Direct115Client.validatedSecurityKey(" 123456 "), "123456")
         for bad in ["", "12345", "1234567", "12345a"] {

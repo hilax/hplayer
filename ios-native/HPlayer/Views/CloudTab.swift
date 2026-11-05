@@ -1,12 +1,18 @@
 import SwiftUI
 
+/// 网盘页导航栈里的页面：某个文件夹，或文件管理的二级页面（离线下载、回收站、下载管理）
+enum CloudRoute: Hashable {
+    case folder(Crumb)
+    case page(ManagementPage)
+}
+
 /// 网盘：115 账号卡片、四个工具入口，以及进入网盘文件浏览的入口。
 struct CloudTab: View {
     var onSearch: () -> Void = {}
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var localStore: LocalMediaStore
     @EnvironmentObject private var accountInfo: P115AccountInfoStore
-    @State private var path: [Crumb] = []
+    @State private var path: [CloudRoute] = []
     @State private var playing: PlaybackQueue?
     @State private var showDirectLogin = false
     @State private var connecting = false
@@ -40,15 +46,8 @@ struct CloudTab: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(.hidden, for: .navigationBar)
             .designScreen(appState.isAuthenticated ? "library" : "library-empty")
-            .navigationDestination(for: Crumb.self) { crumb in
-                DirectoryView(cid: crumb.cid, trail: trail(to: crumb), onJump: { jump(to: $0) },
-                              onOpenDir: { path.append($0) }, onPlay: { file, files in
-                    let source = PlaybackSource.p115(title: file.name, pickCode: file.pickCode)
-                    playing = PlaybackQueue(source: source, items: files.map { .p115(title: $0.name, pickCode: $0.pickCode) })
-                })
-                .navigationTitle(crumb.name)
-                .toolbar(.visible, for: .navigationBar)
-                .hidesTabBar()
+            .navigationDestination(for: CloudRoute.self) { route in
+                destination(route)
             }
         }
         .playerWindow(item: $playing) { queue in
@@ -58,7 +57,7 @@ struct CloudTab: View {
             NavigationStack {
                 CookieWebLoginView {
                     showDirectLogin = false
-                    path.append(Crumb(cid: "0", name: "115 网盘"))
+                    path.append(.folder(Crumb(cid: "0", name: "115 网盘")))
                 }
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { showDirectLogin = false } } }
             }
@@ -132,16 +131,19 @@ struct CloudTab: View {
         .accessibilityIdentifier("library.account")
     }
 
-    /// 四个工具入口：磁力播放、BT 云下载、本机视频、磁力聚合。
+    /// 四个工具入口：磁力播放、离线下载、本机视频、磁力聚合。
     /// 媒体库管理放在「我的」页，这里不再重复。
     private var toolGrid: some View {
         HStack(spacing: 8) {
             NavigationLink { MagnetPlayerView().hidesTabBar() } label: {
                 toolTile(icon: .link, title: "磁力播放")
             }
-            NavigationLink { TorrentView().hidesTabBar() } label: {
-                toolTile(icon: .download, title: "BT 云下载")
+            Button {
+                openPage(.offline)
+            } label: {
+                toolTile(icon: .cloudDownload, title: "离线下载")
             }
+            .accessibilityIdentifier("library.offline")
             NavigationLink { LocalVideosView().hidesTabBar() } label: {
                 toolTile(icon: .device, title: "本机视频", badge: localStore.files.isEmpty ? "" : "\(localStore.files.count)")
             }
@@ -187,37 +189,108 @@ struct CloudTab: View {
 
     // MARK: 路径
 
-    /// 从网盘根目录到这一层的路径，用来画面包屑
-    private func trail(to crumb: Crumb) -> [Crumb] {
-        guard let index = path.firstIndex(of: crumb) else { return [crumb] }
-        return Array(path.prefix(through: index))
+    @ViewBuilder
+    private func destination(_ route: CloudRoute) -> some View {
+        switch route {
+        case .folder(let crumb):
+            folderPage(crumb)
+        case .page(let page):
+            managementPage(page)
+        }
     }
 
+    private func folderPage(_ crumb: Crumb) -> some View {
+        DirectoryView(cid: crumb.cid, trail: trail(to: crumb), onJump: { jump(to: $0) },
+                      onOpenDir: { path.append(.folder($0)) }, onPlay: { file, files in
+            let source = PlaybackSource.p115(title: file.name, pickCode: file.pickCode)
+            playing = PlaybackQueue(source: source, items: files.map { .p115(title: $0.name, pickCode: $0.pickCode) })
+        }, management: true, onOpenPage: { path.append(.page($0)) })
+        .navigationTitle(crumb.name)
+        .toolbar(.visible, for: .navigationBar)
+        .hidesTabBar()
+    }
+
+    @ViewBuilder
+    private func managementPage(_ page: ManagementPage) -> some View {
+        switch page {
+        case .offline:
+            OfflineTasksView(onShowFolder: { showFolder($0) }).hidesTabBar()
+        case .recycleBin:
+            RecycleBinView().hidesTabBar()
+        case .downloads:
+            DownloadsView().hidesTabBar()
+        }
+    }
+
+    /// 只有文件夹页面才算面包屑里的一级
+    private var folderCrumbs: [Crumb] {
+        path.compactMap { route -> Crumb? in
+            if case .folder(let crumb) = route { return crumb }
+            return nil
+        }
+    }
+
+    /// 从网盘根目录到这一层的路径，用来画面包屑
+    private func trail(to crumb: Crumb) -> [Crumb] {
+        let crumbs = folderCrumbs
+        guard let index = crumbs.firstIndex(of: crumb) else { return [crumb] }
+        return Array(crumbs.prefix(through: index))
+    }
+
+    /// 回到面包屑里的第 `index` 级文件夹：它上面的页面全部收起
     private func jump(to index: Int) {
-        guard index >= 0, index < path.count - 1 else { return }
-        path.removeLast(path.count - 1 - index)
+        var seen = -1
+        var target: Int?
+        for (position, route) in path.enumerated() {
+            if case .folder = route {
+                seen += 1
+                if seen == index {
+                    target = position
+                    break
+                }
+            }
+        }
+        guard let target, target < path.count - 1 else { return }
+        path.removeLast(path.count - 1 - target)
+    }
+
+    /// 离线任务页的「在网盘中查看」：直接定位到那个文件夹
+    private func showFolder(_ entries: [Direct115PathEntry]) {
+        guard let first = entries.first else { return }
+        var routes: [CloudRoute] = [.folder(Crumb(cid: first.id, name: "115 网盘"))]
+        for entry in entries.dropFirst() {
+            routes.append(.folder(Crumb(cid: entry.id, name: entry.name)))
+        }
+        path = routes
+    }
+
+    /// 打开离线下载这类二级页面；没登录时先去登录
+    private func openPage(_ page: ManagementPage) {
+        guard appState.isAuthenticated, appState.directClient() != nil else {
+            showDirectLogin = true
+            return
+        }
+        path.append(.page(page))
     }
 
     // MARK: 状态文字
 
     private var primaryActionTitle: String {
-        if !appState.isAuthenticated { return "登录 115" }
-        if let status, !status.configured { return "完成 115 授权" }
-        return "浏览全部文件"
+        appState.isAuthenticated ? "浏览全部文件" : "登录 115"
     }
 
     private var syncText: String {
         guard appState.isAuthenticated else { return "未连接" }
         if !accountInfo.error(for: appState.sessionID).isEmpty { return "状态待确认" }
         guard let status else { return "检查中" }
-        return status.configured && status.error == nil ? "已连接" : "待授权"
+        return status.error == nil ? "已连接" : "状态待确认"
     }
 
     private var statusColor: Color {
         guard appState.isAuthenticated else { return Color(uiColor: .systemGray3) }
         if !accountInfo.error(for: appState.sessionID).isEmpty { return Theme.warning }
         guard let status else { return Color(uiColor: .systemGray3) }
-        return status.configured && status.error == nil ? Theme.success : Theme.warning
+        return status.error == nil ? Theme.success : Theme.warning
     }
 
     private func quotaRatio(_ quota: QuotaResponse) -> Double {
@@ -239,7 +312,7 @@ struct CloudTab: View {
             let loadedStatus = try await direct.user()
             guard !Task.isCancelled, sessionID == appState.sessionID, requestID == openRequestID else { return }
             accountInfo.record(loadedStatus, for: sessionID)
-            path.append(Crumb(cid: "0", name: "115 网盘"))
+            path.append(.folder(Crumb(cid: "0", name: "115 网盘")))
         } catch {
             guard !Task.isCancelled, sessionID == appState.sessionID, requestID == openRequestID else { return }
             connectionError = error.localizedDescription

@@ -39,6 +39,19 @@ extension P115File {
     }
 }
 
+extension P115File {
+    /// 改名、移动之后的新记录；其余字段保持不变。
+    func replacing(name: String? = nil, parentId: String? = nil) -> P115File {
+        P115File(id: id, parentId: parentId ?? self.parentId, name: name ?? self.name, isDir: isDir, kind: kind,
+                 size: size, pickCode: pickCode, sha1: sha1, updatedAt: updatedAt, thumbUrl: thumbUrl)
+    }
+
+    /// 文件名里的扩展名（大写），例如 MKV；没有扩展名时为空
+    var extensionLabel: String {
+        isDir ? "" : (name as NSString).pathExtension.uppercased()
+    }
+}
+
 struct MediaInfo: Codable {
     let container: String
     let videoCodec: String

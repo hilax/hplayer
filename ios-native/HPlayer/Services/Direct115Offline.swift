@@ -81,6 +81,12 @@ struct Direct115CloudVideo {
     let folder: String
 }
 
+/// 文件夹路径上的一级：编号加名称
+struct Direct115PathEntry: Equatable {
+    let id: String
+    let name: String
+}
+
 enum Direct115OfflineError: LocalizedError {
     case quotaExhausted
     case invalidLink
@@ -249,6 +255,21 @@ extension Direct115Client {
         guard let url = components.url else { throw APIError.badURL }
         let json = try jsonObject(try await send(url))
         return Self.parseFolderPath(json)
+    }
+
+    /// 文件夹从根目录开始的每一级（带编号），用来在网盘里定位到它。读不到时返回空数组。
+    func folderTrail(id: String) async throws -> [Direct115PathEntry] {
+        let cid = try Self.validatedID(id, allowRoot: true)
+        guard var components = URLComponents(string: "https://webapi.115.com/files") else { throw APIError.badURL }
+        components.queryItems = [
+            URLQueryItem(name: "aid", value: "1"), URLQueryItem(name: "cid", value: cid),
+            URLQueryItem(name: "offset", value: "0"), URLQueryItem(name: "limit", value: "1"),
+            URLQueryItem(name: "show_dir", value: "1"), URLQueryItem(name: "format", value: "json"),
+            URLQueryItem(name: "fc_mix", value: "0"),
+        ]
+        guard let url = components.url else { throw APIError.badURL }
+        let json = try jsonObject(try await send(url))
+        return Self.parseFolderTrail(json)
     }
 
     /// 离线完成后找出里面的视频：结果是文件夹就往下找（最多三层），是单个文件就按名称搜索
@@ -465,6 +486,16 @@ extension Direct115Client {
             if text(entry["cid"]) == "0" { return "网盘" }
             let name = text(entry["name"])
             return name.isEmpty ? nil : name
+        }
+    }
+
+    static func parseFolderTrail(_ json: [String: Any]) -> [Direct115PathEntry] {
+        (json["path"] as? [[String: Any]] ?? []).compactMap { entry -> Direct115PathEntry? in
+            let id = text(entry["cid"])
+            guard !id.isEmpty else { return nil }
+            if id == "0" { return Direct115PathEntry(id: "0", name: "网盘") }
+            let name = text(entry["name"])
+            return name.isEmpty ? nil : Direct115PathEntry(id: id, name: name)
         }
     }
 

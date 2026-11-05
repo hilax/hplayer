@@ -16,40 +16,45 @@ final class ScreenCatalogUITests: XCTestCase {
     func test12Library() { capture("library", expected: "网盘") }
     func test13LibraryEmpty() { capture("library-empty", expected: "网盘") }
     func test14Files() { capture("files", expected: "影视收藏") }
-    func test15FilesSelect() { capture("files-select", expected: "选择视频") }
-    func test16Local() { capture("local", expected: "本机视频") }
-    func test17Search() { capture("search", expected: "找到你想看的") }
-    func test18SearchResults() { capture("search-results", expected: "沙丘 2") }
-    func test19SearchEmpty() { capture("search-empty", expected: "暂时没有找到") }
-    func test20Manage() { capture("manage", expected: "媒体库管理") }
-    func test21FolderPicker() { capture("folder-picker", expected: "选择要扫描的文件夹") }
-    func test22Unmatched() { capture("unmatched", expected: "未匹配影片") }
-    func test23Match() { capture("match", expected: "匹配封面") }
-    func test24Metadata() { capture("metadata", expected: "资料来源") }
-    func test25Credentials() { capture("credentials", expected: "资料接口凭证") }
-    func test26Settings() { capture("settings", expected: "我的") }
-    func test27Appearance() { capture("appearance", expected: "外观") }
-    func test28Connect115() { capture("connect115", expected: "连接 115 网盘") }
-    func test29Official() { capture("official", expected: "115 官方授权") }
-    func test30Licenses() { capture("licenses", expected: "开源许可") }
-    func test31Magnet() { capture("magnet", expected: "磁力在线播放") }
-    func test32Resolving() { capture("resolving", expected: "正在获取影片目录") }
-    func test33MagnetFiles() { capture("magnet-files", expected: "资源目录") }
-    func test34Torrent() { capture("torrent", expected: "BT 云下载") }
-    func test35TorrentFiles() { capture("torrent-files", expected: "选择下载文件") }
-    func test36Portrait() { capture("portrait", expected: "portrait") }
-    func test37Landscape() { capture("landscape", expected: "landscape") }
-    func test38Playback() { capture("playback", expected: "播放设置") }
-    func test39Tracks() { capture("tracks", expected: "字幕与音轨") }
-    func test40Episodes() { capture("episodes", expected: "选集") }
-    func test41Aspect() { capture("aspect", expected: "画面比例") }
-    func test42HomeLight() { capture("home", expected: "播放", style: "light") }
-    func test43LibraryLight() { capture("library", expected: "网盘", style: "light") }
-    func test44FilesLight() { capture("files", expected: "影视收藏", style: "light") }
-    func test45SearchLight() { capture("search-results", expected: "沙丘 2", style: "light") }
-    func test46MetadataLight() { capture("metadata", expected: "资料来源", style: "light") }
-    func test47SettingsLight() { capture("settings", expected: "我的", style: "light") }
-    func test48Catalog() { capture("catalog", expected: "片库") }
+    func test15FilesSelect() { capture("files-select", expected: "已选 3 项") }
+    func test16FilesMenu() { capture("files-menu", expected: "新建文件夹") }
+    func test17FilesDelete() { capture("files-delete", expected: "删除 3 项？") }
+    func test18FilesMove() { capture("files-move", expected: "选择目标文件夹") }
+    func test19FileInfo() { capture("file-info", expected: "文件信息") }
+    func test20Recycle() { capture("recycle", expected: "回收站") }
+    func test21Offline() { capture("offline", expected: "离线下载") }
+    func test22OfflineAdd() { capture("offline-add", expected: "添加离线任务") }
+    func test23Downloads() { capture("downloads", expected: "下载管理") }
+    func test24Local() { capture("local", expected: "本机视频") }
+    func test25Search() { capture("search", expected: "找到你想看的") }
+    func test26SearchResults() { capture("search-results", expected: "沙丘 2") }
+    func test27SearchEmpty() { capture("search-empty", expected: "暂时没有找到") }
+    func test28Manage() { capture("manage", expected: "媒体库管理") }
+    func test29FolderPicker() { capture("folder-picker", expected: "选择要扫描的文件夹") }
+    func test30Unmatched() { capture("unmatched", expected: "未匹配影片") }
+    func test31Match() { capture("match", expected: "匹配封面") }
+    func test32Metadata() { capture("metadata", expected: "资料来源") }
+    func test33Credentials() { capture("credentials", expected: "资料接口凭证") }
+    func test34Settings() { capture("settings", expected: "我的") }
+    func test35Appearance() { capture("appearance", expected: "外观") }
+    func test36Connect115() { capture("connect115", expected: "连接 115 网盘") }
+    func test37Licenses() { capture("licenses", expected: "开源许可") }
+    func test38Magnet() { capture("magnet", expected: "磁力在线播放") }
+    func test39Resolving() { capture("resolving", expected: "正在获取影片目录") }
+    func test40MagnetFiles() { capture("magnet-files", expected: "资源目录") }
+    func test41Portrait() { capture("portrait", expected: "portrait") }
+    func test42Landscape() { capture("landscape", expected: "landscape") }
+    func test43Playback() { capture("playback", expected: "播放设置") }
+    func test44Tracks() { capture("tracks", expected: "字幕与音轨") }
+    func test45Episodes() { capture("episodes", expected: "选集") }
+    func test46Aspect() { capture("aspect", expected: "画面比例") }
+    func test47HomeLight() { capture("home", expected: "播放", style: "light") }
+    func test48LibraryLight() { capture("library", expected: "网盘", style: "light") }
+    func test49FilesLight() { capture("files", expected: "影视收藏", style: "light") }
+    func test50SearchLight() { capture("search-results", expected: "沙丘 2", style: "light") }
+    func test51MetadataLight() { capture("metadata", expected: "资料来源", style: "light") }
+    func test52SettingsLight() { capture("settings", expected: "我的", style: "light") }
+    func test53Catalog() { capture("catalog", expected: "片库") }
 
     private func capture(_ screen: String, expected: String, style: String = "dark") {
         continueAfterFailure = false
@@ -93,10 +98,16 @@ final class ScreenCatalogUITests: XCTestCase {
         }
         if screen == "add" { app.buttons["home.sources"].tap() }
         if screen == "film-menu" { app.buttons["影片选项"].tap() }
+        if screen == "files-menu" {
+            // 目录页右上角的「更多」菜单：点开后截图
+            let menu = app.buttons["library.menu"]
+            XCTAssertTrue(menu.waitForExistence(timeout: 10))
+            menu.tap()
+        }
         if screen != "portrait" && screen != "landscape" {
             XCTAssertTrue(wait {
                 if screen == "home" { return app.buttons["home.heroPlay"].exists }
-                return app.staticTexts[expected].firstMatch.exists || app.navigationBars[expected].exists
+                return self.shows(expected, in: app)
             }, "Missing native state: \(screen)")
         }
         if screen.hasPrefix("home") {
@@ -109,12 +120,28 @@ final class ScreenCatalogUITests: XCTestCase {
             XCTAssertTrue(bar.exists)
             XCTAssertFalse(bar.staticTexts["首页"].exists)
         }
+        if screen == "files-menu" {
+            // 菜单里要有离线下载、回收站、下载管理三个入口
+            for title in ["离线下载", "回收站", "下载管理"] {
+                XCTAssertTrue(wait { self.shows(title, in: app) }, "Missing menu entry: \(title)")
+            }
+        }
         // Allow the native presentation transition and localhost artwork requests to finish.
         Thread.sleep(forTimeInterval: 1.2)
         let shot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         shot.name = "Prototype41-\(screen)-\(style)"
         shot.lifetime = .keepAlways
         add(shot)
+    }
+
+    /// 页面上有没有这段文字：静态文字、导航栏标题，或者菜单里的按钮。
+    /// 按文字内容比较，因为带了无障碍标识的元素不一定能直接用文字下标找到。
+    private func shows(_ text: String, in app: XCUIApplication) -> Bool {
+        if app.staticTexts[text].firstMatch.exists || app.navigationBars[text].exists { return true }
+        let byLabel = NSPredicate(format: "label == %@", text)
+        return app.staticTexts.matching(byLabel).firstMatch.exists
+            || app.buttons.matching(byLabel).firstMatch.exists
+            || app.menuItems.matching(byLabel).firstMatch.exists
     }
 
     private func wait(_ predicate: @escaping () -> Bool) -> Bool {

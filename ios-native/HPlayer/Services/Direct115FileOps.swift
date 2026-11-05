@@ -251,7 +251,7 @@ extension Direct115Client {
     }
 
     func restoreFromRecycleBin(_ ids: [String]) async throws {
-        let list = try ids.map { try Self.validatedID($0) }
+        let list = try ids.map { try Self.validatedRecycleID($0) }
         try await Self.inBatches(list) { batch in
             var form: [String: String] = [:]
             for (index, id) in batch.enumerated() { form["rid[\(index)]"] = id }
@@ -264,7 +264,7 @@ extension Direct115Client {
     /// 安全密钥是 6 位数字；账号没有开启时用默认值即可。
     func deleteFromRecycleBin(_ ids: [String], securityKey: String = Direct115Client.defaultSecurityKey) async throws {
         let key = try Self.validatedSecurityKey(securityKey)
-        let list = try ids.map { try Self.validatedID($0) }
+        let list = try ids.map { try Self.validatedRecycleID($0) }
         let batches: [[String]] = list.isEmpty ? [[]] : Self.batches(list, size: Self.fileBatchSize)
         for (position, batch) in batches.enumerated() {
             if position > 0 { try await Task.sleep(nanoseconds: Self.batchPause) }
@@ -309,6 +309,16 @@ extension Direct115Client {
     static func validatedID(_ raw: String, allowRoot: Bool = false) throws -> String {
         let id = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !id.isEmpty, id.count <= 20, id.allSatisfy({ $0.isASCII && $0.isNumber }), allowRoot || id != "0" else {
+            throw Direct115FileError.invalidID
+        }
+        return id
+    }
+
+    /// 回收站条目的编号是 115 自己生成的，通常是数字；这里只挡掉空值和奇怪的符号，不强求全是数字。
+    static func validatedRecycleID(_ raw: String) throws -> String {
+        let id = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty, id.count <= 40,
+              id.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_" || $0 == "-") }) else {
             throw Direct115FileError.invalidID
         }
         return id

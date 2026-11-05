@@ -200,6 +200,8 @@ final class DownloadManagerTests: XCTestCase {
     private var root: URL!
     private var library: URL!
     private var loose: URL!
+    /// DownloadManager 只弱引用本地视频库；测试里用 `_` 丢掉返回值时，库会被立刻释放，下载就落到别的目录
+    private var retainedMedia: [LocalMediaStore] = []
 
     override func setUpWithError() throws {
         root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -217,6 +219,7 @@ final class DownloadManagerTests: XCTestCase {
             looseDirectory: loose, maxConcurrent: maxConcurrent, protocolClasses: [RoutedURLProtocol.self],
             retryDelays: retryDelays, freeSpace: freeSpace)
         manager.media = media
+        retainedMedia.append(media)
         manager.requestProvider = { _ in URLRequest(url: URL(string: "https://dl.example.test/file")!) }
         return (manager, media)
     }

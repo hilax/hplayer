@@ -205,15 +205,6 @@ struct SettingsView: View {
             }
             .buttonStyle(.pressable(scale: 0.985))
             .accessibilityIdentifier("mine.sources")
-            rowDivider
-            NavigationLink {
-                Official115SettingsView(onSourceChanged: {}).hidesTabBar()
-            } label: {
-                LibraryActionRow(symbol: AppIcon.verified.name, title: "115 官方授权",
-                                 subtitle: "BT 云下载等官方接口使用")
-            }
-            .buttonStyle(.pressable(scale: 0.985))
-            .accessibilityIdentifier("mine.official")
         }
     }
 

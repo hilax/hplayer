@@ -35,6 +35,8 @@ enum AppIcon: String, CaseIterable {
     case link, key, keyHorizontal, privacy, verified, checklist
     case download, cloudDownload, cloudReady, cloudFailed, cloudLocked
     case network, fast, scan, qrScan, switchAccount, logout
+    // MARK: 文件管理
+    case rename, moveTo, newFolder, recycleBin, restore, sort, paste, share
 
     // MARK: 外观
     case appearance, appearanceLight, appearanceDark, appearanceSystem
@@ -152,6 +154,14 @@ enum AppIcon: String, CaseIterable {
         case .qrScan: return "qrcode.viewfinder"
         case .switchAccount: return "arrow.triangle.2.circlepath"
         case .logout: return "rectangle.portrait.and.arrow.right"
+        case .rename: return "pencil"
+        case .moveTo: return "arrowshape.turn.up.right"
+        case .newFolder: return "folder.badge.plus"
+        case .recycleBin: return "trash.circle"
+        case .restore: return "arrow.uturn.backward"
+        case .sort: return "arrow.up.arrow.down"
+        case .paste: return "doc.on.clipboard"
+        case .share: return "square.and.arrow.up"
 
         case .appearance: return "moon"
         case .appearanceLight: return "sun.max.fill"

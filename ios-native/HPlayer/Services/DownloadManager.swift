@@ -304,6 +304,14 @@ final class DownloadManager: ObservableObject {
         save()
     }
 
+    #if DEBUG
+    /// 界面预览用：直接放入几条下载记录和速度，不会开始真正的下载，也不会写入磁盘
+    func setItemsForPreview(_ preview: [DownloadItem], speeds previewSpeeds: [UUID: Double] = [:]) {
+        items = preview
+        speeds = previewSpeeds
+    }
+    #endif
+
     // MARK: 前后台
 
     func sceneDidEnterBackground() {

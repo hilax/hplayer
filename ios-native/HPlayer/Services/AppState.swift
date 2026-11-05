@@ -97,7 +97,4 @@ final class AppState: ObservableObject {
         isAuthenticated = false
         sessionID = UUID()
     }
-
-    /// 115 开放平台接口（云下载、种子），在手机上本地实现
-    func client() -> APIClient? { APIClient() }
 }
