@@ -37,7 +37,38 @@ final class RoutedURLProtocol: URLProtocol {
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
+    /// URLSession 会把 POST 的 httpBody 换成数据流交给协议；这里先读出来放回 httpBody，路由函数和测试断言都能直接看到表单内容。
+    private static func materialized(_ request: URLRequest) -> URLRequest {
+        guard request.httpBody == nil, let stream = request.httpBodyStream else { return request }
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while stream.hasBytesAvailable {
+            let count = stream.read(&buffer, maxLength: buffer.count)
+            if count <= 0 { break }
+            data.append(buffer, count: count)
+        }
+        var copy = request
+        copy.httpBodyStream = nil
+        copy.httpBody = data
+        return copy
+    }
+
+    /// 把表单请求的内容拆成键值对
+    static func form(of request: URLRequest) -> [String: String] {
+        let text = String(decoding: request.httpBody ?? Data(), as: UTF8.self)
+        var result: [String: String] = [:]
+        for pair in text.split(separator: "&") {
+            let parts = pair.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+            guard let key = parts.first?.removingPercentEncoding else { continue }
+            result[key] = parts.count > 1 ? (parts[1].removingPercentEncoding ?? "") : ""
+        }
+        return result
+    }
+
     override func startLoading() {
+        let request = Self.materialized(self.request)
         Self.lock.lock()
         Self.recorded.append(request)
         let route = Self.route

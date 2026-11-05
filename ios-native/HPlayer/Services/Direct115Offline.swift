@@ -1,7 +1,7 @@
 import Foundation
 
 /// 115 云下载（离线下载）任务
-struct Direct115OfflineTask: Equatable {
+struct Direct115OfflineTask: Equatable, Identifiable {
     enum Status: Equatable {
         case waiting
         case downloading
@@ -19,6 +19,60 @@ struct Direct115OfflineTask: Equatable {
     let fileID: String
     /// 保存到的目录
     let folderID: String
+    /// 115 返回的任务编号原文；删除任务时原样交回给 115
+    var remoteHash: String = ""
+    /// 添加任务时用的链接
+    var sourceURL: String = ""
+    var addedAt: Date? = nil
+    /// 字节/秒，只有下载中才有
+    var speed: Double = 0
+    /// 预计剩余秒数，0 表示未知
+    var remainingSeconds: Int = 0
+
+    var id: String { infoHash.isEmpty ? remoteHash : infoHash }
+
+    /// 任务来源，用来在列表里写「磁力链接」「HTTP 链接」
+    var sourceLabel: String {
+        let link = sourceURL.lowercased()
+        if link.hasPrefix("magnet:") { return "磁力链接" }
+        if link.hasPrefix("ed2k:") { return "电驴链接" }
+        if link.hasPrefix("ftp:") || link.hasPrefix("ftps:") { return "FTP 链接" }
+        if link.hasPrefix("http:") || link.hasPrefix("https:") { return "HTTP 链接" }
+        return "离线任务"
+    }
+}
+
+/// 离线任务列表的一页
+struct Direct115OfflinePage: Equatable {
+    var tasks: [Direct115OfflineTask]
+    /// 全部任务数；115 没有返回时等于已经看到的数量
+    var total: Int
+    var page: Int
+    var pageCount: Int
+
+    var hasMore: Bool { page < pageCount && !tasks.isEmpty }
+}
+
+/// 批量添加的结果：每条链接分别成功或失败
+struct Direct115OfflineAddSummary {
+    struct Failure {
+        let link: String
+        let error: Direct115OfflineError
+    }
+
+    /// 成功加入的条数（已经在列表里的也算）
+    let succeeded: Int
+    let failures: [Failure]
+}
+
+/// 清空离线任务时的范围；数值就是 115 接口的 flag
+enum Direct115OfflineClearScope: Int {
+    case completed = 0
+    case all = 1
+    case failed = 2
+    case running = 3
+    case completedWithFiles = 4
+    case allWithFiles = 5
 }
 
 /// 离线完成后找到的视频，folder 是相对于下载结果的文件夹路径
@@ -35,7 +89,7 @@ enum Direct115OfflineError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .quotaExhausted: return "115 离线下载额度用完了"
-        case .invalidLink: return "115 认为这个磁力链接无效"
+        case .invalidLink: return "115 认为这个链接无效"
         case .server(let message): return message
         }
     }
@@ -46,15 +100,35 @@ enum Direct115OfflineError: LocalizedError {
 extension Direct115Client {
     private static let offlineAppVersion = "27.0.5.7"
     private static let offlineUserAgent = "Mozilla/5.0 115Browser/27.0.5.7"
+    /// 一次最多提交的链接数
+    static let offlineAddLimit = 50
 
     /// 提交离线任务。任务已经存在也算成功。
     func addOfflineTask(_ link: String, userID: Int) async throws {
-        let payload = [
+        let summary = try await addOfflineTasks([link], userID: userID, folderID: nil)
+        if let failure = summary.failures.first { throw failure.error }
+    }
+
+    /// 一次提交多条链接。`folderID` 为空时保存到 115 默认的离线下载目录。
+    /// 整个请求被拒绝时抛出错误；只有部分链接失败时返回结果，由调用方告诉用户是哪几条。
+    func addOfflineTasks(_ links: [String], userID: Int, folderID: String?) async throws -> Direct115OfflineAddSummary {
+        var cleaned: [String] = []
+        var seen = Set<String>()
+        for link in links {
+            let trimmed = link.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty, seen.insert(trimmed).inserted { cleaned.append(trimmed) }
+        }
+        guard !cleaned.isEmpty else { throw Direct115OfflineError.invalidLink }
+        guard cleaned.count <= Self.offlineAddLimit else {
+            throw Direct115OfflineError.server("一次最多添加 \(Self.offlineAddLimit) 条链接")
+        }
+        var payload = [
             "ac": "add_task_urls",
             "app_ver": Self.offlineAppVersion,
             "uid": String(userID),
-            "url[0]": link,
         ]
+        if let folderID { payload["wp_path_id"] = try Self.validatedID(folderID, allowRoot: true) }
+        for (index, link) in cleaned.enumerated() { payload["url[\(index)]"] = link }
         let endpoints = [
             "https://lixian.115.com/lixianssp/?ac=add_task_urls",
             "https://clouddownload.115.com/lixianssp/?ac=add_task_urls",
@@ -64,17 +138,18 @@ extension Direct115Client {
             do {
                 let (json, key) = try await encryptedPost(endpoint, payload: payload, userAgent: Self.offlineUserAgent)
                 if Self.succeeded(json) {
-                    try Self.checkAddResult(json, key: key)
-                    return
+                    return Self.addSummary(json, key: key, links: cleaned)
                 }
                 let code = Self.errorCode(json)
                 switch code {
                 case 10008:
-                    return
+                    return Direct115OfflineAddSummary(succeeded: cleaned.count, failures: [])
                 case 10010:
                     throw Direct115OfflineError.quotaExhausted
                 case 10004:
                     throw Direct115OfflineError.invalidLink
+                case 99, 990001:
+                    throw Direct115FileError.notLoggedIn
                 default:
                     let message = Self.errorMessage(json)
                     // 没有错误码也没有说明，多半是接口地址变了，换一个地址再试
@@ -85,6 +160,8 @@ extension Direct115Client {
                     throw Direct115OfflineError.server(message.isEmpty ? "115 离线下载失败（\(code)）" : message)
                 }
             } catch let error as Direct115OfflineError {
+                throw error
+            } catch let error as Direct115FileError {
                 throw error
             } catch {
                 lastError = error
@@ -105,6 +182,12 @@ extension Direct115Client {
     }
 
     func offlineTasks(page: Int) async throws -> [Direct115OfflineTask] {
+        try await offlinePage(page).tasks
+    }
+
+    /// 读取离线任务列表的一页（页码从 1 开始）
+    func offlinePage(_ page: Int) async throws -> Direct115OfflinePage {
+        guard page >= 1 else { throw Direct115OfflineError.server("离线任务页码无效") }
         let attempts: [(address: String, post: Bool)] = [
             ("https://lixian.115.com/lixian/?ct=lixian&ac=task_lists&page=\(page)", true),
             ("https://clouddownload.115.com/web/?ac=task_lists&page=\(page)&page_size=30", false),
@@ -119,20 +202,53 @@ extension Direct115Client {
                     lastError = Direct115OfflineError.server("读取 115 离线任务失败（\(response.statusCode)）")
                     continue
                 }
-                let container = json["data"] as? [String: Any] ?? json
-                if let tasks = container["tasks"] as? [[String: Any]] ?? json["tasks"] as? [[String: Any]] {
-                    return tasks.map(Self.parseTask)
-                }
+                if let parsed = Self.parseTaskPage(json, requestedPage: page) { return parsed }
                 if Self.succeeded(json) {
-                    return []
+                    return Direct115OfflinePage(tasks: [], total: 0, page: page, pageCount: 0)
                 }
+                let code = Self.errorCode(json)
+                if code == 99 || code == 990001 { throw Direct115FileError.notLoggedIn }
                 let message = Self.errorMessage(json)
                 lastError = Direct115OfflineError.server(message.isEmpty ? "读取 115 离线任务失败" : message)
+            } catch let error as Direct115FileError {
+                throw error
             } catch {
                 lastError = error
             }
         }
         throw lastError
+    }
+
+    /// 删除任务。`deleteFiles` 为 true 时连已经下载到网盘里的文件一起删除（进回收站）。
+    func deleteOfflineTasks(_ hashes: [String], deleteFiles: Bool) async throws {
+        let list = hashes.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        guard !list.isEmpty else { return }
+        for (position, batch) in Self.batches(list, size: Self.fileBatchSize).enumerated() {
+            try Task.checkCancellation()
+            if position > 0 { try await Task.sleep(nanoseconds: 300_000_000) }
+            var form = ["flag": deleteFiles ? "1" : "0"]
+            for (index, hash) in batch.enumerated() { form["hash[\(index)]"] = hash }
+            try await offlineAction("task_del", form: form)
+        }
+    }
+
+    func clearOfflineTasks(_ scope: Direct115OfflineClearScope) async throws {
+        try await offlineAction("task_clear", form: ["flag": String(scope.rawValue)])
+    }
+
+    /// 文件夹的完整路径（从「网盘」开始）。只取一条记录，很快；读不到时返回空数组。
+    func folderPath(id: String) async throws -> [String] {
+        let cid = try Self.validatedID(id, allowRoot: true)
+        guard var components = URLComponents(string: "https://webapi.115.com/files") else { throw APIError.badURL }
+        components.queryItems = [
+            URLQueryItem(name: "aid", value: "1"), URLQueryItem(name: "cid", value: cid),
+            URLQueryItem(name: "offset", value: "0"), URLQueryItem(name: "limit", value: "1"),
+            URLQueryItem(name: "show_dir", value: "1"), URLQueryItem(name: "format", value: "json"),
+            URLQueryItem(name: "fc_mix", value: "0"),
+        ]
+        guard let url = components.url else { throw APIError.badURL }
+        let json = try jsonObject(try await send(url))
+        return Self.parseFolderPath(json)
     }
 
     /// 离线完成后找出里面的视频：结果是文件夹就往下找（最多三层），是单个文件就按名称搜索
@@ -171,7 +287,8 @@ extension Direct115Client {
         return videos
     }
 
-    /// 原文件下载地址，用来播放还没有转码的视频。地址和请求时的 User-Agent 绑定，播放器要用同一个。
+    /// 原文件下载地址，用来播放还没有转码的视频，也用来下载到手机。
+    /// 地址和请求时的 User-Agent 绑定，播放器、下载器要用同一个。
     func originalURL(pickCode: String) async throws -> URL {
         let (json, key) = try await encryptedPost("https://proapi.115.com/app/chrome/downurl", payload: ["pickcode": pickCode], userAgent: Self.userAgent)
         guard Self.succeeded(json), let text = json["data"] as? String, !text.isEmpty else {
@@ -211,23 +328,75 @@ extension Direct115Client {
         return (json, key)
     }
 
-    /// 解开添加结果，单条任务里也可能带着错误码
-    private static func checkAddResult(_ json: [String: Any], key: [UInt8]) throws {
+    /// 删除、清空这类只要知道成败的离线操作。两个接口地址依次尝试：第一个地址没有认出请求（没有成败信息）才换下一个。
+    private func offlineAction(_ action: String, form: [String: String]) async throws {
+        var body = form
+        body["ac"] = action
+        let endpoints = [
+            "https://lixian.115.com/lixian/?ct=lixian&ac=\(action)",
+            "https://clouddownload.115.com/web/?ac=\(action)",
+        ]
+        var lastError: Error = Direct115OfflineError.server("115 离线下载接口没有响应")
+        for endpoint in endpoints {
+            guard let url = URL(string: endpoint) else { continue }
+            do {
+                let (data, response) = try await send(url, form: body)
+                guard (200..<300).contains(response.statusCode) else {
+                    lastError = Direct115HTTPError(statusCode: response.statusCode)
+                    continue
+                }
+                guard let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+                    lastError = Direct115OfflineError.server("115 离线下载接口返回了无法识别的结果")
+                    continue
+                }
+                if Self.succeeded(json) { return }
+                let code = Self.errorCode(json)
+                let message = Self.errorMessage(json)
+                if code == 99 || code == 990001 { throw Direct115FileError.notLoggedIn }
+                guard code != 0 || !message.isEmpty else {
+                    lastError = Direct115OfflineError.server("115 离线下载接口返回了无法识别的结果")
+                    continue
+                }
+                throw Direct115OfflineError.server(message.isEmpty ? "115 离线下载操作失败（\(code)）" : message)
+            } catch let error as Direct115OfflineError {
+                throw error
+            } catch let error as Direct115FileError {
+                throw error
+            } catch {
+                lastError = error
+            }
+        }
+        throw lastError
+    }
+
+    /// 解开添加结果，逐条链接看成败。结果对不上号时，按全部成功处理（任务确实已经交给 115 了）。
+    static func addSummary(_ json: [String: Any], key: [UInt8], links: [String]) -> Direct115OfflineAddSummary {
         guard let text = json["data"] as? String, !text.isEmpty,
               let decoded = try? M115Cipher.decode(text, key: key),
-              let object = try? JSONSerialization.jsonObject(with: Data(decoded)) as? [String: Any] else { return }
-        let items = object["result"] as? [[String: Any]] ?? []
-        guard let first = items.first else { return }
-        let code = errorCode(first)
-        if code == 0 || code == 10008 { return }
-        if succeeded(first) { return }
-        switch code {
-        case 10010: throw Direct115OfflineError.quotaExhausted
-        case 10004: throw Direct115OfflineError.invalidLink
-        default:
-            let message = errorMessage(first)
-            throw Direct115OfflineError.server(message.isEmpty ? "115 离线下载失败（\(code)）" : message)
+              let object = try? JSONSerialization.jsonObject(with: Data(decoded)) as? [String: Any] else {
+            return Direct115OfflineAddSummary(succeeded: links.count, failures: [])
         }
+        return addSummary(results: object["result"] as? [[String: Any]] ?? [], links: links)
+    }
+
+    static func addSummary(results: [[String: Any]], links: [String]) -> Direct115OfflineAddSummary {
+        var failures: [Direct115OfflineAddSummary.Failure] = []
+        for (index, link) in links.enumerated() {
+            guard index < results.count else { continue }
+            let item = results[index]
+            let code = errorCode(item)
+            if code == 0 || code == 10008 || succeeded(item) { continue }
+            let error: Direct115OfflineError
+            switch code {
+            case 10010: error = .quotaExhausted
+            case 10004: error = .invalidLink
+            default:
+                let message = errorMessage(item)
+                error = .server(message.isEmpty ? "115 离线下载失败（\(code)）" : message)
+            }
+            failures.append(.init(link: link, error: error))
+        }
+        return Direct115OfflineAddSummary(succeeded: links.count - failures.count, failures: failures)
     }
 
     /// 列出文件夹内容；返回的目录编号和请求的不一致时，说明这个编号不是文件夹
@@ -255,7 +424,17 @@ extension Direct115Client {
 
     // MARK: 解析
 
-    private static func parseTask(_ raw: [String: Any]) -> Direct115OfflineTask {
+    static func parseTaskPage(_ json: [String: Any], requestedPage page: Int) -> Direct115OfflinePage? {
+        let container = json["data"] as? [String: Any] ?? json
+        guard let rows = container["tasks"] as? [[String: Any]] ?? json["tasks"] as? [[String: Any]] else { return nil }
+        let tasks = rows.map(parseTask)
+        let total = Int(text(container["count"] ?? json["count"])) ?? Int(text(container["total"] ?? json["total"])) ?? 0
+        let reportedPages = Int(text(container["page_count"] ?? json["page_count"])) ?? 0
+        let pageCount = reportedPages > 0 ? reportedPages : (tasks.isEmpty ? 0 : page)
+        return Direct115OfflinePage(tasks: tasks, total: max(total, tasks.count), page: page, pageCount: pageCount)
+    }
+
+    static func parseTask(_ raw: [String: Any]) -> Direct115OfflineTask {
         let percent = Double(text(raw["percentDone"])) ?? 0
         let code = Int(text(raw["status"])) ?? 0
         let status: Direct115OfflineTask.Status
@@ -272,8 +451,21 @@ extension Direct115Client {
             status: status,
             percent: min(max(percent, 0), 100),
             fileID: text(raw["file_id"]),
-            folderID: text(raw["wp_path_id"])
+            folderID: text(raw["wp_path_id"]),
+            remoteHash: text(raw["info_hash"]),
+            sourceURL: text(raw["url"]),
+            addedAt: Direct115Value.date(raw["add_time"]),
+            speed: max(0, Double(text(raw["rateDownload"])) ?? 0),
+            remainingSeconds: max(0, Int(text(raw["left_time"])) ?? 0)
         )
+    }
+
+    static func parseFolderPath(_ json: [String: Any]) -> [String] {
+        (json["path"] as? [[String: Any]] ?? []).compactMap { entry in
+            if text(entry["cid"]) == "0" { return "网盘" }
+            let name = text(entry["name"])
+            return name.isEmpty ? nil : name
+        }
     }
 
     private static let cloudVideoExtensions: Set<String> = [

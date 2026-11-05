@@ -16,21 +16,33 @@ final class LocalMediaStore: ObservableObject {
 
     private let fm = FileManager.default
     private let directory: URL?
-    private let videoExtensions: Set<String> = [
+    private let videoExtensions: Set<String> = LocalMediaStore.supportedVideoExtensions
+
+    /// 「本地视频」能识别的格式。下载到手机的视频只有扩展名在这里面的才会放进本地视频，否则列表里看不到。
+    static let supportedVideoExtensions: Set<String> = [
         "mp4", "mov", "m4v", "mkv", "avi", "ts", "flv", "webm", "wmv",
     ]
+
+    static func supportsVideoExtension(_ ext: String) -> Bool {
+        supportedVideoExtensions.contains(ext.lowercased())
+    }
+
+    /// App 沙盒里默认的本地视频文件夹
+    static var defaultMediaDirectory: URL {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let dir = docs.appendingPathComponent("Media", isDirectory: true)
+        if !FileManager.default.fileExists(atPath: dir.path) {
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        return dir
+    }
 
     var mediaDirectory: URL {
         if let directory {
             try? fm.createDirectory(at: directory, withIntermediateDirectories: true)
             return directory
         }
-        let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let dir = docs.appendingPathComponent("Media", isDirectory: true)
-        if !fm.fileExists(atPath: dir.path) {
-            try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        }
-        return dir
+        return Self.defaultMediaDirectory
     }
 
     init(directory: URL? = nil) {
