@@ -160,22 +160,26 @@ final class LocalStreamProxyTests: XCTestCase {
     /// 下载到一半被对方掐断：中转自己带上 Range 从断开的位置接着下，mpv 收到的是一条完整的响应。
     /// 用真正的 TCP 连接模拟（发一半就关 socket），走的是和线上一样的 URLSession 网络栈。
     func testResumesFromTheBreakPointWhenUpstreamDropsMidDownload() async throws {
-        let full = pattern(1000)
+        let total = 200_000
+        let cut = 80_000
+        let full = pattern(total)
         let server = try ScriptedHTTPServer([
-            .send(status: 206, headers: ["Content-Range": "bytes 0-999/1000", "Content-Length": "1000"], body: Data(full.prefix(400))),
-            .send(status: 206, headers: ["Content-Range": "bytes 400-999/1000", "Content-Length": "600"], body: Data(full.suffix(600))),
+            .send(status: 206, headers: ["Content-Type": "video/mp4", "Content-Range": "bytes 0-\(total - 1)/\(total)", "Content-Length": "\(total)"], body: Data(full.prefix(cut))),
+            .send(status: 206, headers: ["Content-Type": "video/mp4", "Content-Range": "bytes \(cut)-\(total - 1)/\(total)", "Content-Length": "\(total - cut)"], body: Data(full.suffix(total - cut))),
         ])
         defer { server.stop() }
         let proxy = LocalStreamProxy()
         proxy.setRetryDelaysForTesting([0.05, 0.05])
 
         let local = try await relayURL(proxy, upstream: server.url)
-        let fetched = try fetch(local, range: "bytes=0-999")
+        let fetched = try fetch(local, range: "bytes=0-\(total - 1)")
         let history = proxy.problemHistoryLines.joined(separator: "\n")
-        XCTAssertEqual(fetched.status, 206, "head=\(fetched.head)\n\(history)")
-        XCTAssertEqual(fetched.body, full, "断开前后的数据要接得上，不多不少；head=\(fetched.head)\n\(history)")
-        XCTAssertEqual(server.receivedRanges(), ["bytes=0-999", "bytes=400-999"], history)
-        XCTAssertTrue(history.contains("从 400 字节接着下"), history)
+        let detail = "head=\(fetched.head)\n上游收到的 Range：\(server.receivedRanges())\n\(history)"
+        XCTAssertEqual(fetched.status, 206, detail)
+        XCTAssertEqual(fetched.body.count, total, "断开前后的数据要接得上，不多不少；\(detail)")
+        XCTAssertTrue(fetched.body == full, "长度对了，内容也要和原文件一样；\(detail)")
+        XCTAssertEqual(server.receivedRanges(), ["bytes=0-\(total - 1)", "bytes=\(cut)-\(total - 1)"], detail)
+        XCTAssertTrue(history.contains("从 \(cut) 字节接着下"), detail)
     }
 
     /// 连不上（对方拒绝连接）：等一会儿再试，不要马上给 mpv 一个 502
@@ -228,20 +232,24 @@ final class LocalStreamProxyTests: XCTestCase {
 
     /// 上游不肯从断开的位置接上（直接重发了整个文件）：不能把重复的数据拼进去，断开让 mpv 自己处理
     func testRefusesToSpliceWhenUpstreamCannotResumeAtTheBreakPoint() async throws {
-        let full = pattern(1000)
+        let total = 200_000
+        let cut = 80_000
+        let full = pattern(total)
         let server = try ScriptedHTTPServer([
-            .send(status: 206, headers: ["Content-Range": "bytes 0-999/1000", "Content-Length": "1000"], body: Data(full.prefix(400))),
-            .send(status: 200, headers: ["Content-Length": "1000"], body: full),
+            .send(status: 206, headers: ["Content-Type": "video/mp4", "Content-Range": "bytes 0-\(total - 1)/\(total)", "Content-Length": "\(total)"], body: Data(full.prefix(cut))),
+            .send(status: 200, headers: ["Content-Type": "video/mp4", "Content-Length": "\(total)"], body: full),
         ])
         defer { server.stop() }
         let proxy = LocalStreamProxy()
         proxy.setRetryDelaysForTesting([0.05])
 
         let local = try await relayURL(proxy, upstream: server.url)
-        let fetched = try fetch(local, range: "bytes=0-999")
+        let fetched = try fetch(local, range: "bytes=0-\(total - 1)")
         let history = proxy.problemHistoryLines.joined(separator: "\n")
-        XCTAssertEqual(fetched.body, Data(full.prefix(400)), "只该有断开之前那 400 字节；head=\(fetched.head)\n\(history)")
-        XCTAssertTrue(history.contains("续传失败"), history)
+        let detail = "head=\(fetched.head)\n上游收到的 Range：\(server.receivedRanges())\n\(history)"
+        XCTAssertEqual(fetched.body.count, cut, "只该有断开之前那 \(cut) 字节；\(detail)")
+        XCTAssertTrue(fetched.body == Data(full.prefix(cut)), "收到的内容必须是断开之前的原样数据；\(detail)")
+        XCTAssertTrue(history.contains("续传失败"), detail)
     }
 }
 
