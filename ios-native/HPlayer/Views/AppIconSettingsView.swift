@@ -1,9 +1,10 @@
 import SwiftUI
 import UIKit
 
-private enum HomeScreenIcon: String, CaseIterable, Identifiable {
+enum HomeScreenIcon: String, CaseIterable, Identifiable {
+    case prism
     case classic, night, aurora, sunset
-    case prism, ocean, mint, iris, coral
+    case ocean, mint, iris, coral
 
     var id: String { rawValue }
 
@@ -23,11 +24,11 @@ private enum HomeScreenIcon: String, CaseIterable, Identifiable {
 
     var alternateName: String? {
         switch self {
-        case .classic: return nil
+        case .classic: return "AppIconClassic"
         case .night: return "AppIconNight"
         case .aurora: return "AppIconAurora"
         case .sunset: return "AppIconSunset"
-        case .prism: return "AppIconPrism"
+        case .prism: return nil
         case .ocean: return "AppIconOcean"
         case .mint: return "AppIconMint"
         case .iris: return "AppIconIris"
@@ -48,6 +49,12 @@ private enum HomeScreenIcon: String, CaseIterable, Identifiable {
         case .coral: return "AppIconPreviewCoral"
         }
     }
+
+    func matchesCurrentName(_ name: String?) -> Bool {
+        // Keep the white-prism selection from builds where it was an alternate.
+        if self == .prism { return name == nil || name == "AppIconPrism" }
+        return name == alternateName
+    }
 }
 
 struct AppIconSettingsView: View {
@@ -62,6 +69,12 @@ struct AppIconSettingsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 PageIntroduction(eyebrow: "App Icon", title: "应用图标", subtitle: "选择喜欢的图标，显示在主屏幕上。", showsTitle: false)
+                Button { changeIcon(to: .prism) } label: {
+                    Label("恢复默认图标", systemImage: AppIcon.refresh.name)
+                }
+                .buttonStyle(SecondaryActionStyle())
+                .disabled(isChanging || !UIApplication.shared.supportsAlternateIcons || currentName == nil)
+                .accessibilityIdentifier("settings.appIcon.restoreDefault")
                 LazyVGrid(columns: columns, spacing: 14) {
                     ForEach(HomeScreenIcon.allCases) { icon in
                         iconOption(icon)
@@ -94,7 +107,7 @@ struct AppIconSettingsView: View {
     }
 
     private func iconOption(_ icon: HomeScreenIcon) -> some View {
-        let selected = currentName == icon.alternateName
+        let selected = icon.matchesCurrentName(currentName)
         return Button {
             changeIcon(to: icon)
         } label: {
@@ -115,6 +128,11 @@ struct AppIconSettingsView: View {
                 Text(icon.title)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(Theme.textPrimary)
+                if icon == .prism {
+                    Text("默认图标")
+                        .font(.caption)
+                        .foregroundStyle(Theme.textSecondary)
+                }
             }
             .padding(12)
             .frame(maxWidth: .infinity)
