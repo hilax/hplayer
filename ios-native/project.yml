@@ -18,7 +18,7 @@ settings:
   base:
     SWIFT_VERSION: "5.9"
     MARKETING_VERSION: "1.4"
-    CURRENT_PROJECT_VERSION: "18"
+    CURRENT_PROJECT_VERSION: "19"
     IPHONEOS_DEPLOYMENT_TARGET: "16.1"
 
 targets:
@@ -58,7 +58,7 @@ targets:
       properties:
         CFBundleDisplayName: HPlayer
         CFBundleShortVersionString: "1.4"
-        CFBundleVersion: "18"
+        CFBundleVersion: "19"
         UILaunchScreen: {}
         UIApplicationSupportsIndirectInputEvents: true
         UISupportedInterfaceOrientations:

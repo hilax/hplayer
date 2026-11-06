@@ -146,6 +146,11 @@ final class PlaybackController: ObservableObject {
     /// 真的播放到了结尾（用于自动播放下一集）
     @Published private(set) var ended = false
     @Published private(set) var rate: Float = 1
+    /// Includes temporary/adaptive long-press acceleration; `rate` remains the user's setting.
+    @Published private(set) var effectiveRate: Float = 1
+    /// Sampled once a second, without refreshing the entire UI for each decoded frame.
+    private(set) var avSync: Double?
+    private(set) var boostAVSyncPeak: Double?
     @Published private(set) var decoding = VideoDecoding.saved
     @Published private(set) var readahead = ReadaheadLevel.saved
     @Published private(set) var subtitleStyle = SubtitleStyle.saved
@@ -208,6 +213,8 @@ final class PlaybackController: ObservableObject {
     /// Prevent late asynchronous opens from restarting audio while closing.
     private var closingPlayback = false
     private var boosted = false
+    private var boostDesyncSince: TimeInterval?
+    private var lastBoostReduction = -Double.infinity
     private var loaded = false
     private var opening = false
     private var pausedForCache = false
@@ -223,6 +230,9 @@ final class PlaybackController: ObservableObject {
     /// An EOF reported while seeking can belong to the previous position.
     private var eofDuringSeek = false
     private var resumePoint: Double = 0
+    private var lastConfirmedUptime: TimeInterval?
+    private var discardedPlaybackPosition = false
+    private var videoWidth: Int64 = 0
     private var videoHeight: Int64 = 0
     private var hdr = false
 
@@ -349,6 +359,8 @@ final class PlaybackController: ObservableObject {
             ("gpu-api", "vulkan"),
             ("gpu-context", "moltenvk"),
             ("hwdec", decoding == .hardware ? "videotoolbox" : "no"),
+            ("video-sync", "audio"),
+            ("framedrop", "vo"),
             // 画面处理用 mpv 给低功耗设备准备的省电档（内置的 fast 档，只保留抖动）。mpv 的默认值是给电脑显卡的：
             // lanczos 放大再加 sigmoid、线性光 + 抗锯齿缩小、每帧算 HDR 峰值，一帧要跑好几遍全屏着色器，
             // 手机 GPU 长时间满负荷就会发烫。手机屏幕像素很密，换成双线性看不出区别，GPU 的活少一大截。
@@ -403,6 +415,7 @@ final class PlaybackController: ObservableObject {
         ("aid", MPV_FORMAT_STRING),
         ("sid", MPV_FORMAT_STRING),
         ("video-params/h", MPV_FORMAT_INT64),
+        ("video-params/w", MPV_FORMAT_INT64),
         ("video-params/sig-peak", MPV_FORMAT_DOUBLE),
         ("mute", MPV_FORMAT_FLAG),
         ("hwdec-current", MPV_FORMAT_STRING),
@@ -523,6 +536,13 @@ final class PlaybackController: ObservableObject {
         seekUsesKeyframes = false
         eofDuringSeek = false
         boosted = false
+        boostDesyncSince = nil
+        lastBoostReduction = -Double.infinity
+        effectiveRate = rate
+        avSync = nil
+        boostAVSyncPeak = nil
+        lastConfirmedUptime = nil
+        discardedPlaybackPosition = false
         loaded = false
         hasPlayed = false
         pausedForCache = false
@@ -549,6 +569,7 @@ final class PlaybackController: ObservableObject {
             selectedAudio = nil
             selectedSubtitle = nil
             videoBadges = []
+            videoWidth = 0
             videoHeight = 0
             hdr = false
         }
@@ -679,20 +700,66 @@ final class PlaybackController: ObservableObject {
     private var injectedStaleEOFForUITest = false
 
     func receiveEventForTesting(_ event: MPVEngine.Event) { handle(event) }
+
+    func checkBoostSyncForTesting(_ avSync: Double?, at uptime: TimeInterval) {
+        checkBoostSync(avSync, at: uptime)
+    }
+
+    func checkHealthForTesting() { checkHealth() }
     #endif
 
     func skip(_ seconds: Double) { seek(to: max(0, currentTime + seconds)) }
 
     func setRate(_ value: Float) {
         rate = value
-        if !boosted { engine?.set("speed", Double(value)) }
+        if !boosted { applyRate(value) }
     }
 
-    /// 长按快进：画面和声音一起 3× 加速（mpv 自动保持音调）
+    /// 长按临时加速；高负载时降低倍速，松手恢复用户设置（mpv 自动保持音调）。
     func setBoost(_ enabled: Bool) {
         guard boosted != enabled else { return }
         boosted = enabled
-        engine?.set("speed", Double(enabled ? Self.boostRate : rate))
+        boostDesyncSince = nil
+        lastBoostReduction = -Double.infinity
+        if enabled { boostAVSyncPeak = nil }
+        applyRate(enabled ? preferredBoostRate : rate)
+    }
+
+    /// 4K at 3× can exceed the hardware decoder's throughput. Start at 2× and
+    /// lower only the temporary speed if sustained A/V drift shows it still cannot keep up.
+    private var preferredBoostRate: Float {
+        videoWidth >= 3840 || videoHeight >= 2160 || activeHwdec == "no" ? 2 : Self.boostRate
+    }
+
+    private func applyRate(_ value: Float) {
+        if effectiveRate != value { effectiveRate = value }
+        engine?.set("speed", Double(value))
+    }
+
+    private func limitBoostForVideo() {
+        if boosted, effectiveRate > preferredBoostRate { applyRate(preferredBoostRate) }
+    }
+
+    private func checkBoostSync(_ avSync: Double?, at uptime: TimeInterval) {
+        guard boosted, loaded, !userPaused, !pausedForCache, !seeking, pendingSeek == nil,
+              !eofReached, error.isEmpty, let avSync, avSync.isFinite else {
+            boostDesyncSince = nil
+            return
+        }
+        boostAVSyncPeak = max(boostAVSyncPeak ?? 0, abs(avSync))
+        guard abs(avSync) > 0.2 else {
+            boostDesyncSince = nil
+            return
+        }
+        guard let since = boostDesyncSince else {
+            boostDesyncSince = uptime
+            return
+        }
+        guard uptime - since >= 1, uptime - lastBoostReduction >= 2, effectiveRate > 1 else { return }
+        applyRate(max(1, effectiveRate - 0.5))
+        boostDesyncSince = nil
+        lastBoostReduction = uptime
+        logEvent("长按快进调整到 \(effectiveRate)×，保持音画同步")
     }
 
     func toggleMute() { setMuted(!muted) }
@@ -871,17 +938,30 @@ final class PlaybackController: ObservableObject {
     private func handleProperty(_ name: String, _ value: MPVEngine.Value) {
         switch (name, value) {
         case ("time-pos", .double(let time)):
+            guard time.isFinite, time >= 0 else { return }
+            // A failed read/queued event can jump straight to the file tail after
+            // seeking clears. It must not become playback history or an actual EOF.
+            if pendingSeek == nil, let confirmedTime, let lastConfirmedUptime {
+                let elapsed = max(0, ProcessInfo.processInfo.systemUptime - lastConfirmedUptime)
+                let nearEnd = duration > 0 && time >= duration - min(1.5, duration * 0.1)
+                let advance = max(nearEnd ? 1.5 : 8, elapsed * Double(effectiveRate) + 0.5)
+                if time - confirmedTime > advance || time < confirmedTime - 2 {
+                    if !discardedPlaybackPosition { logEvent("忽略未播放的位置跳变：\(Self.clock(time))") }
+                    discardedPlaybackPosition = true
+                    return
+                }
+            }
             engineTime = time
             if pendingSeek != nil { seekObservedTime = time }
             checkFailedSeek(time)
             settlePendingSeek(at: time)
-            if pendingSeek == nil {
+            if pendingSeek == nil, recoveryTask == nil, !opening {
                 if abs(time - lastPublishedTime) >= 0.25 || time < lastPublishedTime {
                     lastPublishedTime = time
                     currentTime = time
                 }
                 if time > 0 { resumePoint = time }
-                if time.isFinite, time >= 0, hasPlayed, !opening { confirmedTime = time }
+                confirmPlaybackTime(time)
             }
         case ("duration", .double(let value)):
             if value.isFinite, value > 0 {
@@ -895,6 +975,7 @@ final class PlaybackController: ObservableObject {
         case ("paused-for-cache", .flag(let value)):
             if value && !pausedForCache && !seeking { noDataSeconds = 0 }
             pausedForCache = value
+            if !value, let observed = seekObservedTime { settlePendingSeek(at: observed) }
         case ("seeking", .flag(let value)):
             if value && !seeking && !pausedForCache { noDataSeconds = 0 }
             seeking = value
@@ -943,7 +1024,11 @@ final class PlaybackController: ObservableObject {
             selectedSubtitle = nil
         case ("video-params/h", .int(let value)):
             videoHeight = value
+            limitBoostForVideo()
             updateBadges()
+        case ("video-params/w", .int(let value)):
+            videoWidth = value
+            limitBoostForVideo()
         case ("video-params/sig-peak", .double(let value)):
             hdr = value > 1
             updateBadges()
@@ -952,6 +1037,7 @@ final class PlaybackController: ObservableObject {
         case ("hwdec-current", .string(let value)):
             guard value != activeHwdec else { return }
             activeHwdec = value
+            limitBoostForVideo()
             logEvent(value == "no" ? "解码：软解码（CPU）" : "解码：硬解码（\(value)）")
             if value == "no", decoding == .hardware { warnSoftwareFallback() }
         case ("hwdec-current", .none):
@@ -982,7 +1068,8 @@ final class PlaybackController: ObservableObject {
         // resumePoint can be the requested destination, not a position mpv has played.
         guard pendingSeek == nil, !seekAwaitingRestart, !seeking, !opening, recoveryTask == nil else { return }
         let tolerance = min(1.5, duration * 0.1)
-        if hasPlayed, engineTime.isFinite, engineTime >= duration - tolerance {
+        if hasPlayed, !pausedForCache, !discardedPlaybackPosition,
+           let confirmedTime, confirmedTime >= duration - tolerance {
             ended = true
         } else if watchdogEnabled, !userPaused {
             // 没到结尾却「播完」了：多半是网络断了，从断开的位置接着连
@@ -1021,13 +1108,17 @@ final class PlaybackController: ObservableObject {
     }
 
     private func settlePendingSeek(at time: Double) {
-        guard let pending = pendingSeek, !seekAwaitingRestart, !seeking, time.isFinite else { return }
+        guard let pending = pendingSeek, !seekAwaitingRestart, !seeking, !pausedForCache, !eofReached,
+              time.isFinite, time >= 0 else { return }
         let offset = time - pending
         // A fast keyframe seek can land before its target. A later old position
         // must not confirm a new seek, especially when it is near the end.
         let nearEnd = duration > 0 && time >= duration - min(1.5, duration * 0.1)
         let reachedTarget = offset > (seekUsesKeyframes ? -30 : -2) && offset < (nearEnd ? 1 : 5)
         guard reachedTarget else { return }
+        // The notification batch can lag behind a newer seek/cache transition.
+        guard engine?.flag("seeking") != true, engine?.flag("paused-for-cache") != true,
+              engine?.flag("eof-reached") != true else { return }
         pendingSeek = nil
         seekObservedTime = nil
         if eofDuringSeek {
@@ -1039,7 +1130,14 @@ final class PlaybackController: ObservableObject {
             currentTime = time
         }
         if time > 0 { resumePoint = time }
-        if time >= 0 { confirmedTime = time }
+        confirmPlaybackTime(time)
+    }
+
+    private func confirmPlaybackTime(_ time: Double) {
+        guard hasPlayed, !opening, !seeking, !pausedForCache else { return }
+        confirmedTime = time
+        lastConfirmedUptime = ProcessInfo.processInfo.systemUptime
+        discardedPlaybackPosition = false
     }
 
     /// 跳转根本没生效（例如服务器拒绝了跳转用的新连接，还在按原来的位置播）：从目标位置重新打开
@@ -1053,7 +1151,8 @@ final class PlaybackController: ObservableObject {
     }
 
     private func updateFlags() {
-        let newBuffering = error.isEmpty && (recoveryTask != nil || opening || pausedForCache || (seeking && !userPaused))
+        let newBuffering = error.isEmpty && !ended && (recoveryTask != nil || opening || pausedForCache
+            || ((seeking || pendingSeek != nil) && !userPaused))
         if newBuffering != buffering { buffering = newBuffering }
         let newPlaying = !userPaused && error.isEmpty && !ended
             && (loaded || opening || recoveryTask != nil)
@@ -1124,6 +1223,8 @@ final class PlaybackController: ObservableObject {
     }
 
     private func checkHealth() {
+        avSync = loaded ? engine?.double("avsync") : nil
+        if boosted { checkBoostSync(avSync, at: ProcessInfo.processInfo.systemUptime) }
         if dataSinceTick {
             noDataSeconds = 0
         } else {
@@ -1132,7 +1233,13 @@ final class PlaybackController: ObservableObject {
             if noDataSeconds >= 2, downloadSpeed > 0 { downloadSpeed = 0 }
         }
         dataSinceTick = false
-        guard watchdogEnabled, recoveryTask == nil, currentURL != nil, error.isEmpty, !userPaused, loaded else { return }
+        guard watchdogEnabled, recoveryTask == nil, currentURL != nil, error.isEmpty, !userPaused, loaded, !ended else { return }
+        // With keep-open, a failed seek can leave an EOF without end-file, even
+        // while the demuxer keeps downloading. Do not wait for a no-data timeout.
+        if eofReached, engine?.flag("eof-reached") != false {
+            recover(reason: pendingSeek == nil ? "网络连接断了" : "跳转未完成")
+            return
+        }
         // A failed seek need not leave seeking/cache/EOF set. Retain the pending
         // target until it is confirmed, and recover even when those flags clear.
         if pendingSeek != nil, Date().timeIntervalSince(pendingSeekStarted) >= 7, noDataSeconds >= 5 {
@@ -1227,6 +1334,7 @@ final class PlaybackController: ObservableObject {
             "115：\(currentDirect115) 解码：\(decoding.rawValue)（实际：\(activeHwdec.isEmpty ? "未知" : activeHwdec)） 缓存：\(readahead.rawValue)s",
             "状态：loaded=\(loaded) opening=\(opening) playedOnce=\(hasPlayed) cache=\(pausedForCache) seeking=\(seeking) speed=\(Int(downloadSpeed)) cached=\(Int(cachedSeconds))s",
             "位置：\(Self.clock(engineTime)) / \(Self.clock(duration)) 可跳转=\(seekable) 播完=\(ended) eof=\(eofReached) 暂停=\(userPaused)",
+            "倍速：\(effectiveRate)× 音画偏差：\(avSync.map { String(format: "%.3fs", $0) } ?? "未知") 长按最大偏差：\(boostAVSyncPeak.map { String(format: "%.3fs", $0) } ?? "未知")",
             "错误：\(error)",
             "中转：\(LocalStreamProxy.shared.statusText)\(LocalStreamProxy.shared.problem.isEmpty ? "" : "；上游出错：" + LocalStreamProxy.shared.problem)",
             "—— 播放事件 ——",

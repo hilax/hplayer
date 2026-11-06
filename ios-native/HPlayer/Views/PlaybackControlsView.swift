@@ -790,7 +790,7 @@ struct PlaybackControlsView: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.6))
                 Spacer(minLength: 0)
-                Text("长按画面临时 \(String(format: "%g", PlaybackController.boostRate))×")
+                Text("长按画面临时加速，优先保持音画同步")
                     .font(.system(size: 12))
                     .foregroundStyle(.white.opacity(0.5))
             }
@@ -2227,7 +2227,7 @@ struct PlaybackControlsView: View {
             Image(systemName: AppIcon.skip.name)
                 .font(.system(size: 13, weight: .bold))
                 .foregroundStyle(Theme.gold)
-            Text("\(String(format: "%g", PlaybackController.boostRate))× 快进中")
+            Text("\(String(format: "%g", playback.effectiveRate))× 快进中")
                 .font(.system(size: 13, weight: .bold))
         }
         .foregroundStyle(.white)
@@ -2240,17 +2240,16 @@ struct PlaybackControlsView: View {
     /// 提示条离画面顶部的距离（控制栏收起时的位置）。
     private static let hudTopInset: CGFloat = 18
 
-    /// 亮度、音量的玻璃条正在显示：它固定在画面最上面，顶栏这时先淡出让位，
+    /// 手势提示固定在画面上方，顶栏这时先淡出让位，
     /// 不管控制栏出没出来，玻璃条都在同一个位置，也不会叠在片名上。
     private var levelHUDShowing: Bool {
         switch adjustment?.kind {
-        case .brightness?, .volume?: return true
+        case .seek?, .brightness?, .volume?: return true
         default: return false
         }
     }
 
-    /// 亮度、音量的玻璃条永远在画面最上面同一个位置（控制栏出来时顶栏让开）；
-    /// 文字提示和长按快进的提示在控制栏出来时放在顶栏下面；拖动进度提示在正中间。
+    /// 跳转时间与亮度、音量提示共用顶部位置，控制栏出来时顶栏让开。
     @ViewBuilder
     private func hudLayer(insets: EdgeInsets) -> some View {
         ZStack {
@@ -2258,6 +2257,8 @@ struct PlaybackControlsView: View {
                 switch adjustment.kind {
                 case .seek:
                     SeekHUD(time: timeText(adjustment.targetTime ?? 0), delta: adjustment.valueText)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        .padding(.top, insets.top + Self.hudTopInset)
                         .transition(.opacity)
                 case .brightness, .volume:
                     LevelHUD(adjustment: adjustment)
@@ -2274,7 +2275,7 @@ struct PlaybackControlsView: View {
         }
         .allowsHitTesting(false)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: adjustment?.kind)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("playback.adjustmentHUD")
     }
 
@@ -2424,7 +2425,7 @@ struct PlaybackControlsView: View {
         }
     }
     private var gestureStatus: String {
-        "\(lastAdjustment); brightness=\(String(format: "%.3f", brightnessLevel)); volume=\(String(format: "%.3f", systemVolume.level)); time=\(String(format: "%.3f", playback.engineTime)); rate=\(String(format: "%g", boosting ? PlaybackController.boostRate : playback.rate)); buffering=\(playback.buffering ? 1 : 0); note=\(playback.statusNote); error=\(playback.error)"
+        "\(lastAdjustment); brightness=\(String(format: "%.3f", brightnessLevel)); volume=\(String(format: "%.3f", systemVolume.level)); time=\(String(format: "%.3f", playback.engineTime)); rate=\(String(format: "%g", playback.effectiveRate)); avsync=\(String(format: "%.3f", playback.avSync ?? .nan)); boostAVSyncPeak=\(String(format: "%.3f", playback.boostAVSyncPeak ?? .nan)); buffering=\(playback.buffering ? 1 : 0); note=\(playback.statusNote); error=\(playback.error)"
     }
 
     private func toggleControls() {
@@ -2444,8 +2445,8 @@ struct PlaybackControlsView: View {
             // 锁定后也能长按快进；锁定时其他面板都已收起
             guard !showList, settingsPage == nil, popover == nil, panKind == nil, playback.playing else { return }
             boosting = true
-            lastAdjustment = "长按 \(String(format: "%g", PlaybackController.boostRate))×"
             playback.setBoost(true)
+            lastAdjustment = "长按 \(String(format: "%g", playback.effectiveRate))×"
             hideTask?.cancel()
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
         } else if boosting {
@@ -2822,6 +2823,10 @@ private struct LevelHUD: View {
         .padding(.horizontal, 16)
         .frame(width: 280, height: 44)
         .glassCapsule()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(adjustment.kind == .brightness ? "亮度" : "音量")
+        .accessibilityValue("\(Int((value * 100).rounded()))%")
+        .accessibilityIdentifier("playback.levelHUD")
     }
 
     private var icon: String {
@@ -2860,7 +2865,7 @@ private struct NoticeHUD: View {
     }
 }
 
-/// 左右滑快进快退：画面正中，不加底板；上面是目标时间，下面是跳了多少（金色）
+/// 左右滑快进快退：画面中上方，不加底板；上面是目标时间，下面是跳了多少（金色）
 private struct SeekHUD: View {
     let time: String
     let delta: String
@@ -2876,6 +2881,8 @@ private struct SeekHUD: View {
         .foregroundStyle(.white)
         .shadow(color: .black.opacity(0.75), radius: 8, y: 1)
         .shadow(color: .black.opacity(0.5), radius: 1)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("playback.seekHUD")
     }
 }
 

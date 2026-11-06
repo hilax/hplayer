@@ -33,8 +33,28 @@ final class PlaybackUITests: XCTestCase {
         pause.tap()
         XCTAssertTrue(wait { (pause.value as? String) == "paused" })
 
+        swipe(surface, from: CGVector(dx: 0.2, dy: 0.6), to: CGVector(dx: 0.2, dy: 0.35))
+        let levelHUD = app.descendants(matching: .any)["playback.levelHUD"]
+        XCTAssertTrue(levelHUD.exists, "Brightness should show its top HUD")
+        // SwiftUI reports the glyphs' accessibility bounds inside the 44pt capsule.
+        // Its vertical center matches the capsule, whose top is 22pt above it.
+        let levelTop = levelHUD.frame.midY - 22
+        let levelShot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        levelShot.name = portrait ? "Brightness-HUD-portrait" : "Brightness-HUD-landscape"
+        levelShot.lifetime = .keepAlways
+        add(levelShot)
         let before = metric("time", surface: surface)
         swipe(surface, from: CGVector(dx: 0.35, dy: 0.4), to: CGVector(dx: 0.65, dy: 0.4))
+        let seekHUD = app.descendants(matching: .any)["playback.seekHUD"]
+        XCTAssertTrue(seekHUD.exists, "Seeking should show the target time")
+        let seekFrame = seekHUD.frame
+        let seekShot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        seekShot.name = portrait ? "Seek-HUD-portrait" : "Seek-HUD-landscape"
+        seekShot.lifetime = .keepAlways
+        add(seekShot)
+        XCTAssertEqual(seekFrame.minY, levelTop, accuracy: 3, "Seek and brightness HUDs share the same height")
+        XCTAssertEqual(seekFrame.midX, surface.frame.midX, accuracy: 3, "The seek HUD stays horizontally centered")
+        XCTAssertLessThan(seekFrame.maxY, surface.frame.midY, "Seek feedback must leave the middle of the video clear")
         XCTAssertTrue(wait { self.metric("time", surface: surface) > before + 5 }, "Right swipe must seek forward")
         assertControlsStayHidden(in: app)
 
@@ -196,7 +216,7 @@ final class PlaybackUITests: XCTestCase {
         center.doubleTap()
         XCTAssertTrue(wait { (pause.value as? String) == "playing" }, "Double tap should resume")
         center.press(forDuration: 1.2)
-        XCTAssertTrue(wait { (surface.value as? String)?.contains("长按 3×") == true })
+        XCTAssertTrue(wait { (surface.value as? String)?.contains("长按 ") == true })
         XCTAssertEqual(metric("rate", surface: surface), 1, accuracy: 0.01, "Releasing long press restores normal speed")
         // 松手后重新打开音轨，等它恢复播放再继续
         XCTAssertTrue(wait { (pause.value as? String) == "playing" })
@@ -370,6 +390,39 @@ final class PlaybackUITests: XCTestCase {
         }, "Playback should reach the end after seeking; status=\(surface.value as? String ?? "")")
         XCTAssertTrue(wait(timeout: 30) { app.staticTexts["测试下一集"].exists },
                       "Normal playback at the end should still advance to the next video; status=\(surface.value as? String ?? "")")
+    }
+
+    /// The fixture is an actual 3840×2160 H.264/AAC video, served with delayed Range responses.
+    func testLongPress4KRestoresSelectedRateAndKeepsPlaying() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["HPLAYER_UI_TEST_URL"] = "http://127.0.0.1:8765/range/seek-4k-fixture.mp4"
+        app.launchEnvironment["HPLAYER_UI_TEST_115_HEADERS"] = "1"
+        app.launchEnvironment["HPLAYER_UI_TEST_115_COOKIE"] = "UID=ui-test; CID=ui-test; SEID=ui-test; KID=ui-test"
+        app.launchEnvironment["HPLAYER_UI_TEST_KEEP_CONTROLS_VISIBLE"] = "1"
+        app.launch()
+        let surface = app.otherElements["playback.surface"]
+        let pause = app.buttons["playback.playPause"]
+        XCTAssertTrue(wait(timeout: 60) {
+            surface.exists && (pause.value as? String) == "playing" && app.staticTexts["4K"].exists
+                && self.metric("time", surface: surface) > 1 && self.metric("buffering", surface: surface) == 0
+        }, "The actual 4K video must be playing before the long press")
+        app.buttons["playback.speed"].tap()
+        app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "1.5×")).firstMatch.tap()
+        XCTAssertTrue(wait { self.metric("rate", surface: surface) == 1.5 })
+        let before = metric("time", surface: surface)
+        surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4)).press(forDuration: 4)
+        XCTAssertTrue((surface.value as? String)?.contains("长按 2×") == true,
+                      "4K long press starts at the safe 2× rate; status=\(surface.value as? String ?? "")")
+        XCTAssertEqual(metric("rate", surface: surface), 1.5, accuracy: 0.01, "Release restores the selected rate")
+        XCTAssertGreaterThan(metric("time", surface: surface), before + 3, "The decoder must advance during the hold")
+        XCTAssertLessThan(metric("boostAVSyncPeak", surface: surface), 0.3,
+                          "The actual 4K fixture must keep audio and video together during acceleration")
+        let resumed = metric("time", surface: surface)
+        XCTAssertTrue(wait(timeout: 20) { self.metric("time", surface: surface) > resumed + 2 })
+        XCTAssertTrue(wait { abs(self.metric("avsync", surface: surface)) < 0.2 },
+                      "Releasing long press must leave audio and video synchronized")
+        XCTAssertFalse((surface.value as? String ?? "").contains("error=播放"))
     }
 
     /// The fixture is an actual 3840×2160 H.264/AAC video, served with delayed Range responses.
