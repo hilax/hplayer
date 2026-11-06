@@ -2464,11 +2464,12 @@ struct PlaybackControlsView: View {
 
     private func handlePan(_ state: UIGestureRecognizer.State, origin: CGPoint, translation: CGPoint, size: CGSize) {
         if state == .cancelled || state == .failed {
+            let wasScrubbing = panScrubbing
             endPanScrub()
             panActive = false
             panKind = nil
             adjustment = nil
-            revealControls()
+            if !wasScrubbing { revealControls() }
             return
         }
         guard !showList, settingsPage == nil, !showAspect, popover == nil, !closing, size.width > 0, size.height > 0 else {
@@ -2538,7 +2539,7 @@ struct PlaybackControlsView: View {
             let target = min(max(adjustmentStartTime + Double(moveX / size.width) * range, 0), max(0, ceiling))
             seekHaptic(target: target)
             adjustment = seekAdjustment(target: target, from: adjustmentStartTime)
-            // 进度条和左右两端的时间跟着手指实时走；松手才真正跳转
+            // 只更新跳转预览，松手才真正跳转；操作栏和进度条保持隐藏。
             dragTime = target
         case .brightness:
             let value = min(max(adjustmentStartBrightness - Double(moveY / size.height) * 1.2, 0.02), 1)
@@ -2559,18 +2560,18 @@ struct PlaybackControlsView: View {
             endPanScrub()
             self.panKind = nil
             panActive = false
-            hideAdjustmentSoon()
+            hideAdjustmentSoon(revealing: panKind != .seek)
         }
     }
 
-    /// 开始横滑快进：把控制栏亮出来，进度条改由手指位置驱动（和手指按在进度条上拖是同一套显示）。
+    /// 横滑只显示轻量的跳转时间提示，不展开操作栏；原本展开的操作栏也在识别到横滑时收起。
     private func beginPanScrub(at time: Double) {
         panScrubbing = true
         dragTime = time
         dragging = true
         hideTask?.cancel()
-        if !controlsVisible {
-            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) { controlsVisible = true }
+        if controlsVisible {
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) { controlsVisible = false }
         }
     }
 

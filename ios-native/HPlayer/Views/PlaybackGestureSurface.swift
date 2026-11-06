@@ -25,6 +25,8 @@ struct PlaybackGestureSurface: UIViewRepresentable {
         let doubleTap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.doubleTap))
         doubleTap.numberOfTapsRequired = 2
         let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.tap))
+        // A drag must never also toggle the controls when the finger lifts.
+        tap.require(toFail: pan)
         tap.require(toFail: doubleTap)
         tap.require(toFail: longPress)
         doubleTap.require(toFail: pan)

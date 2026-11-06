@@ -1,6 +1,78 @@
 import XCTest
 
 final class PlaybackUITests: XCTestCase {
+    func testScreenSeekingKeepsControlsHiddenInLandscape() {
+        checkScreenSeekingKeepsControlsHidden(portrait: false)
+    }
+
+    func testScreenSeekingKeepsControlsHiddenInPortrait() {
+        checkScreenSeekingKeepsControlsHidden(portrait: true)
+    }
+
+    private func checkScreenSeekingKeepsControlsHidden(portrait: Bool) {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["HPLAYER_UI_TEST_URL"] = "http://127.0.0.1:8765/range/seek-fixture.mp4"
+        app.launchEnvironment["HPLAYER_UI_TEST_115_HEADERS"] = "1"
+        app.launchEnvironment["HPLAYER_UI_TEST_115_COOKIE"] = "UID=ui-test; CID=ui-test; SEID=ui-test; KID=ui-test"
+        // Automatic hiding must not make this pass: the swipe itself must hide the controls.
+        app.launchEnvironment["HPLAYER_UI_TEST_KEEP_CONTROLS_VISIBLE"] = "1"
+        app.launch()
+
+        let surface = app.otherElements["playback.surface"]
+        let pause = app.buttons["playback.playPause"]
+        let slider = app.sliders.firstMatch
+        XCTAssertTrue(wait(timeout: 30) {
+            surface.exists && (pause.value as? String) == "playing"
+                && self.metric("time", surface: surface) > 1 && slider.isEnabled
+        }, "The video must be playing before checking screen gestures; status=\(surface.value as? String ?? "")")
+        if portrait {
+            app.buttons["playback.orientation"].tap()
+            XCTAssertTrue(wait { !self.isLandscape(app) })
+        }
+        pause.tap()
+        XCTAssertTrue(wait { (pause.value as? String) == "paused" })
+
+        let before = metric("time", surface: surface)
+        swipe(surface, from: CGVector(dx: 0.35, dy: 0.4), to: CGVector(dx: 0.65, dy: 0.4))
+        XCTAssertTrue(wait { self.metric("time", surface: surface) > before + 5 }, "Right swipe must seek forward")
+        assertControlsStayHidden(in: app)
+
+        let afterForward = metric("time", surface: surface)
+        swipe(surface, from: CGVector(dx: 0.65, dy: 0.4), to: CGVector(dx: 0.4, dy: 0.4))
+        XCTAssertTrue(wait { self.metric("time", surface: surface) < afterForward - 5 }, "Left swipe must seek backward")
+        assertControlsStayHidden(in: app)
+
+        revealPlaybackControls(in: app, surface: surface)
+        XCTAssertEqual(pause.value as? String, "paused", "Screen seeking must preserve the paused state")
+
+        // Dragging the visible timeline is a separate gesture and should keep its controls visible.
+        let beforeTimeline = metric("time", surface: surface)
+        // This fixture is 120 seconds long. Start on the actual thumb: UISlider
+        // doesn't begin tracking a drag that starts on an unrelated part of the track.
+        slider.coordinate(withNormalizedOffset: CGVector(dx: beforeTimeline / 120, dy: 0.5))
+            .press(forDuration: 0.05, thenDragTo: slider.coordinate(withNormalizedOffset: CGVector(dx: 0.45, dy: 0.5)))
+        XCTAssertTrue(wait { self.metric("time", surface: surface) > beforeTimeline + 5 },
+                      "Dragging the thumb must seek; status=\(surface.value as? String ?? "")")
+        XCTAssertTrue(pause.exists && slider.exists, "Dragging the timeline must keep its controls visible")
+    }
+
+    private func assertControlsStayHidden(in app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+        let controlsVisible = { app.buttons["playback.playPause"].exists || app.sliders.firstMatch.exists }
+        XCTAssertTrue(wait(timeout: 3) { !controlsVisible() }, "Screen seeking must hide buttons and the timeline", file: file, line: line)
+        let reappeared = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in controlsVisible() }, object: nil)
+        reappeared.isInverted = true
+        XCTAssertEqual(XCTWaiter.wait(for: [reappeared], timeout: 1.5), .completed,
+                       "Finishing a screen seek must not bring the controls back", file: file, line: line)
+    }
+
+    private func revealPlaybackControls(in app: XCUIApplication, surface: XCUIElement) {
+        if !app.buttons["playback.playPause"].exists {
+            surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4)).tap()
+        }
+        XCTAssertTrue(app.buttons["playback.playPause"].waitForExistence(timeout: 3), "A single tap should reveal the controls")
+    }
+
     func testCloseRestoresPortraitAndAllowsReopening() {
         continueAfterFailure = false
         let app = XCUIApplication()
@@ -98,12 +170,14 @@ final class PlaybackUITests: XCTestCase {
         let before = seconds(elapsed.label)
         swipe(surface, from: CGVector(dx: 0.4, dy: 0.32), to: CGVector(dx: 0.65, dy: 0.32))
         XCTAssertTrue(wait { (surface.value as? String)?.contains("快进") == true })
-        XCTAssertTrue(wait { self.seconds(elapsed.label) > before + 2 }, "Right swipe must advance playback time")
+        XCTAssertTrue(wait { self.metric("time", surface: surface) > before + 2 }, "Right swipe must advance playback time")
+        revealPlaybackControls(in: app, surface: surface)
         XCTAssertTrue(wait { self.metric("time", surface: surface) > before + 2 && (pause.value as? String) == "paused" }, "Decoder should seek while preserving pause")
-        let afterForward = seconds(elapsed.label)
+        let afterForward = metric("time", surface: surface)
         swipe(surface, from: CGVector(dx: 0.65, dy: 0.32), to: CGVector(dx: 0.4, dy: 0.32))
         XCTAssertTrue(wait { (surface.value as? String)?.contains("快退") == true })
-        XCTAssertTrue(wait { self.seconds(elapsed.label) < afterForward - 2 }, "Left swipe must rewind playback time")
+        XCTAssertTrue(wait { self.metric("time", surface: surface) < afterForward - 2 }, "Left swipe must rewind playback time")
+        revealPlaybackControls(in: app, surface: surface)
         XCTAssertTrue(wait { self.metric("time", surface: surface) < afterForward - 2 && (pause.value as? String) == "paused" })
 
         swipe(surface, from: CGVector(dx: 0.2, dy: 0.4), to: CGVector(dx: 0.2, dy: 0.65))
@@ -137,6 +211,8 @@ final class PlaybackUITests: XCTestCase {
         XCTAssertTrue(app.buttons["playback.unlock"].waitForExistence(timeout: 3))
         swipe(surface, from: CGVector(dx: 0.4, dy: 0.32), to: CGVector(dx: 0.65, dy: 0.32))
         XCTAssertFalse(pause.exists, "Locked player hides playback buttons")
+        center.tap()
+        XCTAssertTrue(app.buttons["playback.unlock"].waitForExistence(timeout: 3), "A tap after seeking should reveal the unlock button")
         app.buttons["playback.unlock"].tap()
         XCTAssertTrue(pause.waitForExistence(timeout: 3))
 
@@ -243,6 +319,7 @@ final class PlaybackUITests: XCTestCase {
         let resumed = metric("time", surface: surface)
         XCTAssertTrue(wait(timeout: 15) { self.metric("time", surface: surface) > resumed + 2 },
                       "Playback should keep advancing after reconnecting; status=\(surface.value as? String ?? "")")
+        revealPlaybackControls(in: app, surface: surface)
         XCTAssertEqual(pause.value as? String, "playing")
 
         let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
@@ -273,6 +350,7 @@ final class PlaybackUITests: XCTestCase {
         }, "The first video should start")
         let before = metric("time", surface: surface)
         swipe(surface, from: CGVector(dx: 0.12, dy: 0.42), to: CGVector(dx: 0.82, dy: 0.42))
+        revealPlaybackControls(in: app, surface: surface)
         XCTAssertTrue(wait(timeout: 30) {
             let time = self.metric("time", surface: surface)
             return time > before + 80 && time < 280 && app.staticTexts["测试影片"].exists
@@ -286,6 +364,7 @@ final class PlaybackUITests: XCTestCase {
         // so use the same on-screen gesture as the real playback regression.
         swipe(surface, from: CGVector(dx: 0.06, dy: 0.42), to: CGVector(dx: 0.94, dy: 0.42))
         swipe(surface, from: CGVector(dx: 0.06, dy: 0.42), to: CGVector(dx: 0.94, dy: 0.42))
+        revealPlaybackControls(in: app, surface: surface)
         XCTAssertTrue(wait(timeout: 30) {
             app.staticTexts["测试下一集"].exists || self.metric("time", surface: surface) > 290
         }, "Playback should reach the end after seeking; status=\(surface.value as? String ?? "")")
@@ -315,6 +394,7 @@ final class PlaybackUITests: XCTestCase {
         let before = metric("time", surface: surface)
         swipe(surface, from: CGVector(dx: 0.2, dy: 0.42), to: CGVector(dx: 0.48, dy: 0.42))
         swipe(surface, from: CGVector(dx: 0.2, dy: 0.42), to: CGVector(dx: 0.58, dy: 0.42))
+        revealPlaybackControls(in: app, surface: surface)
         XCTAssertTrue(wait(timeout: 45) {
             let time = self.metric("time", surface: surface)
             return time > before + 25 && time < 80 && app.staticTexts["测试影片"].exists
@@ -344,6 +424,7 @@ final class PlaybackUITests: XCTestCase {
         for _ in 0..<3 {
             swipe(surface, from: CGVector(dx: 0.06, dy: 0.42), to: CGVector(dx: 0.94, dy: 0.42))
         }
+        revealPlaybackControls(in: app, surface: surface)
         XCTAssertTrue(wait(timeout: 40) {
             self.metric("time", surface: surface) > 298 && (pause.value as? String) == "paused"
         }, "The video should finish normally after reaching the tail; status=\(surface.value as? String ?? "")")
@@ -403,6 +484,7 @@ final class PlaybackUITests: XCTestCase {
         // 连着滑两次、远远超过结尾：最多停在结尾前 5 秒，播完后停在结尾
         swipe(surface, from: CGVector(dx: 0.06, dy: 0.42), to: CGVector(dx: 0.94, dy: 0.42))
         swipe(surface, from: CGVector(dx: 0.06, dy: 0.42), to: CGVector(dx: 0.94, dy: 0.42))
+        revealPlaybackControls(in: app, surface: surface)
         XCTAssertTrue(wait(timeout: 30) { self.metric("time", surface: surface) > 290 },
                       "Overshooting should stop just before the end; status=\(surface.value as? String ?? "")")
         XCTAssertTrue(wait(timeout: 20) { (pause.value as? String) == "paused" },
@@ -410,6 +492,7 @@ final class PlaybackUITests: XCTestCase {
 
         // 播完以后往回滑：要接着播，不能卡在结尾
         swipe(surface, from: CGVector(dx: 0.82, dy: 0.42), to: CGVector(dx: 0.12, dy: 0.42))
+        revealPlaybackControls(in: app, surface: surface)
         XCTAssertTrue(wait(timeout: 30) {
             let time = self.metric("time", surface: surface)
             return time > 120 && time < 260 && (pause.value as? String) == "playing"
