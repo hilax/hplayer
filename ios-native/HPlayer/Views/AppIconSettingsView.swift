@@ -3,6 +3,7 @@ import UIKit
 
 private enum HomeScreenIcon: String, CaseIterable, Identifiable {
     case classic, night, aurora, sunset
+    case prism, ocean, mint, iris, coral
 
     var id: String { rawValue }
 
@@ -12,6 +13,11 @@ private enum HomeScreenIcon: String, CaseIterable, Identifiable {
         case .night: return "深空"
         case .aurora: return "霓虹"
         case .sunset: return "极光"
+        case .prism: return "彩色棱镜"
+        case .ocean: return "晴空蓝"
+        case .mint: return "薄荷绿"
+        case .iris: return "鸢尾紫"
+        case .coral: return "珊瑚橙"
         }
     }
 
@@ -21,6 +27,11 @@ private enum HomeScreenIcon: String, CaseIterable, Identifiable {
         case .night: return "AppIconNight"
         case .aurora: return "AppIconAurora"
         case .sunset: return "AppIconSunset"
+        case .prism: return "AppIconPrism"
+        case .ocean: return "AppIconOcean"
+        case .mint: return "AppIconMint"
+        case .iris: return "AppIconIris"
+        case .coral: return "AppIconCoral"
         }
     }
 
@@ -30,6 +41,11 @@ private enum HomeScreenIcon: String, CaseIterable, Identifiable {
         case .night: return "AppIconPreviewNight"
         case .aurora: return "AppIconPreviewAurora"
         case .sunset: return "AppIconPreviewSunset"
+        case .prism: return "AppIconPreviewPrism"
+        case .ocean: return "AppIconPreviewOcean"
+        case .mint: return "AppIconPreviewMint"
+        case .iris: return "AppIconPreviewIris"
+        case .coral: return "AppIconPreviewCoral"
         }
     }
 }
