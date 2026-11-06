@@ -215,6 +215,12 @@ struct SettingsView: View {
             }
             .buttonStyle(.pressable(scale: 0.985))
             .accessibilityIdentifier("settings.appearance")
+            rowDivider
+            NavigationLink { AppIconSettingsView().hidesTabBar() } label: {
+                LibraryActionRow(symbol: AppIcon.playback.name, title: "应用图标", subtitle: "选择主屏幕上的图标样式")
+            }
+            .buttonStyle(.pressable(scale: 0.985))
+            .accessibilityIdentifier("settings.appIcon")
         }
     }
 

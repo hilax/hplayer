@@ -1,6 +1,30 @@
 import XCTest
 
 final class SettingsUITests: XCTestCase {
+    func testAppIconChoicesAreAccessibleFromSettings() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["HPLAYER_HOME_TEST"] = "1"
+        app.launchEnvironment["HPLAYER_METADATA_TEST_ENDPOINT"] = "http://127.0.0.1:8765"
+        app.launch()
+
+        let settings = app.tabButton("我的")
+        XCTAssertTrue(settings.waitForExistence(timeout: 20))
+        settings.tap()
+        let iconSettings = app.buttons["settings.appIcon"]
+        if !iconSettings.isHittable { app.swipeUp() }
+        XCTAssertTrue(iconSettings.waitForExistence(timeout: 10))
+        iconSettings.tap()
+
+        XCTAssertTrue(app.navigationBars["应用图标"].waitForExistence(timeout: 10))
+        for name in ["classic", "night", "aurora", "sunset"] {
+            XCTAssertTrue(app.buttons["settings.appIcon.\(name)"].exists, "Missing \(name) icon choice")
+        }
+        XCTAssertEqual(["classic", "night", "aurora", "sunset"].filter {
+            app.buttons["settings.appIcon.\($0)"].isSelected
+        }.count, 1, "Exactly one installed icon should be selected")
+    }
+
     func testAppearanceSelectionAndLicenseNavigation() {
         continueAfterFailure = false
         let app = XCUIApplication()
