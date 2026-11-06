@@ -39,10 +39,28 @@ final class PlaybackUITests: XCTestCase {
         // SwiftUI reports the glyphs' accessibility bounds inside the 44pt capsule.
         // Its vertical center matches the capsule, whose top is 22pt above it.
         let levelTop = levelHUD.frame.midY - 22
+        XCTAssertTrue(app.buttons["playback.close"].isHittable, "Brightness must keep the close button usable")
+        XCTAssertTrue(app.buttons["playback.more"].isHittable, "Brightness must keep the settings button usable")
         let levelShot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         levelShot.name = portrait ? "Brightness-HUD-portrait" : "Brightness-HUD-landscape"
         levelShot.lifetime = .keepAlways
         add(levelShot)
+
+        swipe(surface, from: CGVector(dx: 0.8, dy: 0.6), to: CGVector(dx: 0.8, dy: 0.35))
+        XCTAssertTrue(levelHUD.exists, "Volume should show its top HUD")
+        let volumeFrame = levelHUD.frame
+        XCTAssertEqual(volumeFrame.midY - 22, levelTop, accuracy: 3, "Brightness and volume share the fixed top position")
+        let close = app.buttons["playback.close"]
+        let more = app.buttons["playback.more"]
+        XCTAssertTrue(close.isHittable && more.isHittable, "Volume must keep both top controls usable")
+        XCTAssertGreaterThanOrEqual(volumeFrame.minX, close.frame.maxX, "The HUD leaves the close button clear")
+        let firstTrailingButton = portrait ? app.buttons["playback.screenshot"] : app.buttons["playback.aspect"]
+        XCTAssertLessThanOrEqual(volumeFrame.maxX, firstTrailingButton.frame.minX,
+                                 "The HUD leaves the trailing buttons clear")
+        let volumeShot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        volumeShot.name = portrait ? "Volume-HUD-portrait" : "Volume-HUD-landscape"
+        volumeShot.lifetime = .keepAlways
+        add(volumeShot)
         let before = metric("time", surface: surface)
         swipe(surface, from: CGVector(dx: 0.35, dy: 0.4), to: CGVector(dx: 0.65, dy: 0.4))
         let seekHUD = app.descendants(matching: .any)["playback.seekHUD"]
@@ -423,6 +441,15 @@ final class PlaybackUITests: XCTestCase {
         XCTAssertTrue(wait { abs(self.metric("avsync", surface: surface)) < 0.2 },
                       "Releasing long press must leave audio and video synchronized")
         XCTAssertFalse((surface.value as? String ?? "").contains("error=播放"))
+
+        // Exercise the same acceleration with the controls already hidden.
+        // The HUD must use the same top placement in both states.
+        surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4)).tap()
+        XCTAssertTrue(wait { !pause.exists }, "A tap hides the controls before the second long press")
+        let hiddenStart = metric("time", surface: surface)
+        surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4)).press(forDuration: 4)
+        XCTAssertEqual(metric("rate", surface: surface), 1.5, accuracy: 0.01)
+        XCTAssertGreaterThan(metric("time", surface: surface), hiddenStart + 3)
     }
 
     /// The fixture is an actual 3840×2160 H.264/AAC video, served with delayed Range responses.

@@ -411,17 +411,26 @@ struct PlaybackControlsView: View {
     // MARK: 顶部
 
     /// 左边关闭和片名，右边画面比例、字幕音轨、更多设置；按钮都是液态玻璃
-    private func topBar(landscape: Bool) -> some View {
-        HStack(alignment: .center, spacing: 12) {
-            GlassIconButton(systemImage: AppIcon.close.name, label: "关闭播放", action: closePlayer)
-                .accessibilityIdentifier("playback.close")
+    private func topBar(landscape: Bool, insets: EdgeInsets, width: CGFloat) -> some View {
+        let hudWidth = topHUDWidth(landscape: landscape, insets: insets, width: width)
+        let leadingWidth = (width - hudWidth) / 2 - max(insets.leading, 28) - 12
+        let trailingWidth = (width - hudWidth) / 2 - max(insets.trailing, 28) - 12
+        return HStack(alignment: .center, spacing: 0) {
+            HStack(spacing: 12) {
+                GlassIconButton(systemImage: AppIcon.close.name, label: "关闭播放", action: closePlayer)
+                    .accessibilityIdentifier("playback.close")
+                    .fixedSize()
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.headline)
-                    .lineLimit(1)
-                statusBadges
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title)
+                        .font(.headline)
+                        .lineLimit(1)
+                    statusBadges
+                }
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .frame(width: topHUDShowing ? max(0, leadingWidth) : nil, alignment: .leading)
 
             Spacer(minLength: 8)
 
@@ -441,6 +450,7 @@ struct PlaybackControlsView: View {
                         .accessibilityIdentifier("playback.more")
                 }
             }
+            .frame(width: topHUDShowing ? max(0, trailingWidth) : nil, alignment: .trailing)
         }
     }
 
@@ -1379,6 +1389,7 @@ struct PlaybackControlsView: View {
     @ViewBuilder
     private func videoLayer(landscape: Bool, insets: EdgeInsets, width: CGFloat) -> some View {
         let hudInsets = landscape ? insets : EdgeInsets()
+        let hudWidth = topHUDWidth(landscape: landscape, insets: hudInsets, width: width)
         ZStack {
             Theme.playerBackground
             PlayerVideoSurface(playback: playback)
@@ -1418,14 +1429,15 @@ struct PlaybackControlsView: View {
 
             if boosting {
                 boostPill
+                    .frame(maxWidth: hudWidth)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                    .padding(.top, hudInsets.top + (controlsVisible && !locked ? (landscape ? 70 : 48) : Self.hudTopInset))
+                    .padding(.top, hudInsets.top + Self.hudTopInset)
                     .transition(.opacity)
                     .allowsHitTesting(false)
                     .zIndex(5)
             }
 
-            hudLayer(insets: hudInsets)
+            hudLayer(insets: hudInsets, width: hudWidth)
                 .zIndex(6)
         }
         .frame(maxWidth: .infinity, maxHeight: landscape ? .infinity : Self.inlineVideoHeight)
@@ -1434,8 +1446,7 @@ struct PlaybackControlsView: View {
 
     private func landscapeControls(insets: EdgeInsets, width: CGFloat) -> some View {
         VStack(spacing: 0) {
-            topBar(landscape: true)
-                .yieldingToLevelHUD(levelHUDShowing, reduceMotion: reduceMotion)
+            topBar(landscape: true, insets: insets, width: width)
             Spacer(minLength: 0)
             bottomBar(landscape: true)
         }
@@ -1488,7 +1499,6 @@ struct PlaybackControlsView: View {
                 Button { openSettings(.playback) } label: { controlIcon(AppIcon.more.name, label: "更多设置", size: 19) }
                     .accessibilityIdentifier("playback.more")
             }
-            .yieldingToLevelHUD(levelHUDShowing, reduceMotion: reduceMotion)
             Spacer(minLength: 0)
             HStack(spacing: 2) {
                 Button { playback.toggle(); revealControls() } label: {
@@ -2229,46 +2239,54 @@ struct PlaybackControlsView: View {
                 .foregroundStyle(Theme.gold)
             Text("\(String(format: "%g", playback.effectiveRate))× 快进中")
                 .font(.system(size: 13, weight: .bold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
         }
         .foregroundStyle(.white)
         .padding(.horizontal, 16)
         .frame(height: 36)
         .glassCapsule()
         .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("playback.boostHUD")
     }
 
-    /// 提示条离画面顶部的距离（控制栏收起时的位置）。
+    /// 手势提示始终位于同一顶部位置，操作栏显隐不改变这个距离。
     private static let hudTopInset: CGFloat = 18
 
-    /// 手势提示固定在画面上方，顶栏这时先淡出让位，
-    /// 不管控制栏出没出来，玻璃条都在同一个位置，也不会叠在片名上。
-    private var levelHUDShowing: Bool {
-        switch adjustment?.kind {
-        case .seek?, .brightness?, .volume?: return true
-        default: return false
-        }
+    private var topHUDShowing: Bool {
+        boosting || adjustment != nil
     }
 
-    /// 跳转时间与亮度、音量提示共用顶部位置，控制栏出来时顶栏让开。
+    /// 为两侧操作按钮留出空间；横屏还保留至少一段片名，竖屏使用较短的提示条。
+    private func topHUDWidth(landscape: Bool, insets: EdgeInsets, width: CGFloat) -> CGFloat {
+        let side = landscape
+            ? max(max(insets.leading, insets.trailing), 28) + 42 + 12 + 80 + 12
+            : 4 + 88 + 12
+        return max(96, min(280, width - side * 2))
+    }
+
+    /// 跳转时间、亮度、音量提示共用顶部位置，同时保留操作栏。
     @ViewBuilder
-    private func hudLayer(insets: EdgeInsets) -> some View {
+    private func hudLayer(insets: EdgeInsets, width: CGFloat) -> some View {
         ZStack {
             if let adjustment {
                 switch adjustment.kind {
                 case .seek:
                     SeekHUD(time: timeText(adjustment.targetTime ?? 0), delta: adjustment.valueText)
+                        .frame(maxWidth: width)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                         .padding(.top, insets.top + Self.hudTopInset)
                         .transition(.opacity)
                 case .brightness, .volume:
-                    LevelHUD(adjustment: adjustment)
+                    LevelHUD(adjustment: adjustment, width: width)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                         .padding(.top, insets.top + Self.hudTopInset)
                         .transition(.opacity)
                 case .notice:
                     NoticeHUD(text: adjustment.valueText)
+                        .frame(maxWidth: width)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                        .padding(.top, insets.top + (controlsVisible && !locked ? 70 : Self.hudTopInset))
+                        .padding(.top, insets.top + Self.hudTopInset)
                         .transition(.opacity)
                 }
             }
@@ -2681,15 +2699,6 @@ struct PlaybackControlsView: View {
 // MARK: - 液态玻璃按钮
 
 /// 播放页的玻璃圆钮：iOS 26 用系统的液态玻璃按钮样式（按下会有弹性和高光），低版本降级成毛玻璃圆钮
-private extension View {
-    /// 亮度、音量的玻璃条出现时，顶栏淡出让位（也不接收点按），玻璃条消失后再淡回来。
-    func yieldingToLevelHUD(_ yielding: Bool, reduceMotion: Bool) -> some View {
-        opacity(yielding ? 0 : 1)
-            .allowsHitTesting(!yielding)
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: yielding)
-    }
-}
-
 private struct GlassIconButton: View {
     let systemImage: String
     let label: String
@@ -2805,11 +2814,12 @@ private enum ScreenBrightness {
 /// 亮度、音量：顶部一条玻璃胶囊，左边图标、中间细进度条、右边百分比
 private struct LevelHUD: View {
     let adjustment: PlaybackAdjustment
+    let width: CGFloat
 
     private var value: Double { min(max(adjustment.progress, 0), 1) }
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: width < 180 ? 8 : 12) {
             Image(systemName: icon)
                 .font(.system(size: 16, weight: .semibold))
                 .frame(width: 22)
@@ -2820,8 +2830,8 @@ private struct LevelHUD: View {
                 .frame(width: 40, alignment: .trailing)
         }
         .foregroundStyle(.white)
-        .padding(.horizontal, 16)
-        .frame(width: 280, height: 44)
+        .padding(.horizontal, width < 180 ? 10 : 16)
+        .frame(width: width, height: 44)
         .glassCapsule()
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(adjustment.kind == .brightness ? "亮度" : "音量")
