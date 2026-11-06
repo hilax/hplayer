@@ -132,8 +132,8 @@ final class JavBusSourceTests: XCTestCase {
               <a href="magnet:?xt=urn:btih:1111111111111111111111111111111111111111&dn=SSIS-888-C">
                 SSIS-888-UC.HD.mp4
               </a>
-              <a class="btn btn-xs btn-primary">字幕</a>
-              <a class="btn btn-xs btn-warning">高清</a>
+              <a class="btn btn-xs btn-warning">字幕</a>
+              <a class="btn btn-xs btn-primary">高清</a>
             </td>
             <td><a class="btn-default btn-xs">5.20GB</a></td>
             <td>2024-05-19</td>
@@ -166,6 +166,66 @@ final class JavBusSourceTests: XCTestCase {
         XCTAssertEqual(second.date, "2024-05-18")
         XCTAssertFalse(second.hasSubtitles)
         XCTAssertFalse(second.isHD)
+    }
+
+    func testHDResourcesDoNotInheritSubtitleBadges() {
+        let html = magnetTable(rows: [
+            ("sample-hd.mp4", "<a class='btn btn-xs btn-primary'>高清</a>", "3.04GB"),
+            ("sample-4k.mp4", "<a class='btn btn-xs btn-primary'>高清</a>", "16.22GB"),
+            ("sample-C.mp4", "<a class='btn btn-xs btn-primary'>高清</a><a class='btn btn-xs btn-warning'>字幕</a>", "5.84GB"),
+            ("sample-60fps.mp4", "<a class='btn btn-xs btn-primary'>高清</a>", "16.26GB"),
+            ("sample-U.mp4", "<a class='btn btn-xs btn-primary'>高清</a>", "3.57GB"),
+            ("sample_FHD_CH.mp4", "", "1.45GB"),
+        ])
+        let magnets = JavBusSource.parseMagnetsFromHTML(html)
+
+        XCTAssertEqual(magnets.count, 6)
+        XCTAssertEqual(magnets.filter(\.hasSubtitles).map(\.name), ["sample-C.mp4"],
+                       "Only the resource explicitly tagged 字幕 should show 中文字幕")
+        XCTAssertEqual(magnets.map(\.isHD), [true, true, true, true, true, false],
+                       "Names resembling HD or subtitle editions must not override the source's badges")
+        let sorted = JavBusSource.sortMagnets(magnets)
+        XCTAssertEqual(sorted.first?.name, "sample-C.mp4")
+        XCTAssertEqual(sorted.first?.size, "5.84GB")
+        XCTAssertEqual(sorted.last?.name, "sample_FHD_CH.mp4")
+    }
+
+    func testMagnetBadgeMeaningIsIndependentOfColorAndFilename() {
+        let cases: [(name: String, badges: String, hd: Bool, subtitles: Bool)] = [
+            ("plain.mp4", "<a class='btn btn-warning'>高清</a>", true, false),
+            ("plain.mp4", "<span class='btn btn-primary'>字幕</span>", false, true),
+            ("plain.mp4", "<span class='badge badge-info'><b>高&#28165;</b></span><span class='label label-success'>中&#25991;字&#24149;</span>", true, true),
+            ("plain.mp4<span class='btn btn-primary'>HD</span>", "", true, false),
+            ("中文字幕-FHD.mp4", "", false, false),
+            ("plain.mp4", "<a class='btn btn-primary' title='字幕'>复制</a><span class='btn btn-warning'>普通</span>", false, false),
+            ("plain.mp4", "<span class='btn btn-primary'>无字幕</span>", false, false),
+        ]
+        let html = magnetTable(rows: cases.map { ($0.name, $0.badges, "1.00GB") })
+        let magnets = JavBusSource.parseMagnetsFromHTML(html)
+        XCTAssertEqual(magnets.count, cases.count)
+        for (magnet, expected) in zip(magnets, cases) {
+            XCTAssertEqual(magnet.isHD, expected.hd, expected.name + " " + expected.badges)
+            XCTAssertEqual(magnet.hasSubtitles, expected.subtitles, expected.name + " " + expected.badges)
+        }
+
+        let otherCellHTML = """
+        <tr><td><a href="magnet:?xt=urn:btih:AAAA&amp;dn=HD-中文字幕">plain.mp4</a></td>
+        <td><a class="btn btn-primary">字幕</a>1.00GB</td><td>2026-06-01</td></tr>
+        """
+        let otherCell = JavBusSource.parseMagnetsFromHTML(otherCellHTML)
+        XCTAssertEqual(otherCell.first?.hasSubtitles, false, "Badges in other cells and URL parameters aren't resource labels")
+        XCTAssertEqual(otherCell.first?.isHD, false)
+    }
+
+    private func magnetTable(rows: [(name: String, badges: String, size: String)]) -> String {
+        let body = rows.enumerated().map { index, row in
+            let hash = String(repeating: String(index + 1), count: 40)
+            return """
+            <tr><td><a href="magnet:?xt=urn:btih:\(hash)">\(row.name)</a>\(row.badges)</td>
+            <td>\(row.size)</td><td>2026-06-01</td></tr>
+            """
+        }.joined()
+        return "<table>\(body)</table>"
     }
 
     func testSortMagnets() {

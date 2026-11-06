@@ -818,11 +818,11 @@ final class JavBusSource: MagnetSearchSource, @unchecked Sendable {
               let nameRegex = makeRegex(#"<a[^>]*href="magnet:[^"]*"[^>]*>([\s\S]*?)<\/a>"#),
               let sizeRegex = makeRegex(#"(\d+(?:\.\d+)?\s*(?:TB|GB|MB|KB|G|M))(?![A-Za-z0-9])"#, caseInsensitive: true),
               let dateRegex = makeRegex(#"(\d{4}-\d{2}-\d{2})"#),
-              let hdRegex = makeRegex(#"(?<![A-Za-z0-9])(?:F|U)?HD(?![A-Za-z0-9])"#, caseInsensitive: true) else {
+              let badgeRegex = makeRegex(#"<(a|span)\b[^>]*\sclass\s*=\s*["'][^"']*\b(?:btn|badge|label)(?:-[\w-]+)?\b[^"']*["'][^>]*>([\s\S]*?)</\1\s*>"#, caseInsensitive: true) else {
             return []
         }
 
-        /// 先去掉 href="magnet:..."：磁力地址里的哈希、dn 参数不能当成大小、日期或 HD 标记。
+        /// 先去掉 href="magnet:..."：磁力地址里的哈希、dn 参数不能当成大小或日期。
         func withoutHrefs(_ text: String) -> String {
             text.replacingOccurrences(of: #"href="magnet:[^"]*""#, with: "", options: .regularExpression)
         }
@@ -858,14 +858,14 @@ final class JavBusSource: MagnetSearchSource, @unchecked Sendable {
                 torrentName = plainText(rawName)
             }
 
-            let infoFlat = withoutHrefs(infoCell)
-            let infoText = plainText(infoFlat)
-            let isHD = infoFlat.contains("btn-warning")
-                || infoText.contains("高清")
-                || hdRegex.firstMatch(in: infoText, options: [], range: fullRange(infoText as NSString)) != nil
-            let hasSubtitles = infoFlat.contains("btn-primary")
-                || infoText.contains("字幕")
-                || infoText.contains("中字")
+            // 按每条资源自己的标签文字分类。按钮颜色不代表字幕或清晰度，
+            // 文件名、链接参数里的字样也不能代替站点实际标出的标签。
+            let nsInfo = infoCell as NSString
+            let badgeTexts = Set(badgeRegex.matches(in: infoCell, options: [], range: fullRange(nsInfo))
+                .compactMap { capture($0, 2, in: nsInfo) }
+                .map { plainText($0).uppercased() })
+            let isHD = !badgeTexts.isDisjoint(with: ["高清", "HD", "FHD", "UHD", "4K"])
+            let hasSubtitles = !badgeTexts.isDisjoint(with: ["字幕", "中文字幕", "中字"])
 
             let rowText = plainText(withoutHrefs(row))
             let sizeText = cells.count > 1 ? plainText(withoutHrefs(cells[1])) : rowText
