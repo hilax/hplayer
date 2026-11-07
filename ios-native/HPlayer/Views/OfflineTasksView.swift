@@ -95,14 +95,28 @@ struct OfflineTasksView: View {
     private static let maxPages = 10
     private static let pollNanoseconds: UInt64 = 5_000_000_000
 
+    /// 全局内存缓存：再次进入页面时瞬间展示，无需等待转圈
+    private static var cachedTasks: [Direct115OfflineTask]?
+    private static var cachedFolderLabels: [String: String] = [:]
+    private static var cachedSessionID: UUID?
+
+    static func clearCache() {
+        cachedTasks = nil
+        cachedFolderLabels.removeAll()
+        cachedSessionID = nil
+    }
+
     init(onShowFolder: (([Direct115PathEntry]) -> Void)? = nil, initialTasks: [Direct115OfflineTask]? = nil,
          initialFilter: OfflineFilter = .running, initialFolderLabels: [String: String] = [:],
          initialShowAdd: Bool = false) {
         self.onShowFolder = onShowFolder
-        _tasks = State(initialValue: initialTasks ?? [])
-        _loading = State(initialValue: initialTasks == nil)
+        let existing = initialTasks ?? Self.cachedTasks ?? []
+        _tasks = State(initialValue: existing)
+        _loading = State(initialValue: initialTasks == nil && existing.isEmpty)
         _filter = State(initialValue: initialFilter.rawValue)
-        _folderLabels = State(initialValue: initialFolderLabels)
+        var labels = Self.cachedFolderLabels
+        for (k, v) in initialFolderLabels { labels[k] = v }
+        _folderLabels = State(initialValue: labels)
         _showAdd = State(initialValue: initialShowAdd)
     }
 
@@ -126,18 +140,23 @@ struct OfflineTasksView: View {
         .toast($message)
         .task {
             if InterfacePreview.active { return }
+            if Self.cachedSessionID != appState.sessionID {
+                Self.clearCache()
+                Self.cachedSessionID = appState.sessionID
+            }
             await load(silent: !loading)
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: Self.pollNanoseconds)
                 if Task.isCancelled { break }
-                if hasRunning, operation == nil, !showAdd { await load(silent: true) }
+                // 轮询进行中任务时仅刷新首页，速度更快且不浪费网络带宽
+                if hasRunning, operation == nil, !showAdd { await load(silent: true, onlyFirstPage: true) }
             }
         }
         .sheet(isPresented: $showAdd) {
             OfflineAddSheet(client: appState.directClient()) { summary in
                 filter = OfflineFilter.running.rawValue
                 message = "已添加 \(summary.succeeded) 个离线任务"
-                Task { await load(silent: true) }
+                Task { await load(silent: true, onlyFirstPage: true) }
             }
         }
         .confirmationDialog("删除这个离线任务？", isPresented: removalBinding, titleVisibility: .visible,
@@ -484,6 +503,8 @@ struct OfflineTasksView: View {
             problem = "这个任务没有编号，无法删除。"
             return
         }
+        tasks.removeAll { $0.id == task.id }
+        Self.cachedTasks = tasks
         run(deleteFiles ? "正在删除任务和文件…" : "正在删除任务…") { client in
             try await client.deleteOfflineTasks([hash], deleteFiles: deleteFiles)
             return deleteFiles ? "已删除任务，文件已移入回收站" : "已删除任务"
@@ -491,6 +512,8 @@ struct OfflineTasksView: View {
     }
 
     private func clear(_ scope: Direct115OfflineClearScope) {
+        tasks.removeAll { scope == .failed ? $0.status == .failed : $0.status == .done }
+        Self.cachedTasks = tasks
         run("正在清除任务…") { client in
             try await client.clearOfflineTasks(scope)
             return scope == .failed ? "已清除失败的任务" : "已清除已完成的任务"
@@ -529,7 +552,7 @@ struct OfflineTasksView: View {
         return tasks.filter { seen.insert($0.id).inserted }
     }
 
-    private func load(silent: Bool = false) async {
+    private func load(silent: Bool = false, onlyFirstPage: Bool = false) async {
         guard appState.isAuthenticated, let client = appState.directClient() else {
             loading = false
             error = "请先登录 115"
@@ -538,38 +561,101 @@ struct OfflineTasksView: View {
         let sessionID = appState.sessionID
         let requestID = UUID()
         loadRequestID = requestID
-        if !silent {
+        if !silent && tasks.isEmpty {
             loading = true
             error = ""
         }
         do {
-            var collected: [Direct115OfflineTask] = []
-            var page = 1
-            while page <= Self.maxPages {
-                let result = try await client.offlinePage(page)
-                collected.append(contentsOf: result.tasks)
-                if !result.hasMore { break }
-                page += 1
-            }
+            // 第 1 步：优先加载第一页，立即呈现在界面上（消除白屏/长时转圈）
+            let firstResult = try await client.offlinePage(1)
             guard !Task.isCancelled, sessionID == appState.sessionID, requestID == loadRequestID else { return }
+
+            if onlyFirstPage {
+                // 仅刷新首页：将更新的任务与已有列表合并，保持其他页数据
+                tasks = Self.unique(firstResult.tasks + tasks)
+                Self.cachedTasks = tasks
+                Self.cachedSessionID = sessionID
+                error = ""
+                loading = false
+                resolveFoldersAsync(client, sessionID: sessionID)
+                return
+            }
+
+            var collected = firstResult.tasks
             tasks = Self.unique(collected)
+            Self.cachedTasks = tasks
+            Self.cachedSessionID = sessionID
             error = ""
             loading = false
-            await resolveFolders(client, sessionID: sessionID)
+            resolveFoldersAsync(client, sessionID: sessionID)
+
+            // 第 2 步：后台并发加载剩余页（限制最多 maxPages 页）
+            let totalPages = min(firstResult.pageCount, Self.maxPages)
+            if totalPages > 1 {
+                let remainingPages = Array(2...totalPages)
+                await withTaskGroup(of: (Int, [Direct115OfflineTask])?.self) { group in
+                    var pageIndex = 0
+                    let concurrency = 3
+                    while pageIndex < remainingPages.count && pageIndex < concurrency {
+                        let p = remainingPages[pageIndex]
+                        pageIndex += 1
+                        group.addTask {
+                            guard !Task.isCancelled else { return nil }
+                            let res = try? await client.offlinePage(p)
+                            return res.map { (p, $0.tasks) }
+                        }
+                    }
+
+                    for await result in group {
+                        guard !Task.isCancelled, sessionID == appState.sessionID, requestID == loadRequestID else { break }
+                        if let (_, newTasks) = result, !newTasks.isEmpty {
+                            collected.append(contentsOf: newTasks)
+                            tasks = Self.unique(collected)
+                            Self.cachedTasks = tasks
+                        }
+                        if pageIndex < remainingPages.count {
+                            let nextP = remainingPages[pageIndex]
+                            pageIndex += 1
+                            group.addTask {
+                                guard !Task.isCancelled else { return nil }
+                                let res = try? await client.offlinePage(nextP)
+                                return res.map { (nextP, $0.tasks) }
+                            }
+                        }
+                    }
+                }
+                guard !Task.isCancelled, sessionID == appState.sessionID, requestID == loadRequestID else { return }
+                tasks = Self.unique(collected)
+                Self.cachedTasks = tasks
+                resolveFoldersAsync(client, sessionID: sessionID)
+            }
         } catch {
             guard !Task.isCancelled, sessionID == appState.sessionID, requestID == loadRequestID else { return }
-            if !silent { self.error = error.localizedDescription }
+            if !silent && tasks.isEmpty { self.error = error.localizedDescription }
             loading = false
         }
     }
 
-    /// 把任务的保存位置编号换成「网盘 / 电影」这样的路径，一次最多查 8 个新位置
-    private func resolveFolders(_ client: Direct115Client, sessionID: UUID) async {
-        let wanted = Set(tasks.map { $0.folderID }).filter { !$0.isEmpty && folderLabels[$0] == nil }
-        for id in wanted.prefix(8) {
-            guard !Task.isCancelled, sessionID == appState.sessionID else { return }
-            if let names = try? await client.folderPath(id: id), !names.isEmpty {
-                folderLabels[id] = names.joined(separator: " / ")
+    /// 异步并发解析任务保存位置，并写入全局缓存
+    private func resolveFoldersAsync(_ client: Direct115Client, sessionID: UUID) {
+        Task {
+            let wanted = Set(tasks.map { $0.folderID }).filter { !$0.isEmpty && folderLabels[$0] == nil && Self.cachedFolderLabels[$0] == nil }
+            guard !wanted.isEmpty else { return }
+            await withTaskGroup(of: (String, String)?.self) { group in
+                for id in wanted.prefix(8) {
+                    group.addTask {
+                        guard !Task.isCancelled else { return nil }
+                        if let names = try? await client.folderPath(id: id), !names.isEmpty {
+                            return (id, names.joined(separator: " / "))
+                        }
+                        return nil
+                    }
+                }
+                for await result in group {
+                    guard let (id, label) = result, !Task.isCancelled, sessionID == appState.sessionID else { continue }
+                    folderLabels[id] = label
+                    Self.cachedFolderLabels[id] = label
+                }
             }
         }
     }

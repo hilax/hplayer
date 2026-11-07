@@ -177,13 +177,32 @@ struct Direct115Client {
         try await send(url)
     }
 
+    private static let redirectGuard = RedirectGuard()
+    private static let sharedSession: URLSession = {
+        let configuration = URLSessionConfiguration.default
+        configuration.httpShouldSetCookies = false
+        configuration.urlCache = nil
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return URLSession(configuration: configuration, delegate: redirectGuard, delegateQueue: nil)
+    }()
+
     /// 发送带登录 Cookie 的请求；传入 form 时用 POST 表单提交
     func send(_ url: URL, form: [String: String]? = nil, userAgent: String? = nil, timeout: TimeInterval = 20) async throws -> (Data, HTTPURLResponse) {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.httpShouldSetCookies = false
-        if let protocolClasses { configuration.protocolClasses = protocolClasses }
-        let session = URLSession(configuration: configuration, delegate: RedirectGuard(), delegateQueue: nil)
-        defer { session.finishTasksAndInvalidate() }
+        let session: URLSession
+        let ephemeral: Bool
+        if let protocolClasses {
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.httpShouldSetCookies = false
+            configuration.protocolClasses = protocolClasses
+            session = URLSession(configuration: configuration, delegate: Self.redirectGuard, delegateQueue: nil)
+            ephemeral = true
+        } else {
+            session = Self.sharedSession
+            ephemeral = false
+        }
+        defer {
+            if ephemeral { session.finishTasksAndInvalidate() }
+        }
         var request = URLRequest(url: url)
         request.timeoutInterval = timeout
         request.setValue(cookie, forHTTPHeaderField: "Cookie")
