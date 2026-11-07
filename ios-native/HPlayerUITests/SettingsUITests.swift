@@ -43,6 +43,9 @@ final class SettingsUITests: XCTestCase {
         XCTAssertTrue(ocean.isHittable)
         XCTAssertTrue(ocean.isEnabled)
         ocean.tap()
+        XCTAssertTrue(wait { ocean.isSelected }, "Selection must follow the tap immediately, before any system callback")
+        let notice = app.descendants(matching: .any)["settings.appIcon.notice"]
+        XCTAssertTrue(notice.waitForExistence(timeout: 5), "The redesigned in-app confirmation should appear")
         dismissIconChangeAlert(in: app)
         XCTAssertTrue(wait { ocean.isSelected }, "The system should switch to the requested alternate")
 
@@ -64,6 +67,32 @@ final class SettingsUITests: XCTestCase {
         openIconSettings(in: app)
         XCTAssertTrue(prism.isSelected, "The restored primary icon should remain selected after relaunch")
         XCTAssertFalse(restore.isEnabled)
+    }
+
+    func testConfirmationNoticeUndoRestoresPreviousIcon() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["HPLAYER_HOME_TEST"] = "1"
+        app.launchEnvironment["HPLAYER_METADATA_TEST_ENDPOINT"] = "http://127.0.0.1:8765"
+        app.launch()
+        openIconSettings(in: app)
+
+        let coral = app.buttons["settings.appIcon.coral"]
+        for _ in 0..<6 {
+            if coral.isHittable { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(coral.isHittable)
+        coral.tap()
+        let undo = app.buttons["settings.appIcon.notice.undo"]
+        XCTAssertTrue(undo.waitForExistence(timeout: 5), "Success notice should offer undo")
+        undo.tap()
+        let prism = app.buttons["settings.appIcon.prism"]
+        XCTAssertTrue(wait { prism.isSelected }, "Undo must return the selection to the previous icon")
+        let done = app.buttons["settings.appIcon.notice.done"]
+        if done.waitForExistence(timeout: 3) { done.tap() }
+        XCTAssertTrue(wait { !app.descendants(matching: .any)["settings.appIcon.notice"].exists },
+                      "Dismissing the notice should remove it")
     }
 
     func testAppearanceSelectionAndLicenseNavigation() {

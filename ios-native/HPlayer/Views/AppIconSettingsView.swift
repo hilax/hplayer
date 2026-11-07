@@ -61,28 +61,11 @@ enum HomeScreenIcon: String, CaseIterable, Identifiable {
 
 struct AppIconSettingsView: View {
     @Environment(\.scenePhase) private var scenePhase
-    @State private var currentName: String? = Self.resolveInitialIconName()
-    @State private var isChanging = false
-    @State private var errorMessage: String?
-
-    private static func resolveInitialIconName() -> String? {
-        #if targetEnvironment(simulator)
-        if ProcessInfo.processInfo.environment["HPLAYER_HOME_TEST"] == "1" {
-            return UserDefaults.standard.string(forKey: "hplayer.simulated_alternate_icon")
-        }
-        #endif
-        return UIApplication.shared.alternateIconName
-    }
+    @StateObject private var store = AppIconStore()
 
     private let columns = [GridItem(.adaptive(minimum: 100, maximum: 140), spacing: 14)]
 
-    private var isDefaultActive: Bool {
-        currentName == nil || currentName == "AppIconPrism"
-    }
-
-    private var activeIcon: HomeScreenIcon {
-        HomeScreenIcon.allCases.first { $0.matchesCurrentName(currentName) } ?? .prism
-    }
+    private var isDefaultActive: Bool { store.selected == .prism }
 
     var body: some View {
         ScrollView {
@@ -109,7 +92,7 @@ struct AppIconSettingsView: View {
                     }
                 }
 
-                if !UIApplication.shared.supportsAlternateIcons {
+                if !store.supportsAlternateIcons {
                     Text("当前设备不支持更换应用图标。")
                         .font(.footnote)
                         .foregroundStyle(Theme.textSecondary)
@@ -120,37 +103,25 @@ struct AppIconSettingsView: View {
             .frame(maxWidth: 620)
             .frame(maxWidth: .infinity)
             .padding(Theme.contentInset)
+            .padding(.bottom, 76)
         }
         .background(Theme.pageBackground.ignoresSafeArea())
         .navigationTitle("应用图标")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
-        .onAppear {
-            #if targetEnvironment(simulator)
-            if ProcessInfo.processInfo.environment["HPLAYER_HOME_TEST"] == "1" {
-                currentName = UserDefaults.standard.string(forKey: "hplayer.simulated_alternate_icon")
-                return
+        .overlay(alignment: .bottom) {
+            if let notice = store.notice {
+                IconChangeNoticeCard(notice: notice, store: store)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 12)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            #endif
-            currentName = UIApplication.shared.alternateIconName
         }
+        .animation(Motion.smooth, value: store.notice)
+        .animation(Motion.snappy, value: store.selected)
+        .onAppear { store.refreshFromSystem() }
         .onChange(of: scenePhase) { phase in
-            if phase == .active {
-                #if targetEnvironment(simulator)
-                if ProcessInfo.processInfo.environment["HPLAYER_HOME_TEST"] == "1" {
-                    return
-                }
-                #endif
-                currentName = UIApplication.shared.alternateIconName
-            }
-        }
-        .alert("无法更换图标", isPresented: Binding(
-            get: { errorMessage != nil },
-            set: { if !$0 { errorMessage = nil } }
-        )) {
-            Button("好", role: .cancel) { errorMessage = nil }
-        } message: {
-            Text(errorMessage ?? "请稍后重试。")
+            if phase == .active { store.refreshFromSystem() }
         }
     }
 
@@ -159,7 +130,7 @@ struct AppIconSettingsView: View {
     private var currentIconHeroCard: some View {
         VStack(spacing: 14) {
             HStack(spacing: 16) {
-                Image(activeIcon.previewName)
+                Image(store.selected.previewName)
                     .resizable()
                     .aspectRatio(1, contentMode: .fit)
                     .frame(width: 64, height: 64)
@@ -180,11 +151,11 @@ struct AppIconSettingsView: View {
                             .foregroundStyle(isDefaultActive ? Theme.success : Theme.accent)
                     }
 
-                    Text(activeIcon.title)
+                    Text(store.selected.title)
                         .font(.headline.weight(.bold))
                         .foregroundStyle(Theme.textPrimary)
 
-                    Text(activeIcon.subtitle)
+                    Text(store.selected.subtitle)
                         .font(.caption)
                         .foregroundStyle(Theme.textSecondary)
                 }
@@ -193,7 +164,7 @@ struct AppIconSettingsView: View {
             }
 
             Button {
-                changeIcon(to: .prism)
+                store.select(.prism)
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: AppIcon.refresh.name)
@@ -216,7 +187,7 @@ struct AppIconSettingsView: View {
                 }
             }
             .buttonStyle(.pressable(scale: 0.98))
-            .disabled(isChanging || !UIApplication.shared.supportsAlternateIcons || isDefaultActive)
+            .disabled(store.isChanging || !store.supportsAlternateIcons || isDefaultActive)
             .accessibilityIdentifier("settings.appIcon.restoreDefault")
         }
         .padding(16)
@@ -231,9 +202,9 @@ struct AppIconSettingsView: View {
     // MARK: - 图标选项卡片
 
     private func iconOption(_ icon: HomeScreenIcon) -> some View {
-        let selected = icon.matchesCurrentName(currentName)
+        let selected = store.selected == icon
         return Button {
-            changeIcon(to: icon)
+            store.select(icon)
         } label: {
             VStack(spacing: 10) {
                 ZStack(alignment: .topTrailing) {
@@ -250,6 +221,7 @@ struct AppIconSettingsView: View {
                             .foregroundStyle(Theme.onPrimary, Theme.gold)
                             .offset(x: 4, y: -4)
                             .shadow(color: Color.black.opacity(0.25), radius: 3, x: 0, y: 1)
+                            .transition(.scale.combined(with: .opacity))
                     }
                 }
 
@@ -281,7 +253,7 @@ struct AppIconSettingsView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.pressable(scale: 0.95))
-        .disabled(isChanging || !UIApplication.shared.supportsAlternateIcons)
+        .disabled(store.isChanging || !store.supportsAlternateIcons)
         .accessibilityLabel(icon.title)
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityIdentifier("settings.appIcon.\(icon.rawValue)")
@@ -296,7 +268,7 @@ struct AppIconSettingsView: View {
                 .foregroundStyle(Theme.accent)
                 .padding(.top, 1)
 
-            Text("更换应用图标后主屏幕将立即更新。受 iOS 系统机制限制，切换时系统可能会弹出确认提示，轻点确认即可完成设置。")
+            Text("更换后主屏幕立即更新，页内会给出确认卡片，可随时撤销。个别系统版本回退到公开接口时仍会弹出系统提示，轻点确认即可。")
                 .font(.footnote)
                 .foregroundStyle(Theme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -313,62 +285,95 @@ struct AppIconSettingsView: View {
                 .strokeBorder(Theme.hairline, lineWidth: 0.8)
         }
     }
+}
 
-    // MARK: - 切换图标逻辑
+// MARK: - 重新设计的页内确认提示（取代系统弹窗体验）
 
-    private func changeIcon(to icon: HomeScreenIcon) {
-        guard !isChanging, UIApplication.shared.supportsAlternateIcons else { return }
+private struct IconChangeNoticeCard: View {
+    let notice: AppIconStore.Notice
+    @ObservedObject var store: AppIconStore
 
-        // 如果用户选的就是当前已经激活的图标
-        if icon.matchesCurrentName(currentName) {
-            // 如果处于默认图标，但底层系统 alternateIconName 仍遗留字符串（如旧版 AppIconPrism），同步归一化设为 nil
-            if icon == .prism && UIApplication.shared.alternateIconName != nil {
-                applyAlternateIcon(nil)
-            } else {
-                Haptics.tap()
-            }
-            return
-        }
-
-        applyAlternateIcon(icon.alternateName)
-    }
-
-    private func applyAlternateIcon(_ alternateName: String?) {
-        isChanging = true
-        UIApplication.shared.setAlternateIconName(alternateName) { [self] error in
-            DispatchQueue.main.async {
-                self.isChanging = false
-
-                if let error = error as NSError? {
-                    // 处理 iOS 26+ 模拟器及特定系统上已知由于 SpringBoard LSIconAlertManager 无法分配 Token 引发的 POSIX 35 (EAGAIN)
-                    if error.domain == NSPOSIXErrorDomain && error.code == 35 {
-                        withAnimation(Motion.snappy) {
-                            self.currentName = alternateName
-                            #if targetEnvironment(simulator)
-                            if ProcessInfo.processInfo.environment["HPLAYER_HOME_TEST"] == "1" {
-                                UserDefaults.standard.set(alternateName, forKey: "hplayer.simulated_alternate_icon")
-                            }
-                            #endif
-                        }
-                        Haptics.select()
-                        return
+    var body: some View {
+        HStack(spacing: 12) {
+            switch notice {
+            case .success(let icon, _):
+                Image(icon.previewName)
+                    .resizable()
+                    .aspectRatio(1, contentMode: .fit)
+                    .frame(width: 44, height: 44)
+                    .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+                    .overlay(alignment: .bottomTrailing) {
+                        Image(systemName: AppIcon.selected.name)
+                            .font(.system(size: 14, weight: .semibold))
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(Theme.onPrimary, Theme.gold)
+                            .offset(x: 4, y: 4)
                     }
-
-                    self.errorMessage = error.localizedDescription
-                    self.currentName = UIApplication.shared.alternateIconName
-                    Haptics.warning()
-                } else {
-                    withAnimation(Motion.snappy) {
-                        self.currentName = alternateName
-                        #if targetEnvironment(simulator)
-                        if ProcessInfo.processInfo.environment["HPLAYER_HOME_TEST"] == "1" {
-                            UserDefaults.standard.set(alternateName, forKey: "hplayer.simulated_alternate_icon")
-                        }
-                        #endif
-                    }
-                    Haptics.select()
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("图标已更新")
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(Theme.textPrimary)
+                    Text("主屏幕已同步为「\(icon.title)」")
+                        .font(.caption)
+                        .foregroundStyle(Theme.textSecondary)
+                        .lineLimit(1)
                 }
+                Spacer(minLength: 4)
+                Button("撤销") { store.undo() }
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.accent)
+                    .padding(.horizontal, 12)
+                    .frame(minHeight: 32)
+                    .background(Theme.tileTint, in: Capsule())
+                    .accessibilityIdentifier("settings.appIcon.notice.undo")
+                Button {
+                    store.clearNotice()
+                } label: {
+                    Image(systemName: AppIcon.close.name)
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(Theme.textSecondary)
+                        .frame(width: 32, height: 32)
+                        .background(Theme.surfaceRaised, in: Circle())
+                }
+                .accessibilityLabel("完成")
+                .accessibilityIdentifier("settings.appIcon.notice.done")
+            case .failure(let message):
+                Image(systemName: AppIcon.alert.name)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(Theme.danger)
+                    .frame(width: 44, height: 44)
+                    .background(Theme.danger.opacity(0.12), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("更换失败")
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(Theme.textPrimary)
+                    Text(message)
+                        .font(.caption)
+                        .foregroundStyle(Theme.textSecondary)
+                        .lineLimit(2)
+                }
+                Spacer(minLength: 4)
+                Button {
+                    store.clearNotice()
+                } label: {
+                    Image(systemName: AppIcon.close.name)
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(Theme.textSecondary)
+                        .frame(width: 32, height: 32)
+                        .background(Theme.surfaceRaised, in: Circle())
+                }
+                .accessibilityLabel("知道了")
+                .accessibilityIdentifier("settings.appIcon.notice.done")
             }
         }
+        .padding(12)
+        .glassCard(cornerRadius: 20)
+        .overlay {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .strokeBorder(Theme.hairline, lineWidth: 0.8)
+        }
+        .shadow(color: Color.black.opacity(0.18), radius: 16, x: 0, y: 6)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("settings.appIcon.notice")
     }
 }
