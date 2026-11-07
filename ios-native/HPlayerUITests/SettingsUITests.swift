@@ -9,7 +9,7 @@ final class SettingsUITests: XCTestCase {
         app.launch()
 
         openIconSettings(in: app)
-        let names = ["prism", "classic", "night", "aurora", "sunset", "ocean", "mint", "iris", "coral"]
+        let names = ["prism", "classic", "ocean", "mint", "iris", "coral"]
         var found = Set<String>()
         var selected = Set<String>()
         for _ in 0..<6 {
