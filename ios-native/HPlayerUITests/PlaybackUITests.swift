@@ -39,28 +39,33 @@ final class PlaybackUITests: XCTestCase {
         // SwiftUI reports the glyphs' accessibility bounds inside the 44pt capsule.
         // Its vertical center matches the capsule, whose top is 22pt above it.
         let levelTop = levelHUD.frame.midY - 22
-        XCTAssertTrue(app.buttons["playback.close"].isHittable, "Brightness must keep the close button usable")
-        XCTAssertTrue(app.buttons["playback.more"].isHittable, "Brightness must keep the settings button usable")
         let levelShot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         levelShot.name = portrait ? "Brightness-HUD-portrait" : "Brightness-HUD-landscape"
         levelShot.lifetime = .keepAlways
         add(levelShot)
+        assertControlsStayHidden(in: app)
+
+        // Repeat while already hidden: finishing the adjustment must not reveal controls.
+        swipe(surface, from: CGVector(dx: 0.2, dy: 0.35), to: CGVector(dx: 0.2, dy: 0.6))
+        XCTAssertTrue((surface.value as? String ?? "").contains("亮度"))
+        assertControlsStayHidden(in: app)
+
+        revealPlaybackControls(in: app, surface: surface)
+        XCTAssertEqual(pause.value as? String, "paused", "Adjusting brightness preserves pause")
 
         swipe(surface, from: CGVector(dx: 0.8, dy: 0.6), to: CGVector(dx: 0.8, dy: 0.35))
         XCTAssertTrue(levelHUD.exists, "Volume should show its top HUD")
         let volumeFrame = levelHUD.frame
         XCTAssertEqual(volumeFrame.midY - 22, levelTop, accuracy: 3, "Brightness and volume share the fixed top position")
-        let close = app.buttons["playback.close"]
-        let more = app.buttons["playback.more"]
-        XCTAssertTrue(close.isHittable && more.isHittable, "Volume must keep both top controls usable")
-        XCTAssertGreaterThanOrEqual(volumeFrame.minX, close.frame.maxX, "The HUD leaves the close button clear")
-        let firstTrailingButton = portrait ? app.buttons["playback.screenshot"] : app.buttons["playback.aspect"]
-        XCTAssertLessThanOrEqual(volumeFrame.maxX, firstTrailingButton.frame.minX,
-                                 "The HUD leaves the trailing buttons clear")
+        XCTAssertEqual(volumeFrame.midX, surface.frame.midX, accuracy: 3)
         let volumeShot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         volumeShot.name = portrait ? "Volume-HUD-portrait" : "Volume-HUD-landscape"
         volumeShot.lifetime = .keepAlways
         add(volumeShot)
+        assertControlsStayHidden(in: app)
+        swipe(surface, from: CGVector(dx: 0.8, dy: 0.35), to: CGVector(dx: 0.8, dy: 0.6))
+        XCTAssertTrue((surface.value as? String ?? "").contains("音量"))
+        assertControlsStayHidden(in: app)
         let before = metric("time", surface: surface)
         swipe(surface, from: CGVector(dx: 0.35, dy: 0.4), to: CGVector(dx: 0.65, dy: 0.4))
         let seekHUD = app.descendants(matching: .any)["playback.seekHUD"]
@@ -96,12 +101,15 @@ final class PlaybackUITests: XCTestCase {
     }
 
     private func assertControlsStayHidden(in app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
-        let controlsVisible = { app.buttons["playback.playPause"].exists || app.sliders.firstMatch.exists }
-        XCTAssertTrue(wait(timeout: 3) { !controlsVisible() }, "Screen seeking must hide buttons and the timeline", file: file, line: line)
+        let controlIDs = ["playback.close", "playback.playPause", "playback.previous", "playback.next",
+                          "playback.more", "playback.screenshot", "playback.lock", "playback.unlock", "playback.orientation"]
+        let buttons = app.buttons.matching(NSPredicate(format: "identifier IN %@", controlIDs))
+        let controlsVisible = { buttons.firstMatch.exists || app.sliders.firstMatch.exists }
+        XCTAssertTrue(wait(timeout: 3) { !controlsVisible() }, "Screen gestures must hide buttons and the timeline", file: file, line: line)
         let reappeared = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in controlsVisible() }, object: nil)
         reappeared.isInverted = true
         XCTAssertEqual(XCTWaiter.wait(for: [reappeared], timeout: 1.5), .completed,
-                       "Finishing a screen seek must not bring the controls back", file: file, line: line)
+                       "Finishing a screen gesture must not bring the controls back", file: file, line: line)
     }
 
     private func revealPlaybackControls(in app: XCUIApplication, surface: XCUIElement) {
@@ -232,13 +240,18 @@ final class PlaybackUITests: XCTestCase {
 
         let center = surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.28))
         center.doubleTap()
+        assertControlsStayHidden(in: app)
+        revealPlaybackControls(in: app, surface: surface)
         XCTAssertTrue(wait { (pause.value as? String) == "playing" }, "Double tap should resume")
         center.press(forDuration: 1.2)
         XCTAssertTrue(wait { (surface.value as? String)?.contains("长按 ") == true })
         XCTAssertEqual(metric("rate", surface: surface), 1, accuracy: 0.01, "Releasing long press restores normal speed")
-        // 松手后重新打开音轨，等它恢复播放再继续
+        assertControlsStayHidden(in: app)
+        revealPlaybackControls(in: app, surface: surface)
         XCTAssertTrue(wait { (pause.value as? String) == "playing" })
         center.doubleTap()
+        assertControlsStayHidden(in: app)
+        revealPlaybackControls(in: app, surface: surface)
         XCTAssertTrue(wait { (pause.value as? String) == "paused" }, "Double tap should pause")
 
         center.tap()
@@ -412,6 +425,14 @@ final class PlaybackUITests: XCTestCase {
 
     /// The fixture is an actual 3840×2160 H.264/AAC video, served with delayed Range responses.
     func testLongPress4KRestoresSelectedRateAndKeepsPlaying() throws {
+        try checkLongPressKeepsControlsHidden(portrait: false)
+    }
+
+    func testLongPress4KKeepsControlsHiddenInPortrait() throws {
+        try checkLongPressKeepsControlsHidden(portrait: true)
+    }
+
+    private func checkLongPressKeepsControlsHidden(portrait: Bool) throws {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchEnvironment["HPLAYER_UI_TEST_URL"] = "http://127.0.0.1:8765/range/seek-4k-fixture.mp4"
@@ -426,8 +447,16 @@ final class PlaybackUITests: XCTestCase {
                 && self.metric("time", surface: surface) > 1 && self.metric("buffering", surface: surface) == 0
         }, "The actual 4K video must be playing before the long press")
         app.buttons["playback.speed"].tap()
-        app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "1.5×")).firstMatch.tap()
-        XCTAssertTrue(wait { self.metric("rate", surface: surface) == 1.5 })
+        let selectedRate = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "1.5×")).firstMatch
+        XCTAssertTrue(selectedRate.waitForExistence(timeout: 5))
+        snapshot("Boost-speed-selection")
+        selectedRate.tap()
+        XCTAssertTrue(wait { self.metric("rate", surface: surface) == 1.5 },
+                      "The selected rate must apply before testing the hold; status=\(surface.value as? String ?? "")")
+        if portrait {
+            app.buttons["playback.orientation"].tap()
+            XCTAssertTrue(wait { !self.isLandscape(app) })
+        }
         let before = metric("time", surface: surface)
         surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4)).press(forDuration: 4)
         XCTAssertTrue((surface.value as? String)?.contains("长按 2×") == true,
@@ -436,6 +465,7 @@ final class PlaybackUITests: XCTestCase {
         XCTAssertGreaterThan(metric("time", surface: surface), before + 3, "The decoder must advance during the hold")
         XCTAssertLessThan(metric("boostAVSyncPeak", surface: surface), 0.3,
                           "The actual 4K fixture must keep audio and video together during acceleration")
+        assertControlsStayHidden(in: app)
         let resumed = metric("time", surface: surface)
         XCTAssertTrue(wait(timeout: 20) { self.metric("time", surface: surface) > resumed + 2 })
         XCTAssertTrue(wait { abs(self.metric("avsync", surface: surface)) < 0.2 },
@@ -444,12 +474,14 @@ final class PlaybackUITests: XCTestCase {
 
         // Exercise the same acceleration with the controls already hidden.
         // The HUD must use the same top placement in both states.
-        surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4)).tap()
-        XCTAssertTrue(wait { !pause.exists }, "A tap hides the controls before the second long press")
+        assertControlsStayHidden(in: app)
         let hiddenStart = metric("time", surface: surface)
         surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4)).press(forDuration: 4)
         XCTAssertEqual(metric("rate", surface: surface), 1.5, accuracy: 0.01)
         XCTAssertGreaterThan(metric("time", surface: surface), hiddenStart + 3)
+        assertControlsStayHidden(in: app)
+        revealPlaybackControls(in: app, surface: surface)
+        XCTAssertEqual(pause.value as? String, "playing", "A single tap reveals controls without pausing")
     }
 
     /// The fixture is an actual 3840×2160 H.264/AAC video, served with delayed Range responses.

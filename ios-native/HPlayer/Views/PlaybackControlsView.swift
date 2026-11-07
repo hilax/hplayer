@@ -1374,7 +1374,7 @@ struct PlaybackControlsView: View {
                 } else if dragging {
                     dragging = false
                     playback.seek(to: dragTime)
-                    hideAdjustmentSoon()
+                    hideAdjustmentSoon(revealing: true)
                 }
             },
             onCommit: { value in
@@ -1398,9 +1398,9 @@ struct PlaybackControlsView: View {
                 status: gestureStatus,
                 onTap: toggleControls,
                 onDoubleTap: {
-                    guard !locked else { revealControls(); return }
+                    guard !locked else { return }
+                    hideControlsForGesture()
                     playback.toggle()
-                    revealControls()
                 },
                 onBoost: setBoost,
                 onPan: handlePan
@@ -1427,7 +1427,7 @@ struct PlaybackControlsView: View {
                 .scaleEffect(landscape ? 1 : 0.8)
                 .zIndex(4)
 
-            if boosting {
+            if boosting && adjustment == nil {
                 boostPill
                     .frame(maxWidth: hudWidth)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -2458,19 +2458,28 @@ struct PlaybackControlsView: View {
         }
     }
 
+    /// Screen gestures show only their HUD. Only a tap should bring the controls back.
+    private func hideControlsForGesture() {
+        hideTask?.cancel()
+        adjustmentHideTask?.cancel()
+        adjustment = nil
+        if controlsVisible {
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) { controlsVisible = false }
+        }
+    }
+
     private func setBoost(_ enabled: Bool) {
         if enabled {
             // 锁定后也能长按快进；锁定时其他面板都已收起
             guard !showList, settingsPage == nil, popover == nil, panKind == nil, playback.playing else { return }
+            hideControlsForGesture()
             boosting = true
             playback.setBoost(true)
             lastAdjustment = "长按 \(String(format: "%g", playback.effectiveRate))×"
-            hideTask?.cancel()
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
         } else if boosting {
             boosting = false
             playback.setBoost(false)
-            revealControls()
         }
     }
 
@@ -2483,12 +2492,10 @@ struct PlaybackControlsView: View {
 
     private func handlePan(_ state: UIGestureRecognizer.State, origin: CGPoint, translation: CGPoint, size: CGSize) {
         if state == .cancelled || state == .failed {
-            let wasScrubbing = panScrubbing
             endPanScrub()
             panActive = false
             panKind = nil
             adjustment = nil
-            if !wasScrubbing { revealControls() }
             return
         }
         guard !showList, settingsPage == nil, !showAspect, popover == nil, !closing, size.width > 0, size.height > 0 else {
@@ -2498,8 +2505,7 @@ struct PlaybackControlsView: View {
         }
         if state == .began {
             setBoost(false)
-            adjustmentHideTask?.cancel()
-            hideTask?.cancel()
+            hideControlsForGesture()
             adjustmentStartTime = playback.currentTime
             // 每次从屏幕和系统的真实值开始调：自动亮度、音量键、控制中心都可能在两次滑动之间改过它们
             adjustmentStartBrightness = Double(ScreenBrightness.screen.brightness)
@@ -2517,7 +2523,6 @@ struct PlaybackControlsView: View {
                 // 还没走够，先不定方向；这次拖动很短就结束了，什么也不做
                 if state == .ended {
                     panActive = false
-                    revealControls()
                 }
                 return
             }
@@ -2579,19 +2584,15 @@ struct PlaybackControlsView: View {
             endPanScrub()
             self.panKind = nil
             panActive = false
-            hideAdjustmentSoon(revealing: panKind != .seek)
+            hideAdjustmentSoon()
         }
     }
 
-    /// 横滑只显示轻量的跳转时间提示，不展开操作栏；原本展开的操作栏也在识别到横滑时收起。
+    /// 横滑更新跳转预览；操作栏已在手势开始时收起。
     private func beginPanScrub(at time: Double) {
         panScrubbing = true
         dragTime = time
         dragging = true
-        hideTask?.cancel()
-        if controlsVisible {
-            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) { controlsVisible = false }
-        }
     }
 
     /// 横滑结束（松手、取消或被打断）：进度条回到跟着播放位置走。
@@ -2649,7 +2650,7 @@ struct PlaybackControlsView: View {
         hideAdjustmentSoon(revealing: false)
     }
 
-    private func hideAdjustmentSoon(revealing: Bool = true, delay: Double = 0.9) {
+    private func hideAdjustmentSoon(revealing: Bool = false, delay: Double = 0.9) {
         adjustmentHideTask?.cancel()
         adjustmentHideTask = Task {
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
