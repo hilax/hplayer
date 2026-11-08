@@ -2,6 +2,20 @@ import SwiftUI
 
 // MARK: - 筛选条件
 
+enum CatalogSource: String, CaseIterable, Identifiable {
+    case library = "library"
+    case anime = "anime"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .library: return "我的片库"
+        case .anime: return "动漫共和国"
+        }
+    }
+}
+
 enum CatalogKind: String, CaseIterable, Identifiable {
     case all, movie, series, anime, performer
 
@@ -146,6 +160,7 @@ struct CatalogTab: View {
     @EnvironmentObject private var librarySnapshots: LibrarySnapshotStore
     private var snapshot: HomeSnapshot { librarySnapshots.home }
     private var entries: [CatalogEntry] { librarySnapshots.catalogEntries }
+    @State private var source: CatalogSource = .library
     @State private var kind: CatalogKind = .all
     @State private var region: CatalogRegion = .all
     @State private var year: CatalogYear = .all
@@ -162,19 +177,30 @@ struct CatalogTab: View {
     var body: some View {
         NavigationStack {
             GeometryReader { proxy in
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 12) {
-                        ScreenTitleBar(title: "片库", subtitle: subtitle) {
-                            BarIconButton(icon: .search, label: "搜索片库", identifier: "catalog.search", action: onSearch)
-                        }
-                        filterRows
-                        if !snapshot.unmatched.isEmpty { unmatchedBanner }
-                        grid(width: proxy.size.width)
+                VStack(spacing: 0) {
+                    ScreenTitleBar(title: "片库", subtitle: source == .library ? subtitle : "在线番剧") {
+                        BarIconButton(icon: .search, label: "搜索片库", identifier: "catalog.search", action: onSearch)
                     }
-                    .padding(.top, 6)
-                    .padding(.bottom, 32)
+
+                    sourcePicker
+                        .padding(.horizontal, Theme.contentInset)
+                        .padding(.bottom, 8)
+
+                    if source == .library {
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 12) {
+                                filterRows
+                                if !snapshot.unmatched.isEmpty { unmatchedBanner }
+                                grid(width: proxy.size.width)
+                            }
+                            .padding(.top, 4)
+                            .padding(.bottom, 32)
+                        }
+                        .scrollIndicators(.hidden)
+                    } else {
+                        AnimeCatalogView(onSearch: onSearch)
+                    }
                 }
-                .scrollIndicators(.hidden)
             }
             .background(Theme.pageBackground.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
@@ -216,6 +242,33 @@ struct CatalogTab: View {
             region = .all
             year = .all
         }
+    }
+
+    private var sourcePicker: some View {
+        HStack(spacing: 0) {
+            ForEach(CatalogSource.allCases) { item in
+                let isSelected = (source == item)
+                Button(action: {
+                    Haptics.select()
+                    withAnimation(reduceMotion ? nil : Motion.snappy) {
+                        source = item
+                    }
+                }) {
+                    Text(item.title)
+                        .font(.system(size: 13, weight: isSelected ? .bold : .medium))
+                        .foregroundStyle(isSelected ? Theme.onPrimary : Theme.textSecondary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                        .background(
+                            isSelected ? Theme.primaryAction : Color.clear,
+                            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        )
+                }
+                .buttonStyle(.pressable)
+            }
+        }
+        .padding(3)
+        .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
     }
 
     // MARK: 数据

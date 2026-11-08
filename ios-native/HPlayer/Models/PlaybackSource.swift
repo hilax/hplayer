@@ -4,12 +4,15 @@ import Foundation
 /// 这样播放器本身不依赖 115，115 只是其中一种来源。
 enum PlaybackSource: Identifiable, Hashable {
     case direct(title: String, url: URL)
+    case online(title: String, url: URL, headers: [String: String])
     case p115(title: String, pickCode: String)
 
     var id: String {
         switch self {
         case .direct(let title, let url):
             return "direct|\(title)|\(url.absoluteString)"
+        case .online(let title, let url, _):
+            return "online|\(title)|\(url.absoluteString)"
         case .p115(_, let pickCode):
             return "p115|\(pickCode)"
         }
@@ -17,7 +20,7 @@ enum PlaybackSource: Identifiable, Hashable {
 
     var title: String {
         switch self {
-        case .direct(let title, _):
+        case .direct(let title, _), .online(let title, _, _):
             return title
         case .p115(let title, _):
             return title
@@ -49,4 +52,7 @@ struct RecentItem: Codable, Identifiable, Hashable {
 
     var isCloud: Bool { !(pickCode ?? "").isEmpty }
     var isLocalFile: Bool { !isCloud && (URL(string: url)?.isFileURL ?? false) }
+    var isAnime: Bool {
+        !isCloud && !isLocalFile && (url.contains("cenmo.fun") || url.contains("hzhcbkj.cn") || url.contains("xhscdn.com") || url.contains("kechuangai.com") || url.contains("yximgs.com"))
+    }
 }

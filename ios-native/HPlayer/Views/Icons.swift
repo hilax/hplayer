@@ -17,6 +17,7 @@ enum AppIcon: String, CaseIterable {
     case check, selected, unselected, success, alert, info, help, addCircle
     case refresh, history, clock, sortAscending, sortDescending, tune, settings
     case copy, trash, openExternal, returnKey, sparkles, hidden, hot, topics, mirror
+    case heart, heartFill, bolt
 
     // MARK: 播放
     case play, playCircle, pause, stop, previous, next, skip, seek, fullscreen, exitFullscreen
@@ -83,6 +84,9 @@ enum AppIcon: String, CaseIterable {
         case .hot: return "flame"
         case .topics: return "square.stack"
         case .mirror: return "globe"
+        case .heart: return "heart"
+        case .heartFill: return "heart.fill"
+        case .bolt: return "bolt.fill"
 
         case .play: return "play.fill"
         case .playCircle: return "play.circle.fill"

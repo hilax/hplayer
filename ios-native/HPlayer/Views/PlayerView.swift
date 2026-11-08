@@ -117,6 +117,10 @@ struct PlayerView: View {
                 #endif
                 guard await openAfterReveal(request, source: source, session: session) else { return }
                 playback.open(url, direct115: use115Headers, directCookie: testCookie, startTime: resume)
+            case .online(_, let url, let headers):
+                guard isCurrentRequest(request, source: source, session: session), !Task.isCancelled else { return }
+                guard await openAfterReveal(request, source: source, session: session) else { return }
+                playback.open(url, customHeaders: headers, startTime: resume)
             case .p115(_, let pickCode):
                 do {
                     guard let client = appState.directClient() else { throw APIError.server("请先登录 115") }

@@ -28,7 +28,7 @@ final class RecentStore: ObservableObject {
         entry.title = source.title
         entry.playedAt = Date()
         switch source {
-        case .direct(_, let url):
+        case .direct(_, let url), .online(_, let url, _):
             entry.url = url.absoluteString
             entry.pickCode = nil
         case .p115(_, let pickCode):
@@ -84,6 +84,9 @@ final class RecentStore: ObservableObject {
             return .p115(title: item.title, pickCode: pickCode)
         }
         guard let url = URL(string: item.url) else { return nil }
+        if item.isAnime {
+            return .online(title: item.title, url: url, headers: ["User-Agent": ""])
+        }
         if url.isFileURL, !FileManager.default.fileExists(atPath: url.path), let localDirectory {
             let moved = localDirectory.appendingPathComponent(url.lastPathComponent)
             guard FileManager.default.fileExists(atPath: moved.path) else { return nil }
@@ -123,7 +126,7 @@ final class RecentStore: ObservableObject {
         switch source {
         case .p115(_, let pickCode):
             return "p115|\(pickCode)"
-        case .direct(_, let url):
+        case .direct(_, let url), .online(_, let url, _):
             return url.isFileURL ? "file|\(url.lastPathComponent)" : "url|\(url.absoluteString)"
         }
     }
