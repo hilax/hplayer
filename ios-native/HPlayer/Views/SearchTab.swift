@@ -451,7 +451,7 @@ struct SearchView: View {
                     selectedAnimeId = item.id
                 } label: {
                     LibraryResultRow(
-                        posterURL: item.pic ?? "",
+                        posterURL: item.safePicURLString,
                         title: item.name,
                         meta: [item.year, item.area, item.continu].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "),
                         detail: ["在线动漫", item.tags.prefix(2).joined(separator: " / ")].filter { !$0.isEmpty }.joined(separator: " · "),

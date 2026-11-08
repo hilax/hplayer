@@ -84,25 +84,11 @@ struct AnimeHeroBanner: View {
 
     private func bannerCard(banner: AnimeBanner) -> some View {
         ZStack(alignment: .bottomLeading) {
-            // 背景封面图
-            AsyncImage(url: URL(string: banner.displayImage)) { phase in
-                switch phase {
-                case .success(let image):
-                    image
-                        .resizable()
-                        .scaledToFill()
-                case .failure, .empty:
-                    LinearGradient(
-                        colors: [Color(uiColor: UIColor(hex: 0x2A1F10)), Theme.surface],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                @unknown default:
-                    Theme.surface
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .clipped()
+            // 背景封面图（通过 HPlayer 专属 ImagePipeline 磁盘与内存缓存）
+            ArtworkView(urlString: banner.safePicURLString, title: banner.displayTitle, maxPixel: ArtworkSize.hero, loading: .clear, drawsFallback: false)
+                .scaledToFill()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
 
             // 渐变蒙层
             LinearGradient(
@@ -163,25 +149,8 @@ struct AnimePosterCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             ZStack(alignment: .bottomTrailing) {
-                // 封面
-                AsyncImage(url: URL(string: item.pic ?? "")) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .scaledToFill()
-                    case .failure, .empty:
-                        ZStack {
-                            Theme.surfaceRaised
-                            Image(icon: .video)
-                                .iconStyle(size: 24, color: Theme.textTertiary)
-                        }
-                    @unknown default:
-                        Theme.surfaceRaised
-                    }
-                }
-                .frame(width: width, height: width * 1.38)
-                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
+                // 封面（基于 ImagePipeline 磁盘+内存缓存与异步解码）
+                PosterArtwork(urlString: item.safePicURLString, title: item.name, width: width)
 
                 // 右下角连载状态角标
                 if let continu = item.continu, !continu.isEmpty {
@@ -194,10 +163,6 @@ struct AnimePosterCard: View {
                         .padding(4)
                 }
             }
-            .overlay(
-                RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous)
-                    .stroke(Theme.hairline, lineWidth: 0.5)
-            )
 
             // 标题与分类
             VStack(alignment: .leading, spacing: 2) {

@@ -39,6 +39,12 @@ struct AnimeBanner: Identifiable, Codable, Hashable {
 
     var displayTitle: String { vname }
     var displayImage: String { img }
+    var safePicURLString: String {
+        if img.hasPrefix("http://") {
+            return "https://" + img.dropFirst(7)
+        }
+        return img
+    }
     var displayRemarks: String { continu ?? "" }
     var displayDesc: String {
         (content ?? "").replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
@@ -131,6 +137,14 @@ struct AnimeVideoItem: Identifiable, Codable, Hashable {
         (content ?? "").replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
     }
 
+    var safePicURLString: String {
+        guard let raw = pic, !raw.isEmpty else { return "" }
+        if raw.hasPrefix("http://") {
+            return "https://" + raw.dropFirst(7)
+        }
+        return raw
+    }
+
     var tags: [String] {
         (type ?? "").split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
     }
@@ -208,6 +222,14 @@ struct AnimeVideoDetail: Identifiable, Codable, Hashable {
 
     var cleanDesc: String {
         (content ?? "").replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+    }
+
+    var safePicURLString: String {
+        guard let raw = pic, !raw.isEmpty else { return "" }
+        if raw.hasPrefix("http://") {
+            return "https://" + raw.dropFirst(7)
+        }
+        return raw
     }
 
     var tags: [String] {

@@ -125,24 +125,10 @@ struct AnimeDetailView: View {
             let stretch = max(minY, 0)
 
             ZStack(alignment: .bottom) {
-                AsyncImage(url: URL(string: detail.pic ?? "")) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .scaledToFill()
-                    case .failure, .empty:
-                        LinearGradient(
-                            colors: [Color(uiColor: UIColor(hex: 0x222633)), Theme.surface],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    @unknown default:
-                        Theme.surface
-                    }
-                }
-                .frame(width: proxy.size.width, height: backdropHeight + stretch)
-                .clipped()
+                ArtworkView(urlString: detail.safePicURLString, title: detail.name, maxPixel: ArtworkSize.hero, loading: .clear, drawsFallback: false)
+                    .scaledToFill()
+                    .frame(width: proxy.size.width, height: backdropHeight + stretch)
+                    .clipped()
 
                 LinearGradient(
                     stops: [
@@ -165,29 +151,8 @@ struct AnimeDetailView: View {
     private func headerView(_ detail: AnimeVideoDetail) -> some View {
         HStack(alignment: .bottom, spacing: 14) {
             // 封面海报
-            AsyncImage(url: URL(string: detail.pic ?? "")) { phase in
-                switch phase {
-                case .success(let image):
-                    image
-                        .resizable()
-                        .scaledToFill()
-                case .failure, .empty:
-                    ZStack {
-                        Theme.surfaceRaised
-                        Image(icon: .video)
-                            .iconStyle(size: 28, color: Theme.textTertiary)
-                    }
-                @unknown default:
-                    Theme.surfaceRaised
-                }
-            }
-            .frame(width: 95, height: 133)
-            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous)
-                    .stroke(Theme.hairline, lineWidth: 1)
-            )
-            .shadow(color: Color.black.opacity(0.4), radius: 8, x: 0, y: 4)
+            PosterArtwork(urlString: detail.safePicURLString, title: detail.name, width: 95)
+                .shadow(color: Color.black.opacity(0.4), radius: 8, x: 0, y: 4)
 
             // 信息文字
             VStack(alignment: .leading, spacing: 6) {

@@ -141,20 +141,17 @@ struct AnimeCatalogView: View {
                     ForEach(waterfallItems) { item in
                         VStack(alignment: .leading, spacing: 6) {
                             ZStack(alignment: .bottomTrailing) {
-                                AsyncImage(url: URL(string: item.pic ?? "")) { phase in
-                                    switch phase {
-                                    case .success(let image):
-                                        image
-                                            .resizable()
-                                            .scaledToFill()
-                                    case .failure, .empty:
-                                        Theme.surfaceRaised
-                                    @unknown default:
-                                        Theme.surfaceRaised
+                                ArtworkView(urlString: item.safePicURLString, title: item.name)
+                                    .scaledToFill()
+                                    .aspectRatio(3/4, contentMode: .fill)
+                                    .frame(minWidth: 0, maxWidth: .infinity)
+                                    .clipped()
+                                    .allowsHitTesting(false)
+                                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
+                                    .overlay {
+                                        RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous)
+                                            .strokeBorder(Theme.hairline, lineWidth: 0.5)
                                     }
-                                }
-                                .aspectRatio(3/4, contentMode: .fit)
-                                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
 
                                 if let continu = item.continu, !continu.isEmpty {
                                     Text(continu)
