@@ -11,6 +11,9 @@ struct AnimeCatalogView: View {
     /// 推荐页里每个频道的货架，按频道 id 存；滚到可见时才拉，首屏只并发前几个。
     @State private var shelves: [Int: [AnimeVideoItem]] = [:]
     @State private var loadingShelves: Set<Int> = []
+    /// 拉失败的货架单独记，不能塞进 shelves 当空数组——那样会被当成「已加载」，
+    /// 网络恢复后也永远不再重试，页面上只剩一排空标题。
+    @State private var failedShelves: Set<Int> = []
     @State private var gridItems: [AnimeVideoItem] = []
 
     // MARK: 筛选与分页
@@ -94,16 +97,63 @@ struct AnimeCatalogView: View {
 
             if isReloading && banners.isEmpty && trendingItems.isEmpty && shelves.isEmpty {
                 recommendSkeleton
+            } else if !isReloading && banners.isEmpty && trendingItems.isEmpty && channels.isEmpty {
+                // 全部板块都没拉到时必须给出说明和重试入口，否则整页一片空白，
+                // 看起来就是「首页加载不出来」，用户也不知道该做什么。
+                recommendFailedState
             }
         }
         .padding(.bottom, 80)
     }
 
-    /// 单个频道的货架：没拉过就在出现时拉一次。
+    private var recommendFailedState: some View {
+        VStack(spacing: 12) {
+            Image(icon: .alert)
+                .iconStyle(size: 36, color: Theme.textTertiary)
+            Text("推荐内容没加载出来")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Theme.textPrimary)
+            Text("接口没能连上。下拉可以刷新，或点下面的按钮重试。")
+                .font(.system(size: 13))
+                .foregroundStyle(Theme.textSecondary)
+                .multilineTextAlignment(.center)
+            Button("重新加载") {
+                Task { await reload(channel: nil) }
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(Theme.primaryAction)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, Theme.contentInset)
+        .padding(.vertical, 48)
+    }
+
+    /// 单个频道的货架：没拉过就在出现时拉一次；拉失败给出重试入口。
     @ViewBuilder
     private func channelShelf(_ channel: AnimeChannel) -> some View {
-        if let items = shelves[channel.id], !items.isEmpty {
-            shelf(title: "推荐 · \(channel.name)", items: items, detail: nil, destination: channel.id)
+        if failedShelves.contains(channel.id) {
+            VStack(alignment: .leading, spacing: 8) {
+                ShelfHeader("推荐 · \(channel.name)")
+                Button {
+                    Task { await loadShelf(channel.id, retry: true) }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(icon: .refresh).iconStyle(size: 13, color: Theme.accent)
+                        Text("加载失败，点按重试")
+                            .font(.system(size: 13))
+                            .foregroundStyle(Theme.textSecondary)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 44)
+                    .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous))
+                }
+                .buttonStyle(.pressable(scale: 0.98))
+                .padding(.horizontal, Theme.contentInset)
+            }
+        } else if let items = shelves[channel.id] {
+            // 成功但确实没内容就不占版面
+            if !items.isEmpty {
+                shelf(title: "推荐 · \(channel.name)", items: items, detail: nil, destination: channel.id)
+            }
         } else if loadingShelves.contains(channel.id) {
             shelfSkeleton(title: "推荐 · \(channel.name)")
         } else {
@@ -352,8 +402,10 @@ struct AnimeCatalogView: View {
 
     @MainActor private func reload(channel: Int?) async {
         if channel == nil {
-            // 下拉刷新推荐页：清掉货架缓存重新拉
+            // 下拉刷新推荐页：清掉货架缓存和失败标记重新拉
             shelves = [:]
+            failedShelves = []
+            channels = []
             trendingItems = []
             banners = []
         }
@@ -390,17 +442,24 @@ struct AnimeCatalogView: View {
         }
     }
 
-    @MainActor private func loadShelf(_ channelId: Int) async {
-        guard shelves[channelId] == nil, !loadingShelves.contains(channelId) else { return }
+    @MainActor private func loadShelf(_ channelId: Int, retry: Bool = false) async {
+        guard !loadingShelves.contains(channelId) else { return }
+        if retry {
+            failedShelves.remove(channelId)
+            shelves.removeValue(forKey: channelId)
+        } else {
+            // 已经成功拉过就不再重复拉；失败的走重试按钮，不在滚动时反复打接口
+            guard shelves[channelId] == nil, !failedShelves.contains(channelId) else { return }
+        }
         loadingShelves.insert(channelId)
         defer { loadingShelves.remove(channelId) }
         if let res = try? await AnimeClient.shared.fetchVideoList(
             channel: channelId, sort: "weight", limit: shelfSize, page: 1
         ) {
             shelves[channelId] = unique(res.items)
+            failedShelves.remove(channelId)
         } else {
-            // 拉失败留空数组，避免每次滚过来都重试
-            shelves[channelId] = []
+            failedShelves.insert(channelId)
         }
     }
 
