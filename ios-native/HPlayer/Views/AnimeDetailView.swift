@@ -71,30 +71,35 @@ struct AnimeDetailView: View {
                 }
             }
 
-            // 加载/解析中遮罩
+            // 解析中遮罩：文字必须用主题色，之前写死 .white 压在 Theme.surface 上，
+            // 浅色模式下两者都是白的，只剩一个转圈、说明文字完全看不见。
             if isResolvingPlay {
-                Color.black.opacity(0.6)
+                Color.black.opacity(0.45)
                     .ignoresSafeArea()
-                VStack(spacing: 12) {
+                VStack(spacing: 10) {
                     ProgressView()
-                        .tint(Theme.gold)
-                    Text("正在解析流媒体播放地址...")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .tint(Theme.accent)
+                    Text("正在解析播放地址…")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(Theme.textPrimary)
                 }
-                .padding(24)
-                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .padding(.horizontal, 24)
+                .padding(.vertical, 20)
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
+                .shadow(color: Theme.shadow, radius: 12, x: 0, y: 4)
             }
         }
         .designScreen("anime-detail")
         .hidesTabBar()
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar(.visible, for: .navigationBar)
+        // 解析中把整条导航栏收起来：它在 ZStack 之外，遮罩盖不住，
+        // 否则返回键和追番心会浮在灰罩上面，既突兀又能被点走。
+        .toolbar(isResolvingPlay ? .hidden : .visible, for: .navigationBar)
         .modifier(TransparentNavigationBar())
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                if let detail {
+                if let detail, !isResolvingPlay {
                     Button {
                         Haptics.tap()
                         watchlist.toggle(detail: detail)
