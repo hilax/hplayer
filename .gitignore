@@ -13,3 +13,4 @@ ios-native/HPlayer/Info.plist
 *.log
 __pycache__/
 .spm/
+.superpowers/
