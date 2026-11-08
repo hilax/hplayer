@@ -1,47 +1,55 @@
 import SwiftUI
 
-// MARK: - 频道分类胶囊栏 (AnimeChannelBar)
+// MARK: - 频道分类标签栏 (AnimeChannelBar)
+//
+// 推荐 + 各频道横向标签，选中项白字加粗、下方一条金色滑条（滑条用 matchedGeometryEffect
+// 在标签之间平移，和 App 其余分段选择器一致）。nil 代表「推荐」。
 
 struct AnimeChannelBar: View {
     let channels: [AnimeChannel]
     @Binding var selectedChannelId: Int?
     var onSelect: (Int?) -> Void
 
+    @Namespace private var underline
+
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                // "全部" 胶囊
-                channelPill(title: "全部", isSelected: selectedChannelId == nil) {
-                    onSelect(nil)
-                }
-
+            HStack(spacing: 18) {
+                tab(title: "推荐", id: nil)
                 ForEach(channels) { channel in
-                    channelPill(title: channel.name, isSelected: selectedChannelId == channel.id) {
-                        onSelect(channel.id)
-                    }
+                    tab(title: channel.name, id: channel.id)
                 }
             }
             .padding(.horizontal, Theme.contentInset)
-            .padding(.vertical, 4)
+            .padding(.top, 2)
         }
     }
 
-    private func channelPill(title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: {
+    private func tab(title: String, id: Int?) -> some View {
+        let isSelected = (selectedChannelId == id)
+        return Button {
             Haptics.select()
-            action()
-        }) {
-            Text(title)
-                .font(.system(size: 13, weight: isSelected ? .bold : .medium))
-                .foregroundStyle(isSelected ? Theme.onPrimary : Theme.textSecondary)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(
-                    isSelected ? Theme.primaryAction : Theme.surfaceRaised,
-                    in: Capsule()
-                )
+            withAnimation(Motion.snappy) { onSelect(id) }
+        } label: {
+            VStack(spacing: 4) {
+                Text(title)
+                    .font(.system(size: 15, weight: isSelected ? .bold : .regular))
+                    .foregroundStyle(isSelected ? Theme.textPrimary : Theme.textTertiary)
+                ZStack {
+                    if isSelected {
+                        Capsule()
+                            .fill(Theme.primaryAction)
+                            .frame(width: 22, height: 3)
+                            .matchedGeometryEffect(id: "anime.channel.underline", in: underline)
+                    } else {
+                        Capsule().fill(Color.clear).frame(width: 22, height: 3)
+                    }
+                }
+            }
+            .contentShape(Rectangle())
         }
-        .buttonStyle(.pressable)
+        .buttonStyle(.pressable(scale: 0.94))
+        .accessibilityIdentifier("anime.channel.\(id.map(String.init) ?? "recommend")")
     }
 }
 
@@ -196,10 +204,15 @@ struct AnimePosterCard: View {
 
 // MARK: - 选集方块矩阵 (AnimeEpisodeMatrix)
 
+/// 选集格子与剧集详情页（SeriesDetailView.episodeCell）同一套视觉规格：
+/// 48pt 高、当前集整块填金、看完置灰打勾、看到一半画底部金色进度线。
+/// 这里只对齐视觉，不共用代码，剧集页保持原样不动。
 struct AnimeEpisodeMatrix: View {
     let episodes: [String]
     let activeEpisode: String?
     var isDescending: Bool = false
+    /// 单集观看进度（0…1），由详情页按标题从播放记录里查。
+    var progress: (String) -> Double? = { _ in nil }
     var onSelect: (String) -> Void
 
     private var orderedEpisodes: [String] {
@@ -211,31 +224,59 @@ struct AnimeEpisodeMatrix: View {
     }
 
     var body: some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 5), spacing: 8) {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 5), spacing: 10) {
             ForEach(orderedEpisodes, id: \.self) { ep in
-                let isSelected = (ep == activeEpisode)
-                Button(action: {
-                    Haptics.tap()
-                    onSelect(ep)
-                }) {
-                    Text(formatEpisodeTitle(ep))
-                        .font(.system(size: 12, weight: isSelected ? .bold : .medium))
-                        .foregroundStyle(isSelected ? Theme.onPrimary : Theme.textPrimary)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 38)
-                        .background(
-                            isSelected ? Theme.primaryAction : Theme.surface,
-                            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .stroke(isSelected ? Theme.goldLight : Theme.hairline, lineWidth: isSelected ? 1.5 : 0.5)
-                        )
-                }
-                .buttonStyle(.pressable)
+                cell(ep)
             }
         }
         .id("anime-episode-grid-\(isDescending ? "desc" : "asc")-\(episodes.count)")
+    }
+
+    private func cell(_ ep: String) -> some View {
+        let isCurrent = (ep == activeEpisode)
+        let value = progress(ep) ?? 0
+        let finished = value >= 0.92
+        return Button {
+            Haptics.tap()
+            onSelect(ep)
+        } label: {
+            ZStack {
+                RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous)
+                    .fill(isCurrent ? Theme.gold : Theme.surface)
+                Text(formatEpisodeTitle(ep))
+                    .font(.system(size: 16, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(isCurrent ? Theme.onPrimary : (finished ? Theme.textTertiary : Theme.textPrimary))
+                if finished && !isCurrent {
+                    Image(icon: .check)
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(Theme.textTertiary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                        .padding(6)
+                }
+            }
+            .frame(height: 48)
+            .overlay(alignment: .bottom) {
+                if value > 0.02 && !finished {
+                    GeometryReader { proxy in
+                        Capsule()
+                            .fill(isCurrent ? Theme.onPrimary.opacity(0.55) : Theme.gold)
+                            .frame(width: max(4, (proxy.size.width - 16) * value), height: 2)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.leading, 8)
+                    }
+                    .frame(height: 2)
+                    .padding(.bottom, 5)
+                }
+            }
+            .overlay {
+                if !isCurrent {
+                    RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous)
+                        .strokeBorder(Theme.hairline, lineWidth: 0.5)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.pressable)
     }
 
     private func formatEpisodeTitle(_ raw: String) -> String {

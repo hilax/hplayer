@@ -135,4 +135,39 @@ final class AnimeSecurityTests: XCTestCase {
             XCTFail("PlaybackSource.online 匹配失败")
         }
     }
+
+    /// 旧版本写入的播放记录没有 finished 字段，必须还能读出来，否则升级后播放历史全丢。
+    func testRecentItemDecodesLegacyRecordWithoutFinishedFlag() throws {
+        let legacy = """
+        {"id":"a1","title":"测试番剧 第01集","url":"https://example.com/a.m3u8","playedAt":0,"position":120,"duration":600}
+        """
+        let item = try JSONDecoder().decode(RecentItem.self, from: Data(legacy.utf8))
+        XCTAssertNil(item.finished)
+        XCTAssertEqual(item.position, 120)
+        XCTAssertEqual(item.progress ?? 0, 0.2, accuracy: 0.0001)
+    }
+
+    /// 看完的一集 position 会被清掉，靠 finished 标记才能在选集里打勾。
+    func testRecentItemFinishedRecordHasNoResumePosition() throws {
+        let json = """
+        {"id":"a2","title":"测试番剧 第02集","url":"https://example.com/b.m3u8","playedAt":0,"finished":true}
+        """
+        let item = try JSONDecoder().decode(RecentItem.self, from: Data(json.utf8))
+        XCTAssertEqual(item.finished, true)
+        XCTAssertNil(item.position)
+        XCTAssertNil(item.progress)
+    }
+
+    /// 选集倒序必须是稳定的新数组，且集数标题不会互相误配。
+    func testEpisodeOrderingAndTitleMatching() throws {
+        let episodes = ["第01集", "第02集", "第03集", "第10集"]
+        let descending = Array(episodes.reversed())
+        XCTAssertEqual(descending, ["第10集", "第03集", "第02集", "第01集"])
+        XCTAssertEqual(episodes, ["第01集", "第02集", "第03集", "第10集"], "原数组不应被倒序改动")
+
+        // 按完整标题精确匹配：「第1集」不能命中「第10集」的记录
+        let titles = Dictionary(episodes.map { ("测试番剧 \($0)", $0) }, uniquingKeysWith: { a, _ in a })
+        XCTAssertEqual(titles["测试番剧 第10集"], "第10集")
+        XCTAssertNil(titles["测试番剧 第1集"])
+    }
 }

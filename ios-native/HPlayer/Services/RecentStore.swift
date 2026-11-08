@@ -59,6 +59,12 @@ final class RecentStore: ObservableObject {
         return items.first { Self.key(of: $0) == key }?.progress
     }
 
+    /// 动漫单集记录。解析出的流地址带时效签名，每次解析都不一样，用 URL 做 key 必然查不到，
+    /// 所以按稳定标题「番剧名 第XX集」匹配。items 已按最近播放排序，first 就是最近一次。
+    func animeEpisode(title: String) -> RecentItem? {
+        items.first { $0.title == title }
+    }
+
     /// 刚开头或快看完时不记位置，下次从头播放
     func savePosition(for source: PlaybackSource, seconds: Double, duration: Double) {
         guard seconds.isFinite, duration.isFinite, duration > 0 else { return }
@@ -66,7 +72,10 @@ final class RecentStore: ObservableObject {
         guard let index = items.firstIndex(where: { Self.key(of: $0) == key }) else { return }
         var entry = items[index]
         if seconds < 10 || seconds > duration - 30 || seconds / duration > 0.95 {
-            guard entry.position != nil else { return }
+            // 片尾判定为看完，单独留标记；开头就退出不算看完。
+            let reachedEnd = seconds > duration - 30 || seconds / duration > 0.95
+            if reachedEnd { entry.finished = true }
+            guard entry.position != nil || reachedEnd else { return }
             entry.position = nil
             entry.duration = nil
         } else {

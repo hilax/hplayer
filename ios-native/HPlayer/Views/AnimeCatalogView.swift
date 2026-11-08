@@ -8,15 +8,23 @@ struct AnimeCatalogView: View {
     @State private var channels: [AnimeChannel] = []
     @State private var banners: [AnimeBanner] = []
     @State private var trendingItems: [AnimeVideoItem] = []
-    @State private var waterfallItems: [AnimeVideoItem] = []
+    /// 推荐页里每个频道的货架，按频道 id 存；滚到可见时才拉，首屏只并发前几个。
+    @State private var shelves: [Int: [AnimeVideoItem]] = [:]
+    @State private var loadingShelves: Set<Int> = []
+    @State private var gridItems: [AnimeVideoItem] = []
 
     // MARK: 筛选与分页
 
+    /// nil = 推荐页；非 nil = 该频道的完整网格。
     @State private var selectedChannelId: Int? = nil
+    @State private var sort = "addtime"
     @State private var currentPage = 1
     @State private var totalCount = 0
     @State private var hasMore = true
     private let pageSize = 18
+    private let shelfSize = 6
+    /// 首屏并发拉取的货架数量，其余滚动到可见时再拉。
+    private let eagerShelfCount = 3
 
     // MARK: 加载状态
 
@@ -37,32 +45,21 @@ struct AnimeCatalogView: View {
                 AnimeChannelBar(
                     channels: channels,
                     selectedChannelId: $selectedChannelId,
-                    onSelect: { channelId in
-                        selectedChannelId = channelId
-                        beginLoad(channel: channelId, refreshAll: false)
-                    }
+                    onSelect: { channelId in selectChannel(channelId) }
                 )
 
                 // 频道切换时重建滚动容器：回到顶部，不把旧频道滚到底的偏移带到新列表
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 20) {
-                        if selectedChannelId == nil && !banners.isEmpty {
-                            AnimeHeroBanner(banners: banners)
-                                .padding(.top, 4)
-                        }
-
-                        if selectedChannelId == nil && !trendingItems.isEmpty {
-                            trendingSection
-                        }
-
-                        waterfallSection(metrics: metrics)
+                    if selectedChannelId == nil {
+                        recommendContent
+                    } else {
+                        channelContent(metrics: metrics)
                     }
-                    .padding(.bottom, 80)
                 }
                 .id("anime-scroll-\(selectedChannelId ?? 0)")
                 .scrollIndicators(.hidden)
                 .refreshable {
-                    await reload(channel: selectedChannelId, refreshAll: true)
+                    await reload(channel: selectedChannelId)
                 }
             }
         }
@@ -74,8 +71,183 @@ struct AnimeCatalogView: View {
         .task {
             guard !initialLoaded else { return }
             initialLoaded = true
-            beginLoad(channel: nil, refreshAll: true)
+            beginLoad(channel: nil)
         }
+    }
+
+    // MARK: - 推荐页：轮播 + 热门新番 + 各频道货架
+
+    private var recommendContent: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            if !banners.isEmpty {
+                AnimeHeroBanner(banners: banners)
+                    .padding(.top, 4)
+            }
+
+            if !trendingItems.isEmpty {
+                shelf(title: "热门新番", items: trendingItems, detail: "共 \(trendingItems.count) 部", destination: nil)
+            }
+
+            ForEach(channels) { channel in
+                channelShelf(channel)
+            }
+
+            if isReloading && banners.isEmpty && trendingItems.isEmpty && shelves.isEmpty {
+                recommendSkeleton
+            }
+        }
+        .padding(.bottom, 80)
+    }
+
+    /// 单个频道的货架：没拉过就在出现时拉一次。
+    @ViewBuilder
+    private func channelShelf(_ channel: AnimeChannel) -> some View {
+        if let items = shelves[channel.id], !items.isEmpty {
+            shelf(title: "推荐 · \(channel.name)", items: items, detail: nil, destination: channel.id)
+        } else if loadingShelves.contains(channel.id) {
+            shelfSkeleton(title: "推荐 · \(channel.name)")
+        } else {
+            // 占位一行，滚到可见时触发加载；不占高度太多，避免首屏被空货架撑长
+            ShelfHeader("推荐 · \(channel.name)")
+                .onAppear { Task { await loadShelf(channel.id) } }
+        }
+    }
+
+    /// 货架：标题走 ShelfHeader（18pt 粗体），右侧「查看更多」走 ShelfLinkLabel（12pt caption 次要灰），
+    /// 和首页电影/剧集货架完全同一套规格。
+    private func shelf(title: String, items: [AnimeVideoItem], detail: String?, destination: Int?) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ShelfHeader(title: title) {
+                HStack(spacing: 10) {
+                    if let detail {
+                        Text(detail)
+                            .font(.system(size: 12))
+                            .tertiaryTextStyle()
+                    }
+                    if let destination {
+                        Button {
+                            selectChannel(destination)
+                        } label: {
+                            ShelfLinkLabel(text: "查看更多")
+                                .frame(minWidth: 44, minHeight: 44, alignment: .trailing)
+                        }
+                        .buttonStyle(.pressable(scale: 0.92))
+                    }
+                }
+            }
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: 12) {
+                    ForEach(items) { item in
+                        AnimeDetailLink(animeId: item.id) {
+                            AnimePosterCard(item: item, width: 108)
+                        }
+                    }
+                }
+                .padding(.horizontal, Theme.contentInset)
+            }
+        }
+    }
+
+    private func shelfSkeleton(title: String) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ShelfHeader(title)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: 12) {
+                    ForEach(0..<4, id: \.self) { _ in
+                        VStack(alignment: .leading, spacing: 6) {
+                            RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous)
+                                .fill(Theme.surfaceRaised)
+                                .frame(width: 108, height: 162)
+                            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                                .fill(Theme.surfaceRaised)
+                                .frame(width: 78, height: 11)
+                        }
+                    }
+                }
+                .padding(.horizontal, Theme.contentInset)
+            }
+        }
+    }
+
+    private var recommendSkeleton: some View {
+        VStack(spacing: 12) {
+            ProgressView().tint(Theme.accent)
+            Text("正在加载推荐…")
+                .font(.system(size: 13))
+                .foregroundStyle(Theme.textSecondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 40)
+    }
+
+    // MARK: - 频道页：排序 + 完整分页网格
+
+    private func channelContent(metrics: GridMetrics) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            // 接口只支持 channel / sort / limit / page，没有年份与类型筛选，所以这里只放排序。
+            HStack(spacing: 6) {
+                sortPill(title: "最新上架", value: "addtime")
+                sortPill(title: "推荐权重", value: "weight")
+                Spacer(minLength: 8)
+                if totalCount > 0 {
+                    Text("共 \(totalCount) 部")
+                        .font(.system(size: 12))
+                        .tertiaryTextStyle()
+                }
+            }
+            .padding(.horizontal, Theme.contentInset)
+            .padding(.top, 4)
+
+            if isReloading && gridItems.isEmpty {
+                loadingGrid(metrics: metrics)
+            } else if gridItems.isEmpty {
+                emptyOrErrorState
+            } else {
+                LazyVGrid(columns: gridColumns(metrics), alignment: .leading, spacing: 16) {
+                    ForEach(gridItems) { item in
+                        AnimeDetailLink(animeId: item.id) {
+                            AnimePosterCard(item: item, width: metrics.cell)
+                        }
+                        .onAppear {
+                            if item.id == gridItems.last?.id {
+                                Task { await loadNextPage() }
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, Theme.contentInset)
+                // 不让 SwiftUI 对整组 id 做插入动画：插入动画会和分页加载叠在一起，行会跳
+                .transaction { $0.animation = nil }
+                .id("anime-grid-\(selectedChannelId ?? 0)-\(sort)")
+
+                if isLoadingMore {
+                    loadMoreIndicator
+                }
+            }
+        }
+        .padding(.bottom, 80)
+    }
+
+    private func sortPill(title: String, value: String) -> some View {
+        let selected = (sort == value)
+        return Button {
+            guard sort != value else { return }
+            Haptics.select()
+            sort = value
+            beginLoad(channel: selectedChannelId)
+        } label: {
+            Text(title)
+                .font(.system(size: 12, weight: selected ? .bold : .medium))
+                .foregroundStyle(selected ? Theme.onPrimary : Theme.textSecondary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(
+                    selected ? Theme.primaryAction : Theme.surfaceRaised,
+                    in: Capsule()
+                )
+        }
+        .buttonStyle(.pressable)
     }
 
     // MARK: - 网格尺寸
@@ -100,85 +272,6 @@ struct AnimeCatalogView: View {
     private func gridColumns(_ metrics: GridMetrics) -> [GridItem] {
         Array(repeating: GridItem(.fixed(metrics.cell), spacing: metrics.spacing, alignment: .top),
               count: metrics.columns)
-    }
-
-    // MARK: - 热门新番横滑货架
-
-    private var trendingSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("🔥 热门新番")
-                    .font(.display(16))
-                    .foregroundStyle(Theme.textPrimary)
-
-                Spacer()
-
-                Text("共 \(trendingItems.count) 部推荐")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Theme.textTertiary)
-            }
-            .padding(.horizontal, Theme.contentInset)
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(alignment: .top, spacing: 12) {
-                    ForEach(trendingItems) { item in
-                        AnimeDetailLink(animeId: item.id) {
-                            AnimePosterCard(item: item, width: 108)
-                        }
-                    }
-                }
-                .padding(.horizontal, Theme.contentInset)
-            }
-        }
-    }
-
-    // MARK: - 分类更新海报网格
-
-    private func waterfallSection(metrics: GridMetrics) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                let title = channels.first(where: { $0.id == selectedChannelId })?.name ?? "全部番剧"
-                Text(title)
-                    .font(.display(16))
-                    .foregroundStyle(Theme.textPrimary)
-
-                Spacer()
-
-                if totalCount > 0 {
-                    Text("共 \(totalCount) 部")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Theme.textTertiary)
-                }
-            }
-            .padding(.horizontal, Theme.contentInset)
-
-            if isReloading && waterfallItems.isEmpty {
-                loadingGrid(metrics: metrics)
-            } else if waterfallItems.isEmpty {
-                emptyOrErrorState
-            } else {
-                LazyVGrid(columns: gridColumns(metrics), alignment: .leading, spacing: 16) {
-                    ForEach(waterfallItems) { item in
-                        AnimeDetailLink(animeId: item.id) {
-                            AnimePosterCard(item: item, width: metrics.cell)
-                        }
-                        .onAppear {
-                            if item.id == waterfallItems.last?.id {
-                                Task { await loadNextPage() }
-                            }
-                        }
-                    }
-                }
-                .padding(.horizontal, Theme.contentInset)
-                // 不让 SwiftUI 对整组 id 做插入动画：插入动画会和分页加载叠在一起，行会跳
-                .transaction { $0.animation = nil }
-                .id("anime-grid-\(selectedChannelId ?? 0)")
-
-                if isLoadingMore {
-                    loadMoreIndicator
-                }
-            }
-        }
     }
 
     private func loadingGrid(metrics: GridMetrics) -> some View {
@@ -211,7 +304,7 @@ struct AnimeCatalogView: View {
                 .multilineTextAlignment(.center)
             if errorMessage != nil {
                 Button("重新加载") {
-                    beginLoad(channel: selectedChannelId, refreshAll: false)
+                    beginLoad(channel: selectedChannelId)
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(Theme.primaryAction)
@@ -234,7 +327,13 @@ struct AnimeCatalogView: View {
 
     // MARK: - 数据加载流水线
 
-    @MainActor private func beginLoad(channel: Int?, refreshAll: Bool) {
+    @MainActor private func selectChannel(_ channelId: Int?) {
+        guard channelId != selectedChannelId else { return }
+        selectedChannelId = channelId
+        beginLoad(channel: channelId)
+    }
+
+    @MainActor private func beginLoad(channel: Int?) {
         loadTask?.cancel()
         loadGeneration += 1
         let generation = loadGeneration
@@ -244,70 +343,88 @@ struct AnimeCatalogView: View {
         hasMore = true
         errorMessage = nil
         currentPage = 1
-        waterfallItems = []
+        if channel != nil { gridItems = [] }
 
         loadTask = Task {
-            await performLoad(generation: generation, channel: channel, refreshAll: refreshAll)
+            await performLoad(generation: generation, channel: channel)
         }
     }
 
-    @MainActor private func reload(channel: Int?, refreshAll: Bool) async {
-        beginLoad(channel: channel, refreshAll: refreshAll)
+    @MainActor private func reload(channel: Int?) async {
+        if channel == nil {
+            // 下拉刷新推荐页：清掉货架缓存重新拉
+            shelves = [:]
+            trendingItems = []
+            banners = []
+        }
+        beginLoad(channel: channel)
         await loadTask?.value
     }
 
-    @MainActor private func performLoad(generation: Int, channel: Int?, refreshAll: Bool) async {
-        if refreshAll {
-            if let c = try? await AnimeClient.shared.fetchChannels() {
-                guard isCurrent(generation) else { return }
-                channels = c
-            }
-            if let b = try? await AnimeClient.shared.fetchBanners() {
-                guard isCurrent(generation) else { return }
-                banners = b
-            }
-            if let t = try? await AnimeClient.shared.fetchVideoList(sort: "weight", limit: 12, page: 1) {
-                guard isCurrent(generation) else { return }
-                trendingItems = unique(t.items)
-            }
+    @MainActor private func performLoad(generation: Int, channel: Int?) async {
+        if channel == nil {
+            await loadRecommend(generation: generation)
+        } else {
+            await loadGrid(generation: generation, channel: channel)
         }
+        guard isCurrent(generation) else { return }
+        isReloading = false
+    }
 
+    /// 推荐页：频道列表、轮播、热门新番独立拉取，任一失败不影响其他板块。
+    @MainActor private func loadRecommend(generation: Int) async {
+        if channels.isEmpty, let c = try? await AnimeClient.shared.fetchChannels() {
+            guard isCurrent(generation) else { return }
+            channels = c
+        }
+        async let bannerTask = try? AnimeClient.shared.fetchBanners()
+        async let trendingTask = try? AnimeClient.shared.fetchVideoList(sort: "weight", limit: 12, page: 1)
+        let (b, t) = await (bannerTask, trendingTask)
+        guard isCurrent(generation) else { return }
+        if let b { banners = b }
+        if let t { trendingItems = unique(t.items) }
+
+        // 首屏只并发前几个频道货架，其余滚到可见时再拉
+        for channel in channels.prefix(eagerShelfCount) {
+            Task { await loadShelf(channel.id) }
+        }
+    }
+
+    @MainActor private func loadShelf(_ channelId: Int) async {
+        guard shelves[channelId] == nil, !loadingShelves.contains(channelId) else { return }
+        loadingShelves.insert(channelId)
+        defer { loadingShelves.remove(channelId) }
+        if let res = try? await AnimeClient.shared.fetchVideoList(
+            channel: channelId, sort: "weight", limit: shelfSize, page: 1
+        ) {
+            shelves[channelId] = unique(res.items)
+        } else {
+            // 拉失败留空数组，避免每次滚过来都重试
+            shelves[channelId] = []
+        }
+    }
+
+    @MainActor private func loadGrid(generation: Int, channel: Int?) async {
         do {
             let res = try await AnimeClient.shared.fetchVideoList(
-                channel: channel, sort: "addtime", limit: pageSize, page: 1
+                channel: channel, sort: sort, limit: pageSize, page: 1
             )
             guard isCurrent(generation) else { return }
             let items = unique(res.items)
-            waterfallItems = items
+            gridItems = items
             totalCount = res.total
             currentPage = 1
             hasMore = !items.isEmpty && items.count < totalCount && res.items.count >= pageSize
             errorMessage = nil
         } catch {
             guard isCurrent(generation) else { return }
-            // 兜底重试：若全库 addtime 异常，改拉日漫频道的推荐列表
-            if let fallback = try? await AnimeClient.shared.fetchVideoList(
-                channel: channel ?? 20, sort: "weight", limit: pageSize, page: 1
-            ) {
-                guard isCurrent(generation) else { return }
-                let items = unique(fallback.items)
-                waterfallItems = items
-                totalCount = fallback.total
-                currentPage = 1
-                hasMore = !items.isEmpty && items.count < totalCount && fallback.items.count >= pageSize
-                errorMessage = nil
-            } else {
-                errorMessage = error.localizedDescription
-                hasMore = false
-            }
+            errorMessage = error.localizedDescription
+            hasMore = false
         }
-
-        guard isCurrent(generation) else { return }
-        isReloading = false
     }
 
     @MainActor private func loadNextPage() async {
-        guard !isReloading, !isLoadingMore, hasMore else { return }
+        guard selectedChannelId != nil, !isReloading, !isLoadingMore, hasMore else { return }
         let generation = loadGeneration
         let nextPage = currentPage + 1
         isLoadingMore = true
@@ -317,13 +434,13 @@ struct AnimeCatalogView: View {
 
         do {
             let res = try await AnimeClient.shared.fetchVideoList(
-                channel: selectedChannelId, sort: "addtime", limit: pageSize, page: nextPage
+                channel: selectedChannelId, sort: sort, limit: pageSize, page: nextPage
             )
             guard generation == loadGeneration, !Task.isCancelled else { return }
 
             // 按上线时间排序时，翻页过程中新番插入会让下一页重复返回上一页的条目；
             // 过滤掉重复 id，否则同一个 id 在 ForEach 里出现两次，SwiftUI 会错位复用卡片。
-            let existing = Set(waterfallItems.map(\.id))
+            let existing = Set(gridItems.map(\.id))
             let additions = unique(res.items).filter { !existing.contains($0.id) }
 
             if additions.isEmpty || res.items.isEmpty {
@@ -331,9 +448,9 @@ struct AnimeCatalogView: View {
                 return
             }
 
-            waterfallItems.append(contentsOf: additions)
+            gridItems.append(contentsOf: additions)
             currentPage = nextPage
-            if waterfallItems.count >= totalCount || res.items.count < pageSize {
+            if gridItems.count >= totalCount || res.items.count < pageSize {
                 hasMore = false
             }
         } catch {

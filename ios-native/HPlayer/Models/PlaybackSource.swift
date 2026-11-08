@@ -50,6 +50,9 @@ struct RecentItem: Codable, Identifiable, Hashable {
     var pickCode: String? = nil
     var position: Double? = nil
     var duration: Double? = nil
+    /// 看到片尾被判定为看完。快看完时 position 会被清掉（下次从头播），
+    /// 所以「看完」要单独记一个标记，选集格子才能打勾。可选是为了兼容旧记录。
+    var finished: Bool? = nil
 
     /// 看过的比例，没有记录时为空
     var progress: Double? {

@@ -19,6 +19,7 @@ struct AnimeDetailView: View {
     @State private var errorMessage: String? = nil
 
     @State private var playingQueue: PlaybackQueue?
+    @Namespace private var routeNamespace
 
     private static let scrollSpace = "anime.detail.scroll"
     private let backdropHeight: CGFloat = 260
@@ -32,11 +33,12 @@ struct AnimeDetailView: View {
                     VStack(alignment: .leading, spacing: 0) {
                         backdropView(detail)
 
-                        VStack(alignment: .leading, spacing: 20) {
+                        // 顺序与剧集详情页一致：抬头 → 简介 → 主按钮 → 选集
+                        VStack(alignment: .leading, spacing: 22) {
                             headerView(detail)
+                            synopsisSection(detail)
                             primaryPlayButton(detail)
                             routesAndEpisodesSection(detail)
-                            synopsisSection(detail)
                         }
                         .padding(.horizontal, Theme.contentInset)
                         .padding(.top, -50)
@@ -186,17 +188,17 @@ struct AnimeDetailView: View {
                         .foregroundStyle(Theme.gold)
                     }
                 }
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(Theme.textSecondary)
 
-                // 分类胶囊
-                HStack(spacing: 5) {
+                // 分类胶囊：与剧集页 chip 同规格（11pt、22pt 高）
+                HStack(spacing: 6) {
                     ForEach(detail.tags.prefix(3), id: \.self) { tag in
                         Text(tag)
-                            .font(.system(size: 10, weight: .medium))
+                            .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(Theme.accent)
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 3)
+                            .padding(.horizontal, 9)
+                            .frame(height: 22)
                             .background(Theme.tileTint, in: Capsule())
                     }
                 }
@@ -212,32 +214,30 @@ struct AnimeDetailView: View {
         let ep = activeEpisode ?? currentRoute?.part.first ?? "第01集"
         let isContinuing = hasWatchedBefore || (lastPosition != nil && lastPosition! > 5)
 
+        let title: String
+        if isContinuing, let pos = lastPosition, pos > 5 {
+            title = "续播 \(ep) · 看到 \(formatTime(pos))"
+        } else if isContinuing {
+            title = "续播 \(ep)"
+        } else {
+            title = "播放 \(ep)"
+        }
+
+        // 与剧集页主按钮同规格：胶囊、48pt 高、Label + 播放图标
         return Button(action: {
             Task { await startPlay(episode: ep, detail: detail) }
         }) {
-            HStack(spacing: 8) {
-                Image(icon: .play)
-                    .iconStyle(size: 14, color: Theme.onPrimary)
-                if isContinuing, let pos = lastPosition, pos > 5 {
-                    Text("续播：\(ep)（看到 \(formatTime(pos))）")
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundStyle(Theme.onPrimary)
-                } else if isContinuing {
-                    Text("续播：\(ep)")
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundStyle(Theme.onPrimary)
-                } else {
-                    Text("立即播放：\(ep)")
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundStyle(Theme.onPrimary)
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: 44)
-            .background(Theme.primaryAction, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .shadow(color: Theme.gold.opacity(0.3), radius: 6, x: 0, y: 3)
+            Label(title, systemImage: AppIcon.play.name)
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(Theme.onPrimary)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity)
+                .frame(height: 48)
+                .background(Theme.primaryAction, in: Capsule())
+                .contentShape(Capsule())
         }
-        .buttonStyle(.pressable)
+        .buttonStyle(.pressable(scale: 0.97))
+        .accessibilityIdentifier("anime.play")
     }
 
     private func formatTime(_ seconds: Double) -> String {
@@ -250,59 +250,82 @@ struct AnimeDetailView: View {
     // MARK: - 线路切换与选集矩阵
 
     private func routesAndEpisodesSection(_ detail: AnimeVideoDetail) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // 线路选择器与正倒序
-            HStack {
-                HStack(spacing: 6) {
-                    ForEach(Array(detail.parts.enumerated()), id: \.element.id) { index, route in
-                        let isSelected = (index == selectedRouteIndex)
-                        Button(action: {
-                            Haptics.select()
-                            selectedRouteIndex = index
-                            UserDefaults.standard.set(index, forKey: "anime.last_route.\(animeId)")
-                            restoreLastWatched(detail: detail)
-                        }) {
-                            Text(route.playZh)
-                                .font(.system(size: 12, weight: isSelected ? .bold : .medium))
-                                .foregroundStyle(isSelected ? Theme.onPrimary : Theme.textSecondary)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 5)
-                                .background(
-                                    isSelected ? Theme.primaryAction : Theme.surfaceRaised,
-                                    in: RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                )
+        let route = detail.parts.indices.contains(selectedRouteIndex) ? detail.parts[selectedRouteIndex] : detail.parts.first
+        let episodes = route?.part ?? []
+
+        return VStack(alignment: .leading, spacing: 12) {
+            // 选集标题行：与剧集页同一套（ShelfHeader + 共 N 集）
+            ShelfHeader(title: "选集", inset: 0) {
+                HStack(spacing: 10) {
+                    Text("共 \(episodes.count) 集")
+                        .font(.system(size: 12))
+                        .tertiaryTextStyle()
+                    HStack(spacing: 0) {
+                        orderPill(title: "正序", icon: .sortAscending, selected: !isDescending) {
+                            withAnimation(Motion.snappy) { isDescending = false }
                         }
-                        .buttonStyle(.pressable)
+                        orderPill(title: "倒序", icon: .sortDescending, selected: isDescending) {
+                            withAnimation(Motion.snappy) { isDescending = true }
+                        }
                     }
+                    .padding(2)
+                    .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
-
-                Spacer()
-
-                // 正序 / 倒序 双胶囊切换器：明确显示两种状态，点哪个就切到哪个
-                HStack(spacing: 0) {
-                    orderPill(title: "正序", icon: .sortAscending, selected: !isDescending) {
-                        withAnimation(Motion.snappy) { isDescending = false }
-                    }
-                    orderPill(title: "倒序", icon: .sortDescending, selected: isDescending) {
-                        withAnimation(Motion.snappy) { isDescending = true }
-                    }
-                }
-                .padding(2)
-                .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
 
-            // 选集列表矩阵
-            if let currentRoute = detail.parts.indices.contains(selectedRouteIndex) ? detail.parts[selectedRouteIndex] : detail.parts.first {
+            // 线路胶囊：对应剧集页的「季」，用同一个 SelectionPill
+            if !detail.parts.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(Array(detail.parts.enumerated()), id: \.element.id) { index, item in
+                            SelectionPill(
+                                title: "\(item.playZh) · \(item.part.count) 集",
+                                selected: index == selectedRouteIndex,
+                                namespace: routeNamespace
+                            ) {
+                                withAnimation(Motion.snappy) { selectedRouteIndex = index }
+                                UserDefaults.standard.set(index, forKey: "anime.last_route.\(animeId)")
+                                restoreLastWatched(detail: detail)
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !episodes.isEmpty {
                 AnimeEpisodeMatrix(
-                    episodes: currentRoute.part,
+                    episodes: episodes,
                     activeEpisode: activeEpisode,
-                    isDescending: isDescending
+                    isDescending: isDescending,
+                    progress: { episodeProgress($0, detail: detail) }
                 ) { ep in
                     activeEpisode = ep
                     Task { await startPlay(episode: ep, detail: detail) }
                 }
+
+                if let ep = activeEpisode, let line = episodeDetailLine(ep, detail: detail) {
+                    Text(line)
+                        .font(.system(size: 12))
+                        .tertiaryTextStyle()
+                        .lineLimit(2)
+                        .padding(.top, 2)
+                }
             }
         }
+    }
+
+    /// 单集进度：流地址带时效签名不能用 URL 查，按稳定标题「番剧名 第XX集」找最近一条记录。
+    private func episodeProgress(_ episode: String, detail: AnimeVideoDetail) -> Double? {
+        guard let item = RecentStore.shared.animeEpisode(title: "\(detail.name) \(episode)") else { return nil }
+        if item.finished == true { return 1 }
+        return item.progress
+    }
+
+    private func episodeDetailLine(_ episode: String, detail: AnimeVideoDetail) -> String? {
+        guard let item = RecentStore.shared.animeEpisode(title: "\(detail.name) \(episode)") else { return nil }
+        if item.finished == true { return "\(episode) · 已看完" }
+        guard let position = item.position, position > 5 else { return nil }
+        return "\(episode) · 看到 \(formatTime(position))"
     }
 
     private func orderPill(title: String, icon: AppIcon, selected: Bool, action: @escaping () -> Void) -> some View {
@@ -329,37 +352,27 @@ struct AnimeDetailView: View {
 
     // MARK: - 剧情简介手风琴
 
+    /// 简介：与剧集页一致，直接铺在页面上，不再包一张卡片；14pt、默认 3 行、「更多/收起」。
+    @ViewBuilder
     private func synopsisSection(_ detail: AnimeVideoDetail) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("剧情简介")
-                .font(.display(14))
-                .foregroundStyle(Theme.textPrimary)
-
-            Text(detail.cleanDesc)
-                .font(.system(size: 13))
-                .foregroundStyle(Theme.textSecondary)
-                .lineSpacing(4)
-                .lineLimit(isOverviewExpanded ? nil : 3)
-
-            if detail.cleanDesc.count > 60 {
-                Button(action: {
-                    withAnimation(Motion.snappy) {
-                        isOverviewExpanded.toggle()
+        let text = detail.cleanDesc
+        if !text.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(text)
+                    .font(.system(size: 14))
+                    .foregroundStyle(Theme.textSecondary)
+                    .lineSpacing(4)
+                    .lineLimit(isOverviewExpanded ? nil : 3)
+                if text.count > 60 {
+                    Button(isOverviewExpanded ? "收起" : "更多") {
+                        withAnimation(Motion.snappy) { isOverviewExpanded.toggle() }
                     }
-                }) {
-                    HStack(spacing: 2) {
-                        Text(isOverviewExpanded ? "收起" : "展开全文")
-                        Image(icon: isOverviewExpanded ? .collapse : .expand)
-                    }
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(Theme.accent)
+                    .buttonStyle(.pressable(scale: 0.94))
                 }
-                .buttonStyle(.plain)
-                .padding(.top, 2)
             }
         }
-        .padding(14)
-        .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
     }
 
     // MARK: - 数据加载与播放调用
@@ -390,17 +403,17 @@ struct AnimeDetailView: View {
            let currentRoute, currentRoute.part.contains(savedEpisode) {
             self.activeEpisode = savedEpisode
             self.hasWatchedBefore = true
-            if let recent = RecentStore.shared.items.first(where: { $0.title.contains(detail.name) && $0.title.contains(savedEpisode) }) {
-                self.lastPosition = recent.position
-            }
+            self.lastPosition = RecentStore.shared
+                .animeEpisode(title: "\(detail.name) \(savedEpisode)")?.position
             return
         }
 
-        // 2. 从 RecentStore 全局播放历史寻找匹配
+        // 2. 从播放历史找最近看过的一集（按完整标题精确匹配，避免「第1集」误配「第10集」）
         if let currentRoute {
+            let titles = Dictionary(currentRoute.part.map { ("\(detail.name) \($0)", $0) },
+                                    uniquingKeysWith: { first, _ in first })
             for recent in RecentStore.shared.items {
-                guard recent.title.contains(detail.name) else { continue }
-                if let matchedEp = currentRoute.part.first(where: { recent.title.contains($0) }) {
+                if let matchedEp = titles[recent.title] {
                     self.activeEpisode = matchedEp
                     self.lastPosition = recent.position
                     self.hasWatchedBefore = true
