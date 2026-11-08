@@ -82,29 +82,24 @@ struct AnimeDetailView: View {
                 .background(Theme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             }
         }
+        .designScreen("anime-detail")
         .hidesTabBar()
-        .toolbarBackground(.hidden, for: .navigationBar)
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
+        .modifier(TransparentNavigationBar())
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button(action: { dismiss() }) {
-                    Image(icon: .back)
-                        .iconStyle(size: 16, color: .white)
-                        .frame(width: 32, height: 32)
-                        .background(Color.black.opacity(0.5), in: Circle())
-                }
-            }
-
             ToolbarItem(placement: .topBarTrailing) {
                 if let detail {
-                    Button(action: {
+                    Button {
                         Haptics.tap()
                         watchlist.toggle(detail: detail)
-                    }) {
+                    } label: {
                         Image(icon: watchlist.isWatched(id: detail.id) ? .heartFill : .heart)
-                            .iconStyle(size: 17, color: watchlist.isWatched(id: detail.id) ? Theme.gold : .white)
-                            .frame(width: 32, height: 32)
-                            .background(Color.black.opacity(0.5), in: Circle())
+                            .foregroundStyle(watchlist.isWatched(id: detail.id) ? Theme.gold : Theme.accent)
                     }
+                    .accessibilityLabel(watchlist.isWatched(id: detail.id) ? "取消追番" : "追番")
+                    .accessibilityIdentifier("anime.watchlist.\(detail.id)")
                 }
             }
         }
