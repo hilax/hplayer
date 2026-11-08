@@ -1,5 +1,13 @@
 import Foundation
 
+// MARK: - 导航路由
+//
+// 用值类型路由而不是 `navigationDestination(isPresented:)`：后者的布尔绑定
+// 在 SwiftUI 重建视图时容易被重置，点击后看起来「没反应」。
+struct AnimeDetailRoute: Hashable {
+    let animeId: Int
+}
+
 // MARK: - 统一 API 响应包装外壳
 
 struct AnimeAPIResponse<T: Codable>: Codable {

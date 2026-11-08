@@ -57,7 +57,6 @@ struct SearchView: View {
     @State private var openSeriesID: String?
     @State private var animeResults: [AnimeVideoItem] = []
     @State private var isAnimeLoading = false
-    @State private var selectedAnimeId: Int? = nil
     /// 键盘占掉的高度。搜索页整体不跟系统的键盘避让（那样它的布局会随键盘收起被拖着变），
     /// 改成自己量键盘高度、只给列表底部留白；退出时冻结，收起键盘不再引起任何布局变化。
     @State private var keyboardHeight: CGFloat = 0
@@ -173,13 +172,9 @@ struct SearchView: View {
                 }
             }
         }
-        .navigationDestination(isPresented: Binding(
-            get: { selectedAnimeId != nil },
-            set: { if !$0 { selectedAnimeId = nil } }
-        )) {
-            if let id = selectedAnimeId {
-                AnimeDetailView(animeId: id)
-            }
+        .navigationDestination(for: AnimeDetailRoute.self) { route in
+            AnimeDetailView(animeId: route.animeId)
+                .id(route.animeId)
         }
         .onChange(of: keyword) { _ in
             searchTask?.cancel()
@@ -446,10 +441,7 @@ struct SearchView: View {
             sectionTitle("在线动漫 · \(animeResults.count) 部")
 
             ForEach(Array(animeResults.enumerated()), id: \.element.id) { index, item in
-                Button {
-                    Haptics.tap()
-                    selectedAnimeId = item.id
-                } label: {
+                NavigationLink(value: AnimeDetailRoute(animeId: item.id)) {
                     LibraryResultRow(
                         posterURL: item.safePicURLString,
                         title: item.name,

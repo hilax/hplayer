@@ -29,8 +29,6 @@ struct AnimeCatalogView: View {
     @State private var loadGeneration = 0
     @State private var loadTask: Task<Void, Never>?
 
-    @State private var selectedAnimeId: Int? = nil
-
     var body: some View {
         GeometryReader { proxy in
             let metrics = gridMetrics(width: proxy.size.width)
@@ -49,12 +47,8 @@ struct AnimeCatalogView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 20) {
                         if selectedChannelId == nil && !banners.isEmpty {
-                            AnimeHeroBanner(banners: banners) { banner in
-                                if let vid = banner.vid {
-                                    selectedAnimeId = vid
-                                }
-                            }
-                            .padding(.top, 4)
+                            AnimeHeroBanner(banners: banners)
+                                .padding(.top, 4)
                         }
 
                         if selectedChannelId == nil && !trendingItems.isEmpty {
@@ -73,18 +67,14 @@ struct AnimeCatalogView: View {
             }
         }
         .background(Theme.pageBackground.ignoresSafeArea())
+        .navigationDestination(for: AnimeDetailRoute.self) { route in
+            AnimeDetailView(animeId: route.animeId)
+                .id(route.animeId)
+        }
         .task {
             guard !initialLoaded else { return }
             initialLoaded = true
             beginLoad(channel: nil, refreshAll: true)
-        }
-        .navigationDestination(isPresented: Binding(
-            get: { selectedAnimeId != nil },
-            set: { if !$0 { selectedAnimeId = nil } }
-        )) {
-            if let id = selectedAnimeId {
-                AnimeDetailView(animeId: id)
-            }
         }
     }
 
@@ -132,11 +122,9 @@ struct AnimeCatalogView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(alignment: .top, spacing: 12) {
                     ForEach(trendingItems) { item in
-                        AnimePosterCard(item: item, width: 108)
-                            .onTapGesture {
-                                Haptics.tap()
-                                selectedAnimeId = item.id
-                            }
+                        AnimeDetailLink(animeId: item.id) {
+                            AnimePosterCard(item: item, width: 108)
+                        }
                     }
                 }
                 .padding(.horizontal, Theme.contentInset)
@@ -171,16 +159,14 @@ struct AnimeCatalogView: View {
             } else {
                 LazyVGrid(columns: gridColumns(metrics), alignment: .leading, spacing: 16) {
                     ForEach(waterfallItems) { item in
-                        AnimePosterCard(item: item, width: metrics.cell)
-                            .onTapGesture {
-                                Haptics.tap()
-                                selectedAnimeId = item.id
+                        AnimeDetailLink(animeId: item.id) {
+                            AnimePosterCard(item: item, width: metrics.cell)
+                        }
+                        .onAppear {
+                            if item.id == waterfallItems.last?.id {
+                                Task { await loadNextPage() }
                             }
-                            .onAppear {
-                                if item.id == waterfallItems.last?.id {
-                                    Task { await loadNextPage() }
-                                }
-                            }
+                        }
                     }
                 }
                 .padding(.horizontal, Theme.contentInset)

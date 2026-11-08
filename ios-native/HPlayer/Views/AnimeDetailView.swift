@@ -83,7 +83,6 @@ struct AnimeDetailView: View {
             }
         }
         .hidesTabBar()
-        .navigationBarBackButtonHidden(true)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 Button(action: { dismiss() }) {

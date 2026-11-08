@@ -49,7 +49,6 @@ struct AnimeChannelBar: View {
 
 struct AnimeHeroBanner: View {
     let banners: [AnimeBanner]
-    var onSelect: (AnimeBanner) -> Void
 
     @State private var currentIndex = 0
 
@@ -61,12 +60,11 @@ struct AnimeHeroBanner: View {
             // 也违反界面规范「不做无限循环动画」。用户手动左右滑动即可。
             TabView(selection: $currentIndex) {
                 ForEach(Array(banners.enumerated()), id: \.element.id) { index, banner in
-                    bannerCard(banner: banner)
-                        .tag(index)
-                        .onTapGesture {
-                            Haptics.tap()
-                            onSelect(banner)
-                        }
+                    NavigationLink(value: AnimeDetailRoute(animeId: banner.vid ?? banner.id)) {
+                        bannerCard(banner: banner)
+                    }
+                    .buttonStyle(.plain)
+                    .tag(index)
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: .automatic))
