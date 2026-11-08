@@ -73,6 +73,13 @@ targets:
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
           NSAllowsLocalNetworking: true
+          NSExceptionDomains:
+            cenmo.fun:
+              NSIncludesSubdomains: true
+              NSExceptionAllowsInsecureHTTPLoads: true
+            hzhcbkj.cn:
+              NSIncludesSubdomains: true
+              NSExceptionAllowsInsecureHTTPLoads: true
         NSPhotoLibraryAddUsageDescription: "截图时把当前画面保存到相册。"
         NSLocalNetworkUsageDescription: "用于磁力播放时在本机播放缓存并发现局域网节点。"
         CFBundleURLTypes:
@@ -110,10 +117,23 @@ targets:
       - path: HPlayerTests
     dependencies:
       - target: HPlayer
+    info:
+      path: HPlayerTests/Info.plist
+      properties:
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+          NSAllowsLocalNetworking: true
+          NSExceptionDomains:
+            cenmo.fun:
+              NSIncludesSubdomains: true
+              NSExceptionAllowsInsecureHTTPLoads: true
+            hzhcbkj.cn:
+              NSIncludesSubdomains: true
+              NSExceptionAllowsInsecureHTTPLoads: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.hplayer.tests
-        GENERATE_INFOPLIST_FILE: YES
+        GENERATE_INFOPLIST_FILE: NO
 
 schemes:
   HPlayer:

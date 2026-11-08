@@ -209,21 +209,34 @@ struct AnimeCatalogView: View {
         isLoading = true
         errorMessage = nil
 
-        async let fetchChannels = AnimeClient.shared.fetchChannels()
-        async let fetchBanners = AnimeClient.shared.fetchBanners()
-        async let fetchTrending = AnimeClient.shared.fetchVideoList(sort: "weight", limit: 12, page: 1)
-        async let fetchList = AnimeClient.shared.fetchVideoList(sort: "addtime", limit: 18, page: 1)
+        // 独立安全拉取各个板块，避免单个接口异常导致全屏空白
+        if let c = try? await AnimeClient.shared.fetchChannels() {
+            self.channels = c
+        }
+
+        if let b = try? await AnimeClient.shared.fetchBanners() {
+            self.banners = b
+        }
+
+        if let t = try? await AnimeClient.shared.fetchVideoList(sort: "weight", limit: 12, page: 1) {
+            self.trendingItems = t.items
+        }
 
         do {
-            let (c, b, t, l) = try await (fetchChannels, fetchBanners, fetchTrending, fetchList)
-            self.channels = c
-            self.banners = b
-            self.trendingItems = t.items
+            let l = try await AnimeClient.shared.fetchVideoList(sort: "addtime", limit: 18, page: 1)
             self.waterfallItems = l.items
             self.totalCount = l.total
             self.currentPage = 1
         } catch {
-            self.errorMessage = error.localizedDescription
+            print("[AnimeCatalogView] fetchVideoList addtime error: \(error)")
+            // 兜底重试：若全库 addtime 异常，拉取日漫频道内容
+            if let fallback = try? await AnimeClient.shared.fetchVideoList(channel: 20, sort: "weight", limit: 18, page: 1) {
+                self.waterfallItems = fallback.items
+                self.totalCount = fallback.total
+                self.currentPage = 1
+            } else {
+                self.errorMessage = error.localizedDescription
+            }
         }
 
         isLoading = false

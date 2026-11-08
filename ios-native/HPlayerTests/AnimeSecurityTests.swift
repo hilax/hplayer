@@ -77,4 +77,36 @@ final class AnimeSecurityTests: XCTestCase {
         XCTAssertEqual(headers["ts"], "1794108715730")
         XCTAssertFalse(headers["authentication"]?.isEmpty ?? true)
     }
+
+    func testRealAnimeClientFetch() async throws {
+        do {
+            let channels = try await AnimeClient.shared.fetchChannels()
+            print("Fetched channels count:", channels.count)
+            XCTAssertFalse(channels.isEmpty)
+
+            let list = try await AnimeClient.shared.fetchVideoList(sort: "weight", limit: 6, page: 1)
+            print("Fetched list count:", list.items.count)
+            XCTAssertFalse(list.items.isEmpty)
+
+            guard let firstVideo = list.items.first else { return }
+            let detail = try await AnimeClient.shared.fetchDetail(id: firstVideo.id)
+            print("Fetched detail for:", detail.name, "parts count:", detail.parts.count)
+            XCTAssertFalse(detail.name.isEmpty)
+            XCTAssertFalse(detail.parts.isEmpty)
+
+            if let firstRoute = detail.parts.first, let firstEp = firstRoute.part.first {
+                print("Fetching play cred for route:", firstRoute.play, "episode:", firstEp)
+                let cred = try await AnimeClient.shared.fetchPlayCredential(id: detail.id, play: firstRoute.play, part: firstEp)
+                print("Got play cred url:", cred.url.prefix(30))
+                XCTAssertFalse(cred.url.isEmpty)
+
+                let resolved = try await AnimePlaybackResolver.shared.resolve(playCode: cred.url, title: "\(detail.name) \(firstEp)")
+                print("Resolved final stream URL:", resolved.url.absoluteString)
+                XCTAssertTrue(resolved.url.absoluteString.hasPrefix("http"))
+            }
+        } catch {
+            print("Client fetch failed with error:", error)
+            XCTFail("AnimeClient fetch failed: \(error)")
+        }
+    }
 }

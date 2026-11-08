@@ -125,7 +125,7 @@ struct AnimeDetailView: View {
             let stretch = max(minY, 0)
 
             ZStack(alignment: .bottom) {
-                AsyncImage(url: URL(string: detail.parts.first?.play ?? "")) { phase in
+                AsyncImage(url: URL(string: detail.pic ?? "")) { phase in
                     switch phase {
                     case .success(let image):
                         image
@@ -165,7 +165,7 @@ struct AnimeDetailView: View {
     private func headerView(_ detail: AnimeVideoDetail) -> some View {
         HStack(alignment: .bottom, spacing: 14) {
             // 封面海报
-            AsyncImage(url: URL(string: detail.parts.first?.play ?? "")) { phase in
+            AsyncImage(url: URL(string: detail.pic ?? "")) { phase in
                 switch phase {
                 case .success(let image):
                     image

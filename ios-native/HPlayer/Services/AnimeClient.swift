@@ -30,14 +30,18 @@ final class AnimeClient {
         let cleanPath = path.replacingOccurrences(of: "/?", with: "?")
 
         // 尝试通过主域名请求
-        if let result: T = try? await performRequest(hostHeader: host, targetHost: host, path: cleanPath, method: method, body: body) {
-            return result
+        do {
+            return try await performRequest(hostHeader: host, targetHost: host, path: cleanPath, method: method, body: body)
+        } catch {
+            print("[AnimeClient] Primary host failed: \(error)")
         }
 
         // 域名请求失败，尝试备用 IP 池
         for ip in fallbackIPs {
-            if let result: T = try? await performRequest(hostHeader: host, targetHost: ip, path: cleanPath, method: method, body: body) {
-                return result
+            do {
+                return try await performRequest(hostHeader: host, targetHost: ip, path: cleanPath, method: method, body: body)
+            } catch {
+                print("[AnimeClient] Fallback IP \(ip) failed: \(error)")
             }
         }
 
