@@ -17,6 +17,9 @@ struct AnimeDetailView: View {
     @State private var isLoading = true
     @State private var isResolvingPlay = false
     @State private var errorMessage: String? = nil
+    /// 取链失败单独存一份：详情已经加载出来时 errorMessage 那份错误 UI 不会显示，
+    /// 之前解析失败就什么都不弹，看起来像「点了没反应」。
+    @State private var playError: String? = nil
 
     @State private var playingQueue: PlaybackQueue?
     @Namespace private var routeNamespace
@@ -106,6 +109,19 @@ struct AnimeDetailView: View {
                     .accessibilityIdentifier("anime.watchlist.\(detail.id)")
                 }
             }
+        }
+        .alert("播放失败", isPresented: Binding(
+            get: { playError != nil },
+            set: { if !$0 { playError = nil } }
+        )) {
+            Button("重试") {
+                if let detail, let ep = activeEpisode {
+                    Task { await startPlay(episode: ep, detail: detail) }
+                }
+            }
+            Button("知道了", role: .cancel) { playError = nil }
+        } message: {
+            Text(playError ?? "")
         }
         .task {
             await loadDetail()
@@ -432,8 +448,10 @@ struct AnimeDetailView: View {
 
     private func startPlay(episode: String, detail: AnimeVideoDetail) async {
         guard let currentRoute = detail.parts.indices.contains(selectedRouteIndex) ? detail.parts[selectedRouteIndex] : detail.parts.first else {
+            playError = "这部番剧没有可用的播放线路"
             return
         }
+        guard !isResolvingPlay else { return }
 
         // 持久化当前选集与线路
         UserDefaults.standard.set(episode, forKey: "anime.last_episode.\(animeId)")
@@ -465,7 +483,9 @@ struct AnimeDetailView: View {
             // 5. 唤起 HPlayer 原生独立播放器窗口
             self.playingQueue = PlaybackQueue(source: source, items: [source])
         } catch {
-            self.errorMessage = "播放解析失败: \(error.localizedDescription)"
+            if !Task.isCancelled {
+                playError = "\(error.localizedDescription)\n\n解析服务偶尔会抽风，点重试通常就能播。"
+            }
         }
 
         isResolvingPlay = false
