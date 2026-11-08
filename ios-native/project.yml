@@ -74,6 +74,14 @@ targets:
           NSAllowsArbitraryLoads: true
           NSAllowsLocalNetworking: true
           NSExceptionDomains:
+            120.240.157.64:
+              NSExceptionAllowsInsecureHTTPLoads: true
+            111.29.14.203:
+              NSExceptionAllowsInsecureHTTPLoads: true
+            183.214.145.89:
+              NSExceptionAllowsInsecureHTTPLoads: true
+            183.232.189.187:
+              NSExceptionAllowsInsecureHTTPLoads: true
             cenmo.fun:
               NSIncludesSubdomains: true
               NSExceptionAllowsInsecureHTTPLoads: true
@@ -145,6 +153,14 @@ targets:
           NSAllowsArbitraryLoads: true
           NSAllowsLocalNetworking: true
           NSExceptionDomains:
+            120.240.157.64:
+              NSExceptionAllowsInsecureHTTPLoads: true
+            111.29.14.203:
+              NSExceptionAllowsInsecureHTTPLoads: true
+            183.214.145.89:
+              NSExceptionAllowsInsecureHTTPLoads: true
+            183.232.189.187:
+              NSExceptionAllowsInsecureHTTPLoads: true
             cenmo.fun:
               NSIncludesSubdomains: true
               NSExceptionAllowsInsecureHTTPLoads: true

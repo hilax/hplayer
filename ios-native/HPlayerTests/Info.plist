@@ -26,6 +26,26 @@
 		<true/>
 		<key>NSExceptionDomains</key>
 		<dict>
+			<key>111.29.14.203</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+			</dict>
+			<key>120.240.157.64</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+			</dict>
+			<key>183.214.145.89</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+			</dict>
+			<key>183.232.189.187</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+			</dict>
 			<key>adukwai.com</key>
 			<dict>
 				<key>NSExceptionAllowsInsecureHTTPLoads</key>

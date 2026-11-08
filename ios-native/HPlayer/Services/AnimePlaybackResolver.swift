@@ -150,42 +150,20 @@ final class AnimePlaybackResolver {
         return String((0..<count).compactMap { _ in chars.randomElement() })
     }
 
-    // MARK: - 网络请求与 IP 回退
+    // MARK: - 网络请求（节点竞速 + 可用节点锁定）
 
     private func performParseRequest(urlString: String, headers: [String: String]) async throws -> Data {
         guard let originalURL = URL(string: urlString) else {
             throw AnimePlaybackError.invalidPlayCode
         }
-
-        // 先尝试直连域名
-        var request = URLRequest(url: originalURL, timeoutInterval: 12)
-        for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
-        request.setValue(apiHost, forHTTPHeaderField: "Host")
-
+        let path = originalURL.path + (originalURL.query.map { "?\($0)" } ?? "")
+        let transport = AnimeTransport(host: apiHost, fallbackIPs: fallbackIPs)
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            if let httpRes = response as? HTTPURLResponse, httpRes.statusCode == 200 {
-                return data
-            }
+            let result = try await transport.send(path: path, headers: headers)
+            return result.data
         } catch {
-            // 直连失败，进入备用 IP 循环重试
+            throw AnimePlaybackError.parserFailed(error.localizedDescription)
         }
-
-        // 备用 IP 容灾
-        for ip in fallbackIPs {
-            let pathAndQuery = originalURL.path + (originalURL.query.map { "?\($0)" } ?? "")
-            guard let ipURL = URL(string: "http://\(ip)\(pathAndQuery)") else { continue }
-            var ipRequest = URLRequest(url: ipURL, timeoutInterval: 10)
-            for (k, v) in headers { ipRequest.setValue(v, forHTTPHeaderField: k) }
-            ipRequest.setValue(apiHost, forHTTPHeaderField: "Host")
-
-            if let (data, response) = try? await URLSession.shared.data(for: ipRequest),
-               let httpRes = response as? HTTPURLResponse, httpRes.statusCode == 200 {
-                return data
-            }
-        }
-
-        throw AnimePlaybackError.parserFailed("所有解析节点连接失败")
     }
 
     // MARK: - 响应解密与地址拼装

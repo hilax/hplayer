@@ -26,52 +26,19 @@ final class AnimeClient {
 
     // MARK: - 基础请求执行流水线
 
-    private func request<T: Codable>(path: String, method: String = "GET", body: Data? = nil) async throws -> T {
+    private func request<T: Codable>(path: String, method: String = "GET", body: Data? = nil,
+                                     redirectDepth: Int = 0) async throws -> T {
         let cleanPath = path.replacingOccurrences(of: "/?", with: "?")
+        let transport = AnimeTransport(host: host, fallbackIPs: fallbackIPs)
+        let result = try await transport.send(path: cleanPath, method: method,
+                                              headers: AnimeSigner.shared.headers(), body: body)
 
-        // 尝试通过主域名请求
-        do {
-            return try await performRequest(hostHeader: host, targetHost: host, path: cleanPath, method: method, body: body)
-        } catch {
-            print("[AnimeClient] Primary host failed: \(error)")
+        // 带尾斜杠的路径会 301，跟一次 Location
+        if (result.status == 301 || result.status == 302), let loc = result.location, redirectDepth < 3 {
+            return try await request(path: loc, method: method, body: body, redirectDepth: redirectDepth + 1)
         }
 
-        // 域名请求失败，尝试备用 IP 池
-        for ip in fallbackIPs {
-            do {
-                return try await performRequest(hostHeader: host, targetHost: ip, path: cleanPath, method: method, body: body)
-            } catch {
-                print("[AnimeClient] Fallback IP \(ip) failed: \(error)")
-            }
-        }
-
-        throw AnimeClientError.networkError("所有动漫服务节点均无法连接")
-    }
-
-    private func performRequest<T: Codable>(hostHeader: String, targetHost: String, path: String, method: String, body: Data?) async throws -> T {
-        let urlString = "http://\(targetHost)\(path)"
-        guard let url = URL(string: urlString) else {
-            throw AnimeClientError.invalidURL
-        }
-
-        var req = URLRequest(url: url, timeoutInterval: 12)
-        req.httpMethod = method
-        req.httpBody = body
-
-        let headers = AnimeSigner.shared.headers()
-        for (k, v) in headers {
-            req.setValue(v, forHTTPHeaderField: k)
-        }
-        req.setValue(hostHeader, forHTTPHeaderField: "Host")
-
-        let (data, response) = try await URLSession.shared.data(for: req)
-
-        // 处理重定向
-        if let httpRes = response as? HTTPURLResponse, (httpRes.statusCode == 301 || httpRes.statusCode == 302),
-           let loc = httpRes.allHeaderFields["Location"] as? String ?? httpRes.allHeaderFields["location"] as? String {
-            return try await request(path: loc, method: method, body: body)
-        }
-
+        let data = result.data
         guard let rawString = String(data: data, encoding: .utf8) else {
             throw AnimeClientError.networkError("无法解析服务器响应内容")
         }
