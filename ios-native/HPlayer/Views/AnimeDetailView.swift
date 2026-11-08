@@ -83,6 +83,7 @@ struct AnimeDetailView: View {
             }
         }
         .hidesTabBar()
+        .toolbarBackground(.hidden, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 Button(action: { dismiss() }) {

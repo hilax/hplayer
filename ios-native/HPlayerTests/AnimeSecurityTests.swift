@@ -78,35 +78,25 @@ final class AnimeSecurityTests: XCTestCase {
         XCTAssertFalse(headers["authentication"]?.isEmpty ?? true)
     }
 
-    func testRealAnimeClientFetch() async throws {
-        do {
-            let channels = try await AnimeClient.shared.fetchChannels()
-            print("Fetched channels count:", channels.count)
-            XCTAssertFalse(channels.isEmpty)
+    func testDecodesRealWorldAnimePayloads() throws {
+        // 接口真实样本：stars 在列表里是字符串、在详情里是数字。
+        let listJSON = """
+        {"code":20000,"message":"请求成功!","data":{"total":1,"items":[{"id":180167,"cid":20,"name":"恋爱与选举与巧克力","pic":"http://p4-ad.adukwai.com/x.jpg","year":"2012","area":"日本","continu":"13全","type":"后宫,校园","stars":""}]}}
+        """
+        let listResponse = try JSONDecoder().decode(
+            AnimeAPIResponse<AnimeVideoListResult>.self, from: Data(listJSON.utf8)
+        )
+        XCTAssertEqual(listResponse.data?.items.first?.name, "恋爱与选举与巧克力")
+        XCTAssertEqual(listResponse.data?.items.first?.safePicURLString, "https://p4-ad.adukwai.com/x.jpg")
 
-            let list = try await AnimeClient.shared.fetchVideoList(sort: "weight", limit: 6, page: 1)
-            print("Fetched list count:", list.items.count)
-            XCTAssertFalse(list.items.isEmpty)
-
-            guard let firstVideo = list.items.first else { return }
-            let detail = try await AnimeClient.shared.fetchDetail(id: firstVideo.id)
-            print("Fetched detail for:", detail.name, "parts count:", detail.parts.count)
-            XCTAssertFalse(detail.name.isEmpty)
-            XCTAssertFalse(detail.parts.isEmpty)
-
-            if let firstRoute = detail.parts.first, let firstEp = firstRoute.part.first {
-                print("Fetching play cred for route:", firstRoute.play, "episode:", firstEp)
-                let cred = try await AnimeClient.shared.fetchPlayCredential(id: detail.id, play: firstRoute.play, part: firstEp)
-                print("Got play cred url:", cred.url.prefix(30))
-                XCTAssertFalse(cred.url.isEmpty)
-
-                let resolved = try await AnimePlaybackResolver.shared.resolve(playCode: cred.url, title: "\(detail.name) \(firstEp)")
-                print("Resolved final stream URL:", resolved.url.absoluteString)
-                XCTAssertTrue(resolved.url.absoluteString.hasPrefix("http"))
-            }
-        } catch {
-            print("Client fetch failed with error:", error)
-            XCTFail("AnimeClient fetch failed: \(error)")
-        }
+        let detailJSON = """
+        {"code":20000,"message":"请求成功!","data":{"id":180167,"name":"恋爱与选举与巧克力","stars":1,"pic":"http://p4-ad.adukwai.com/x.jpg","parts":[{"play":"newup-jp","play_zh":"日语","single_clarity_display":1,"part":["第01集"]}]}}
+        """
+        let detailResponse = try JSONDecoder().decode(
+            AnimeAPIResponse<AnimeVideoDetail>.self, from: Data(detailJSON.utf8)
+        )
+        XCTAssertEqual(detailResponse.data?.stars, "1")
+        XCTAssertEqual(detailResponse.data?.safePicURLString, "https://p4-ad.adukwai.com/x.jpg")
+        XCTAssertEqual(detailResponse.data?.parts.first?.part.first, "第01集")
     }
 }

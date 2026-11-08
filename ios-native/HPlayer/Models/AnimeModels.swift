@@ -132,10 +132,10 @@ struct AnimeVideoItem: Identifiable, Codable, Hashable {
 
         if let str = try? c.decodeIfPresent(String.self, forKey: .stars) {
             stars = str
-        } else if let num = try? c.decodeIfPresent(Double.self, forKey: .stars) {
-            stars = String(num)
         } else if let intVal = try? c.decodeIfPresent(Int.self, forKey: .stars) {
             stars = String(intVal)
+        } else if let num = try? c.decodeIfPresent(Double.self, forKey: .stars) {
+            stars = String(num)
         } else {
             stars = nil
         }
@@ -219,10 +219,10 @@ struct AnimeVideoDetail: Identifiable, Codable, Hashable {
 
         if let str = try? c.decodeIfPresent(String.self, forKey: .stars) {
             stars = str
-        } else if let num = try? c.decodeIfPresent(Double.self, forKey: .stars) {
-            stars = String(num)
         } else if let intVal = try? c.decodeIfPresent(Int.self, forKey: .stars) {
             stars = String(intVal)
+        } else if let num = try? c.decodeIfPresent(Double.self, forKey: .stars) {
+            stars = String(num)
         } else {
             stars = nil
         }
