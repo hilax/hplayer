@@ -62,32 +62,18 @@ final class AnimePlaybackResolver {
         }
 
         let md5source = String(clean.dropFirst(4))
+        let apiSource = encryptMd5Id(md5source)
+        let authParam = generateAuthParams(path: "/", expire: authExpire, key: authKey)
+        let headers = buildApiHeaders(path: "/", md5Param: apiSource, authParam: authParam)
 
-        // 解析服务会间歇性抽风：同一份凭据上一次失败、下一次就成功。
-        // 每次重试都重新生成 apiSource / sign / 三层头（签名带时间戳，不能复用旧的），
-        // 否则一次网络抖动就直接播放失败。
-        var lastError: Error = AnimePlaybackError.parserFailed("解析服务没有响应")
-        for attempt in 0..<Self.parseAttempts {
-            if Task.isCancelled { throw CancellationError() }
-            let apiSource = encryptMd5Id(md5source)
-            let authParam = generateAuthParams(path: "/", expire: authExpire, key: authKey)
-            let headers = buildApiHeaders(path: "/", md5Param: apiSource, authParam: authParam)
-            let requestURLString = apiEndpoint + apiSource + "&" + authParam
+        let requestURLString = apiEndpoint + apiSource + "&" + authParam
 
-            do {
-                let responseData = try await performParseRequest(urlString: requestURLString, headers: headers)
-                return try parseResponse(data: responseData, title: title)
-            } catch {
-                lastError = error
-                if attempt < Self.parseAttempts - 1 {
-                    try? await Task.sleep(nanoseconds: UInt64(400_000_000 * (attempt + 1)))
-                }
-            }
-        }
-        throw lastError
+        // 3. 发送解析请求（支持备用 IP 回退）
+        let responseData = try await performParseRequest(urlString: requestURLString, headers: headers)
+
+        // 4. 解析响应并解密流地址
+        return try parseResponse(data: responseData, title: title)
     }
-
-    private static let parseAttempts = 3
 
     // MARK: - 逆向混淆算法实现
 
