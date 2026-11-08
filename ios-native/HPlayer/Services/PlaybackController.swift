@@ -491,6 +491,7 @@ final class PlaybackController: ObservableObject {
 
         engine.set("hwdec", decoding == .hardware ? "videotoolbox" : "no")
         applyCacheOptions(engine)
+        engine.set("hls-bitrate", "max")
         if let ua = customHeaders["User-Agent"] {
             engine.set("user-agent", ua)
         } else {

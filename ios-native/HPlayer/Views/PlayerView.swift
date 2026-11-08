@@ -78,10 +78,22 @@ struct PlayerView: View {
     }
 
     private var qualityChoices: [PlaybackChoice] {
-        guard case .p115 = current else { return [] }
-        // 原画直接播放原文件，不依赖 115 的转码
-        return [PlaybackChoice(id: "direct-original", title: "原画")]
-            + directQualities.enumerated().map { PlaybackChoice(id: "direct-\($0.offset)", title: $0.element.title) }
+        switch current {
+        case .p115:
+            // 原画直接播放原文件，不依赖 115 的转码
+            return [PlaybackChoice(id: "direct-original", title: "原画")]
+                + directQualities.enumerated().map { PlaybackChoice(id: "direct-\($0.offset)", title: $0.element.title) }
+        case .online(_, _, _, let qualities, _):
+            if !qualities.isEmpty {
+                return qualities.map { PlaybackChoice(id: "online-\($0.id)", title: $0.title) }
+            } else if !selectedQuality.isEmpty {
+                return [PlaybackChoice(id: "online-default", title: selectedQuality)]
+            } else {
+                return [PlaybackChoice(id: "online-default", title: "1080P 高清")]
+            }
+        case .direct:
+            return []
+        }
     }
 
     /// 记播放历史会让首页「继续观看」重新排一遍；放到播放页进场动画走完之后再记，
@@ -117,7 +129,8 @@ struct PlayerView: View {
                 #endif
                 guard await openAfterReveal(request, source: source, session: session) else { return }
                 playback.open(url, direct115: use115Headers, directCookie: testCookie, startTime: resume)
-            case .online(_, let url, let headers):
+            case .online(_, let url, let headers, let qualities, let currentQuality):
+                selectedQuality = !currentQuality.isEmpty ? currentQuality : (qualities.first?.title ?? "1080P 高清")
                 guard isCurrentRequest(request, source: source, session: session), !Task.isCancelled else { return }
                 guard await openAfterReveal(request, source: source, session: session) else { return }
                 playback.open(url, customHeaders: headers, startTime: resume)
@@ -190,8 +203,33 @@ struct PlayerView: View {
     }
 
     private func switchQuality(_ id: String, source: PlaybackSource) async -> UUID? {
-        guard visible, !Task.isCancelled, current == source,
-              case .p115(_, let pickCode) = source,
+        guard visible, !Task.isCancelled, current == source else { return nil }
+
+        // 在线动漫画质切换
+        if case .online(let title, _, let headers, let qualities, _) = source {
+            guard let chosen = qualities.first(where: { "online-\($0.id)" == id }),
+                  chosen.title != selectedQuality else { return nil }
+            let request = UUID()
+            requestID = request
+            let session = appState.sessionID
+            let preservePosition = playback.canRetryInPlace
+            let savedPosition = preservePosition || !tracksHistory ? nil : RecentStore.shared.position(for: source)
+            loading = true; error = ""
+            defer { if isCurrentRequest(request, source: source, session: session) { loading = false } }
+            selectedQuality = chosen.title
+            let updatedSource = PlaybackSource.online(
+                title: title,
+                url: chosen.url,
+                headers: headers,
+                qualities: qualities,
+                currentQuality: chosen.title
+            )
+            current = updatedSource
+            playback.open(chosen.url, customHeaders: headers, preservingPosition: preservePosition, startTime: savedPosition)
+            return request
+        }
+
+        guard case .p115(_, let pickCode) = source,
               let client = appState.directClient() else { return nil }
         // 原画已经打开时无需重新发请求，也让尚在获取的转码菜单继续完成。
         if id == "direct-original", selectedQuality == "原画", !loading,

@@ -286,4 +286,6 @@ struct AnimeResolvedStream: Equatable {
     let headers: [String: String]
     let format: String // "hls", "mp4", etc.
     let title: String
+    let qualityTitle: String
+    let qualities: [PlaybackQualityItem]
 }

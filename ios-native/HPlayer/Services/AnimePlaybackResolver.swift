@@ -45,7 +45,15 @@ final class AnimePlaybackResolver {
                 throw AnimePlaybackError.invalidPlayCode
             }
             let isMp4 = url.absoluteString.lowercased().contains(".mp4")
-            return AnimeResolvedStream(url: url, headers: ["User-Agent": ""], format: isMp4 ? "mp4" : "hls", title: title)
+            let quality = PlaybackQualityItem(id: "default", title: "1080P 高清", url: url)
+            return AnimeResolvedStream(
+                url: url,
+                headers: ["User-Agent": ""],
+                format: isMp4 ? "mp4" : "hls",
+                title: title,
+                qualityTitle: "1080P 高清",
+                qualities: [quality]
+            )
         }
 
         // 2. 必须以 new- 开头
@@ -187,44 +195,83 @@ final class AnimePlaybackResolver {
               let code = json["code"] as? Int, code == 0,
               let dataDict = json["data"] as? [String: Any],
               let playAddrs = dataDict["playAddr"] as? [[String: Any]],
-              let firstAddr = playAddrs.first else {
+              !playAddrs.isEmpty else {
             throw AnimePlaybackError.parserFailed("解析响应数据为空或 code != 0")
-        }
-
-        guard let addrCipher = firstAddr["addr"] as? String,
-              let domainCipher = firstAddr["m3u8FileDomain"] as? String else {
-            throw AnimePlaybackError.decryptUrlFailed
         }
 
         // 使用互换密钥解密: key = md5AesIv, iv = md5AesKey
         guard let keyData = md5AesIv.data(using: .utf8),
-              let ivData = md5AesKey.data(using: .utf8),
-              let addrData = Data(base64Encoded: addrCipher),
-              let domainData = Data(base64Encoded: domainCipher),
-              let addrPlain = AnimeCrypto.aes128CbcDecrypt(data: addrData, key: keyData, iv: ivData),
-              let domainPlain = AnimeCrypto.aes128CbcDecrypt(data: domainData, key: keyData, iv: ivData),
-              let addrStr = String(data: addrPlain, encoding: .utf8),
-              let domainStr = String(data: domainPlain, encoding: .utf8) else {
+              let ivData = md5AesKey.data(using: .utf8) else {
             throw AnimePlaybackError.decryptUrlFailed
         }
 
-        var fullUrl = domainStr + addrStr
-        if domainStr.contains("anixx.r2") {
-            fullUrl = "https://sns-music.xhscdn.com/104002e031m0qe7o84s0m6saf3o"
-        } else {
-            fullUrl = applyRewrites(fullUrl)
+        var decodedStreams: [(quality: PlaybackQualityItem, isMp4: Bool, score: Int)] = []
+
+        for (index, addrItem) in playAddrs.enumerated() {
+            guard let addrCipher = addrItem["addr"] as? String,
+                  let domainCipher = addrItem["m3u8FileDomain"] as? String,
+                  let addrData = Data(base64Encoded: addrCipher),
+                  let domainData = Data(base64Encoded: domainCipher),
+                  let addrPlain = AnimeCrypto.aes128CbcDecrypt(data: addrData, key: keyData, iv: ivData),
+                  let domainPlain = AnimeCrypto.aes128CbcDecrypt(data: domainData, key: keyData, iv: ivData),
+                  let addrStr = String(data: addrPlain, encoding: .utf8),
+                  let domainStr = String(data: domainPlain, encoding: .utf8) else {
+                continue
+            }
+
+            var fullUrl = domainStr + addrStr
+            if domainStr.contains("anixx.r2") {
+                fullUrl = "https://sns-music.xhscdn.com/104002e031m0qe7o84s0m6saf3o"
+            } else {
+                fullUrl = applyRewrites(fullUrl)
+            }
+
+            guard let targetURL = URL(string: fullUrl) else { continue }
+            let isMp4 = fullUrl.lowercased().contains(".mp4")
+
+            let desc = (addrItem["desc"] as? String)?.trimmingCharacters(in: .whitespaces) ?? ""
+            let itemTitle = (addrItem["title"] as? String)?.trimmingCharacters(in: .whitespaces) ?? ""
+            let qualityName = !desc.isEmpty ? desc : (!itemTitle.isEmpty ? itemTitle : "1080P 高清")
+
+            let width = addrItem["width"] as? Int ?? 0
+            let height = addrItem["height"] as? Int ?? 0
+
+            var score = width * height
+            if qualityName.contains("4K") || qualityName.contains("2160") {
+                score = max(score, 3840 * 2160)
+            } else if qualityName.contains("1080") || qualityName.contains("原画") || qualityName.contains("蓝光") {
+                score = max(score, 1920 * 1080)
+            } else if qualityName.contains("720") || qualityName.contains("超清") {
+                score = max(score, 1280 * 720)
+            } else if qualityName.contains("480") || qualityName.contains("高清") {
+                score = max(score, 854 * 480)
+            } else if qualityName.contains("360") || qualityName.contains("标清") {
+                score = max(score, 640 * 360)
+            } else {
+                score = max(score, 1)
+            }
+
+            let qualityItem = PlaybackQualityItem(id: "\(index)", title: qualityName, url: targetURL)
+            decodedStreams.append((quality: qualityItem, isMp4: isMp4, score: score))
         }
 
-        guard let targetURL = URL(string: fullUrl) else {
+        guard !decodedStreams.isEmpty else {
             throw AnimePlaybackError.noPlayableURL
         }
 
-        let isMp4 = fullUrl.lowercased().contains(".mp4")
+        // 按画质从最高到最低排序，默认播放最高画质
+        decodedStreams.sort { $0.score > $1.score }
+
+        let best = decodedStreams[0]
+        let allQualities = decodedStreams.map(\.quality)
+
         return AnimeResolvedStream(
-            url: targetURL,
+            url: best.quality.url,
             headers: ["User-Agent": ""],
-            format: isMp4 ? "mp4" : "hls",
-            title: title
+            format: best.isMp4 ? "mp4" : "hls",
+            title: title,
+            qualityTitle: best.quality.title,
+            qualities: allQualities
         )
     }
 

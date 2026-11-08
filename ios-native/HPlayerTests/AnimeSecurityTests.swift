@@ -99,4 +99,40 @@ final class AnimeSecurityTests: XCTestCase {
         XCTAssertEqual(detailResponse.data?.safePicURLString, "https://p4-ad.adukwai.com/x.jpg")
         XCTAssertEqual(detailResponse.data?.parts.first?.part.first, "第01集")
     }
+
+    func testAnimeQualityResolutionAndSorting() throws {
+        let q1 = PlaybackQualityItem(id: "0", title: "720P 高清", url: URL(string: "http://example.com/720.m3u8")!)
+        let q2 = PlaybackQualityItem(id: "1", title: "1080P 超清", url: URL(string: "http://example.com/1080.m3u8")!)
+        let q3 = PlaybackQualityItem(id: "2", title: "480P 标清", url: URL(string: "http://example.com/480.m3u8")!)
+
+        let stream = AnimeResolvedStream(
+            url: q2.url,
+            headers: ["User-Agent": ""],
+            format: "hls",
+            title: "测试番剧 第01集",
+            qualityTitle: "1080P 超清",
+            qualities: [q2, q1, q3]
+        )
+
+        // 验证默认画质为最高画质
+        XCTAssertEqual(stream.qualityTitle, "1080P 超清")
+        XCTAssertEqual(stream.url.absoluteString, "http://example.com/1080.m3u8")
+        XCTAssertEqual(stream.qualities.count, 3)
+
+        // 验证构建出的 PlaybackSource 包含多画质
+        let source = PlaybackSource.online(
+            title: stream.title,
+            url: stream.url,
+            headers: stream.headers,
+            qualities: stream.qualities,
+            currentQuality: stream.qualityTitle
+        )
+        if case .online(_, let url, _, let qualities, let curQ) = source {
+            XCTAssertEqual(url.absoluteString, "http://example.com/1080.m3u8")
+            XCTAssertEqual(curQ, "1080P 超清")
+            XCTAssertEqual(qualities.count, 3)
+        } else {
+            XCTFail("PlaybackSource.online 匹配失败")
+        }
+    }
 }

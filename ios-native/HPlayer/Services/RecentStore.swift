@@ -28,7 +28,7 @@ final class RecentStore: ObservableObject {
         entry.title = source.title
         entry.playedAt = Date()
         switch source {
-        case .direct(_, let url), .online(_, let url, _):
+        case .direct(_, let url), .online(_, let url, _, _, _):
             entry.url = url.absoluteString
             entry.pickCode = nil
         case .p115(_, let pickCode):
@@ -126,7 +126,7 @@ final class RecentStore: ObservableObject {
         switch source {
         case .p115(_, let pickCode):
             return "p115|\(pickCode)"
-        case .direct(_, let url), .online(_, let url, _):
+        case .direct(_, let url), .online(_, let url, _, _, _):
             return url.isFileURL ? "file|\(url.lastPathComponent)" : "url|\(url.absoluteString)"
         }
     }

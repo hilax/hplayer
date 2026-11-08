@@ -342,11 +342,13 @@ struct AnimeDetailView: View {
             // 2. 自动化解析真实流地址
             let resolved = try await AnimePlaybackResolver.shared.resolve(playCode: cred.url, title: "\(detail.name) \(episode)")
 
-            // 3. 构建 HPlayer 在线播放源
+            // 3. 构建 HPlayer 在线播放源（默认最高画质，并携带可选画质列表）
             let source = PlaybackSource.online(
                 title: "\(detail.name) \(episode)",
                 url: resolved.url,
-                headers: resolved.headers
+                headers: resolved.headers,
+                qualities: resolved.qualities,
+                currentQuality: resolved.qualityTitle
             )
 
             // 4. 记录观看历史
