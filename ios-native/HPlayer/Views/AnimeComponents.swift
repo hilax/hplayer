@@ -12,13 +12,11 @@ struct AnimeChannelBar: View {
             HStack(spacing: 8) {
                 // "全部" 胶囊
                 channelPill(title: "全部", isSelected: selectedChannelId == nil) {
-                    selectedChannelId = nil
                     onSelect(nil)
                 }
 
                 ForEach(channels) { channel in
                     channelPill(title: channel.name, isSelected: selectedChannelId == channel.id) {
-                        selectedChannelId = channel.id
                         onSelect(channel.id)
                     }
                 }
@@ -54,12 +52,13 @@ struct AnimeHeroBanner: View {
     var onSelect: (AnimeBanner) -> Void
 
     @State private var currentIndex = 0
-    private let timer = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
 
     var body: some View {
         if banners.isEmpty {
             EmptyView()
         } else {
+            // 不做自动轮播：定时器会让外层 ScrollView 每几秒重排一次，
+            // 也违反界面规范「不做无限循环动画」。用户手动左右滑动即可。
             TabView(selection: $currentIndex) {
                 ForEach(Array(banners.enumerated()), id: \.element.id) { index, banner in
                     bannerCard(banner: banner)
@@ -73,19 +72,14 @@ struct AnimeHeroBanner: View {
             .tabViewStyle(.page(indexDisplayMode: .automatic))
             .frame(height: 170)
             .padding(.horizontal, Theme.contentInset)
-            .onReceive(timer) { _ in
-                guard banners.count > 1 else { return }
-                withAnimation(Motion.smooth) {
-                    currentIndex = (currentIndex + 1) % banners.count
-                }
-            }
         }
     }
 
     private func bannerCard(banner: AnimeBanner) -> some View {
         ZStack(alignment: .bottomLeading) {
             // 背景封面图（通过 HPlayer 专属 ImagePipeline 磁盘与内存缓存）
-            ArtworkView(urlString: banner.safePicURLString, title: banner.displayTitle, maxPixel: ArtworkSize.hero, loading: .clear, drawsFallback: false)
+            ArtworkView(urlString: banner.safePicURLString, title: banner.displayTitle,
+                        maxPixel: ArtworkSize.hero, loading: .clear, drawsFallback: false)
                 .scaledToFill()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
@@ -115,6 +109,7 @@ struct AnimeHeroBanner: View {
                         Text(banner.displayRemarks)
                             .font(.system(size: 10, weight: .semibold))
                             .foregroundStyle(Theme.goldLight)
+                            .lineLimit(1)
                     }
                 }
 
@@ -122,15 +117,18 @@ struct AnimeHeroBanner: View {
                     .font(.display(16))
                     .foregroundStyle(.white)
                     .lineLimit(1)
+                    .truncationMode(.tail)
 
                 if !banner.displayDesc.isEmpty {
                     Text(banner.displayDesc)
                         .font(.system(size: 11))
                         .foregroundStyle(Theme.textSecondaryOnArtwork)
                         .lineLimit(1)
+                        .truncationMode(.tail)
                 }
             }
             .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
         .overlay(
@@ -141,43 +139,60 @@ struct AnimeHeroBanner: View {
 }
 
 // MARK: - 动漫海报卡片 (AnimePosterCard)
+//
+// 横滑货架和两列网格共用这一张卡片：固定宽高、同一套文字行数，
+// 保证任何一屏里所有卡片的几何尺寸完全一致，不会出现高低错落。
 
 struct AnimePosterCard: View {
     let item: AnimeVideoItem
     var width: CGFloat = 105
 
+    private var posterHeight: CGFloat { width * 1.5 }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             ZStack(alignment: .bottomTrailing) {
-                // 封面（基于 ImagePipeline 磁盘+内存缓存与异步解码）
+                // 封面（基于 ImagePipeline 磁盘+内存缓存与异步解码，自带固定 frame）
                 PosterArtwork(urlString: item.safePicURLString, title: item.name, width: width)
+                    .allowsHitTesting(false)
 
                 // 右下角连载状态角标
                 if let continu = item.continu, !continu.isEmpty {
                     Text(continu)
                         .font(.system(size: 9, weight: .bold))
                         .foregroundStyle(Theme.gold)
+                        .lineLimit(1)
                         .padding(.horizontal, 5)
                         .padding(.vertical, 2)
                         .background(Color.black.opacity(0.8), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
                         .padding(4)
                 }
             }
+            .frame(width: width, height: posterHeight, alignment: .bottomTrailing)
 
-            // 标题与分类
+            // 标题与分类：宽度锁死，长片名统一尾部截断
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.name)
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(Theme.textPrimary)
                     .lineLimit(1)
+                    .truncationMode(.tail)
 
-                Text(item.tags.prefix(2).joined(separator: ", ") + (item.year.map { " · \($0)" } ?? ""))
+                Text(subtitle)
                     .font(.system(size: 10))
                     .foregroundStyle(Theme.textTertiary)
                     .lineLimit(1)
+                    .truncationMode(.tail)
             }
             .frame(width: width, alignment: .leading)
         }
+        .frame(width: width, alignment: .top)
+    }
+
+    private var subtitle: String {
+        let tags = item.tags.prefix(2).joined(separator: ", ")
+        guard let year = item.year, !year.isEmpty else { return tags }
+        return tags.isEmpty ? year : "\(tags) · \(year)"
     }
 }
 
