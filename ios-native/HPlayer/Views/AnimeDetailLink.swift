@@ -14,5 +14,6 @@ struct AnimeDetailLink<Label: View>: View {
             label()
         }
         .buttonStyle(PosterButtonStyle())
+        .accessibilityIdentifier("anime.poster.\(animeId)")
     }
 }

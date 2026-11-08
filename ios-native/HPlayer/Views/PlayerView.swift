@@ -10,6 +10,10 @@ struct PlayerView: View {
     @State private var loading = true
     @State private var error = ""
     @State private var directQualities: [Direct115Stream] = []
+    /// 动漫这一集解析出的画质档位和请求头。current 始终保持集数引用不变，
+    /// 换画质只重开流，不改 current——改了 id 就变，选集会认不出当前集，还会再触发一次加载。
+    @State private var animeQualities: [PlaybackQualityItem] = []
+    @State private var animeHeaders: [String: String] = [:]
     @State private var selectedQuality = ""
     @State private var visible = true
     @State private var requestID = UUID()
@@ -25,6 +29,7 @@ struct PlayerView: View {
             playback: playback,
             title: current.title,
             loading: loading,
+            loadingText: loadingText,
             error: error,
             items: playlist.map { PlaybackListItem(id: $0.id, title: $0.title, progress: RecentStore.shared.progress(for: $0)) },
             selectedID: current.id,
@@ -77,8 +82,18 @@ struct PlayerView: View {
         RecentStore.shared.savePosition(for: current, seconds: position, duration: playback.duration)
     }
 
+    private var loadingText: String {
+        if case .anime = current { return "正在解析播放地址…" }
+        return "正在准备播放…"
+    }
+
     private var qualityChoices: [PlaybackChoice] {
         switch current {
+        case .anime:
+            if !animeQualities.isEmpty {
+                return animeQualities.map { PlaybackChoice(id: "online-\($0.id)", title: $0.title) }
+            }
+            return selectedQuality.isEmpty ? [] : [PlaybackChoice(id: "online-default", title: selectedQuality)]
         case .p115:
             // 原画直接播放原文件，不依赖 115 的转码
             return [PlaybackChoice(id: "direct-original", title: "原画")]
@@ -111,7 +126,7 @@ struct PlayerView: View {
         let request = UUID()
         requestID = request
         let session = appState.sessionID
-        loading = true; error = ""; directQualities = []; selectedQuality = ""
+        loading = true; error = ""; directQualities = []; animeQualities = []; animeHeaders = [:]; selectedQuality = ""
         defer { if isCurrentRequest(request, source: source, session: session) { loading = false } }
         let resume = tracksHistory ? RecentStore.shared.position(for: source) : nil
         if tracksHistory { recordWhenPresented(source) }
@@ -134,6 +149,16 @@ struct PlayerView: View {
                 guard isCurrentRequest(request, source: source, session: session), !Task.isCancelled else { return }
                 guard await openAfterReveal(request, source: source, session: session) else { return }
                 playback.open(url, customHeaders: headers, startTime: resume)
+            case .anime(let ref):
+                // 详情页记住最后看的一集：在播放器里切集、连播也算数
+                ref.rememberAsLastWatched()
+                let resolved = try await AnimePlaybackResolver.shared.resolve(episode: ref)
+                guard isCurrentRequest(request, source: source, session: session), !Task.isCancelled else { return }
+                animeQualities = resolved.qualities
+                animeHeaders = resolved.headers
+                selectedQuality = resolved.qualityTitle
+                guard await openAfterReveal(request, source: source, session: session) else { return }
+                playback.open(resolved.url, customHeaders: resolved.headers, startTime: resume)
             case .p115(_, let pickCode):
                 do {
                     guard let client = appState.directClient() else { throw APIError.server("请先登录 115") }
@@ -204,6 +229,23 @@ struct PlayerView: View {
 
     private func switchQuality(_ id: String, source: PlaybackSource) async -> UUID? {
         guard visible, !Task.isCancelled, current == source else { return nil }
+
+        // 动漫画质切换：档位是这一集解析出来的，直接换地址重开，不用再解析一次。
+        // current 不动，所以不会触发 .task(id:) 再加载一遍。
+        if case .anime = source {
+            guard let chosen = animeQualities.first(where: { "online-\($0.id)" == id }),
+                  chosen.title != selectedQuality else { return nil }
+            let request = UUID()
+            requestID = request
+            let session = appState.sessionID
+            let preservePosition = playback.canRetryInPlace
+            let savedPosition = preservePosition || !tracksHistory ? nil : RecentStore.shared.position(for: source)
+            loading = true; error = ""
+            defer { if isCurrentRequest(request, source: source, session: session) { loading = false } }
+            selectedQuality = chosen.title
+            playback.open(chosen.url, customHeaders: animeHeaders, preservingPosition: preservePosition, startTime: savedPosition)
+            return request
+        }
 
         // 在线动漫画质切换
         if case .online(let title, _, let headers, let qualities, _) = source {

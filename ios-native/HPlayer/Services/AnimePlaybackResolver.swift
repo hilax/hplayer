@@ -36,6 +36,13 @@ final class AnimePlaybackResolver {
 
     // MARK: - 主解析入口
 
+    /// 按集数现取播放地址：先拿播放凭证，再解析真实流。
+    /// 播放器里切集、自动连播、从「继续观看」回来都走这里，每次都是新鲜地址。
+    func resolve(episode ref: AnimeEpisodeRef) async throws -> AnimeResolvedStream {
+        let cred = try await AnimeClient.shared.fetchPlayCredential(id: ref.animeId, play: ref.play, part: ref.part)
+        return try await resolve(playCode: cred.url, title: ref.episodeTitle)
+    }
+
     func resolve(playCode: String, title: String = "") async throws -> AnimeResolvedStream {
         let clean = playCode.trimmingCharacters(in: .whitespacesAndNewlines)
 

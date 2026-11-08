@@ -15,7 +15,6 @@ struct AnimeDetailView: View {
     @State private var isDescending = false
     @State private var isOverviewExpanded = false
     @State private var isLoading = true
-    @State private var isResolvingPlay = false
     @State private var errorMessage: String? = nil
 
     @State private var playingQueue: PlaybackQueue?
@@ -71,35 +70,15 @@ struct AnimeDetailView: View {
                 }
             }
 
-            // 解析中遮罩：文字必须用主题色，之前写死 .white 压在 Theme.surface 上，
-            // 浅色模式下两者都是白的，只剩一个转圈、说明文字完全看不见。
-            if isResolvingPlay {
-                Color.black.opacity(0.45)
-                    .ignoresSafeArea()
-                VStack(spacing: 10) {
-                    ProgressView()
-                        .tint(Theme.accent)
-                    Text("正在解析播放地址…")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(Theme.textPrimary)
-                }
-                .padding(.horizontal, 24)
-                .padding(.vertical, 20)
-                .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
-                .shadow(color: Theme.shadow, radius: 12, x: 0, y: 4)
-            }
         }
         .designScreen("anime-detail")
         .hidesTabBar()
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
-        // 解析中把整条导航栏收起来：它在 ZStack 之外，遮罩盖不住，
-        // 否则返回键和追番心会浮在灰罩上面，既突兀又能被点走。
-        .toolbar(isResolvingPlay ? .hidden : .visible, for: .navigationBar)
         .modifier(TransparentNavigationBar())
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                if let detail, !isResolvingPlay {
+                if let detail {
                     Button {
                         Haptics.tap()
                         watchlist.toggle(detail: detail)
@@ -230,7 +209,7 @@ struct AnimeDetailView: View {
 
         // 与剧集页主按钮同规格：胶囊、48pt 高、Label + 播放图标
         return Button(action: {
-            Task { await startPlay(episode: ep, detail: detail) }
+            startPlay(episode: ep, detail: detail)
         }) {
             Label(title, systemImage: AppIcon.play.name)
                 .font(.system(size: 15, weight: .bold))
@@ -305,7 +284,7 @@ struct AnimeDetailView: View {
                     progress: { episodeProgress($0, detail: detail) }
                 ) { ep in
                     activeEpisode = ep
-                    Task { await startPlay(episode: ep, detail: detail) }
+                    startPlay(episode: ep, detail: detail)
                 }
 
                 if let ep = activeEpisode, let line = episodeDetailLine(ep, detail: detail) {
@@ -435,44 +414,20 @@ struct AnimeDetailView: View {
         }
     }
 
-    private func startPlay(episode: String, detail: AnimeVideoDetail) async {
-        guard let currentRoute = detail.parts.indices.contains(selectedRouteIndex) ? detail.parts[selectedRouteIndex] : detail.parts.first else {
-            return
-        }
+    /// 打开播放器：把整条线路的集数都交给它，解析放到播放器里现做。
+    ///
+    /// 之前这里先解析出这一集的地址、只把这一集塞进播放列表，播放器的选集就只有「共 1 集」，
+    /// 切集、上一集/下一集、自动连播全都无从谈起。现在传的是集数引用（见 AnimeEpisodeRef），
+    /// 播放器要播哪集就现解析哪集——和 115 网盘按 pickCode 取地址是同一个模式。
+    /// 顺带也不再用详情页上的解析遮罩：播放器窗口立刻打开，转圈在播放器自己的画面里。
+    private func startPlay(episode: String, detail: AnimeVideoDetail) {
+        let episodes = detail.episodeRefs(routeIndex: selectedRouteIndex)
+        guard let ref = episodes.first(where: { $0.part == episode }) else { return }
 
-        // 持久化当前选集与线路
-        UserDefaults.standard.set(episode, forKey: "anime.last_episode.\(animeId)")
-        UserDefaults.standard.set(selectedRouteIndex, forKey: "anime.last_route.\(animeId)")
+        ref.rememberAsLastWatched()
         self.activeEpisode = episode
         self.hasWatchedBefore = true
 
-        isResolvingPlay = true
-
-        do {
-            // 1. 获取播放凭据
-            let cred = try await AnimeClient.shared.fetchPlayCredential(id: detail.id, play: currentRoute.play, part: episode)
-
-            // 2. 自动化解析真实流地址
-            let resolved = try await AnimePlaybackResolver.shared.resolve(playCode: cred.url, title: "\(detail.name) \(episode)")
-
-            // 3. 构建 HPlayer 在线播放源（默认最高画质，并携带可选画质列表）
-            let source = PlaybackSource.online(
-                title: "\(detail.name) \(episode)",
-                url: resolved.url,
-                headers: resolved.headers,
-                qualities: resolved.qualities,
-                currentQuality: resolved.qualityTitle
-            )
-
-            // 4. 记录观看历史
-            RecentStore.shared.record(source)
-
-            // 5. 唤起 HPlayer 原生独立播放器窗口
-            self.playingQueue = PlaybackQueue(source: source, items: [source])
-        } catch {
-            self.errorMessage = "播放解析失败: \(error.localizedDescription)"
-        }
-
-        isResolvingPlay = false
+        self.playingQueue = PlaybackQueue(source: .anime(ref), items: episodes.map { PlaybackSource.anime($0) })
     }
 }

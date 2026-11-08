@@ -289,3 +289,47 @@ struct AnimeResolvedStream: Equatable {
     let qualityTitle: String
     let qualities: [PlaybackQualityItem]
 }
+
+// MARK: - 选集身份
+
+/// 一集动漫的稳定身份。
+///
+/// 解析出的流地址带时效签名，每次解析都不一样，不能拿它当身份：选集会认不出当前这一集，
+/// 播放记录也会每播一次多一条。所以播放列表里存的是这个引用，真地址在播放器里现取
+/// ——和 115 用 pickCode 当播放源是同一个套路。
+struct AnimeEpisodeRef: Identifiable, Hashable, Codable {
+    let animeId: Int
+    let seriesName: String
+    /// 线路代码，例如 newup-jp
+    let play: String
+    let routeIndex: Int
+    /// 集数原文，例如「第01集」
+    let part: String
+
+    var id: String { "anime|\(animeId)|\(play)|\(part)" }
+    var episodeTitle: String { "\(seriesName) \(part)" }
+
+    /// 记下最后看的一集和线路，回到详情页时选中它。播放器里切集也走这里，
+    /// 否则在播放器里连播了几集、退出后详情页还停在最初那一集。
+    func rememberAsLastWatched() {
+        let defaults = UserDefaults.standard
+        defaults.set(part, forKey: "anime.last_episode.\(animeId)")
+        defaults.set(routeIndex, forKey: "anime.last_route.\(animeId)")
+    }
+}
+
+extension AnimeVideoDetail {
+    /// 一条线路下的全部集数，按接口给的正序。播放器的选集、上一集/下一集、自动连播都用这一份，
+    /// 不受详情页「正序/倒序」显示开关影响——播放器里的格子是按序号标的。
+    /// 集数去重：接口偶尔返回重名的一集，重名会让选集列表的 id 撞车、整列表渲染错乱。
+    func episodeRefs(routeIndex: Int) -> [AnimeEpisodeRef] {
+        let index = parts.indices.contains(routeIndex) ? routeIndex : 0
+        guard parts.indices.contains(index) else { return [] }
+        let route = parts[index]
+        var seen: Set<String> = []
+        return route.part.compactMap { part in
+            guard !part.isEmpty, seen.insert(part).inserted else { return nil }
+            return AnimeEpisodeRef(animeId: id, seriesName: name, play: route.play, routeIndex: index, part: part)
+        }
+    }
+}
