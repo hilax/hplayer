@@ -10,6 +10,8 @@ struct AnimeDetailView: View {
     @State private var detail: AnimeVideoDetail?
     @State private var selectedRouteIndex = 0
     @State private var activeEpisode: String?
+    @State private var lastPosition: Double? = nil
+    @State private var hasWatchedBefore: Bool = false
     @State private var isDescending = false
     @State private var isOverviewExpanded = false
     @State private var isLoading = true
@@ -106,6 +108,16 @@ struct AnimeDetailView: View {
         .task {
             await loadDetail()
         }
+        .onAppear {
+            if let detail {
+                restoreLastWatched(detail: detail)
+            }
+        }
+        .onChange(of: playingQueue == nil) { isClosed in
+            if isClosed, let detail {
+                restoreLastWatched(detail: detail)
+            }
+        }
         .playerWindow(item: $playingQueue) { queue in
             PlayerView(source: queue.source, playlist: queue.items)
                 .environmentObject(appState)
@@ -198,6 +210,7 @@ struct AnimeDetailView: View {
     private func primaryPlayButton(_ detail: AnimeVideoDetail) -> some View {
         let currentRoute = detail.parts.indices.contains(selectedRouteIndex) ? detail.parts[selectedRouteIndex] : detail.parts.first
         let ep = activeEpisode ?? currentRoute?.part.first ?? "第01集"
+        let isContinuing = hasWatchedBefore || (lastPosition != nil && lastPosition! > 5)
 
         return Button(action: {
             Task { await startPlay(episode: ep, detail: detail) }
@@ -205,9 +218,19 @@ struct AnimeDetailView: View {
             HStack(spacing: 8) {
                 Image(icon: .play)
                     .iconStyle(size: 14, color: Theme.onPrimary)
-                Text("立即播放：\(ep)")
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(Theme.onPrimary)
+                if isContinuing, let pos = lastPosition, pos > 5 {
+                    Text("续播：\(ep)（看到 \(formatTime(pos))）")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(Theme.onPrimary)
+                } else if isContinuing {
+                    Text("续播：\(ep)")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(Theme.onPrimary)
+                } else {
+                    Text("立即播放：\(ep)")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(Theme.onPrimary)
+                }
             }
             .frame(maxWidth: .infinity)
             .frame(height: 44)
@@ -215,6 +238,13 @@ struct AnimeDetailView: View {
             .shadow(color: Theme.gold.opacity(0.3), radius: 6, x: 0, y: 3)
         }
         .buttonStyle(.pressable)
+    }
+
+    private func formatTime(_ seconds: Double) -> String {
+        let val = Int(max(0, seconds))
+        let m = val / 60
+        let s = val % 60
+        return String(format: "%02d:%02d", m, s)
     }
 
     // MARK: - 线路切换与选集矩阵
@@ -229,6 +259,8 @@ struct AnimeDetailView: View {
                         Button(action: {
                             Haptics.select()
                             selectedRouteIndex = index
+                            UserDefaults.standard.set(index, forKey: "anime.last_route.\(animeId)")
+                            restoreLastWatched(detail: detail)
                         }) {
                             Text(route.playZh)
                                 .font(.system(size: 12, weight: isSelected ? .bold : .medium))
@@ -246,22 +278,17 @@ struct AnimeDetailView: View {
 
                 Spacer()
 
-                Button(action: {
-                    Haptics.tap()
-                    isDescending.toggle()
-                }) {
-                    HStack(spacing: 3) {
-                        Image(icon: isDescending ? .sortDescending : .sortAscending)
-                            .iconStyle(size: 12, color: Theme.textSecondary)
-                        Text(isDescending ? "倒序" : "正序")
-                            .font(.system(size: 11))
-                            .foregroundStyle(Theme.textSecondary)
+                // 正序 / 倒序 双胶囊切换器：明确显示两种状态，点哪个就切到哪个
+                HStack(spacing: 0) {
+                    orderPill(title: "正序", icon: .sortAscending, selected: !isDescending) {
+                        withAnimation(Motion.snappy) { isDescending = false }
                     }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    orderPill(title: "倒序", icon: .sortDescending, selected: isDescending) {
+                        withAnimation(Motion.snappy) { isDescending = true }
+                    }
                 }
-                .buttonStyle(.pressable)
+                .padding(2)
+                .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
 
             // 选集列表矩阵
@@ -276,6 +303,28 @@ struct AnimeDetailView: View {
                 }
             }
         }
+    }
+
+    private func orderPill(title: String, icon: AppIcon, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: {
+            Haptics.select()
+            action()
+        }) {
+            HStack(spacing: 3) {
+                Image(icon: icon)
+                    .iconStyle(size: 11, color: selected ? Theme.onPrimary : Theme.textSecondary)
+                Text(title)
+                    .font(.system(size: 11, weight: selected ? .bold : .medium))
+                    .foregroundStyle(selected ? Theme.onPrimary : Theme.textSecondary)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+                selected ? Theme.primaryAction : Color.clear,
+                in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+            )
+        }
+        .buttonStyle(.pressable)
     }
 
     // MARK: - 剧情简介手风琴
@@ -321,17 +370,63 @@ struct AnimeDetailView: View {
         do {
             let res = try await AnimeClient.shared.fetchDetail(id: animeId)
             self.detail = res
-            self.activeEpisode = res.parts.first?.part.first
+            restoreLastWatched(detail: res)
         } catch {
             self.errorMessage = error.localizedDescription
         }
         isLoading = false
     }
 
+    private func restoreLastWatched(detail: AnimeVideoDetail) {
+        let savedRoute = UserDefaults.standard.integer(forKey: "anime.last_route.\(animeId)")
+        if detail.parts.indices.contains(savedRoute) {
+            self.selectedRouteIndex = savedRoute
+        }
+
+        let currentRoute = detail.parts.indices.contains(selectedRouteIndex) ? detail.parts[selectedRouteIndex] : detail.parts.first
+
+        // 1. 优先读取持久化的上次播放集数
+        if let savedEpisode = UserDefaults.standard.string(forKey: "anime.last_episode.\(animeId)"),
+           let currentRoute, currentRoute.part.contains(savedEpisode) {
+            self.activeEpisode = savedEpisode
+            self.hasWatchedBefore = true
+            if let recent = RecentStore.shared.items.first(where: { $0.title.contains(detail.name) && $0.title.contains(savedEpisode) }) {
+                self.lastPosition = recent.position
+            }
+            return
+        }
+
+        // 2. 从 RecentStore 全局播放历史寻找匹配
+        if let currentRoute {
+            for recent in RecentStore.shared.items {
+                guard recent.title.contains(detail.name) else { continue }
+                if let matchedEp = currentRoute.part.first(where: { recent.title.contains($0) }) {
+                    self.activeEpisode = matchedEp
+                    self.lastPosition = recent.position
+                    self.hasWatchedBefore = true
+                    return
+                }
+            }
+        }
+
+        // 3. 首次观看：默认第一集
+        if self.activeEpisode == nil {
+            self.activeEpisode = currentRoute?.part.first
+            self.lastPosition = nil
+            self.hasWatchedBefore = false
+        }
+    }
+
     private func startPlay(episode: String, detail: AnimeVideoDetail) async {
         guard let currentRoute = detail.parts.indices.contains(selectedRouteIndex) ? detail.parts[selectedRouteIndex] : detail.parts.first else {
             return
         }
+
+        // 持久化当前选集与线路
+        UserDefaults.standard.set(episode, forKey: "anime.last_episode.\(animeId)")
+        UserDefaults.standard.set(selectedRouteIndex, forKey: "anime.last_route.\(animeId)")
+        self.activeEpisode = episode
+        self.hasWatchedBefore = true
 
         isResolvingPlay = true
 

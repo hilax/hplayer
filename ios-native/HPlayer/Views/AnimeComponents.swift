@@ -203,7 +203,11 @@ struct AnimeEpisodeMatrix: View {
     var onSelect: (String) -> Void
 
     private var orderedEpisodes: [String] {
-        isDescending ? episodes.reversed() : episodes
+        if isDescending {
+            return Array(episodes.reversed())
+        } else {
+            return episodes
+        }
     }
 
     var body: some View {
@@ -231,6 +235,7 @@ struct AnimeEpisodeMatrix: View {
                 .buttonStyle(.pressable)
             }
         }
+        .id("anime-episode-grid-\(isDescending ? "desc" : "asc")-\(episodes.count)")
     }
 
     private func formatEpisodeTitle(_ raw: String) -> String {
@@ -238,7 +243,10 @@ struct AnimeEpisodeMatrix: View {
         var clean = raw.replacingOccurrences(of: "第", with: "")
                        .replacingOccurrences(of: "集", with: "")
                        .replacingOccurrences(of: "话", with: "")
-        if clean.count == 1 { clean = "0" + clean }
+                       .trimmingCharacters(in: .whitespaces)
+        if clean.count == 1 && clean.allSatisfy({ $0.isNumber }) {
+            clean = "0" + clean
+        }
         return clean.isEmpty ? raw : clean
     }
 }
