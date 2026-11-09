@@ -244,8 +244,15 @@ function enablePages() {
         return;
       }
     } catch {}
-    ghApi(`repos/${REPO}/pages`, 'PUT', { source: body.source, build_type: body.build_type });
-    console.log('  ✅ GitHub Pages 源已更新为 main /docs');
+    // Pages 已存在但源不对：部分账号的 PUT 不接受 source，失败时给出手动指引而不是中断
+    const upd = ghTry(['api', '--method', 'PUT', `repos/${REPO}/pages`,
+      '-H', 'Content-Type: application/json', '-f', 'build_type=legacy',
+      '-f', `source[branch]=${BRANCH}`, '-f', 'source[path]=/docs']);
+    if (upd.status === 0) console.log('  ✅ GitHub Pages 源已更新为 main /docs');
+    else {
+      console.log('  ⚠️  自动改 Pages 源失败，请到 Settings → Pages 手动设为 Deploy from a branch → main /docs');
+      console.log(`     ${String(upd.stderr || '').trim().split('\n')[0]}`);
+    }
   } else {
     try {
       ghApi(`repos/${REPO}/pages`, 'POST', body);
@@ -282,8 +289,16 @@ function setSecrets(s) {
     OTA_BUNDLE_ID: s.profile.bundleId,
   };
   for (const [k, v] of Object.entries(secrets)) {
-    gh(['secret', 'set', k, '-R', REPO], { input: v });
-    console.log(`  ✓ ${k}`);
+    // GitHub Actions 单个 Secret 上限 48 KB；超限会给 HTTP 400 malformed request
+    if (Buffer.byteLength(v, 'utf8') > 48 * 1024) {
+      throw new Error(`${k} 有 ${(Buffer.byteLength(v, 'utf8') / 1024).toFixed(1)} KB，超过 GitHub Secret 的 48 KB 上限。请改用本机签名模式：node scripts/ota/ota.mjs publish`);
+    }
+    // gh secret set 的 -b 不适合大段文本，统一走 stdin
+    const r = run(GH, ['secret', 'set', k, '-R', REPO], { input: v });
+    if (r.status !== 0) {
+      throw new Error(`写入 ${k} 失败：${String(r.stderr || r.stdout || '').trim().split('\n')[0]}`);
+    }
+    console.log(`  ✓ ${k} (${(Buffer.byteLength(v, 'utf8') / 1024).toFixed(1)} KB)`);
   }
 }
 function latestBuildRun() {
