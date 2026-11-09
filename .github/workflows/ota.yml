@@ -1,0 +1,121 @@
+name: OTA sign and publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: 'Build unsigned iOS IPA run id (blank = latest successful build)'
+        required: false
+        default: ''
+  workflow_run:
+    workflows: ["Build unsigned iOS IPA"]
+    types: [completed]
+    branches: [main, 'feat/*']
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: ota-sign
+  cancel-in-progress: false
+
+jobs:
+  sign:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Gate on signing secrets
+        id: gate
+        env:
+          CERT_P12_B64: ${{ secrets.OTA_CERT_P12_B64 }}
+          CERT_PROV_B64: ${{ secrets.OTA_CERT_PROV_B64 }}
+        run: |
+          if [ -z "$CERT_P12_B64" ] || [ -z "$CERT_PROV_B64" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::OTA signing secrets are not configured. Run: node scripts/ota/ota.mjs setup"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install zsign (static, no build)
+        if: steps.gate.outputs.ready == 'true'
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/zsign.tgz \
+            https://github.com/zhlynn/zsign/releases/download/v1.1.3/zsign-linux-musl-static.tar.gz
+          echo "323533d2deb04c84149820f6123fa037adb3c2849d3c213833f9a212da219cad  /tmp/zsign.tgz" | sha256sum -c -
+          tar -xzf /tmp/zsign.tgz -C /tmp
+          sudo install -m 0755 /tmp/zsign-musl /usr/local/bin/zsign
+          zsign -h | head -1
+
+      - name: Resolve unsigned IPA
+        if: steps.gate.outputs.ready == 'true'
+        id: ipa
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_RUN_ID: ${{ inputs.run_id }}
+          TRIGGER_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          rid="${INPUT_RUN_ID:-}"
+          if [ -z "$rid" ]; then rid="${TRIGGER_RUN_ID:-}"; fi
+          if [ -z "$rid" ]; then
+            rid="$(gh run list -R "$GITHUB_REPOSITORY" -w 'Build unsigned iOS IPA' -s success -L 1 --json databaseId -q '.[0].databaseId')"
+          fi
+          echo "Using build run: $rid"
+          mkdir -p input
+          gh run download "$rid" -R "$GITHUB_REPOSITORY" -n HPlayer-unsigned-ipa -D input
+          file="$(find input -maxdepth 2 -type f -name '*.ipa' | head -1)"
+          test -n "$file"
+          echo "path=$file" >> "$GITHUB_OUTPUT"
+
+      - name: Decode signing assets
+        if: steps.gate.outputs.ready == 'true'
+        env:
+          CERT_P12_B64: ${{ secrets.OTA_CERT_P12_B64 }}
+          CERT_PROV_B64: ${{ secrets.OTA_CERT_PROV_B64 }}
+        run: |
+          set -euo pipefail
+          mkdir -p signing
+          printf '%s' "$CERT_P12_B64" | base64 -d > signing/cert.p12
+          printf '%s' "$CERT_PROV_B64" | base64 -d > signing/cert.mobileprovision
+          chmod 600 signing/*
+          ls -l signing
+
+      - name: Check certificate status (OCSP)
+        if: steps.gate.outputs.ready == 'true'
+        env:
+          CERT_PASSWORD: ${{ secrets.OTA_CERT_PASSWORD }}
+        run: zsign -C signing/cert.p12 -p "$CERT_PASSWORD" || true
+
+      - name: Sign IPA
+        if: steps.gate.outputs.ready == 'true'
+        env:
+          CERT_PASSWORD: ${{ secrets.OTA_CERT_PASSWORD }}
+          BUNDLE_ID: ${{ secrets.OTA_BUNDLE_ID }}
+          IPA_PATH: ${{ steps.ipa.outputs.path }}
+        run: |
+          set -euo pipefail
+          bid="${BUNDLE_ID:-app.hplayer.native}"
+          zsign -f -k signing/cert.p12 -p "$CERT_PASSWORD" \
+            -m signing/cert.mobileprovision -b "$bid" -z 9 \
+            -o HPlayer-signed.ipa "$IPA_PATH"
+          ls -lh HPlayer-signed.ipa
+          unzip -l HPlayer-signed.ipa | grep -E 'embedded.mobileprovision|Info.plist' || true
+
+      - name: Publish to fixed Release tag
+        if: steps.gate.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if ! gh release view ota -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create ota -R "$GITHUB_REPOSITORY" \
+              --title "HPlayer OTA" \
+              --notes "Fixed tag for OTA installs. The IPA asset is replaced in place with --clobber."
+          fi
+          gh release upload ota HPlayer-signed.ipa -R "$GITHUB_REPOSITORY" --clobber
+          echo "IPA: https://github.com/$GITHUB_REPOSITORY/releases/download/ota/HPlayer-signed.ipa"

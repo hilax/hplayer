@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>安装 HPlayer</title>
+<style>
+  :root{--bg:#0b0e14;--card:#151a24;--line:#252c3a;--fg:#eef2f8;--dim:#8b97ab;--acc:#38d996;--warn:#ffb454}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",Arial,sans-serif;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:560px;margin:0 auto;padding:28px 18px 56px}
+  .head{display:flex;align-items:center;gap:14px;margin-bottom:22px}
+  .head img{width:64px;height:64px;border-radius:15px;box-shadow:0 6px 24px #0008}
+  h1{font-size:22px;margin:0;letter-spacing:.3px}
+  .sub{color:var(--dim);margin:2px 0 0;font-size:13px}
+  .btn{display:block;width:100%;padding:16px 18px;margin:18px 0 10px;border-radius:14px;background:var(--acc);color:#05271a;text-align:center;font-size:17px;font-weight:700;text-decoration:none;letter-spacing:.4px}
+  .btn:active{transform:scale(.985)}
+  .btn.sec{background:#1d2532;color:var(--fg);font-size:14px;font-weight:600;padding:12px;margin-top:8px;border:1px solid var(--line)}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 16px;margin:14px 0}
+  .card h2{font-size:14px;margin:0 0 10px;color:var(--fg);letter-spacing:.5px}
+  .row{display:flex;justify-content:space-between;gap:12px;padding:5px 0;font-size:13px;border-bottom:1px dashed #ffffff0d}
+  .row:last-child{border-bottom:0}
+  .row span:first-child{color:var(--dim)}
+  .row span:last-child{text-align:right;word-break:break-all}
+  ol{margin:8px 0 0;padding-left:20px;color:var(--dim);font-size:13px}
+  ol li{margin:7px 0}
+  ol b{color:var(--fg);font-weight:600}
+  .qr{display:block;width:190px;height:190px;margin:16px auto 6px;background:#fff;border-radius:12px;padding:8px}
+  .warn{background:#3a2a12;border:1px solid #6b4c1c;color:var(--warn);border-radius:12px;padding:12px 14px;font-size:13px;margin:14px 0}
+  .ok{color:var(--acc)}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;background:#0006;padding:2px 5px;border-radius:5px;word-break:break-all}
+  .foot{color:var(--dim);font-size:12px;text-align:center;margin-top:26px}
+  .foot a{color:var(--dim)}
+  .hidden{display:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="head">
+    <img src="icon.png" alt="HPlayer">
+    <div>
+      <h1>HPlayer</h1>
+      <p class="sub">iOS 客户端 · 一键安装</p>
+    </div>
+  </div>
+
+  <a class="btn" href="itms-services://?action=download-manifest&amp;url=https%3A%2F%2Fhilax.github.io%2Fhplayer%2Fmanifest.plist">点此安装到 iPhone / iPad</a>
+  <a class="btn sec" id="dl" href="https://github.com/hilax/hplayer/releases/download/ota/HPlayer-signed.ipa">备用：直接下载 IPA 文件</a>
+
+  <div class="card">
+    <h2>当前安装包</h2>
+    <div class="row"><span>状态</span><span id="st">正在查询…</span></div>
+    <div class="row"><span>版本</span><span id="ver">1.4 (23)</span></div>
+    <div class="row"><span>大小</span><span id="size">—</span></div>
+    <div class="row"><span>更新于</span><span id="time">—</span></div>
+    <div class="row"><span>最低系统</span><span>iOS 16.1</span></div>
+  </div>
+
+  <div class="card">
+    <h2>安装步骤</h2>
+    <ol>
+      <li><b>务必用 Safari 打开本页</b>。微信 / QQ / 钉钉内置浏览器不支持安装，点右上角「···」→「在 Safari 中打开」。</li>
+      <li>点上面的绿色按钮，弹窗出现后点 <b>「安装」</b>。</li>
+      <li>回到主屏幕，等图标进度条走完再打开。</li>
+      <li>第一次打开如提示 <b>「未受信任的企业级开发者」</b>：设置 → 通用 → VPN 与设备管理 → 企业级 App 下选中开发者 → 点「信任」。iOS 18 及更新版本显示 <b>「允许并重启」(Allow &amp; Restart)</b>，按提示重启后再打开。</li>
+      <li>若提示 <b>「需要开发者模式」</b>：设置 → 隐私与安全性 → 开发者模式 → 打开并重启。</li>
+    </ol>
+  </div>
+
+  <div class="card">
+    <h2>把链接发给别人</h2>
+    <img class="qr" src="qr.png" alt="安装页二维码">
+    <p style="color:var(--dim);font-size:13px;text-align:center;margin:4px 0 0">用手机相机扫这个二维码，或直接把本页网址发过去</p>
+    <div class="row" style="margin-top:10px"><span>安装页</span><span><code>https://hilax.github.io/hplayer/</code></span></div>
+  </div>
+
+  <div class="warn hidden" id="udidWarn"></div>
+
+  <div class="card">
+    <h2>装不上？</h2>
+    <ol>
+      <li><b>「无法验证 App / Unable to Verify App」</b>：证书已被吊销或过期。联系管理员重新签名上传，装过的人需要删掉旧 App 重装。</li>
+      <li><b>「此 App 无法安装，因为其完整性无法验证」</b>：这台设备的 UDID 不在描述文件里。把 UDID 发给管理员，加入后重签。</li>
+      <li><b>点按钮没反应</b>：确认是 Safari、确认网络能访问 <code>github.io</code> 与 <code>github.com</code>；国内网络可开关飞行模式重试。</li>
+      <li><b>装完立刻闪退</b>：证书被吊销或 profile 与 bundle id 不匹配，让管理员重新签名。</li>
+      <li>也可以下载 IPA 后，用全能签 / 轻松签 / Sideloadly 自行签名安装。</li>
+    </ol>
+  </div>
+
+  <p class="foot">本页面托管于 GitHub Pages · 安装包托管于 GitHub Releases<br>仅向获得授权的用户分发</p>
+</div>
+
+<script>
+(function(){
+  var st=document.getElementById('st'), size=document.getElementById('size'), time=document.getElementById('time'),
+      ver=document.getElementById('ver'), dl=document.getElementById('dl'), warn=document.getElementById('udidWarn');
+  fetch('meta.json?_='+Date.now()).then(function(r){return r.json()}).then(function(m){
+    if(m.version) ver.textContent=m.version+(m.build?' ('+m.build+')':'');
+    if(m.ipaUrl) dl.href=m.ipaUrl;
+    if(m.udidBound){
+      warn.classList.remove('hidden');
+      warn.textContent='注意：当前描述文件是 UDID 绑定型，仅 '+m.udidCount+' 台已登记设备可以安装。其他手机会提示「完整性无法验证」，需要把 UDID 加进描述文件后重新签名。';
+    }
+  }).catch(function(){});
+  fetch('https://api.github.com/repos/hilax/hplayer/releases/tags/ota',{headers:{'Accept':'application/vnd.github+json'}})
+    .then(function(r){return r.ok?r.json():Promise.reject(r.status)})
+    .then(function(d){
+      var a=(d.assets||[]).filter(function(x){return x.name==='HPlayer-signed.ipa'})[0];
+      if(!a){st.textContent='尚未上传签名包';st.style.color='var(--warn)';return}
+      st.innerHTML='<span class="ok">可安装</span>';
+      size.textContent=(a.size/1048576).toFixed(1)+' MB';
+      time.textContent=new Date(a.updated_at).toLocaleString('zh-CN',{hour12:false});
+      dl.href=a.browser_download_url;
+    })
+    .catch(function(){st.textContent='暂时查不到安装包状态，可直接点上方按钮';st.style.color='var(--dim)'});
+})();
+</script>
+</body>
+</html>

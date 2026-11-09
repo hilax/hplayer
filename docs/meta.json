@@ -1,0 +1,15 @@
+{
+  "app": "HPlayer",
+  "bundleIdentifier": "app.hplayer.native",
+  "version": "1.4",
+  "build": "23",
+  "minOS": "16.1",
+  "profileType": "enterprise",
+  "udidBound": false,
+  "udidCount": 0,
+  "devModeRequired": false,
+  "manifestUrl": "https://hilax.github.io/hplayer/manifest.plist",
+  "ipaUrl": "https://github.com/hilax/hplayer/releases/download/ota/HPlayer-signed.ipa",
+  "installUrl": "https://hilax.github.io/hplayer/",
+  "releaseApi": "https://api.github.com/repos/hilax/hplayer/releases/tags/ota"
+}
