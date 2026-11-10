@@ -1,5 +1,5 @@
 {
-  "expected_screens": 47,
+  "expected_screens": 50,
   "screens": [
     {
       "id": "home",
@@ -376,6 +376,30 @@
       "native_view": "ios-native/HPlayer/Views/PlaybackControlsView.swift",
       "route": "播放器 → 画面比例",
       "screenshot": "prototype41/aspect-dark.png"
+    },
+    {
+      "id": "magnet-tab",
+      "title": "磁力 · 一级 Tab",
+      "state": "implemented",
+      "native_view": "ios-native/HPlayer/Views/MagnetTab.swift",
+      "route": "磁力",
+      "screenshot": "prototype41/magnet-tab-dark.png"
+    },
+    {
+      "id": "transfers",
+      "title": "传输中心",
+      "state": "implemented",
+      "native_view": "ios-native/HPlayer/Views/TransferCenterView.swift",
+      "route": "网盘 › 传输中心",
+      "screenshot": "prototype41/transfers-dark.png"
+    },
+    {
+      "id": "watchlist",
+      "title": "我的追番",
+      "state": "implemented",
+      "native_view": "ios-native/HPlayer/Views/AnimeWatchlistView.swift",
+      "route": "我的 › 我的追番",
+      "screenshot": "prototype41/watchlist-dark.png"
     }
   ],
   "design_url": "https://www.figma.com/design/GokGdpKDY5nhYi9YnPRpx9?node-id=4-34"

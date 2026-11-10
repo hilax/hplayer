@@ -88,6 +88,7 @@ struct InterfaceCatalogHost: View {
                 OfflineTasksView(initialTasks: fixture.offlineTasks, initialFilter: .running,
                                  initialFolderLabels: fixture.offlineFolders)
             }
+        case "watchlist": NavigationStack { AnimeWatchlistView() }
         case "transfers":
             NavigationStack {
                 TransferCenterView(onOpenPage: { _ in }, previewTasks: fixture.offlineTasks)

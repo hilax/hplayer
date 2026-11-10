@@ -55,6 +55,10 @@ final class ScreenCatalogUITests: XCTestCase {
     func test51MetadataLight() { capture("metadata", expected: "资料来源", style: "light") }
     func test52SettingsLight() { capture("settings", expected: "我的", style: "light") }
     func test53Catalog() { capture("catalog", expected: "片库") }
+    // 2.0 新增页面
+    func test54MagnetTab() { capture("magnet-tab", expected: "磁力") }
+    func test55Transfers() { capture("transfers", expected: "传输中心") }
+    func test56Watchlist() { capture("watchlist", expected: "我的追番") }
 
     private func capture(_ screen: String, expected: String, style: String = "dark") {
         continueAfterFailure = false
