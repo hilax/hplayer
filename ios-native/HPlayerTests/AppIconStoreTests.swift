@@ -20,8 +20,13 @@ final class AppIconStoreTests: XCTestCase {
     }
 
     /// 回调经 Task @MainActor  hop 回主线程，断言前让主 runloop 转一圈。
-    private func settle(_ seconds: TimeInterval = 0.15) {
-        RunLoop.main.run(until: Date().addingTimeInterval(seconds))
+    /// CI 模拟器负载高时 0.15 秒不一定够：转主 runloop，直到这次切换处理完（最多 3 秒）。
+    private func settle(_ store: AppIconStore, timeout: TimeInterval = 3) {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        } while store.isChanging && Date() < deadline
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
     }
 
     func testSelectionMovesImmediatelyWithoutWaitingForSystem() {
@@ -37,7 +42,7 @@ final class AppIconStoreTests: XCTestCase {
         XCTAssertTrue(store.isChanging)
         XCTAssertEqual(requested, ["AppIconOcean"])
         completion?(nil)
-        settle()
+        settle(store)
         XCTAssertFalse(store.isChanging)
         XCTAssertEqual(store.notice, .success(.ocean, previous: .prism))
     }
@@ -48,7 +53,7 @@ final class AppIconStoreTests: XCTestCase {
         let store = makeStore(apply: { _, done in completion = done }, saved: { saved.append($0) })
         store.select(.mint)
         completion?(NSError(domain: "test", code: 1, userInfo: [NSLocalizedDescriptionKey: "拒绝"]))
-        settle()
+        settle(store)
         XCTAssertEqual(store.selected, .prism, "失败必须回滚勾选，不能留下桌面与页内不一致")
         XCTAssertEqual(saved.last ?? nil, nil)
         XCTAssertEqual(store.notice, .failure("拒绝"))
@@ -59,7 +64,7 @@ final class AppIconStoreTests: XCTestCase {
         let store = makeStore(apply: { _, done in completion = done })
         store.select(.iris)
         completion?(NSError(domain: NSPOSIXErrorDomain, code: 35))
-        settle()
+        settle(store)
         XCTAssertEqual(store.selected, .iris)
         XCTAssertEqual(store.notice, .success(.iris, previous: .prism))
     }
@@ -71,7 +76,7 @@ final class AppIconStoreTests: XCTestCase {
         let store = makeStore(system: { system }, clock: clock, apply: { _, done in completion = done })
         store.select(.coral)
         completion?(nil)
-        settle()
+        settle(store)
         // 系统确认弹窗关闭触发回前台校准，但 SpringBoard 仍返回旧值。
         store.refreshFromSystem()
         XCTAssertEqual(store.selected, .coral, "settle 期内的旧系统值不得覆盖刚选中的样式")
@@ -91,10 +96,10 @@ final class AppIconStoreTests: XCTestCase {
             done(nil)
         })
         store.select(.ocean)
-        settle()
+        settle(store)
         XCTAssertEqual(store.notice, .success(.ocean, previous: .prism))
         store.undo()
-        settle()
+        settle(store)
         XCTAssertEqual(store.selected, .prism)
         XCTAssertEqual(requested, ["AppIconOcean", nil])
     }
