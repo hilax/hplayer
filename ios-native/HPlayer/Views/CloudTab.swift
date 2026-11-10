@@ -141,7 +141,8 @@ struct CloudTab: View {
     private var toolRows: some View {
         DesignGroup {
             Button {
-                openPage(.transfers)
+                // 本机下载和边下边播不需要 115 登录，传输中心直接进；里面的云端离线再按需登录
+                path.append(.page(.transfers))
             } label: {
                 LibraryActionRow(symbol: AppIcon.cloudDownload.name, title: "传输中心",
                                  subtitle: "云端离线、下载到本机、磁力边下边播",
