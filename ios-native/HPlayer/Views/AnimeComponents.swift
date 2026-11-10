@@ -114,7 +114,7 @@ struct AnimeHeroBanner: View {
                     if !banner.displayRemarks.isEmpty {
                         Text(banner.displayRemarks)
                             .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(Theme.goldLight)
+                            .foregroundStyle(Color.white.opacity(0.85))
                             .lineLimit(1)
                     }
                 }

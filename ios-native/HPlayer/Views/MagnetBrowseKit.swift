@@ -147,7 +147,8 @@ struct MagnetCover: View {
     }
 }
 
-/// 浮在封面上的番号小标签。
+/// 浮在封面上的番号小标签。底色固定是深色，文字就必须固定是白色：
+/// 之前用的 `Theme.goldLight` 在浅色模式下是深灰，深灰字落在深色底上几乎看不见。
 struct MagnetCodeChip: View {
     let code: String
 
@@ -156,10 +157,10 @@ struct MagnetCodeChip: View {
             .font(.system(size: 10, weight: .bold))
             .lineLimit(1)
             .minimumScaleFactor(0.8)
-            .foregroundStyle(Theme.goldLight)
+            .foregroundStyle(Color.white)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
-            .background(Theme.brandNight.opacity(0.72), in: Capsule())
+            .background(Theme.brandNight.opacity(0.78), in: Capsule())
     }
 }
 
