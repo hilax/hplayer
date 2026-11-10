@@ -458,7 +458,10 @@ final class PlaybackUITests: XCTestCase {
             XCTAssertTrue(wait { !self.isLandscape(app) })
         }
         let before = metric("time", surface: surface)
-        surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4)).press(forDuration: 4)
+        // 竖屏小窗只有 220 高，居中的上一集/播放/下一集占了正中间：按在 40% 的高度会按到播放钮，
+        // 变成暂停而不是长按画面。竖屏改按上半部分没有按钮的空白处
+        let holdY: CGFloat = portrait ? 0.25 : 0.4
+        surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: holdY)).press(forDuration: 4)
         XCTAssertTrue((surface.value as? String)?.contains("长按 2×") == true,
                       "4K long press starts at the safe 2× rate; status=\(surface.value as? String ?? "")")
         XCTAssertEqual(metric("rate", surface: surface), 1.5, accuracy: 0.01, "Release restores the selected rate")
