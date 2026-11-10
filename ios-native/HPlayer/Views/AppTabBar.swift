@@ -52,7 +52,7 @@ extension View {
 
 /// 首页顶部的频道：推荐（混合精选与货架）、片库（115 + 本地，四行筛选海报墙）、动漫（在线番剧）。
 enum HomeChannel: String, Hashable, CaseIterable, Identifiable {
-    case recommend, library, anime
+    case recommend, library, anime, drama
 
     var id: String { rawValue }
 
@@ -61,6 +61,7 @@ enum HomeChannel: String, Hashable, CaseIterable, Identifiable {
         case .recommend: return "推荐"
         case .library: return "片库"
         case .anime: return "动漫"
+        case .drama: return "短剧"
         }
     }
 }

@@ -15,6 +15,8 @@ enum PlaybackSource: Identifiable, Hashable {
     case p115(title: String, pickCode: String)
     /// 在线动漫的一集。地址带时效签名，打开时才现解析，所以播放列表里存的是集数引用而不是 URL。
     case anime(AnimeEpisodeRef)
+    /// 在线短剧的一集，同样是打开时才现取地址。
+    case drama(DramaEpisodeRef)
 
     var id: String {
         switch self {
@@ -26,6 +28,8 @@ enum PlaybackSource: Identifiable, Hashable {
             return "p115|\(pickCode)"
         case .anime(let ref):
             return ref.id
+        case .drama(let ref):
+            return ref.id
         }
     }
 
@@ -36,6 +40,8 @@ enum PlaybackSource: Identifiable, Hashable {
         case .p115(let title, _):
             return title
         case .anime(let ref):
+            return ref.episodeTitle
+        case .drama(let ref):
             return ref.episodeTitle
         }
     }
@@ -74,6 +80,10 @@ struct RecentItem: Codable, Identifiable, Hashable {
         return AnimeEpisodeRef(animeId: animeId, seriesName: name, play: play,
                                routeIndex: animeRoute ?? 0, part: part)
     }
+
+    /// 短剧记录存的是占位地址（hpdrama://video/编号/集数），打开时还原成集数引用再现取播放地址。
+    var dramaRef: DramaEpisodeRef? { DramaEpisodeRef(recordURL: url, title: title) }
+    var isDrama: Bool { url.hasPrefix(DramaEpisodeRef.scheme + "://") }
 
     /// 看过的比例，没有记录时为空
     var progress: Double? {

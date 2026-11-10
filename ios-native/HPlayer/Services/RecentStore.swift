@@ -46,6 +46,9 @@ final class RecentStore: ObservableObject {
             updated.animePlay = ref.play
             updated.animeRoute = ref.routeIndex
             updated.animePart = ref.part
+        case .drama(let ref):
+            updated.url = ref.recordURL
+            updated.pickCode = nil
         }
         // 认领来的旧记录 id 相同但 key 不同，两个条件都要清，否则会留下重复的一条。
         items.removeAll { Self.key(of: $0) == key || $0.id == updated.id }
@@ -109,6 +112,9 @@ final class RecentStore: ObservableObject {
         if let pickCode = item.pickCode, !pickCode.isEmpty {
             return .p115(title: item.title, pickCode: pickCode)
         }
+        if let ref = item.dramaRef {
+            return .drama(ref)
+        }
         guard let url = URL(string: item.url) else { return nil }
         if item.isAnime {
             return .online(title: item.title, url: url, headers: ["User-Agent": ""])
@@ -154,6 +160,9 @@ final class RecentStore: ObservableObject {
             return "p115|\(pickCode)"
         case .anime(let ref):
             return ref.id
+        case .drama(let ref):
+            // 和 key(of:) 对占位地址算出来的结果一致
+            return "url|\(ref.recordURL)"
         case .direct(_, let url), .online(_, let url, _, _, _):
             return url.isFileURL ? "file|\(url.lastPathComponent)" : "url|\(url.absoluteString)"
         }

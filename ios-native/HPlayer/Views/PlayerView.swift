@@ -96,6 +96,7 @@ struct PlayerView: View {
 
     private var loadingText: String {
         if case .anime = current { return "正在解析播放地址…" }
+        if case .drama = current { return "正在获取播放地址…" }
         return "正在准备播放…"
     }
 
@@ -118,7 +119,7 @@ struct PlayerView: View {
             } else {
                 return [PlaybackChoice(id: "online-default", title: "1080P 高清")]
             }
-        case .direct:
+        case .direct, .drama:
             return []
         }
     }
@@ -171,6 +172,12 @@ struct PlayerView: View {
                 selectedQuality = resolved.qualityTitle
                 guard await openAfterReveal(request, source: source, session: session) else { return }
                 playback.open(resolved.url, customHeaders: resolved.headers, startTime: resume)
+            case .drama(let ref):
+                ref.rememberAsLastWatched()
+                let url = try await DramaClient.shared.playURL(videoId: ref.videoId, episode: ref.episode)
+                guard isCurrentRequest(request, source: source, session: session), !Task.isCancelled else { return }
+                guard await openAfterReveal(request, source: source, session: session) else { return }
+                playback.open(url, customHeaders: DramaClient.shared.mediaHeaders, startTime: resume)
             case .p115(_, let pickCode):
                 do {
                     guard let client = appState.directClient() else { throw APIError.server("请先登录 115") }

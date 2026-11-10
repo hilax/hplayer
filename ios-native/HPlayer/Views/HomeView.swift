@@ -296,6 +296,8 @@ struct HomeView: View {
                             channel = .library
                         },
                         channel: $channel)
+            } else if channel == .drama {
+                DramaTab(channel: $channel)
             } else {
                 CatalogTab(onSearch: { openSearch() }, preset: $catalogPreset, channel: $channel)
             }
