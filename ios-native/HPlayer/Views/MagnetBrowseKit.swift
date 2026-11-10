@@ -6,10 +6,11 @@ import SwiftUI
 // MARK: - 版式常量
 
 enum MagnetLayout {
-    /// 两列海报网格（最新、女优页、片商页）。
+    /// 三列海报网格（最新、女优页、片商页）。
     static let posterColumns = [
-        GridItem(.flexible(), spacing: 12, alignment: .top),
-        GridItem(.flexible(), spacing: 12, alignment: .top)
+        GridItem(.flexible(), spacing: 10, alignment: .top),
+        GridItem(.flexible(), spacing: 10, alignment: .top),
+        GridItem(.flexible(), spacing: 10, alignment: .top)
     ]
 
     /// 三列头像网格（女优分类）。
@@ -85,14 +86,33 @@ struct MagnetCover: View {
         return nil
     }
 
+    /// 大图超过这个时间还没到，才开始加载小图垫底。大多数封面一两秒内就到了，
+    /// 这样不会给每张封面同时发两个请求（一屏九张封面时，请求翻倍容易被图床限流，表现就是封面空着）。
+    static let thumbnailDelay: UInt64 = 1_200_000_000
+
+    @State private var thumbnailWanted = false
+
     var body: some View {
         if let hires = Self.highResURL(for: url) {
             PipelineImage(url: hires, maxPixel: 800) { phase in
-                if case let .loaded(image) = phase, let crop = Self.crop(for: image.size) {
-                    front(of: image, crop: crop)
-                } else {
+                switch phase {
+                case let .loaded(image):
+                    if let crop = Self.crop(for: image.size) {
+                        front(of: image, crop: crop)
+                    } else {
+                        thumbnail
+                    }
+                case .loading:
+                    if thumbnailWanted { thumbnail } else { Rectangle().fill(Theme.surfaceRaised) }
+                case .failed:
                     thumbnail
                 }
+            }
+            .task(id: url) {
+                thumbnailWanted = false
+                try? await Task.sleep(nanoseconds: Self.thumbnailDelay)
+                guard !Task.isCancelled else { return }
+                thumbnailWanted = true
             }
         } else {
             thumbnail
@@ -133,10 +153,12 @@ struct MagnetCodeChip: View {
 
     var body: some View {
         Text(code)
-            .font(.caption2.weight(.bold))
+            .font(.system(size: 10, weight: .bold))
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
             .foregroundStyle(Theme.goldLight)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
             .background(Theme.brandNight.opacity(0.72), in: Capsule())
     }
 }
@@ -170,7 +192,7 @@ struct MagnetPosterCard: View {
         NavigationLink {
             MagnetDetailView(item: movie)
         } label: {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 6) {
                 Color.clear
                     .aspectRatio(MagnetLayout.posterRatio, contentMode: .fit)
                     .overlay {
@@ -183,12 +205,12 @@ struct MagnetPosterCard: View {
                     }
                     .overlay(alignment: .topLeading) {
                         if !movie.code.isEmpty {
-                            MagnetCodeChip(code: movie.code).padding(8)
+                            MagnetCodeChip(code: movie.code).padding(5)
                         }
                     }
 
                 Text(movie.title)
-                    .font(.footnote)
+                    .font(.caption)
                     .foregroundStyle(.primary)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
@@ -196,7 +218,7 @@ struct MagnetPosterCard: View {
 
                 if let date = movie.releaseDate {
                     Text(date)
-                        .font(.caption)
+                        .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
             }
@@ -205,13 +227,13 @@ struct MagnetPosterCard: View {
     }
 }
 
-/// 两列海报网格，滑到最后一项时触发翻页。
+/// 三列海报网格，滑到最后一项时触发翻页。
 struct MagnetPosterGrid: View {
     let movies: [MagnetSearchItem]
     let loadMore: () -> Void
 
     var body: some View {
-        LazyVGrid(columns: MagnetLayout.posterColumns, alignment: .leading, spacing: 20) {
+        LazyVGrid(columns: MagnetLayout.posterColumns, alignment: .leading, spacing: 16) {
             ForEach(movies) { movie in
                 MagnetPosterCard(movie: movie)
                     .onAppear {
@@ -544,8 +566,8 @@ struct MagnetLoadingView: View {
         Group {
             switch style {
             case .grid:
-                LazyVGrid(columns: MagnetLayout.posterColumns, spacing: 20) {
-                    ForEach(0 ..< 4, id: \.self) { _ in
+                LazyVGrid(columns: MagnetLayout.posterColumns, spacing: 16) {
+                    ForEach(0 ..< 6, id: \.self) { _ in
                         VStack(alignment: .leading, spacing: 8) {
                             RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous)
                                 .fill(Theme.surfaceRaised)

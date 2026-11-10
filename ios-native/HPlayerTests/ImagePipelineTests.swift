@@ -73,7 +73,7 @@ final class ImagePipelineTests: XCTestCase {
         XCTAssertTrue(RoutedURLProtocol.requests().isEmpty)
     }
 
-    func testMissingImagesAreNotRetriedButServerErrorsAreRetriedOnce() async throws {
+    func testMissingImagesAreNotRetriedButTransientErrorsAreRetried() async throws {
         let notFound = try XCTUnwrap(URL(string: "https://images.example/missing.jpg"))
         RoutedURLProtocol.install { _ in .init(status: 404) }
         let missing = await makePipeline().image(notFound, maxPixel: 600)
@@ -84,7 +84,19 @@ final class ImagePipelineTests: XCTestCase {
         RoutedURLProtocol.install { _ in .init(status: 503) }
         let failed = await makePipeline().image(broken, maxPixel: 600)
         XCTAssertNil(failed)
-        XCTAssertEqual(RoutedURLProtocol.requests().count, 2)
+        XCTAssertEqual(RoutedURLProtocol.requests().count, 3)
+
+        // 图床对突发请求偶尔回 403，过一会儿就好：要重试，而不是当场放弃
+        let throttled = try XCTUnwrap(URL(string: "https://images.example/throttled.jpg"))
+        let data = png(width: 40, height: 60)
+        let counter = Counter()
+        RoutedURLProtocol.install { _ in
+            counter.next() < 2
+                ? RoutedURLProtocol.Reply(status: 403)
+                : RoutedURLProtocol.Reply(status: 200, headers: ["Content-Type": "image/png"], body: data)
+        }
+        let recovered = await makePipeline().image(throttled, maxPixel: 600)
+        XCTAssertNotNil(recovered)
     }
 
     func testAnErrorPageWithStatus200IsNotKeptAsAnImage() async throws {
@@ -281,5 +293,17 @@ private final class HeldImageURLProtocol: URLProtocol {
         if Self.pending.removeValue(forKey: ObjectIdentifier(self)) != nil, let url = request.url {
             Self.cancellations.append(url)
         }
+    }
+}
+
+/// 测试里按调用次数返回不同结果用的线程安全计数器。
+private final class Counter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+
+    func next() -> Int {
+        lock.lock(); defer { lock.unlock() }
+        defer { value += 1 }
+        return value
     }
 }

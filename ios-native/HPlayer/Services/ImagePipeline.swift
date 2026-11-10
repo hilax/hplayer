@@ -195,7 +195,7 @@ actor ImagePipeline {
             let task = Task.detached(priority: priority) { () -> Data? in
                 guard !Task.isCancelled else { return nil }
                 if let stored = disk.read(url) { return Task.isCancelled ? nil : stored }
-                for attempt in 0..<2 {
+                for attempt in 0..<3 {
                     guard !Task.isCancelled else { return nil }
                     do {
                         var request = URLRequest(url: url)
@@ -208,12 +208,12 @@ actor ImagePipeline {
                             disk.write(data, for: url)
                             return data
                         }
-                        // 404、403 之类重试也不会好；只有服务器出错或被限流才再试一次。
-                        if status < 500, status != 429 { return nil }
+                        // 404 之类重试也不会好；服务器出错、被限流、超时、以及图床对突发请求回的 403 才再试。
+                        if status < 500, ![429, 408, 403].contains(status) { return nil }
                     } catch {
                         if error is CancellationError || (error as? URLError)?.code == .cancelled { return nil }
                     }
-                    if attempt == 0 { try? await Task.sleep(nanoseconds: 700_000_000) }
+                    if attempt < 2 { try? await Task.sleep(nanoseconds: attempt == 0 ? 700_000_000 : 1_800_000_000) }
                 }
                 return nil
             }
@@ -349,7 +349,7 @@ enum PipelineImagePhase {
 }
 
 /// 从 ImagePipeline 取图：缓存里有就第一帧直接显示，没有就后台加载后淡入。
-/// 加载失败（网络抖动）时过几秒自动再试一次。
+/// 加载失败（网络抖动、图床限流）时隔几秒自动再试，最多再试两次；之后视图重新滑进屏幕还会再取。
 struct PipelineImage<Content: View>: View {
     let url: URL?
     let maxPixel: Int
@@ -392,7 +392,7 @@ struct PipelineImage<Content: View>: View {
         }
         shownURL = nil
         phase = .loading
-        for attempt in 0..<2 {
+        for attempt in 0..<3 {
             let loaded = await ImagePipeline.shared.image(url, maxPixel: maxPixel)
             guard !Task.isCancelled else { return }
             if let loaded {
@@ -401,8 +401,8 @@ struct PipelineImage<Content: View>: View {
                 return
             }
             phase = .failed
-            if attempt == 0 {
-                try? await Task.sleep(nanoseconds: 4_000_000_000)
+            if attempt < 2 {
+                try? await Task.sleep(nanoseconds: attempt == 0 ? 3_000_000_000 : 8_000_000_000)
                 guard !Task.isCancelled else { return }
             }
         }
