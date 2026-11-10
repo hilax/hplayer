@@ -16,7 +16,9 @@ final class HomeOnlineFeed: ObservableObject {
 
     /// 进入首页时调用；十分钟内不重复拉。界面截图（InterfacePreview）不联网。
     func loadIfNeeded() async {
-        guard !InterfacePreview.active, !loading else { return }
+        // 单元测试把 App 当宿主启动，这时不去请求真实的动漫接口，免得和测试里的网络桩抢资源
+        let hostedUnitTest = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+        guard !InterfacePreview.active, !hostedUnitTest, !loading else { return }
         if let loadedAt, Date().timeIntervalSince(loadedAt) < 600, !trending.isEmpty { return }
         loading = true
         defer { loading = false }
