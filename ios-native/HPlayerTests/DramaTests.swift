@@ -43,6 +43,20 @@ final class DramaTests: XCTestCase {
         XCTAssertNil(DramaCard(json: ["title": "没有编号"]))
     }
 
+    func testPlayableURLHandlesFieldVariants() {
+        let line = "https://example.com"
+        XCTAssertEqual(DramaClient.playableURL(in: ["video_url": "https://a.b/x.m3u8?k=1"], line: line)?.absoluteString,
+                       "https://a.b/x.m3u8?k=1")
+        XCTAssertEqual(DramaClient.playableURL(in: ["video_url": "", "video_url_hevc": "//a.b/h.m3u8"], line: line)?.absoluteString,
+                       "https://a.b/h.m3u8")
+        XCTAssertEqual(DramaClient.playableURL(in: ["video_url": "/hls/1/index.m3u8"], line: line)?.absoluteString,
+                       "https://example.com/hls/1/index.m3u8")
+        XCTAssertEqual(DramaClient.playableURL(in: ["play": ["src": "https://a.b/v.mp4"]] as [String: Any], line: line)?.absoluteString,
+                       "https://a.b/v.mp4")
+        XCTAssertNotNil(DramaClient.playableURL(in: ["video_url": "https://a.b/短剧 1/x.m3u8"], line: line))
+        XCTAssertNil(DramaClient.playableURL(in: ["video_url": "", "title": "x"], line: line))
+    }
+
     func testCoverDecodeRejectsGarbage() {
         XCTAssertNil(DramaCoverStore.decode(Data()))
         XCTAssertNil(DramaCoverStore.decode(Data(repeating: 7, count: 32)))

@@ -5,14 +5,14 @@ enum DramaError: LocalizedError {
     case http(Int)
     case server(String)
     case invalidResponse
-    case noPlayURL
+    case noPlayURL(String)
 
     var errorDescription: String? {
         switch self {
         case .http(let code): return "短剧接口请求失败（HTTP \(code)）"
         case .server(let message): return message.isEmpty ? "短剧接口返回失败" : message
         case .invalidResponse: return "短剧接口返回异常"
-        case .noPlayURL: return "这一集暂时没有可播放的片源"
+        case .noPlayURL(let detail): return "这一集没有取到播放地址。" + detail
         }
     }
 }
@@ -79,11 +79,66 @@ final class DramaClient {
     /// 一集的 HLS 地址。地址里的签名一小时左右过期，每次播放现取，不缓存。
     func playURL(videoId: Int, episode: Int) async throws -> URL {
         let data = try await request("/api/videos/\(videoId)/play?ep=\(episode)&page_texts=0")
-        guard let dict = data as? [String: Any],
-              let text = AnimeJSON.string(dict, ["video_url"]), let url = URL(string: text) else {
-            throw DramaError.noPlayURL
+        if let url = Self.playableURL(in: data, line: currentLine) { return url }
+        // 取不到地址时把接口实际返回了哪些字段带进提示里，方便对照修正
+        throw DramaError.noPlayURL(Self.describe(data))
+    }
+
+    /// 从播放接口的返回里找出视频地址。优先按已知字段取，取不到再在整个返回里找像视频地址的字符串。
+    static func playableURL(in data: Any, line: String) -> URL? {
+        var candidates: [String] = []
+        if let dict = data as? [String: Any] {
+            for key in ["video_url", "video_url_hevc", "play_url", "m3u8", "hls"] {
+                if let text = dict[key] as? String { candidates.append(text) }
+            }
         }
-        return url
+        collectMediaStrings(in: data, into: &candidates, depth: 0)
+        for candidate in candidates {
+            if let url = normalizedURL(candidate, line: line) { return url }
+        }
+        return nil
+    }
+
+    private static func collectMediaStrings(in value: Any, into result: inout [String], depth: Int) {
+        guard depth < 5 else { return }
+        if let text = value as? String {
+            let lower = text.lowercased()
+            if lower.contains(".m3u8") || lower.contains(".mp4") { result.append(text) }
+        } else if let dict = value as? [String: Any] {
+            for key in dict.keys.sorted() { collectMediaStrings(in: dict[key] as Any, into: &result, depth: depth + 1) }
+        } else if let array = value as? [Any] {
+            for item in array { collectMediaStrings(in: item, into: &result, depth: depth + 1) }
+        }
+    }
+
+    /// 补全协议和域名；地址里带中文或空格时先转义（旧系统的 URL(string:) 会直接返回空）。
+    static func normalizedURL(_ raw: String, line: String) -> URL? {
+        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+        if text.hasPrefix("//") {
+            text = "https:" + text
+        } else if text.hasPrefix("/") {
+            text = line + text
+        }
+        guard text.lowercased().hasPrefix("http") else { return nil }
+        if let url = URL(string: text) { return url }
+        var allowed = CharacterSet.urlQueryAllowed
+        allowed.insert(charactersIn: "#%")
+        return text.addingPercentEncoding(withAllowedCharacters: allowed).flatMap(URL.init(string:))
+    }
+
+    private static func describe(_ data: Any) -> String {
+        if let dict = data as? [String: Any] {
+            let fields = dict.keys.sorted().map { key -> String in
+                let value = dict[key]
+                if let text = value as? String { return "\(key)=\(text.isEmpty ? "空" : "文本\(text.count)字")" }
+                if value is NSNull { return "\(key)=空" }
+                return key
+            }
+            return "返回字段：" + fields.prefix(14).joined(separator: "、")
+        }
+        if let text = data as? String { return "返回了一段文本（\(text.count) 字）" }
+        return "返回的不是预期的结构"
     }
 
     // MARK: 请求
