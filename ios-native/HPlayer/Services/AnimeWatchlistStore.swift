@@ -78,6 +78,11 @@ final class AnimeWatchlistStore: ObservableObject {
         if changed { save() }
     }
 
+    func remove(id: Int) {
+        items.removeAll { $0.id == id }
+        save()
+    }
+
     func markUpdateChecked(id: Int) {
         if let index = items.firstIndex(where: { $0.id == id }) {
             items[index].hasUpdate = false

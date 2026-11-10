@@ -17,6 +17,10 @@ struct SettingsView: View {
     @AppStorage(AppearanceMode.storageKey) private var appearance: AppearanceMode = .system
     @State private var confirmLogout = false
     @State private var showManagement = false
+    @State private var transferPage: ManagementPage?
+    @AppStorage(DanmakuPrefs.enabled) private var danmakuEnabled = true
+    @ObservedObject private var watchlist = AnimeWatchlistStore.shared
+    @ObservedObject private var downloads = DownloadManager.shared
 
     private var status: P115Status? { appState.isAuthenticated ? accountInfo.status(for: appState.sessionID) : nil }
     private var quota: QuotaResponse? { appState.isAuthenticated ? accountInfo.quota(for: appState.sessionID) : nil }
@@ -35,9 +39,11 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 20) {
                     profileCard.reveal(0)
                     statsRow.reveal(1)
-                    mediaGroup.reveal(2)
-                    appearanceGroup.reveal(3)
-                    aboutGroup.reveal(4)
+                    contentGroup.reveal(2)
+                    playbackGroup.reveal(3)
+                    mediaGroup.reveal(4)
+                    appearanceGroup.reveal(5)
+                    aboutGroup.reveal(6)
                 }
                 .frame(maxWidth: 620)
                 .frame(maxWidth: .infinity)
@@ -50,6 +56,17 @@ struct SettingsView: View {
             .background(Theme.pageBackground.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
             .designScreen("settings")
+            .navigationDestination(for: AnimeDetailRoute.self) { route in
+                AnimeDetailView(animeId: route.animeId).id(route.animeId)
+            }
+            .navigationDestination(isPresented: Binding(get: { transferPage != nil }, set: { if !$0 { transferPage = nil } })) {
+                switch transferPage {
+                case .offline: OfflineTasksView().hidesTabBar()
+                case .downloads: DownloadsView().hidesTabBar()
+                case .recycleBin: RecycleBinView().hidesTabBar()
+                case .transfers, .none: EmptyView()
+                }
+            }
         }
         .fullScreenCover(isPresented: $showManagement) { LibraryManagementView() }
     }
@@ -186,6 +203,59 @@ struct SettingsView: View {
 
     private var rowDivider: some View {
         Divider().padding(.leading, 60)
+    }
+
+    /// 我的内容：追番、传输中心（观看历史在首页右上角）
+    private var contentGroup: some View {
+        group("我的内容") {
+            NavigationLink { AnimeWatchlistView().hidesTabBar() } label: {
+                LibraryActionRow(symbol: AppIcon.heart.name, title: "我的追番",
+                                 subtitle: watchUpdates > 0 ? "\(watchUpdates) 部有更新" : "在线动漫的追番列表",
+                                 value: watchlist.items.isEmpty ? "" : "\(watchlist.items.count)")
+            }
+            .buttonStyle(.pressable(scale: 0.985))
+            .accessibilityIdentifier("mine.watchlist")
+            rowDivider
+            NavigationLink { TransferCenterView(onOpenPage: { transferPage = $0 }).hidesTabBar() } label: {
+                LibraryActionRow(symbol: AppIcon.cloudDownload.name, title: "传输中心",
+                                 subtitle: "云端离线、下载到本机、磁力边下边播",
+                                 value: activeDownloads == 0 ? "" : "\(activeDownloads) 个下载中")
+            }
+            .buttonStyle(.pressable(scale: 0.985))
+            .accessibilityIdentifier("mine.transfers")
+        }
+    }
+
+    /// 播放偏好：弹幕默认开关（样式在播放页的弹幕设置里调）
+    private var playbackGroup: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            group("播放") {
+                HStack(spacing: 12) {
+                    IconTile(symbolName: AppIcon.comment.name, size: 34, tone: .accent)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("显示弹幕").font(.system(size: 14, weight: .medium)).foregroundStyle(.primary)
+                        Text("在线动漫播放时默认显示弹幕").font(.caption).foregroundStyle(Theme.textSecondary)
+                    }
+                    Spacer(minLength: 8)
+                    Toggle("显示弹幕", isOn: $danmakuEnabled)
+                        .labelsHidden()
+                        .tint(Theme.accent)
+                        .accessibilityIdentifier("mine.danmaku")
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .frame(minHeight: 58)
+            }
+            Text("弹幕的区域、透明度、字号和速度可以在播放页「评论」旁的设置里调整。")
+                .font(.caption).foregroundStyle(Theme.textTertiary)
+                .padding(.leading, 6)
+        }
+    }
+
+    private var watchUpdates: Int { watchlist.items.filter(\.hasUpdate).count }
+
+    private var activeDownloads: Int {
+        downloads.items.filter { $0.state == .downloading || $0.state == .queued }.count
     }
 
     private var mediaGroup: some View {
