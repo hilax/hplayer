@@ -341,7 +341,7 @@ struct MagnetSearchField: View {
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(Theme.textSecondary)
 
-            TextField("番号或女优名，例如 SSIS-888", text: $text)
+            TextField("番号、女优，或粘贴磁力链接", text: $text)
                 .font(.body)
                 .submitLabel(.search)
                 .focused($focused)
@@ -361,10 +361,22 @@ struct MagnetSearchField: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("清除搜索")
+            } else {
+                // 系统粘贴按钮：不会弹「允许粘贴」的询问
+                PasteButton(payloadType: String.self) { strings in
+                    guard let first = strings.first else { return }
+                    Task { @MainActor in text = first.trimmingCharacters(in: .whitespacesAndNewlines) }
+                }
+                .labelStyle(.iconOnly)
+                .buttonBorderShape(.capsule)
+                .tint(Theme.surfaceHigh)
+                .foregroundStyle(Theme.textPrimary)
+                .controlSize(.small)
+                .accessibilityIdentifier("magnet.paste")
             }
         }
         .padding(.leading, 14)
-        .padding(.trailing, text.isEmpty ? 14 : 2)
+        .padding(.trailing, text.isEmpty ? 8 : 2)
         .frame(minHeight: 46)
         .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous))
         .overlay {

@@ -348,7 +348,9 @@ private struct MagnetTorrentCard: View {
     let highlighted: Bool
     let playTitle: String
     let copied: Bool
+    var saveState: Offline115SaveState = .idle
     let onPlay: () -> Void
+    var onSave: () -> Void = {}
     let onCopy: () -> Void
 
     var body: some View {
@@ -405,17 +407,39 @@ private struct MagnetTorrentCard: View {
                 .buttonStyle(MagnetActionStyle(prominent: true))
                 .accessibilityIdentifier("magnet.play")
 
-                Button(action: onCopy) {
+                Button(action: onSave) {
                     HStack(spacing: 6) {
-                        Image(systemName: copied ? AppIcon.check.name : AppIcon.copy.name)
-                            .font(.system(size: 13))
-                        Text(copied ? "已复制" : "复制磁力")
+                        if saveState == .saving {
+                            ProgressView().controlSize(.mini)
+                        } else {
+                            Image(systemName: saveState == .saved ? AppIcon.check.name : AppIcon.cloudDownload.name)
+                                .font(.system(size: 13))
+                        }
+                        Text(saveState.title)
+                            .lineLimit(1)
                     }
-                    .foregroundStyle(copied ? Theme.accent : Color.primary)
+                    .foregroundStyle(saveState == .saved ? Theme.success : Color.primary)
                 }
                 .buttonStyle(MagnetActionStyle(prominent: false))
-                .frame(width: 108)
+                .frame(width: 112)
+                .disabled(saveState == .saving || saveState == .saved)
+                .accessibilityIdentifier("magnet.save115")
+
+                Button(action: onCopy) {
+                    Image(systemName: copied ? AppIcon.check.name : AppIcon.copy.name)
+                        .font(.system(size: 14))
+                        .foregroundStyle(copied ? Theme.accent : Color.primary)
+                }
+                .buttonStyle(MagnetActionStyle(prominent: false))
+                .frame(width: 52)
+                .accessibilityLabel(copied ? "已复制" : "复制磁力")
                 .accessibilityIdentifier("magnet.copy")
+            }
+            if case .failed(let message) = saveState {
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(Theme.danger)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(14)
@@ -439,6 +463,7 @@ struct MagnetDetailView: View {
     @State private var copiedMagnetID: String?
     /// 点了播放：播放页盖在详情页上面，关掉后仍停留在这一页。
     @State private var playLaunch: MagnetLaunch?
+    @State private var saveStates: [String: Offline115SaveState] = [:]
 
     var body: some View {
         ScrollView {
@@ -595,11 +620,29 @@ struct MagnetDetailView: View {
                             highlighted: index == 0,
                             playTitle: cloudRelay ? "115 云下载播放" : "磁力播放",
                             copied: copiedMagnetID == torrent.id,
+                            saveState: saveStates[torrent.id] ?? .idle,
                             onPlay: { playLaunch = MagnetLaunch(value: torrent.magnetURL) },
+                            onSave: { save(torrent) },
                             onCopy: { copy(torrent) }
                         )
                     }
                 }
+            }
+        }
+    }
+
+    private func save(_ torrent: MagnetTorrentItem) {
+        Haptics.tap()
+        let id = torrent.id
+        saveStates[id] = .saving
+        Task { @MainActor in
+            do {
+                _ = try await Offline115Saver.save([torrent.magnetURL], appState: appState)
+                Haptics.success()
+                saveStates[id] = .saved
+            } catch {
+                Haptics.warning()
+                saveStates[id] = .failed((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
             }
         }
     }

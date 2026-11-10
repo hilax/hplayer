@@ -60,6 +60,8 @@ struct MagnetSearchView: View {
 
     // 镜像域名变化时（在设置里保存后）自动重新加载。
     @AppStorage(JavBusSource.hostDefaultsKey) private var customHost = ""
+    @EnvironmentObject private var appState: AppState
+    @State private var playLaunch: MagnetLaunch?
 
     @State private var keyword = ""
     @State private var selectedCategory: MagnetCategory = .latest
@@ -87,8 +89,13 @@ struct MagnetSearchView: View {
         keyword.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// 输入框里是磁力链接 / 信息哈希 / 迅雷链接时，不去站点搜索，直接给出解析面板。
+    private var detectedLink: MagnetLink? {
+        MagnetLink.parse(trimmedKeyword)
+    }
+
     private var inSearchMode: Bool {
-        searchActive && !trimmedKeyword.isEmpty
+        searchActive && !trimmedKeyword.isEmpty && detectedLink == nil
     }
 
     var body: some View {
@@ -97,6 +104,13 @@ struct MagnetSearchView: View {
                 MagnetSearchField(text: $keyword, onSubmit: triggerSearch, onClear: clearSearch)
                     .padding(.horizontal, Theme.contentInset)
                     .padding(.top, 8)
+
+                if let link = detectedLink {
+                    MagnetLinkPanel(link: link) { playLaunch = MagnetLaunch(value: link.uri) }
+                        .padding(.horizontal, Theme.contentInset)
+                        .padding(.top, 12)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                }
 
                 if !inSearchMode {
                     MagnetCategoryTabs(selection: $selectedCategory)
@@ -142,6 +156,11 @@ struct MagnetSearchView: View {
         .sheet(isPresented: $showingSettingsSheet) {
             JavBusHostSettingsSheet()
         }
+        .sheet(item: $playLaunch) { launch in
+            NavigationStack { MagnetPlayerView(initialMagnet: launch.value, closesAfterPlayback: true) }
+                .environmentObject(appState)
+        }
+        .animation(Motion.smooth, value: detectedLink != nil)
         .animation(Motion.smooth, value: inSearchMode)
         .animation(Motion.smooth, value: isSearching)
         .animation(Motion.smooth, value: isLoadingCategory)
@@ -451,7 +470,7 @@ struct MagnetSearchView: View {
 
     private func triggerSearch() {
         let q = trimmedKeyword
-        guard !q.isEmpty else { return }
+        guard !q.isEmpty, detectedLink == nil else { return }
         runSearch(q)
     }
 

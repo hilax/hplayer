@@ -304,6 +304,7 @@ struct AnimeCommentsView: View {
         }
         .scrollIndicators(.hidden)
         .task(id: vid) { await loadFirst() }
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("player.comments")
     }
 

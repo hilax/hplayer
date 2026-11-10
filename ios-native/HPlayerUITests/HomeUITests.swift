@@ -101,6 +101,16 @@ final class HomeUITests: XCTestCase {
         }
         app.buttons["magnet.category.topics"].tap()
         XCTAssertTrue(app.buttons["magnet.studio.s1"].waitForExistence(timeout: 5), "Topics lists the studios")
+        // 智能输入：输入框认出信息哈希时直接给出解析面板，不去站点搜索
+        let magnetField = app.textFields["magnet.search"]
+        magnetField.tap()
+        magnetField.typeText("0123456789abcdef0123456789abcdef01234567")
+        XCTAssertTrue(app.buttons["magnet.link.play"].waitForExistence(timeout: 5), "A pasted hash shows the parse panel")
+        XCTAssertTrue(app.buttons["magnet.link.save115"].exists, "The parse panel can save to 115")
+        XCTAssertTrue(app.buttons["magnet.category.topics"].exists, "A link does not switch into search results")
+        capture("Magnet link panel - redesign", in: app)
+        app.buttons["清除搜索"].tap()
+        XCTAssertFalse(app.buttons["magnet.link.play"].waitForExistence(timeout: 1), "Clearing the field hides the panel")
         app.tabButton("网盘").tap()
         XCTAssertTrue(app.buttons["library.offline"].waitForExistence(timeout: 5), "Switching back shows the Cloud tab")
         capture("Resources - redesign", in: app)
