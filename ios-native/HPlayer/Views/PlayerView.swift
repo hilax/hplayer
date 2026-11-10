@@ -174,10 +174,10 @@ struct PlayerView: View {
                 playback.open(resolved.url, customHeaders: resolved.headers, startTime: resume)
             case .drama(let ref):
                 ref.rememberAsLastWatched()
-                let url = try await DramaClient.shared.playURL(videoId: ref.videoId, episode: ref.episode)
+                let dramaPlayback = try await DramaClient.shared.playback(videoId: ref.videoId, episode: ref.episode)
                 guard isCurrentRequest(request, source: source, session: session), !Task.isCancelled else { return }
                 guard await openAfterReveal(request, source: source, session: session) else { return }
-                playback.open(url, customHeaders: DramaClient.shared.mediaHeaders, startTime: resume)
+                playback.open(dramaPlayback.url, customHeaders: dramaPlayback.headers, startTime: resume)
             case .p115(_, let pickCode):
                 do {
                     guard let client = appState.directClient() else { throw APIError.server("请先登录 115") }

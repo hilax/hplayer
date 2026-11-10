@@ -76,15 +76,53 @@ final class DramaClient {
         return detail
     }
 
-    /// 一集的 HLS 地址。地址里的签名一小时左右过期，每次播放现取，不缓存。
-    func playURL(videoId: Int, episode: Int) async throws -> URL {
-        let data = try await request("/api/videos/\(videoId)/play?ep=\(episode)&page_texts=0")
-        if let url = Self.playableURL(in: data, line: currentLine) { return url }
-        // 取不到地址时把接口实际返回了哪些字段带进提示里，方便对照修正
-        throw DramaError.noPlayURL(Self.describe(data))
+    /// 一集的播放信息：HLS 地址加上取清单时要带的 CDN 校验头。
+    struct Playback {
+        let url: URL
+        /// 播放器取视频时带的请求头（含 CDN 校验头）
+        let headers: [String: String]
     }
 
-    /// 从播放接口的返回里找出视频地址。优先按已知字段取，取不到再在整个返回里找像视频地址的字符串。
+    /// 取一集的播放信息。站点 2026-11 起把播放接口改成了
+    /// `POST /api/videos/{id}/episodes/{ep}/playback`（旧的 `/play` 对游客只返回空字段）；
+    /// 地址里的签名几个小时就过期，所以每次播放现取，不缓存。
+    func playback(videoId: Int, episode: Int) async throws -> Playback {
+        let data = try await request("/api/videos/\(videoId)/episodes/\(episode)/playback",
+                                     method: "POST", body: Data("{}".utf8))
+        guard let parsed = Self.parsePlayback(data, line: currentLine) else {
+            throw DramaError.noPlayURL(Self.describe(data))
+        }
+        var headers = mediaHeaders
+        for (name, value) in parsed.headers { headers[name] = value }
+        return Playback(url: parsed.url, headers: headers)
+    }
+
+    /// 解析播放接口的返回：地址在 `streams` 里（main 是 H.264，hevc 体积更小但兼容性差一些，
+    /// 优先用 main）；`cdn` 里给出取 m3u8 时要带的校验头。老的平铺字段作为兜底保留。
+    static func parsePlayback(_ data: Any, line: String) -> (url: URL, headers: [String: String])? {
+        guard let dict = data as? [String: Any] else { return nil }
+        var candidates: [String] = []
+        if let streams = dict["streams"] as? [String: Any] {
+            for key in ["main", "hevc", "preview"] {
+                if let text = streams[key] as? String { candidates.append(text) }
+            }
+        }
+        for key in ["video_url", "video_url_hevc"] {
+            if let text = dict[key] as? String { candidates.append(text) }
+        }
+        guard let url = candidates.lazy.compactMap({ normalizedURL($0, line: line) }).first
+                ?? playableURL(in: data, line: line) else { return nil }
+        var headers: [String: String] = [:]
+        if let cdn = dict["cdn"] as? [String: Any],
+           let name = cdn["authKey"] as? String, !name.isEmpty,
+           let value = cdn["authValue"] as? String, !value.isEmpty {
+            headers[name] = value
+            if let app = cdn["app"], !"\(app)".isEmpty { headers["x-cdn-app"] = "\(app)" }
+        }
+        return (url, headers)
+    }
+
+    /// 从返回里找出视频地址。优先按已知字段取，取不到再在整个返回里找像视频地址的字符串。
     static func playableURL(in data: Any, line: String) -> URL? {
         var candidates: [String] = []
         if let dict = data as? [String: Any] {
@@ -144,11 +182,11 @@ final class DramaClient {
     // MARK: 请求
 
     /// 返回外壳里的 `data`。连不上时换下一条线路；接口明确返回失败就不再重试。
-    private func request(_ path: String) async throws -> Any {
+    private func request(_ path: String, method: String = "GET", body: Data? = nil) async throws -> Any {
         var lastError: Error = DramaError.invalidResponse
         for line in orderedLines {
             do {
-                let value = try await send(path, line: line)
+                let value = try await send(path, method: method, body: body, line: line)
                 UserDefaults.standard.set(line, forKey: Self.lineKey)
                 return value
             } catch let error as DramaError {
@@ -161,12 +199,14 @@ final class DramaClient {
         throw lastError
     }
 
-    private func send(_ path: String, line: String) async throws -> Any {
+    private func send(_ path: String, method: String, body: Data?, line: String) async throws -> Any {
         guard let url = URL(string: line + "/api/edge/request") else { throw DramaError.invalidResponse }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.httpBody = try JSONSerialization.data(withJSONObject: [
-            "method": "GET", "path": path, "body": "", "content_type": "",
+            "method": method, "path": path,
+            "body": body?.base64EncodedString() ?? "",
+            "content_type": body == nil ? "" : "application/json",
         ])
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")

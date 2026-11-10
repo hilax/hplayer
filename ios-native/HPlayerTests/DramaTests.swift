@@ -57,6 +57,26 @@ final class DramaTests: XCTestCase {
         XCTAssertNil(DramaClient.playableURL(in: ["video_url": "", "title": "x"], line: line))
     }
 
+    /// 真实返回（2026-11-10 取自 POST /api/videos/12/episodes/1/playback，地址与校验值已缩短）
+    func testParsePlaybackReadsStreamsAndCDNHeaders() {
+        let payload: [String: Any] = [
+            "mode": 1, "manifest_method": "GET", "ep": 1, "media_id": "",
+            "cdn": ["m3u8Enabled": true, "otherEnabled": false, "authKey": "x-cdn-auth",
+                    "authValue": "abc123", "app": "150"],
+            "streams": ["main": "https://cdn.example/videos5/a/a.m3u8?auth_key=1-2&via_m=dx150",
+                        "hevc": "https://cdn.example/m3m/h.m3u8?auth_key=1-3",
+                        "preview": "https://cdn.example/videos5/a/a.m3u8?auth_key=1-2"],
+        ]
+        let parsed = DramaClient.parsePlayback(payload, line: "https://example.com")
+        XCTAssertEqual(parsed?.url.absoluteString, "https://cdn.example/videos5/a/a.m3u8?auth_key=1-2&via_m=dx150")
+        XCTAssertEqual(parsed?.headers["x-cdn-auth"], "abc123")
+        XCTAssertEqual(parsed?.headers["x-cdn-app"], "150")
+        // 没有 streams 时回落到老字段；都没有就是 nil
+        XCTAssertEqual(DramaClient.parsePlayback(["video_url": "https://a.b/x.m3u8"], line: "https://example.com")?.url.absoluteString,
+                       "https://a.b/x.m3u8")
+        XCTAssertNil(DramaClient.parsePlayback(["streams": ["main": ""], "video_url": ""] as [String: Any], line: "https://example.com"))
+    }
+
     func testCoverDecodeRejectsGarbage() {
         XCTAssertNil(DramaCoverStore.decode(Data()))
         XCTAssertNil(DramaCoverStore.decode(Data(repeating: 7, count: 32)))
