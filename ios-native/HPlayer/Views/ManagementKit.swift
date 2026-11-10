@@ -89,7 +89,7 @@ struct ThinProgressBar: View {
             Capsule().fill(Theme.textTertiary).frame(width: width)
         } else {
             Capsule()
-                .fill(LinearGradient(colors: [Theme.goldDeep, Theme.gold], startPoint: .leading, endPoint: .trailing))
+                .fill(Theme.prismGradient)
                 .frame(width: width)
         }
     }

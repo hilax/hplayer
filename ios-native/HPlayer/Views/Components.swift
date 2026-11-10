@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 品牌标志的矢量版：黑曜石底上两道金色竖笔组成 H，中间是播放键。
+/// 品牌标志的矢量版：近黑底上两道棱镜色竖笔组成 H，中间是播放键。
 struct BrandLogo: View {
     var size: CGFloat = 88
 
@@ -30,14 +30,14 @@ struct BrandMark: View {
                 HStack(spacing: 0) {
                     RoundedRectangle(cornerRadius: radius, style: .continuous)
                         .fill(LinearGradient(
-                            colors: [Theme.goldLight, Theme.gold],
+                            colors: Array(Theme.prismColors.prefix(3)),
                             startPoint: .top, endPoint: .bottom
                         ))
                         .frame(width: barWidth, height: barHeight)
                     Spacer(minLength: 0)
                     RoundedRectangle(cornerRadius: radius, style: .continuous)
                         .fill(LinearGradient(
-                            colors: [Theme.gold, Theme.goldDeep],
+                            colors: Array(Theme.prismColors.suffix(3)),
                             startPoint: .top, endPoint: .bottom
                         ))
                         .frame(width: barWidth, height: barHeight)
@@ -47,7 +47,7 @@ struct BrandMark: View {
                     .fill(Theme.brandNight)
                     .overlay {
                         PlayTriangle()
-                            .stroke(Theme.gold, style: StrokeStyle(lineWidth: side * 0.05, lineJoin: .round))
+                            .stroke(Color.white, style: StrokeStyle(lineWidth: side * 0.05, lineJoin: .round))
                     }
                     .frame(width: side * 0.52, height: side * 0.46)
                     .offset(x: side * 0.05, y: -side * 0.08)

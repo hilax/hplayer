@@ -152,7 +152,7 @@ struct SeriesDetailView: View {
                                 .font(.system(size: 10, weight: .bold))
                             Text(group.rating)
                         }
-                        .foregroundStyle(Theme.gold)
+                        .foregroundStyle(Theme.rating)
                     }
                 }
                 .font(.system(size: 13, weight: .semibold))

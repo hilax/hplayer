@@ -977,7 +977,7 @@ private struct HeroPage: View {
                             .font(.system(size: 9, weight: .bold))
                         Text(item.rating)
                     }
-                    .foregroundStyle(Theme.gold)
+                    .foregroundStyle(Theme.rating)
                 }
                 if let episode = item.episodeLabel { Text(episode) }
                 if let genres = item.metadata?.genres, !genres.isEmpty {

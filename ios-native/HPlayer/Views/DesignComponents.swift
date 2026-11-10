@@ -174,7 +174,7 @@ struct LibraryActionRow: View {
     }
 }
 
-/// 主按钮：金色胶囊 + 深色字。按下弹性缩小。
+/// 主按钮：主操作色胶囊（深色模式白底黑字）。每屏只放一个。按下弹性缩小。
 struct PrimaryActionStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -296,7 +296,7 @@ struct DesignNotice: View {
     }
 }
 
-/// 筛选胶囊：选中是金色淡底 + 金色粗体字，未选中只有灰字。
+/// 筛选胶囊：选中是主操作色底（深色模式白底黑字），未选中只有灰字。
 /// 同一排里选中状态的底色会滑到新选中的那个上（共用 `namespace` 即可）。
 struct SelectionPill: View {
     let title: String
@@ -319,7 +319,7 @@ struct SelectionPill: View {
         } label: {
             Text(title)
                 .font(.system(size: 13, weight: selected ? .bold : .regular))
-                .foregroundStyle(selected ? Theme.accent : Theme.textSecondary)
+                .foregroundStyle(selected ? Theme.onPrimary : Theme.textSecondary)
                 .padding(.horizontal, 12)
                 .frame(minHeight: 32)
                 .background { background }
@@ -333,9 +333,9 @@ struct SelectionPill: View {
     @ViewBuilder private var background: some View {
         if selected {
             if let namespace {
-                Capsule().fill(Theme.tileTint).matchedGeometryEffect(id: "pill.selection", in: namespace)
+                Capsule().fill(Theme.primaryAction).matchedGeometryEffect(id: "pill.selection", in: namespace)
             } else {
-                Capsule().fill(Theme.tileTint)
+                Capsule().fill(Theme.primaryAction)
             }
         }
     }

@@ -157,7 +157,7 @@ struct AnimeDetailView: View {
                 if let continu = detail.continu, !continu.isEmpty {
                     Text(continu)
                         .font(.system(size: 13, weight: .bold))
-                        .foregroundStyle(Theme.gold)
+                        .foregroundStyle(Theme.accent)
                 }
 
                 HStack(spacing: 6) {
@@ -166,7 +166,7 @@ struct AnimeDetailView: View {
                     if let stars = detail.stars, !stars.isEmpty {
                         HStack(spacing: 2) {
                             Image(icon: .rating)
-                                .iconStyle(size: 10, color: Theme.gold)
+                                .iconStyle(size: 10, color: Theme.rating)
                             Text(stars)
                         }
                         .foregroundStyle(Theme.gold)

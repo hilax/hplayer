@@ -69,68 +69,91 @@ extension UIColor {
     }
 }
 
-/// 琥珀金 + 黑曜石：深色是影院式的近黑底，浅色是偏暖的纸白底；
-/// 主色只用来标出「当前在哪、下一步点哪」，其余全部是中性灰阶。
+/// Prism Noir（2.0）：近黑底承载内容，白色是唯一的主操作色，玫红标出「在看、更新、我的」，
+/// 棱镜渐变（光轨）只用在进度、选中指示、发送与解析中。浅色是同一套色相的冷白版本。
+/// 名称沿用 1.x（gold / onPrimary / tileTint …），调用处不用改：
+/// `gold` / `primaryAction` 现在是「主操作色」——深色模式为白，浅色模式为墨黑；`onPrimary` 与它反相。
 enum Theme {
-    static let accentUIColor = UIColor.adaptive(light: UIColor(hex: 0xB26A14), dark: UIColor(hex: 0xE9B061))
-    static let accentAltUIColor = UIColor.adaptive(light: UIColor(hex: 0x8A5210), dark: UIColor(hex: 0xF4CB8A))
+    static let accentUIColor = UIColor.adaptive(light: UIColor(hex: 0xC42560), dark: UIColor(hex: 0xFF4D8D))
+    static let accentAltUIColor = UIColor.adaptive(light: UIColor(hex: 0xA81E50), dark: UIColor(hex: 0xFF7AA8))
 
+    /// 玫红：更新、在看、置顶、链接文字等强调
     static let accent = Color(uiColor: accentUIColor)
     static let accentAlt = Color(uiColor: accentAltUIColor)
+    /// 玫红实心（压白字 4.7:1）：开关、实心强调
+    static let accentFill = Color(uiColor: UIColor(hex: 0xD92B6B))
 
-    /// 品牌金，两种模式下保持不变；用在实心按钮、进度条、角标上。
-    static let gold = Color(uiColor: UIColor(hex: 0xE9B061))
-    static let goldLight = Color(uiColor: UIColor(hex: 0xF4CB8A))
-    static let goldDeep = Color(uiColor: UIColor(hex: 0xC98A32))
-    /// 压在金色上的文字和图标
-    static let onPrimary = Color(uiColor: UIColor(hex: 0x1A1206))
-    static let brandNight = Color(uiColor: UIColor(hex: 0x0B0C10))
+    /// 主操作色：每屏唯一的主按钮、当前集、选中胶囊、实心角标。深色为白，浅色为墨黑。
+    static let gold = Color(uiColor: .adaptive(light: UIColor(hex: 0x111318), dark: UIColor(hex: 0xF5F6F8)))
+    static let goldLight = Color(uiColor: .adaptive(light: UIColor(hex: 0x2A2D36), dark: UIColor.white))
+    static let goldDeep = Color(uiColor: UIColor(hex: 0xD92B6B))
+    /// 压在主操作色上的文字和图标（与 gold 反相）
+    static let onPrimary = Color(uiColor: .adaptive(light: .white, dark: UIColor(hex: 0x07080B)))
+    static let brandNight = Color(uiColor: UIColor(hex: 0x07080B))
 
-    static let pageBackground = Color(uiColor: .adaptive(light: UIColor(hex: 0xF6F3ED), dark: UIColor(hex: 0x0B0C10)))
-    static let surface = Color(uiColor: .adaptive(light: .white, dark: UIColor(hex: 0x15171D)))
-    static let surfaceRaised = Color(uiColor: .adaptive(light: UIColor(hex: 0xEDE8DE), dark: UIColor(hex: 0x1E2028)))
-    static let surfaceHigh = Color(uiColor: .adaptive(light: UIColor(hex: 0xE2DCCF), dark: UIColor(hex: 0x2A2D36)))
+    /// 评分星标统一用琥珀色
+    static let rating = Color(uiColor: .adaptive(light: UIColor(hex: 0xB26A00), dark: UIColor(hex: 0xFFB547)))
+    /// 信息提示（在线状态等）
+    static let info = Color(uiColor: .adaptive(light: UIColor(hex: 0x0A73A0), dark: UIColor(hex: 0x45C8F5)))
+
+    /// 来源色点：在线 / 115 / 磁力 / 本地
+    enum Source {
+        static let online = Color(uiColor: UIColor(hex: 0xFF4D8D))
+        static let cloud115 = Color(uiColor: UIColor(hex: 0x4C8DFF))
+        static let magnet = Color(uiColor: UIColor(hex: 0x9A84FF))
+        static let local = Color(uiColor: UIColor(hex: 0x33D6A6))
+    }
+
+    /// 棱镜光轨的五个色标（青 → 蓝 → 紫 → 玫红 → 珊瑚），与 Prism 应用图标同源。
+    static let prismColors: [Color] = ([0x35D0FF, 0x5B7CFF, 0xA45CFF, 0xFF4D8D, 0xFF8A5C] as [UInt32]).map { Color(uiColor: UIColor(hex: $0)) }
+    static let prismStops: [Gradient.Stop] = zip(prismColors, [0.0, 0.32, 0.60, 0.84, 1.0] as [CGFloat]).map { Gradient.Stop(color: $0.0, location: $0.1) }
+
+    static let pageBackground = Color(uiColor: .adaptive(light: UIColor(hex: 0xF4F5F8), dark: UIColor(hex: 0x07080B)))
+    static let surface = Color(uiColor: .adaptive(light: .white, dark: UIColor(hex: 0x111319)))
+    static let surfaceRaised = Color(uiColor: .adaptive(light: UIColor(hex: 0xEBEDF2), dark: UIColor(hex: 0x181B23)))
+    static let surfaceHigh = Color(uiColor: .adaptive(light: UIColor(hex: 0xE1E4EB), dark: UIColor(hex: 0x22262F)))
     static let primaryAction = gold
-    static let playerBackground = Color(uiColor: UIColor(hex: 0x050608))
-    static let playerSurface = Color(uiColor: UIColor(hex: 0x15171D))
+    static let playerBackground = Color(uiColor: UIColor(hex: 0x000000))
+    static let playerSurface = Color(uiColor: UIColor(hex: 0x111319))
     static let contentInset: CGFloat = 16
 
-    static let textPrimary = Color(uiColor: .adaptive(light: UIColor(hex: 0x1B1D24), dark: UIColor(hex: 0xF2F3F5)))
-    static let textSecondaryUIColor = UIColor.adaptive(light: UIColor(hex: 0x5E6371), dark: UIColor(hex: 0xA1A6B3))
+    static let textPrimary = Color(uiColor: .adaptive(light: UIColor(hex: 0x111318), dark: UIColor(hex: 0xF5F6F8)))
+    static let textSecondaryUIColor = UIColor.adaptive(light: UIColor(hex: 0x4D5363), dark: UIColor(hex: 0xA9AFBC))
     static let textSecondary = Color(uiColor: textSecondaryUIColor)
-    static let textTertiary = Color(uiColor: .adaptive(light: UIColor(hex: 0x8B90A0), dark: UIColor(hex: 0x6B7080)))
+    static let textTertiary = Color(uiColor: .adaptive(light: UIColor(hex: 0x626877), dark: UIColor(hex: 0x828999)))
     /// 首页铺的是封面取色的底：上面的灰色次要文字会发闷，改用半透明白，底色偏亮偏暗都看得清。
     static let textSecondaryOnArtwork = Color.white.opacity(0.78)
     static let textTertiaryOnArtwork = Color.white.opacity(0.56)
 
     static let hairline = Color(uiColor: .adaptive(
-        light: UIColor(white: 0, alpha: 0.07),
-        dark: UIColor(white: 1, alpha: 0.06)
+        light: UIColor(white: 0, alpha: 0.08),
+        dark: UIColor(white: 1, alpha: 0.08)
     ))
     static let track = Color(uiColor: .adaptive(
         light: UIColor(white: 0, alpha: 0.10),
         dark: UIColor(white: 1, alpha: 0.12)
     ))
     static let shadow = Color(uiColor: .adaptive(
-        light: UIColor(hex: 0x5A4010, alpha: 0.07),
+        light: UIColor(hex: 0x111318, alpha: 0.06),
         dark: UIColor(white: 0, alpha: 0)
     ))
+    /// 图标块、选中行、淡底：中性，不带色相
     static let tileTint = Color(uiColor: .adaptive(
-        light: UIColor(hex: 0xB26A14, alpha: 0.12),
-        dark: UIColor(hex: 0xE9B061, alpha: 0.14)
+        light: UIColor(white: 0, alpha: 0.05),
+        dark: UIColor(white: 1, alpha: 0.08)
     ))
 
     /// 文件夹图标：橙色背板、黄色前板，放在一块淡灰蓝的圆角底上。
     static let folderBack = Color(uiColor: UIColor(hex: 0xE09A3A))
     static let folderFront = Color(uiColor: UIColor(hex: 0xF3C45C))
     static let folderTile = Color(uiColor: .adaptive(
-        light: UIColor(hex: 0xF1ECE2),
+        light: UIColor(hex: 0xEEF0F4),
         dark: UIColor(white: 1, alpha: 0.09)
     ))
 
-    static let success = Color(uiColor: .systemGreen)
-    static let warning = Color(uiColor: .systemOrange)
-    static let danger = Color(uiColor: .systemRed)
+    static let success = Color(uiColor: .adaptive(light: UIColor(hex: 0x11845F), dark: UIColor(hex: 0x33D6A6)))
+    static let warning = Color(uiColor: .adaptive(light: UIColor(hex: 0xB26A00), dark: UIColor(hex: 0xFFB547)))
+    static let danger = Color(uiColor: .adaptive(light: UIColor(hex: 0xD92D33), dark: UIColor(hex: 0xFF5A5F)))
 
     /// 所有线框图标统一的字重
     static let iconWeight: Font.Weight = .medium
@@ -140,15 +163,17 @@ enum Theme {
         static let poster: CGFloat = 10
         static let tile: CGFloat = 12
         static let card: CGFloat = 16
-        static let sheet: CGFloat = 24
+        static let sheet: CGFloat = 28
     }
 
+    /// 品牌渐变（斜向），用于头像描边、选中描边、品牌图形。
     static var accentGradient: LinearGradient {
-        LinearGradient(
-            colors: [goldLight, gold, goldDeep],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
+        LinearGradient(stops: prismStops, startPoint: .topLeading, endPoint: .bottomTrailing)
+    }
+
+    /// 光轨：进度条、选中指示条、发送按钮。
+    static var prismGradient: LinearGradient {
+        LinearGradient(stops: prismStops, startPoint: .leading, endPoint: .trailing)
     }
 }
 
@@ -188,9 +213,9 @@ extension View {
 }
 
 extension Font {
-    /// 片名和栏目大标题：衬线黑体，像院线海报上的字。
+    /// 片名和栏目大标题：系统黑体最粗一档（中文 PingFang SC，西文 SF Pro）。2.0 起不再用衬线。
     static func display(_ size: CGFloat) -> Font {
-        .system(size: size, weight: .black, design: .serif)
+        .system(size: size, weight: .black, design: .default)
     }
 }
 
@@ -294,7 +319,7 @@ struct GlassCapsuleButton: View {
                 .foregroundStyle(prominent ? Theme.onPrimary : Color.primary)
                 .background {
                     if prominent {
-                        Capsule().fill(Theme.accentGradient)
+                        Capsule().fill(Theme.primaryAction)
                     }
                 }
                 .modifier(ConditionalGlass(prominent: prominent))
@@ -308,7 +333,7 @@ private struct ConditionalGlass: ViewModifier {
 
     func body(content: Content) -> some View {
         if prominent {
-            content.shadow(color: Theme.gold.opacity(0.32), radius: 12, x: 0, y: 6)
+            content.shadow(color: Color.black.opacity(0.28), radius: 12, x: 0, y: 6)
         } else {
             content.glassInteractiveCapsule()
         }
@@ -338,7 +363,7 @@ struct GroupLabel: View {
     }
 }
 
-/// 海报和缩略图底部的进度线：3pt 的金色细线，压在半透明的轨道上。
+/// 海报和缩略图底部的进度线：3pt 的光轨细线，压在半透明的轨道上。
 struct GlassProgressBar: View {
     /// 0...1
     let value: Double
@@ -348,7 +373,7 @@ struct GlassProgressBar: View {
             ZStack(alignment: .leading) {
                 Rectangle().fill(Color.white.opacity(0.18))
                 Rectangle()
-                    .fill(Theme.gold)
+                    .fill(Theme.prismGradient)
                     .frame(width: max(0, proxy.size.width * min(max(value, 0), 1)))
             }
         }

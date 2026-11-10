@@ -274,7 +274,7 @@ func playbackTimeText(_ value: Double) -> String {
 extension View {
     /// 压在图片上的小标签：近黑的半透明底、5pt 圆角，白字或金字在任何画面上都清楚。
     func glassBadge() -> some View {
-        self.background(Color(uiColor: UIColor(hex: 0x0B0C10, alpha: 0.72)),
+        self.background(Color(uiColor: UIColor(hex: 0x07080B, alpha: 0.72)),
                         in: RoundedRectangle(cornerRadius: 5, style: .continuous))
     }
 }
@@ -285,7 +285,7 @@ struct RatingBadge: View {
     var body: some View {
         Text(rating)
             .font(.system(size: 10, weight: .bold).monospacedDigit())
-            .foregroundStyle(Theme.gold)
+            .foregroundStyle(Theme.rating)
             .padding(.horizontal, 6)
             .frame(height: 18)
             .glassBadge()

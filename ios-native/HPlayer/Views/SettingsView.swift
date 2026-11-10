@@ -462,8 +462,8 @@ private struct AppearancePreview: View {
     }
 
     private func miniScreen(dark: Bool) -> some View {
-        let background = dark ? Color(uiColor: UIColor(hex: 0x0B0C10)) : Color(uiColor: UIColor(hex: 0xF6F3ED))
-        let card = dark ? Color(uiColor: UIColor(hex: 0x1E2028)) : Color.white
+        let background = dark ? Color(uiColor: UIColor(hex: 0x07080B)) : Color(uiColor: UIColor(hex: 0xF4F5F8))
+        let card = dark ? Color(uiColor: UIColor(hex: 0x181B23)) : Color.white
         let line = dark ? Color.white.opacity(0.3) : Color.black.opacity(0.14)
         return ZStack(alignment: .topLeading) {
             background

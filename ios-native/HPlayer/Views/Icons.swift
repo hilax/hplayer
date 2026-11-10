@@ -233,7 +233,7 @@ struct IconTile: View {
 
         var foreground: Color {
             switch self {
-            case .accent: return Theme.accent
+            case .accent: return Theme.textPrimary
             case .neutral: return Theme.textSecondary
             case .danger: return Theme.danger
             }
