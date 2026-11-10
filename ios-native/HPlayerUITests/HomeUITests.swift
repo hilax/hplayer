@@ -119,6 +119,10 @@ final class HomeUITests: XCTestCase {
         capture("Magnet link panel - redesign", in: app)
         app.buttons["清除搜索"].tap()
         XCTAssertFalse(app.buttons["magnet.link.play"].waitForExistence(timeout: 1), "Clearing the field hides the panel")
+        // 收起键盘（回车会让输入框失去焦点），否则底部标签栏被键盘挡住点不到
+        magnetField.typeText("\n")
+        if !wait(timeout: 2, { app.keyboards.count == 0 }) { app.swipeDown() }
+        XCTAssertTrue(wait { app.keyboards.count == 0 }, "The keyboard is dismissed before switching tabs")
         app.tabButton("网盘").tap()
         XCTAssertTrue(app.buttons["cloud.transfers"].waitForExistence(timeout: 5), "Switching back shows the Cloud tab")
         capture("Resources - redesign", in: app)
