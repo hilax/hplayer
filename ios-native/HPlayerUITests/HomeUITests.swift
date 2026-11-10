@@ -90,7 +90,15 @@ final class HomeUITests: XCTestCase {
         XCTAssertFalse(app.buttons["home.scanStatus"].exists, "Home never shows scan or matching maintenance")
         XCTAssertFalse(app.otherElements["home.matchingState"].exists)
         app.tabButton("网盘").tap()
-        XCTAssertTrue(app.buttons["library.offline"].waitForExistence(timeout: 5), "Cloud tab keeps the offline download entry")
+        // 2.0：云端离线、本机下载、边下边播合并进传输中心
+        let transfers = app.buttons["cloud.transfers"]
+        XCTAssertTrue(transfers.waitForExistence(timeout: 5), "Cloud tab offers the transfer center")
+        transfers.tap()
+        XCTAssertTrue(app.buttons["transfers.offline"].waitForExistence(timeout: 5), "Transfer center links to cloud offline tasks")
+        XCTAssertTrue(app.buttons["transfers.downloads"].exists, "Transfer center links to local downloads")
+        XCTAssertTrue(app.buttons["transfers.bt"].exists, "Transfer center links to BT streaming")
+        app.navigationBars["传输中心"].buttons.firstMatch.tap()
+        XCTAssertTrue(transfers.waitForExistence(timeout: 5), "Back returns to the Cloud tab")
         XCTAssertFalse(app.buttons["library.manage"].exists, "Library management lives in the Mine tab only")
         // 2.0：磁力是一级 Tab。磁力聚合：搜索框 + 四个分类标签；专题是固定的片商入口，不依赖网络
         app.tabButton("磁力").tap()
@@ -112,7 +120,7 @@ final class HomeUITests: XCTestCase {
         app.buttons["清除搜索"].tap()
         XCTAssertFalse(app.buttons["magnet.link.play"].waitForExistence(timeout: 1), "Clearing the field hides the panel")
         app.tabButton("网盘").tap()
-        XCTAssertTrue(app.buttons["library.offline"].waitForExistence(timeout: 5), "Switching back shows the Cloud tab")
+        XCTAssertTrue(app.buttons["cloud.transfers"].waitForExistence(timeout: 5), "Switching back shows the Cloud tab")
         capture("Resources - redesign", in: app)
         // 媒体库管理只留在「我的」页
         app.tabButton("我的").tap()

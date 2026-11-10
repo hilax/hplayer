@@ -88,6 +88,10 @@ struct InterfaceCatalogHost: View {
                 OfflineTasksView(initialTasks: fixture.offlineTasks, initialFilter: .running,
                                  initialFolderLabels: fixture.offlineFolders)
             }
+        case "transfers":
+            NavigationStack {
+                TransferCenterView(onOpenPage: { _ in }, previewTasks: fixture.offlineTasks)
+            }
         case "offline-add":
             OfflineAddPreviewHost(tasks: fixture.offlineTasks, folders: fixture.offlineFolders)
         case "downloads":

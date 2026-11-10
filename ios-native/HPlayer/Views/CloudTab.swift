@@ -19,6 +19,12 @@ struct CloudTab: View {
     @State private var connectionError = ""
     @State private var openRequestID = UUID()
 
+    @ObservedObject private var downloads = DownloadManager.shared
+
+    private var activeDownloads: Int {
+        downloads.items.filter { $0.state == .downloading || $0.state == .queued }.count
+    }
+
     private var status: P115Status? { appState.isAuthenticated ? accountInfo.status(for: appState.sessionID) : nil }
     private var quota: QuotaResponse? { appState.isAuthenticated ? accountInfo.quota(for: appState.sessionID) : nil }
 
@@ -131,17 +137,18 @@ struct CloudTab: View {
         .accessibilityIdentifier("library.account")
     }
 
-    /// 离线下载与本机视频。磁力播放、磁力聚合在「磁力」Tab；第 7 阶段这里会换成传输中心。
+    /// 传输中心与本机视频。云端离线、本机下载、磁力边下边播统一放进传输中心。
     private var toolRows: some View {
         DesignGroup {
             Button {
-                openPage(.offline)
+                openPage(.transfers)
             } label: {
-                LibraryActionRow(symbol: AppIcon.cloudDownload.name, title: "离线下载",
-                                 subtitle: "磁力、HTTP、ed2k 链接交给 115 云端下载")
+                LibraryActionRow(symbol: AppIcon.cloudDownload.name, title: "传输中心",
+                                 subtitle: "云端离线、下载到本机、磁力边下边播",
+                                 value: activeDownloads == 0 ? "" : "\(activeDownloads) 个下载中")
             }
             .buttonStyle(.pressable(scale: 0.985))
-            .accessibilityIdentifier("library.offline")
+            .accessibilityIdentifier("cloud.transfers")
             Divider().padding(.leading, 60)
             NavigationLink { LocalVideosView().hidesTabBar() } label: {
                 LibraryActionRow(symbol: AppIcon.device.name, title: "本机视频",
@@ -191,6 +198,8 @@ struct CloudTab: View {
     @ViewBuilder
     private func managementPage(_ page: ManagementPage) -> some View {
         switch page {
+        case .transfers:
+            TransferCenterView(onOpenPage: { openPage($0) }).hidesTabBar()
         case .offline:
             OfflineTasksView(onShowFolder: { showFolder($0) }).hidesTabBar()
         case .recycleBin:

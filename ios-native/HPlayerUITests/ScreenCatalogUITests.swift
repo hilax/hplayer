@@ -121,8 +121,8 @@ final class ScreenCatalogUITests: XCTestCase {
             XCTAssertFalse(bar.staticTexts["首页"].exists)
         }
         if screen == "files-menu" {
-            // 菜单里要有离线下载、回收站、下载管理三个入口
-            for title in ["离线下载", "回收站", "下载管理"] {
+            // 2.0：离线下载和下载管理合并为传输中心
+            for title in ["传输中心", "回收站"] {
                 XCTAssertTrue(wait { self.shows(title, in: app) }, "Missing menu entry: \(title)")
             }
         }
