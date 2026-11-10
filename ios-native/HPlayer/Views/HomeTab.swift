@@ -18,6 +18,9 @@ struct HomeTab: View {
     @EnvironmentObject private var metadataStore: MediaMetadataStore
     @EnvironmentObject private var scanner: CloudLibraryScanner
     @ObservedObject private var magnetHistory = MagnetHistoryStore.shared
+    /// 2.0：首页融合在线内容——我的追番、热门新番、最新更新
+    @ObservedObject private var watchlist = AnimeWatchlistStore.shared
+    @ObservedObject private var online = HomeOnlineFeed.shared
 
     @State private var showAdd = false
     @State private var addAction: AddMediaAction?
@@ -70,7 +73,9 @@ struct HomeTab: View {
                                 if !continueItems.isEmpty {
                                     continueShelf(continueItems)
                                 }
+                                onlineShelves
                             }
+                            .padding(.horizontal, Theme.contentInset)
                             .padding(.bottom, 40)
                         } else {
                             Group {
@@ -95,6 +100,11 @@ struct HomeTab: View {
             }
             .background {
                 HomeHeroBackdrop(items: HeroLoop.pages(library.featured), motion: heroState.motion, palette: heroState.palette)
+            }
+            .navigationDestination(for: AnimeDetailRoute.self) { route in
+                AnimeDetailView(animeId: route.animeId)
+                    .id(route.animeId)
+                    .restoringAppearance(colorScheme)
             }
             .navigationDestination(for: PerformerListRoute.self) { _ in
                 PerformerGridView(groups: library.performers)
@@ -145,6 +155,7 @@ struct HomeTab: View {
                 Text(playError)
             }
             .task { localStore.refresh() }
+            .task { await online.loadIfNeeded() }
             .onChange(of: librarySnapshots.revision) { _ in prefetchArtwork(snapshot) }
             .onAppear { if snapshotReady { prefetchArtwork(snapshot) } }
             .onChange(of: library.featured.count) { count in
@@ -466,6 +477,7 @@ struct HomeTab: View {
             if !continueItems.isEmpty {
                 continueShelf(continueItems)
             }
+            onlineShelves
             if !library.movies.isEmpty {
                 movieShelf(library)
             }
@@ -655,6 +667,94 @@ struct HomeTab: View {
             recents.remove(recent)
         case .magnet(let item):
             magnetHistory.remove(item.infoHash)
+        }
+    }
+
+    // MARK: 在线内容（追番、热门新番、最新更新）
+
+    @ViewBuilder
+    private var onlineShelves: some View {
+        if !watchlist.items.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                let updates = watchlist.items.filter(\.hasUpdate).count
+                ShelfHeader(title: "我的追番", identifier: "home.shelf.watchlist", inset: 0) {
+                    Text(updates > 0 ? "\(updates) 部有更新" : "\(watchlist.items.count) 部")
+                        .font(.system(size: 12))
+                        .tertiaryTextStyle()
+                }
+                ScrollView(.horizontal) {
+                    LazyHStack(alignment: .top, spacing: 12) {
+                        ForEach(Array(watchlist.items.enumerated()), id: \.element.id) { index, item in
+                            AnimeDetailLink(animeId: item.id) { watchCard(item) }
+                                .reveal(index, id: "watch.\(item.id)")
+                        }
+                    }
+                    .padding(.horizontal, Theme.contentInset)
+                    .padding(.vertical, 4)
+                }
+                .padding(.horizontal, -Theme.contentInset)
+                .scrollIndicators(.hidden)
+            }
+        }
+        if !online.trending.isEmpty {
+            animeShelf("在线 · 热门新番", items: online.trending, identifier: "home.shelf.trending")
+        }
+        if !online.latest.isEmpty {
+            animeShelf("在线 · 最新更新", items: online.latest, identifier: "home.shelf.latest")
+        }
+    }
+
+    private func watchCard(_ item: AnimeWatchItem) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            PosterArtwork(urlString: item.pic ?? "", title: item.name, width: 108)
+                .allowsHitTesting(false)
+                .overlay(alignment: .bottomTrailing) {
+                    if item.hasUpdate {
+                        Text("更新")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(Theme.brandNight)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Theme.accent, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                            .padding(6)
+                    }
+                }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.name)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Theme.textPrimary)
+                    .lineLimit(1)
+                Text(item.lastContinu ?? "在线动漫")
+                    .font(.system(size: 11))
+                    .tertiaryTextStyle()
+                    .lineLimit(1)
+            }
+            .frame(width: 108, alignment: .leading)
+        }
+        .frame(width: 108, alignment: .top)
+    }
+
+    private func animeShelf(_ title: String, items: [AnimeVideoItem], identifier: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ShelfHeader(title: title, identifier: identifier, inset: 0) {
+                Button { channel.wrappedValue = .anime } label: {
+                    ShelfLinkLabel(text: "全部")
+                        .frame(minWidth: 44, minHeight: 44, alignment: .trailing)
+                }
+                .buttonStyle(.pressable(scale: 0.92))
+            }
+            ScrollView(.horizontal) {
+                LazyHStack(alignment: .top, spacing: 12) {
+                    ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                        AnimeDetailLink(animeId: item.id) { AnimePosterCard(item: item, width: 108) }
+                            .reveal(index, id: "\(identifier).\(item.id)")
+                    }
+                }
+                .padding(.horizontal, Theme.contentInset)
+                .padding(.vertical, 4)
+            }
+            .padding(.horizontal, -Theme.contentInset)
+            .scrollIndicators(.hidden)
         }
     }
 

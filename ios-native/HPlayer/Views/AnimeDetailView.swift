@@ -84,7 +84,7 @@ struct AnimeDetailView: View {
                         watchlist.toggle(detail: detail)
                     } label: {
                         Image(icon: watchlist.isWatched(id: detail.id) ? .heartFill : .heart)
-                            .foregroundStyle(watchlist.isWatched(id: detail.id) ? Theme.gold : Theme.accent)
+                            .foregroundStyle(watchlist.isWatched(id: detail.id) ? Theme.accent : Theme.textPrimary)
                     }
                     .accessibilityLabel(watchlist.isWatched(id: detail.id) ? "取消追番" : "追番")
                     .accessibilityIdentifier("anime.watchlist.\(detail.id)")
@@ -92,6 +92,7 @@ struct AnimeDetailView: View {
             }
         }
         .task {
+            watchlist.markUpdateChecked(id: animeId)
             await loadDetail()
         }
         .onAppear {
