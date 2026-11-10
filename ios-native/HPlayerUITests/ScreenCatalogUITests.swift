@@ -44,8 +44,8 @@ final class ScreenCatalogUITests: XCTestCase {
     func test40MagnetFiles() { capture("magnet-files", expected: "资源目录") }
     func test41Portrait() { capture("portrait", expected: "portrait") }
     func test42Landscape() { capture("landscape", expected: "landscape") }
-    func test43Playback() { capture("playback", expected: "播放设置") }
-    func test44Tracks() { capture("tracks", expected: "字幕与音轨") }
+    func test43Playback() { capture("playback", expected: "倍速") }
+    func test44Tracks() { capture("tracks", expected: "字幕") }
     func test45Episodes() { capture("episodes", expected: "选集") }
     func test46Aspect() { capture("aspect", expected: "画面比例") }
     func test47HomeLight() { capture("home", expected: "播放", style: "light") }
@@ -59,7 +59,9 @@ final class ScreenCatalogUITests: XCTestCase {
     func test55PortraitLight() { capture("portrait", expected: "portrait", style: "light") }
     func test56SleepLight() { capture("sleep", expected: "定时关闭", style: "light") }
     func test57EpisodesLight() { capture("episodes", expected: "选集", style: "light") }
-    func test58PlaybackLight() { capture("playback", expected: "播放设置", style: "light") }
+    func test58PlaybackLight() { capture("playback", expected: "倍速", style: "light") }
+    func test59TracksLight() { capture("tracks", expected: "字幕", style: "light") }
+    func test60AspectLight() { capture("aspect", expected: "画面比例", style: "light") }
 
     private func capture(_ screen: String, expected: String, style: String = "dark") {
         continueAfterFailure = false
@@ -113,7 +115,21 @@ final class ScreenCatalogUITests: XCTestCase {
             XCTAssertTrue(app.buttons["playback.sleep.off"].waitForExistence(timeout: 10), "Sleep timer menu should be open")
             XCTAssertTrue(app.buttons["playback.sleep.30"].isSelected, "The preset 30 minute option is marked")
         }
-        if screen != "portrait" && screen != "landscape" && screen != "sleep" {
+        // 竖屏的快捷菜单：倍速、字幕与音轨、画面比例都是按钮旁边的弹出菜单，选集是底部抽屉
+        if screen == "playback" {
+            XCTAssertTrue(app.buttons["playback.speed.1.5"].waitForExistence(timeout: 10), "Speed menu should be open")
+            XCTAssertFalse(app.buttons["关闭设置"].exists, "There is no bottom settings sheet")
+        }
+        if screen == "tracks" {
+            XCTAssertTrue(app.buttons["playback.subtitle.off"].waitForExistence(timeout: 10), "Subtitle menu should be open")
+        }
+        if screen == "aspect" {
+            XCTAssertTrue(app.sliders["画面缩放"].waitForExistence(timeout: 10), "Aspect menu should be open")
+        }
+        if screen == "episodes" {
+            XCTAssertTrue(app.buttons["关闭选集"].waitForExistence(timeout: 10), "Episode drawer should be open")
+        }
+        if !["portrait", "landscape", "sleep", "playback", "tracks", "aspect"].contains(screen) {
             XCTAssertTrue(wait {
                 if screen == "home" { return app.buttons["home.heroPlay"].exists }
                 return self.shows(expected, in: app)

@@ -197,25 +197,57 @@ final class RedesignFlowUITests: XCTestCase {
         XCTAssertFalse(app.buttons["提前缓存"].exists)
         sleepEnd.tap()
         XCTAssertTrue(wait { !sleepEnd.exists }, "Picking an option closes the menu")
-        // 快捷入口打开播放设置：画质、倍速、解码
-        app.buttons["playback.quality"].tap()
-        XCTAssertTrue(app.staticTexts["播放设置"].waitForExistence(timeout: 5))
+        // 五个快捷入口（清晰度、倍速、字幕、画面比例、解码）都在按钮旁边弹出菜单，不再是底部面板
+        let dismiss = { app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.97)).tap() }
+
+        let speedCell = app.buttons["playback.speed"]
+        XCTAssertGreaterThanOrEqual(speedCell.frame.height, 44)
+        speedCell.tap()
+        let rate = app.buttons["playback.speed.1.5"]
+        XCTAssertTrue(rate.waitForExistence(timeout: 5), "The speed entry opens a menu next to it")
+        XCTAssertFalse(app.staticTexts["播放设置"].exists, "No bottom settings sheet any more")
+        XCTAssertFalse(app.buttons["关闭设置"].exists)
         XCTAssertFalse(app.staticTexts["提前缓存"].exists, "Read-ahead is a landscape-only setting")
-        XCTAssertFalse(app.staticTexts["定时关闭"].exists, "The sleep timer lives behind the ellipsis")
-        app.buttons["1.5"].tap()
-        app.buttons["关闭设置"].tap()
+        XCTAssertGreaterThanOrEqual(rate.frame.minY, speedCell.frame.maxY - 1, "The menu opens right under its entry")
+        rate.tap()
+        XCTAssertTrue(wait { !rate.exists }, "Picking a speed closes the menu")
+
+        app.buttons["playback.quality"].tap()
+        XCTAssertTrue(app.staticTexts["清晰度"].waitForExistence(timeout: 5))
+        dismiss()
+        XCTAssertTrue(wait { !app.staticTexts["清晰度"].exists }, "Tapping outside closes the menu")
+
         app.buttons["playback.tracks"].tap()
-        XCTAssertTrue(app.staticTexts["字幕与音轨"].exists)
-        XCTAssertTrue(app.buttons["关闭字幕"].exists)
+        let subtitleOff = app.buttons["playback.subtitle.off"]
+        XCTAssertTrue(subtitleOff.waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["音轨"].firstMatch.exists)
-        app.buttons["关闭设置"].tap()
+        subtitleOff.tap()
+        XCTAssertTrue(subtitleOff.exists, "Choosing a subtitle keeps the menu open so several can be tried")
+        dismiss()
+        XCTAssertTrue(wait { !subtitleOff.exists })
+
         let aspect = app.buttons["playback.aspect"]
         XCTAssertTrue(aspect.waitForExistence(timeout: 5))
         XCTAssertTrue(aspect.isHittable)
         XCTAssertGreaterThanOrEqual(aspect.frame.height, 44)
         aspect.tap()
-        XCTAssertTrue(app.staticTexts["画面比例"].waitForExistence(timeout: 5))
-        app.buttons["关闭画面比例"].tap()
+        let zoom = app.sliders["画面缩放"]
+        XCTAssertTrue(zoom.waitForExistence(timeout: 5))
+        let fill = app.buttons["playback.aspect.fill"]
+        XCTAssertTrue(fill.exists)
+        fill.tap()
+        XCTAssertTrue(zoom.exists, "Choosing a ratio keeps the menu open so the zoom can be adjusted")
+        dismiss()
+        XCTAssertTrue(wait { !zoom.exists })
+
+        app.buttons["playback.decoding"].tap()
+        let hardware = app.buttons["playback.decoding.hardware"]
+        XCTAssertTrue(hardware.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["playback.decoding.software"].exists)
+        dismiss()
+        XCTAssertTrue(wait { !hardware.exists })
+
+        // 选集还是底部抽屉
         app.buttons["playback.playlist"].tap()
         XCTAssertTrue(app.buttons["关闭选集"].waitForExistence(timeout: 5))
         app.buttons["关闭选集"].tap()

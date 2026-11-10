@@ -31,8 +31,18 @@ private struct PlaybackAdjustment {
     var targetTime: Double? = nil
 }
 
-/// 右侧设置面板的分页
-private enum SettingsPage: Equatable { case playback, tracks }
+/// 竖屏信息页上五个快捷入口点开的菜单：在按钮旁边弹出，不再是底部面板
+private enum QuickMenu: Hashable {
+    case quality, speed, tracks, aspect, decoding
+}
+
+/// 菜单要贴着点开它的那个入口，入口把自己的位置报上来
+private struct QuickAnchorKey: PreferenceKey {
+    static var defaultValue: [QuickMenu: Anchor<CGRect>] { [:] }
+    static func reduce(value: inout [QuickMenu: Anchor<CGRect>], nextValue: () -> [QuickMenu: Anchor<CGRect>]) {
+        value.merge(nextValue()) { $1 }
+    }
+}
 
 /// 横屏播放页上点按钮弹出的玻璃层：底栏的画质、倍速、字幕音轨、选集，顶栏的画面比例、更多
 private enum PlayerPopover: Hashable {
@@ -68,6 +78,10 @@ private struct PlayerAnchorKey: PreferenceKey {
 private extension View {
     func playerAnchor(_ anchor: PlayerAnchor) -> some View {
         anchorPreference(key: PlayerAnchorKey.self, value: .bounds) { [anchor: $0] }
+    }
+
+    func quickAnchor(_ menu: QuickMenu) -> some View {
+        anchorPreference(key: QuickAnchorKey.self, value: .bounds) { [menu: $0] }
     }
 
     /// 弹出层的玻璃底：iOS 26 用系统液态玻璃的 Regular 款（磨砂、适合放文字），
@@ -220,10 +234,10 @@ struct PlaybackControlsView: View {
     @State private var controlsVisible = true
     @State private var locked = false
     @State private var showList = false
-    @State private var settingsPage: SettingsPage?
+    /// 竖屏快捷入口（画质、倍速、字幕、画面比例、解码）点开的菜单
+    @State private var quickMenu: QuickMenu?
     /// 竖屏右上角「…」点开的定时关闭菜单
     @State private var showSleepMenu = false
-    @State private var showAspect = false
     @State private var boosting = false
     @State private var dragging = false
     @State private var dragTime = 0.0
@@ -321,20 +335,16 @@ struct PlaybackControlsView: View {
                         if !landscape { infoPage(bottomInset: insets.bottom) }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    // 竖屏快捷入口的菜单：贴着入口弹出，画在整页上面
+                    .overlayPreferenceValue(QuickAnchorKey.self) { anchors in
+                        if !landscape && !locked {
+                            quickMenuLayer(anchors, insets: insets)
+                        }
+                    }
 
                     if showSleepMenu && !locked && !landscape {
                         sleepMenu(insets: insets)
                             .zIndex(6)
-                    }
-
-                    if showAspect && !locked {
-                        aspectPanel(insets: insets)
-                            .zIndex(7)
-                    }
-
-                    if let settingsPage, !locked {
-                        settingsPanel(page: settingsPage, landscape: landscape, insets: insets)
-                            .zIndex(8)
                     }
 
                     // 横屏的选集是弹出层里的玻璃面板，这里只管竖屏的选集抽屉
@@ -357,6 +367,7 @@ struct PlaybackControlsView: View {
                     isLandscapeWindow = isLandscape
                     popover = nil
                     showSleepMenu = false
+                    quickMenu = nil
                     // 竖屏的选集抽屉在横屏不显示，转过去时收起，免得挡住手势
                     if isLandscape { showList = false }
                 }
@@ -377,10 +388,10 @@ struct PlaybackControlsView: View {
             systemVolume.start()
             #if DEBUG
             switch InterfacePreview.screen {
-            case "playback": settingsPage = .playback
-            case "tracks": settingsPage = .tracks
+            case "playback": quickMenu = .speed
+            case "tracks": quickMenu = .tracks
             case "episodes": showList = true
-            case "aspect": showAspect = true
+            case "aspect": quickMenu = .aspect
             case "sleep":
                 // 竖屏「…」的定时关闭菜单：预设 30 分钟，截图里能看到选中行和按钮上的小点
                 sleepTimer = .minutes(30)
@@ -461,20 +472,16 @@ struct PlaybackControlsView: View {
             Spacer(minLength: 8)
 
             // 字幕和音轨在底栏右边已经有一个按钮，顶栏不再重复
+            // 顶栏只在横屏出现；竖屏的「…」在视频区自己的控制层里
             GlassButtonGroup {
-                if landscape {
-                    GlassIconButton(systemImage: AppIcon.aspect.name, label: "画面比例") { togglePopover(.aspect) }
-                        .overlay { popoverRing(.aspect) }
-                        .accessibilityIdentifier("playback.aspect")
-                        .playerAnchor(.popover(.aspect))
-                    GlassIconButton(systemImage: AppIcon.more.name, label: "更多设置") { togglePopover(.more) }
-                        .overlay { popoverRing(.more) }
-                        .accessibilityIdentifier("playback.more")
-                        .playerAnchor(.popover(.more))
-                } else {
-                    GlassIconButton(systemImage: AppIcon.more.name, label: "更多设置") { openSettings(.playback) }
-                        .accessibilityIdentifier("playback.more")
-                }
+                GlassIconButton(systemImage: AppIcon.aspect.name, label: "画面比例") { togglePopover(.aspect) }
+                    .overlay { popoverRing(.aspect) }
+                    .accessibilityIdentifier("playback.aspect")
+                    .playerAnchor(.popover(.aspect))
+                GlassIconButton(systemImage: AppIcon.more.name, label: "更多设置") { togglePopover(.more) }
+                    .overlay { popoverRing(.more) }
+                    .accessibilityIdentifier("playback.more")
+                    .playerAnchor(.popover(.more))
             }
             .frame(width: topHUDShowing ? max(0, trailingWidth) : nil, alignment: .trailing)
         }
@@ -1603,33 +1610,20 @@ struct PlaybackControlsView: View {
     /// 「…」下面展开的定时关闭菜单：毛玻璃卡片，右边和按钮对齐；选项和横屏的定时关闭一致。
     /// 画在整页上面（竖屏视频区只有 220 高，放不下五行），点卡片以外的地方收起。
     private func sleepMenu(insets: EdgeInsets) -> some View {
-        let shape = RoundedRectangle(cornerRadius: Theme.Radius.sheet, style: .continuous)
-        return ZStack(alignment: .topTrailing) {
+        ZStack(alignment: .topTrailing) {
             Color.clear
                 .contentShape(Rectangle())
                 .onTapGesture { closeSleepMenu() }
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 0) {
-                Text("定时关闭")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Theme.textSecondary)
-                    .padding(.horizontal, 12)
-                    .padding(.top, 8)
-                    .padding(.bottom, 6)
+                menuHeader("定时关闭")
                 ForEach(SleepTimer.options) { option in
                     sleepMenuRow(option)
                 }
             }
             .padding(6)
             .frame(width: 204)
-            .background {
-                ZStack {
-                    shape.fill(.regularMaterial)
-                    shape.fill(Theme.surface.opacity(0.72))
-                }
-            }
-            .overlay { shape.strokeBorder(Theme.hairline, lineWidth: 0.5) }
-            .shadow(color: .black.opacity(lightChrome ? 0.16 : 0.45), radius: 18, y: 8)
+            .portraitMenuSurface()
             // 视频区顶部：状态栏占位 + 上边距 6 + 按钮 42 + 间隙 8
             .padding(.top, insets.top + 6 + 42 + 8)
             .padding(.trailing, 12)
@@ -1642,32 +1636,12 @@ struct PlaybackControlsView: View {
 
     private func sleepMenuRow(_ option: SleepTimer) -> some View {
         let selected = sleepTimer == option
-        return Button {
+        return menuRow(option.title, selected: selected, id: "playback.sleep.\(option.id)") {
             setSleepTimer(option)
             closeSleepMenu()
-        } label: {
-            HStack(spacing: 8) {
-                Text(option.title)
-                    .font(.system(size: 15, weight: selected ? .semibold : .regular))
-                    .foregroundStyle(selected ? Theme.accentAlt : Color.primary)
-                Spacer(minLength: 0)
-                if selected {
-                    Image(systemName: AppIcon.check.name)
-                        .font(.system(size: 13, weight: .bold))
-                        .foregroundStyle(Theme.accentAlt)
-                        .accessibilityHidden(true)
-                }
-            }
-            .padding(.horizontal, 12)
-            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-            .background(selected ? Theme.accent.opacity(0.14) : Color.clear,
-                        in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .contentShape(Rectangle())
+        } content: {
+            menuTitle(option.title, selected: selected)
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(option.title)
-        .accessibilityAddTraits(selected ? .isSelected : [])
-        .accessibilityIdentifier("playback.sleep.\(option.id)")
     }
 
     // MARK: 竖屏信息页
@@ -1720,38 +1694,29 @@ struct PlaybackControlsView: View {
     }
 
     /// 一张卡片里五个入口：图标在上、当前值在下，和横屏底栏的图标语言一致；
-    /// 偏离默认的（倍速不是 1×、字幕开着）用琥珀色标出来，和横屏一样
+    /// 偏离默认的（倍速不是 1×、字幕开着）用琥珀色标出来，和横屏一样。
+    /// 点一下在按钮下面弹出菜单（不是底部面板）。
     private var quickRow: some View {
         HStack(spacing: 0) {
-            quickCell(selectedQuality.isEmpty ? "原画" : selectedQuality, "清晰度", id: "playback.quality") {
-                openSettings(.playback)
-            } glyph: {
+            quickCell(.quality, selectedQuality.isEmpty ? "原画" : selectedQuality, "清晰度", id: "playback.quality") {
                 Text("HD")
                     .font(.system(size: 10.5, weight: .heavy))
                     .padding(.horizontal, 4)
                     .padding(.vertical, 1.5)
                     .overlay { RoundedRectangle(cornerRadius: 5, style: .continuous).strokeBorder(lineWidth: 1.7) }
             }
-            quickCell("\(String(format: "%g", playback.rate))×", "倍速", id: "playback.speed",
+            quickCell(.speed, "\(String(format: "%g", playback.rate))×", "倍速", id: "playback.speed",
                       on: abs(playback.rate - 1) > 0.01) {
-                openSettings(.playback)
-            } glyph: {
                 Image(systemName: AppIcon.speed.name).font(.system(size: 18, weight: .medium))
             }
-            quickCell(playback.selectedSubtitle == nil ? "关闭" : "已开启", "字幕", id: "playback.tracks",
+            quickCell(.tracks, playback.selectedSubtitle == nil ? "关闭" : "已开启", "字幕", id: "playback.tracks",
                       on: playback.selectedSubtitle != nil) {
-                openSettings(.tracks)
-            } glyph: {
                 Image(systemName: AppIcon.subtitle.name).font(.system(size: 18, weight: .medium))
             }
-            quickCell(playback.aspect.title, "画面比例", id: "playback.aspect") {
-                openAspect()
-            } glyph: {
+            quickCell(.aspect, playback.aspect.title, "画面比例", id: "playback.aspect") {
                 Image(systemName: AppIcon.aspect.name).font(.system(size: 18, weight: .medium))
             }
-            quickCell(playback.decoding.title, "解码", id: "playback.decoding") {
-                openSettings(.playback)
-            } glyph: {
+            quickCell(.decoding, playback.decoding.title, "解码", id: "playback.decoding") {
                 Image(systemName: AppIcon.decoder.name).font(.system(size: 18, weight: .medium))
             }
         }
@@ -1760,27 +1725,370 @@ struct PlaybackControlsView: View {
         .padding(.top, 14)
     }
 
-    private func quickCell<Glyph: View>(_ value: String, _ label: String, id: String, on: Bool = false,
-                                        action: @escaping () -> Void,
+    /// 菜单开着的那个入口多一块淡琥珀色的底，一眼看出菜单是从哪个按钮出来的
+    private func quickCell<Glyph: View>(_ menu: QuickMenu, _ value: String, _ label: String, id: String, on: Bool = false,
                                         @ViewBuilder glyph: () -> Glyph) -> some View {
-        Button(action: action) {
+        let open = quickMenu == menu
+        return Button {
+            toggleQuickMenu(menu)
+        } label: {
             VStack(spacing: 6) {
                 glyph()
-                    .foregroundStyle(on ? Theme.accent : Theme.textPrimary)
+                    .foregroundStyle(on || open ? Theme.accent : Theme.textPrimary)
                     .frame(height: 22)
                 Text(value)
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(on ? Theme.accentAlt : Theme.textPrimary)
+                    .foregroundStyle(on || open ? Theme.accentAlt : Theme.textPrimary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
             }
             .frame(maxWidth: .infinity, minHeight: 56)
+            .background(open ? Theme.accent.opacity(0.12) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .quickAnchor(menu)
+        .accessibilityLabel(label)
+        .accessibilityValue(value)
+        .accessibilityAddTraits(open ? .isSelected : [])
+        .accessibilityIdentifier(id)
+    }
+
+    // MARK: 竖屏快捷菜单
+
+    /// 菜单盖在整页上面。先铺一层点击区：点菜单以外的任何地方都收起；
+    /// 再把菜单放到点开它的入口旁边：默认在入口下面，下面放不下才翻到上面。
+    private func quickMenuLayer(_ anchors: [QuickMenu: Anchor<CGRect>], insets: EdgeInsets) -> some View {
+        GeometryReader { proxy in
+            ZStack {
+                if let menu = quickMenu {
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture { closeQuickMenu() }
+                        .accessibilityHidden(true)
+                    quickMenuPanel(menu, button: anchors[menu].map { proxy[$0] }, size: proxy.size, insets: insets)
+                }
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height)
+        }
+    }
+
+    private static func quickMenuWidth(_ menu: QuickMenu) -> CGFloat {
+        switch menu {
+        case .quality: return 224
+        case .speed: return 200
+        case .tracks: return 260
+        case .aspect: return 266
+        case .decoding: return 248
+        }
+    }
+
+    private func quickMenuPanel(_ menu: QuickMenu, button: CGRect?, size: CGSize, insets: EdgeInsets) -> some View {
+        let margin: CGFloat = 12
+        let gap: CGFloat = 6
+        let width = Self.quickMenuWidth(menu)
+        // 还没量到入口位置的第一帧，先放在信息区上部，下一帧就会贴到入口上
+        let rect = button ?? CGRect(x: size.width / 2, y: insets.top + 290, width: 0, height: 56)
+        let below = size.height - insets.bottom - margin - (rect.maxY + gap)
+        let above = rect.minY - gap - (insets.top + margin)
+        let opensBelow = below >= 260 || below >= above
+        let maxHeight = max(140, opensBelow ? below : above)
+        let leading = min(max(rect.midX - width / 2, margin), max(margin, size.width - margin - width))
+        let offsetY = opensBelow ? rect.maxY + gap : -(size.height - rect.minY + gap)
+        return quickMenuContent(menu, maxHeight: maxHeight)
+            .fixedSize(horizontal: false, vertical: true)
+            .portraitMenuSurface()
+            .offset(x: leading, y: offsetY)
+            .frame(width: size.width, height: size.height, alignment: opensBelow ? .topLeading : .bottomLeading)
+            .transition(popoverTransition(from: rect, in: size))
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(Self.quickMenuName(menu))
+    }
+
+    private static func quickMenuName(_ menu: QuickMenu) -> String {
+        switch menu {
+        case .quality: return "清晰度"
+        case .speed: return "倍速"
+        case .tracks: return "字幕与音轨"
+        case .aspect: return "画面比例"
+        case .decoding: return "解码"
+        }
+    }
+
+    @ViewBuilder
+    private func quickMenuContent(_ menu: QuickMenu, maxHeight: CGFloat) -> some View {
+        let width = Self.quickMenuWidth(menu)
+        switch menu {
+        case .quality: qualityMenu(width: width, maxHeight: maxHeight)
+        case .speed: speedMenu(width: width, maxHeight: maxHeight)
+        case .tracks: tracksMenu(width: width, maxHeight: maxHeight)
+        case .aspect: aspectMenu(width: width)
+        case .decoding: decodingMenu(width: width, maxHeight: maxHeight)
+        }
+    }
+
+    /// 标题 + 选项：选项多、屏幕放不下时，标题固定，选项在里面滚动
+    private func quickMenuBody<Content: View>(_ title: String, width: CGFloat, maxHeight: CGFloat,
+                                              @ViewBuilder content: () -> Content) -> some View {
+        let rows = VStack(alignment: .leading, spacing: 0) { content() }
+            .frame(width: width - 12, alignment: .leading)
+        return VStack(alignment: .leading, spacing: 0) {
+            menuHeader(title)
+            HuggingScroll(maxHeight: max(88, maxHeight - 48)) { rows }
+        }
+        .padding(6)
+        .frame(width: width)
+    }
+
+    private func qualityMenu(width: CGFloat, maxHeight: CGFloat) -> some View {
+        quickMenuBody("清晰度", width: width, maxHeight: maxHeight) {
+            if qualities.isEmpty {
+                menuRow("原画", selected: true, id: "playback.quality.original") {
+                    closeQuickMenu()
+                } content: {
+                    menuTitle("原画", detail: originalQualityDetail, selected: true)
+                }
+                menuNote("这个视频只有原画，没有别的清晰度可选。")
+            } else {
+                ForEach(qualities) { quality in
+                    menuRow(quality.title, selected: isSelectedQuality(quality), id: "playback.quality.\(quality.id)") {
+                        if !isSelectedQuality(quality) { onQuality(quality.id) }
+                        closeQuickMenu(after: 0.3)
+                    } content: {
+                        menuTitle(quality.title, detail: qualityDetail(quality), selected: isSelectedQuality(quality))
+                    }
+                }
+            }
+        }
+    }
+
+    private func speedMenu(width: CGFloat, maxHeight: CGFloat) -> some View {
+        quickMenuBody("倍速", width: width, maxHeight: maxHeight) {
+            ForEach(Self.speedOptions, id: \.self) { rate in
+                menuRow("\(String(format: "%g", rate))×", selected: abs(playback.rate - rate) < 0.001,
+                        id: "playback.speed.\(String(format: "%g", rate))") {
+                    playback.setRate(rate)
+                    closeQuickMenu(after: 0.3)
+                } content: {
+                    menuTitle("\(String(format: "%g", rate))×", selected: abs(playback.rate - rate) < 0.001)
+                }
+            }
+            menuNote("长按画面可以临时加速。")
+        }
+    }
+
+    /// 字幕、音轨、字幕样式三段排在一列里；选了不收起，可以连着选
+    private func tracksMenu(width: CGFloat, maxHeight: CGFloat) -> some View {
+        quickMenuBody("字幕", width: width, maxHeight: maxHeight) {
+            menuRow("关闭字幕", selected: playback.selectedSubtitle == nil, id: "playback.subtitle.off") {
+                playback.selectSubtitle(nil)
+                revealControls()
+            } content: {
+                menuTitle("关闭", selected: playback.selectedSubtitle == nil)
+            }
+            ForEach(playback.subtitleTracks) { track in
+                menuRow(track.title, selected: playback.selectedSubtitle == track.id, id: "playback.subtitle.\(track.id)") {
+                    playback.selectSubtitle(track.id)
+                    revealControls()
+                } content: {
+                    menuTitle(track.title, detail: track.detail, selected: playback.selectedSubtitle == track.id, stacked: true)
+                }
+            }
+            if playback.subtitleTracks.isEmpty {
+                menuNote("这个视频没有内嵌字幕。同一文件夹里同名的字幕文件会自动加载。")
+            }
+
+            menuDivider
+            menuHeader("音轨")
+            ForEach(playback.audioTracks) { track in
+                menuRow(track.title, selected: playback.selectedAudio == track.id, id: "playback.audio.\(track.id)") {
+                    playback.selectAudio(track.id)
+                    revealControls()
+                } content: {
+                    menuTitle(track.title, detail: track.detail, selected: playback.selectedAudio == track.id, stacked: true)
+                }
+            }
+            if playback.audioTracks.isEmpty {
+                menuNote("视频加载后会在这里列出所有音轨。")
+            }
+
+            menuDivider
+            menuHeader("字幕样式")
+            ForEach(SubtitleStyle.allCases) { style in
+                menuRow("字幕样式：\(style.title)", selected: playback.subtitleStyle == style,
+                        id: "playback.subtitleStyle.\(style.id)") {
+                    playback.setSubtitleStyle(style)
+                    revealControls()
+                } content: {
+                    // 样式文字是白字，放在浅色菜单上要垫一块深色底才看得见
+                    SubtitleStyleLabel(style: style)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.black.opacity(0.72), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                }
+            }
+            if selectedSubtitleKeepsOwnStyle {
+                menuNote("特效和图形字幕会保留自带的样式。")
+            }
+        }
+    }
+
+    /// 3×2 的比例格，每格一个小图示；下面一行是缩放和还原。选了不收起，方便接着调缩放
+    private func aspectMenu(width: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            menuHeader("画面比例")
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(82), spacing: 4), count: 3), spacing: 4) {
+                ForEach(VideoAspect.allCases) { option in
+                    aspectMenuTile(option)
+                }
+            }
+            HStack(spacing: 8) {
+                Text("缩放")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Theme.textSecondary)
+                Slider(value: Binding(get: { playback.zoom }, set: { playback.setZoom($0) }), in: 1...2)
+                    .accessibilityLabel("画面缩放")
+                Text("\(Int((playback.zoom * 100).rounded()))%")
+                    .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                    .frame(width: 38, alignment: .trailing)
+                Button {
+                    playback.setAspect(.fit)
+                    playback.setZoom(1)
+                    revealControls()
+                } label: {
+                    Text("还原")
+                        .font(.system(size: 12, weight: .semibold))
+                        .padding(.horizontal, 12)
+                        .frame(height: 30)
+                        .background(Color.primary.opacity(0.07), in: Capsule())
+                        .frame(height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("还原画面")
+                .accessibilityIdentifier("playback.aspect.reset")
+            }
+            .padding(.horizontal, 6)
+        }
+        .padding(6)
+        .frame(width: width)
+    }
+
+    private func aspectMenuTile(_ option: VideoAspect) -> some View {
+        let selected = playback.aspect == option
+        return Button {
+            playback.setAspect(option)
+            revealControls()
+        } label: {
+            VStack(spacing: 6) {
+                AspectGlyph(option: option)
+                Text(option.title)
+                    .font(.system(size: 12, weight: selected ? .semibold : .medium))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(selected ? Theme.accentAlt : Color.primary)
+            .frame(width: 82, height: 68)
+            .background(selected ? Theme.accent.opacity(0.14) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(option.title)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityIdentifier("playback.aspect.\(option.id)")
+    }
+
+    private func decodingMenu(width: CGFloat, maxHeight: CGFloat) -> some View {
+        quickMenuBody("解码", width: width, maxHeight: maxHeight) {
+            ForEach(VideoDecoding.allCases) { option in
+                menuRow(option.title, selected: playback.decoding == option, id: "playback.decoding.\(option.id)") {
+                    playback.setDecoding(option)
+                    closeQuickMenu(after: 0.3)
+                } content: {
+                    menuTitle(option.title, selected: playback.decoding == option)
+                }
+            }
+            menuNote("硬解码交给手机的视频芯片，省电、不容易发热；软解码很耗电，只在硬解码画面不正常时临时换用。")
+        }
+    }
+
+    // MARK: 竖屏菜单里的通用部件（定时关闭菜单和五个快捷菜单共用）
+
+    private func menuHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(Theme.textSecondary)
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
+            .padding(.bottom, 6)
+    }
+
+    /// 选项行：选中的用琥珀色字、右边一个勾，再垫一块淡琥珀色的底
+    private func menuRow<Content: View>(_ label: String, selected: Bool, id: String,
+                                        action: @escaping () -> Void,
+                                        @ViewBuilder content: () -> Content) -> some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                content()
+                Spacer(minLength: 0)
+                if selected {
+                    Image(systemName: AppIcon.check.name)
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(Theme.accentAlt)
+                        .accessibilityHidden(true)
+                }
+            }
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .background(selected ? Theme.accent.opacity(0.14) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)
-        .accessibilityValue(value)
+        .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityIdentifier(id)
+    }
+
+    /// 行里的文字：标题，加上可选的说明（并排或者放在下面一行）
+    @ViewBuilder
+    private func menuTitle(_ title: String, detail: String = "", selected: Bool, stacked: Bool = false) -> some View {
+        let titleText = Text(Self.clipped(title, stacked ? 22 : 18))
+            .font(.system(size: 15, weight: selected ? .semibold : .regular))
+            .foregroundStyle(selected ? Theme.accentAlt : Color.primary)
+        let detailText = Text(Self.clipped(detail, 24))
+            .font(.system(size: 12))
+            .foregroundStyle(Theme.textSecondary)
+        if stacked && !detail.isEmpty {
+            VStack(alignment: .leading, spacing: 1) {
+                titleText.lineLimit(1)
+                detailText.lineLimit(1)
+            }
+        } else {
+            HStack(spacing: 8) {
+                titleText.lineLimit(1)
+                if !detail.isEmpty { detailText.lineLimit(1) }
+            }
+        }
+    }
+
+    private func menuNote(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 12))
+            .foregroundStyle(Theme.textSecondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+    }
+
+    private var menuDivider: some View {
+        Rectangle()
+            .fill(Theme.hairline)
+            .frame(height: 0.5)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 4)
     }
 
     private var episodesSection: some View {
@@ -1925,97 +2233,6 @@ struct PlaybackControlsView: View {
         .padding(.top, 18)
     }
 
-    // MARK: 画面比例
-
-    private func aspectPanel(insets: EdgeInsets) -> some View {
-        ZStack(alignment: .bottom) {
-            Color.black.opacity(0.25)
-                .contentShape(Rectangle())
-                .onTapGesture { closeAspect() }
-
-            VStack(alignment: .leading, spacing: 14) {
-                HStack {
-                    Text("画面比例")
-                        .font(.title2.bold())
-                    Spacer()
-                    panelClose("关闭画面比例") { closeAspect() }
-                }
-                Text("只影响当前视频")
-                        .font(.caption)
-                        .foregroundStyle(Theme.textSecondary)
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), spacing: 10) {
-                    ForEach(VideoAspect.allCases) { option in
-                        aspectOption(option)
-                    }
-                }
-                HStack(spacing: 12) {
-                    Text("缩放")
-                        .font(.caption)
-                        .foregroundStyle(Theme.textSecondary)
-                    Slider(value: Binding(get: { playback.zoom }, set: { playback.setZoom($0) }), in: 1...2)
-                        .accessibilityLabel("画面缩放")
-                    Text("\(Int((playback.zoom * 100).rounded()))%")
-                        .font(.caption.weight(.semibold).monospacedDigit())
-                        .frame(width: 44, alignment: .trailing)
-                    GlassTextButton(title: "还原", label: "还原画面") {
-                        playback.setAspect(.fit)
-                        playback.setZoom(1)
-                    }
-                }
-            }
-            .padding(18)
-            .padding(.bottom, insets.bottom)
-            .frame(maxWidth: 620)
-            .playerPanelBackground(cornerRadius: Theme.Radius.sheet)
-            .designScreen("aspect")
-            .padding(.horizontal, 0)
-            .padding(.bottom, 0)
-        }
-        .transition(.move(edge: .bottom).combined(with: .opacity))
-    }
-
-    private func aspectOption(_ option: VideoAspect) -> some View {
-        let selected = playback.aspect == option
-        return Button {
-            playback.setAspect(option)
-        } label: {
-            VStack(spacing: 6) {
-                aspectIcon(option)
-                    .frame(height: 22)
-                Text(option.subtitle.map { "\(option.title)\n\($0)" } ?? option.title)
-                    .font(.caption2.weight(.semibold))
-                    .multilineTextAlignment(.center)
-                    .lineLimit(2)
-            }
-            .frame(maxWidth: .infinity, minHeight: 74)
-            .background(selected ? Theme.accent.opacity(lightChrome ? 0.14 : 0.28) : Color.primary.opacity(0.07),
-                        in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(selected ? Theme.accent : Color.primary.opacity(0.12), lineWidth: selected ? 1.5 : 0.5)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(option.title)
-        .accessibilityAddTraits(selected ? .isSelected : [])
-    }
-
-    @ViewBuilder
-    private func aspectIcon(_ option: VideoAspect) -> some View {
-        switch option {
-        case .fit:
-            Image(systemName: AppIcon.aspectFit.name)
-        case .fill:
-            Image(systemName: AppIcon.aspectFill.name)
-        case .stretch:
-            Image(systemName: AppIcon.aspectStretch.name)
-        default:
-            Text(option.title)
-                .font(.system(size: 15, weight: .bold))
-        }
-    }
-
     // MARK: 设置面板
 
     /// 面板右上角的关闭钮：深色沿用玻璃圆钮；浅色的白底面板上玻璃看不清，换成一块淡灰圆底
@@ -2037,215 +2254,6 @@ struct PlaybackControlsView: View {
         } else {
             GlassIconButton(systemImage: AppIcon.close.name, label: label, diameter: 32, action: action)
         }
-    }
-
-    private func settingsPanel(page: SettingsPage, landscape: Bool, insets: EdgeInsets) -> some View {
-        ZStack(alignment: landscape ? .trailing : .bottom) {
-            Color.black.opacity(0.4)
-                .contentShape(Rectangle())
-                .onTapGesture { closeSettings() }
-            VStack(alignment: .leading, spacing: 18) {
-                if !landscape {
-                    Capsule().fill(Color.primary.opacity(0.25)).frame(width: 34, height: 4)
-                        .frame(maxWidth: .infinity).accessibilityHidden(true)
-                }
-                HStack {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(page == .playback ? "播放设置" : "字幕与音轨").font(.title2.weight(.bold))
-                        Text(page == .playback ? "设置会应用于当前播放" : "选择适合你的观看语言")
-                            .font(.caption).foregroundStyle(Theme.textSecondary)
-                    }
-                    Spacer()
-                    panelClose("关闭设置") { closeSettings() }
-                }
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
-                        switch page {
-                        case .playback: playbackSettings(landscape: landscape)
-                        case .tracks:
-                            subtitleSettings
-                            Divider().overlay(Color.primary.opacity(0.12))
-                            audioSettings
-                        }
-                    }
-                    .padding(.bottom, 12)
-                }
-                .scrollIndicators(.hidden)
-            }
-            .padding(.top, landscape ? max(insets.top, 18) : 12)
-            .padding(.horizontal, 22)
-            .padding(.bottom, max(insets.bottom, 18))
-            .frame(width: landscape ? 360 + insets.trailing : nil)
-            .frame(maxWidth: landscape ? 420 : .infinity)
-            .frame(maxHeight: landscape ? .infinity : 590)
-            .playerPanelBackground(cornerRadius: landscape ? 0 : Theme.Radius.sheet)
-            .designScreen(page == .playback ? "playback" : "tracks")
-        }
-        .transition(.opacity)
-    }
-
-    /// 竖屏只放画质、倍速、解码：定时关闭在右上角「…」里，提前缓存和复制诊断信息只在横屏的「更多」里
-    @ViewBuilder
-    private func playbackSettings(landscape: Bool) -> some View {
-        if !qualities.isEmpty {
-            settingGroup("画质") {
-                chipRow(qualities.map { ($0.id, $0.title) }, selected: qualities.first { $0.title == selectedQuality }?.id) { id in
-                    onQuality(id)
-                }
-            }
-        }
-        settingGroup("倍速") {
-            chipGrid(Self.speedOptions.map { (String(format: "%g", $0), String(format: "%g", $0)) },
-                     selected: String(format: "%g", playback.rate), columns: 6) { value in
-                if let rate = Float(value) { playback.setRate(rate) }
-            }
-        }
-        settingGroup("解码", footer: "硬解码交给手机的视频芯片，省电、不容易发热；软解码全靠 CPU，很耗电，只在硬解码画面不正常时临时换用。") {
-            chipRow(VideoDecoding.allCases.map { ($0.rawValue, $0.title) }, selected: playback.decoding.rawValue) { value in
-                if let option = VideoDecoding(rawValue: value) { playback.setDecoding(option) }
-            }
-        }
-        if landscape {
-            settingGroup("提前缓存", footer: "开播不用等，边播边往后存；存在手机里，最多 2GB，退出播放后自动清掉。用流量时最多存 1 分钟。") {
-                chipRow(ReadaheadLevel.allCases.map { (String($0.rawValue), $0.title) }, selected: String(playback.readahead.rawValue)) { value in
-                    if let seconds = Int(value), let option = ReadaheadLevel(rawValue: seconds) { playback.setReadahead(option) }
-                }
-            }
-            settingGroup("定时关闭") {
-                chipGrid(SleepTimer.options.map { ($0.id, $0.title) }, selected: sleepTimer.id, columns: 3) { id in
-                    if let option = SleepTimer.options.first(where: { $0.id == id }) { setSleepTimer(option) }
-                }
-            }
-            settingGroup("遇到问题", footer: "播放不正常时点一下，把复制的内容发给开发者，里面有最近的跳转、重连记录和播放内核的报错，不含 Cookie。") {
-                chip(copiedDiagnostics ? "已复制" : "复制播放诊断信息", selected: false) {
-                    UIPasteboard.general.string = diagnosticsText
-                    copiedDiagnostics = true
-                }
-                .accessibilityIdentifier("playback.copyDiagnosticsSetting")
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var subtitleSettings: some View {
-        settingGroup("字幕") {
-            VStack(spacing: 2) {
-                trackRow(title: "关闭字幕", detail: "", selected: playback.selectedSubtitle == nil) {
-                    playback.selectSubtitle(nil)
-                }
-                ForEach(playback.subtitleTracks) { track in
-                    trackRow(title: track.title, detail: track.detail, selected: playback.selectedSubtitle == track.id) {
-                        playback.selectSubtitle(track.id)
-                    }
-                }
-            }
-        }
-        if playback.subtitleTracks.isEmpty {
-            Text("这个视频没有内嵌字幕。同一文件夹里同名的字幕文件会自动加载。")
-                .font(.caption)
-                .foregroundStyle(Theme.textSecondary)
-        }
-    }
-
-    @ViewBuilder
-    private var audioSettings: some View {
-        settingGroup("音轨") {
-            VStack(spacing: 2) {
-                ForEach(playback.audioTracks) { track in
-                    trackRow(title: track.title, detail: track.detail, selected: playback.selectedAudio == track.id) {
-                        playback.selectAudio(track.id)
-                    }
-                }
-            }
-        }
-        if playback.audioTracks.isEmpty {
-            Text("视频加载后会在这里列出所有音轨。")
-                .font(.caption)
-                .foregroundStyle(Theme.textSecondary)
-        }
-    }
-
-    private func settingGroup<Content: View>(_ title: String, footer: String = "", @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(Theme.textSecondary)
-            content()
-            if !footer.isEmpty {
-                Text(footer)
-                    .font(.caption2)
-                    .foregroundStyle(Theme.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
-
-    private func chipRow(_ options: [(String, String)], selected: String?, onPick: @escaping (String) -> Void) -> some View {
-        ScrollView(.horizontal) {
-            HStack(spacing: 6) {
-                ForEach(options, id: \.0) { option in
-                    chip(option.1, selected: option.0 == selected) { onPick(option.0) }
-                }
-            }
-        }
-        .scrollIndicators(.hidden)
-    }
-
-    private func chipGrid(_ options: [(String, String)], selected: String?, columns: Int, onPick: @escaping (String) -> Void) -> some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: columns), spacing: 6) {
-            ForEach(options, id: \.0) { option in
-                chip(option.1, selected: option.0 == selected, fill: true) { onPick(option.0) }
-            }
-        }
-    }
-
-    private func chip(_ title: String, selected: Bool, fill: Bool = false, action: @escaping () -> Void) -> some View {
-        Button(action: { action(); revealControls() }) {
-            Text(title)
-                .font(.caption.weight(.semibold))
-                .lineLimit(1)
-                .padding(.horizontal, fill ? 4 : 12)
-                .foregroundStyle(selected && lightChrome ? Theme.accentAlt : Color.primary)
-                .frame(maxWidth: fill ? .infinity : nil, minHeight: 32)
-                .background(selected ? Theme.accent.opacity(lightChrome ? 0.14 : 0.3) : Color.primary.opacity(0.08),
-                            in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(selected ? Theme.accent : Color.primary.opacity(0.12), lineWidth: selected ? 1.5 : 0.5)
-                }
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityAddTraits(selected ? .isSelected : [])
-    }
-
-    private func trackRow(title: String, detail: String, selected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 10) {
-                Image(systemName: AppIcon.check.name)
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(Theme.accent)
-                    .opacity(selected ? 1 : 0)
-                    .frame(width: 16)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(.subheadline.weight(selected ? .semibold : .regular))
-                        .lineLimit(1)
-                    if !detail.isEmpty {
-                        Text(detail)
-                            .font(.caption2)
-                            .foregroundStyle(Theme.textSecondary)
-                            .lineLimit(1)
-                    }
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 10)
-            .background(selected ? Color.primary.opacity(0.08) : Color.clear, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
     }
 
     // MARK: 播放列表
@@ -2554,9 +2562,8 @@ struct PlaybackControlsView: View {
         locked = true
         popover = nil
         showSleepMenu = false
+        quickMenu = nil
         showList = false
-        settingsPage = nil
-        showAspect = false
         revealControls()
     }
     private func unlock() {
@@ -2566,8 +2573,7 @@ struct PlaybackControlsView: View {
     /// 竖屏的选集抽屉（横屏的选集是弹出层）
     private func openList() {
         hideTask?.cancel()
-        settingsPage = nil
-        showAspect = false
+        quickMenu = nil
         showSleepMenu = false
         withAnimation(reduceMotion ? nil : Motion.smooth) { showList = true }
     }
@@ -2575,40 +2581,40 @@ struct PlaybackControlsView: View {
         withAnimation(reduceMotion ? nil : Motion.smooth) { showList = false }
         revealControls()
     }
-    private func openSettings(_ page: SettingsPage) {
-        hideTask?.cancel()
-        showAspect = false
-        showList = false
-        showSleepMenu = false
-        withAnimation(reduceMotion ? nil : Motion.smooth) { settingsPage = page }
-    }
     /// 竖屏右上角「…」：只放定时关闭，从按钮下面展开
     private func toggleSleepMenu() {
         if showSleepMenu { closeSleepMenu(); return }
         hideTask?.cancel()
-        settingsPage = nil
+        quickMenu = nil
         showList = false
-        showAspect = false
         withAnimation(reduceMotion ? .easeOut(duration: 0.15) : Self.popoverSpring) { showSleepMenu = true }
     }
     private func closeSleepMenu() {
         withAnimation(popoverCloseAnimation) { showSleepMenu = false }
         revealControls()
     }
-    private func closeSettings() {
-        withAnimation(reduceMotion ? nil : Motion.smooth) { settingsPage = nil }
-        revealControls()
-    }
-    private func openAspect() {
+    /// 竖屏快捷入口：点一下在按钮旁边弹出菜单，再点（或点菜单以外的地方）收起
+    private func toggleQuickMenu(_ menu: QuickMenu) {
+        if quickMenu == menu { closeQuickMenu(); return }
         hideTask?.cancel()
-        settingsPage = nil
-        showList = false
+        popoverCloseTask?.cancel()
         showSleepMenu = false
-        withAnimation(reduceMotion ? nil : Motion.smooth) { showAspect = true }
+        showList = false
+        withAnimation(reduceMotion ? .easeOut(duration: 0.15) : Self.popoverSpring) { quickMenu = menu }
     }
-    private func closeAspect() {
-        withAnimation(reduceMotion ? nil : Motion.smooth) { showAspect = false }
-        revealControls()
+    /// 选完一项时可以稍等一下再收，让勾先亮起来
+    private func closeQuickMenu(after delay: Double = 0) {
+        popoverCloseTask?.cancel()
+        guard delay > 0 else {
+            withAnimation(popoverCloseAnimation) { quickMenu = nil }
+            revealControls()
+            return
+        }
+        popoverCloseTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            closeQuickMenu()
+        }
     }
     private func setSleepTimer(_ option: SleepTimer) {
         sleepTimer = option
@@ -2658,7 +2664,7 @@ struct PlaybackControlsView: View {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: step)
                 guard !Task.isCancelled, controlsVisible else { return }
-                let busy = showList || settingsPage != nil || showAspect || showSleepMenu || popover != nil || dragging || boosting
+                let busy = showList || quickMenu != nil || showSleepMenu || popover != nil || dragging || boosting
                     || adjustment != nil || playback.buffering
                 idle = busy ? 0 : idle + step
                 if idle >= 5_000_000_000 {
@@ -2675,8 +2681,7 @@ struct PlaybackControlsView: View {
     private func toggleControls() {
         if popover != nil { closePopover(); return }
         if showSleepMenu { closeSleepMenu(); return }
-        if settingsPage != nil { closeSettings(); return }
-        if showAspect { closeAspect(); return }
+        if quickMenu != nil { closeQuickMenu(); return }
         if controlsVisible {
             hideTask?.cancel()
             withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) { controlsVisible = false }
@@ -2698,7 +2703,7 @@ struct PlaybackControlsView: View {
     private func setBoost(_ enabled: Bool) {
         if enabled {
             // 锁定后也能长按快进；锁定时其他面板都已收起
-            guard !showList, settingsPage == nil, popover == nil, panKind == nil, playback.playing else { return }
+            guard !showList, quickMenu == nil, popover == nil, panKind == nil, playback.playing else { return }
             hideControlsForGesture()
             boosting = true
             playback.setBoost(true)
@@ -2725,7 +2730,7 @@ struct PlaybackControlsView: View {
             adjustment = nil
             return
         }
-        guard !showList, settingsPage == nil, !showAspect, popover == nil, !closing, size.width > 0, size.height > 0 else {
+        guard !showList, quickMenu == nil, popover == nil, !closing, size.width > 0, size.height > 0 else {
             // 横滑到一半被别的面板打断：进度条别停在半路
             if state == .ended { endPanScrub() }
             return
@@ -2898,8 +2903,8 @@ struct PlaybackControlsView: View {
         popover = nil
         popoverCloseTask?.cancel()
         showList = false
-        settingsPage = nil
-        showAspect = false
+        quickMenu = nil
+        showSleepMenu = false
         withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.3)) {
             controlsVisible = false
             closeFade = true
@@ -2959,40 +2964,6 @@ private struct GlassIconButton: View {
     }
 }
 
-/// 玻璃胶囊文字按钮：倍速「1.0×」、「选集」、「还原」
-private struct GlassTextButton: View {
-    let title: String
-    let label: String
-    let action: () -> Void
-
-    var body: some View {
-        if #available(iOS 26.0, *) {
-            Button(action: action) {
-                Text(title)
-                    .font(.subheadline.weight(.semibold).monospacedDigit())
-                    .lineLimit(1)
-            }
-            .buttonStyle(.glass)
-            .buttonBorderShape(.capsule)
-            .accessibilityLabel(label)
-        } else {
-            Button(action: action) {
-                Text(title)
-                    .font(.subheadline.weight(.semibold).monospacedDigit())
-                    .lineLimit(1)
-                    .padding(.horizontal, 14)
-                    .frame(minHeight: 34)
-                    .background(.ultraThinMaterial, in: Capsule())
-                    .overlay { Capsule().strokeBorder(.white.opacity(0.18), lineWidth: 0.5) }
-                    .frame(minHeight: 44)
-                    .contentShape(Capsule())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(label)
-        }
-    }
-}
-
 /// 几个相邻的玻璃按钮放进同一个容器：iOS 26 上它们会像一组液态玻璃一样互相融合
 private struct GlassButtonGroup<Content: View>: View {
     @ViewBuilder let content: () -> Content
@@ -3024,9 +2995,31 @@ private struct PlayerPanelBackground: ViewModifier {
     }
 }
 
+/// 竖屏菜单的底：磨砂材质上压一层跟随主题的卡片色，细边加一点阴影；定时关闭和五个快捷菜单共用
+private struct PortraitMenuSurface: ViewModifier {
+    @Environment(\.colorScheme) private var scheme
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: Theme.Radius.sheet, style: .continuous)
+        content
+            .background {
+                ZStack {
+                    shape.fill(.regularMaterial)
+                    shape.fill(Theme.surface.opacity(0.72))
+                }
+            }
+            .overlay { shape.strokeBorder(Theme.hairline, lineWidth: 0.5) }
+            .shadow(color: .black.opacity(scheme == .light ? 0.16 : 0.45), radius: 18, y: 8)
+    }
+}
+
 private extension View {
     func playerPanelBackground(cornerRadius: CGFloat) -> some View {
         modifier(PlayerPanelBackground(cornerRadius: cornerRadius))
+    }
+
+    func portraitMenuSurface() -> some View {
+        modifier(PortraitMenuSurface())
     }
 
     /// 竖屏信息页里的卡片：跟随主题的底色，浅色下有一圈很淡的暖色阴影

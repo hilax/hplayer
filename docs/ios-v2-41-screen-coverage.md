@@ -13,9 +13,9 @@
 - 同集重试、画质切换和自动降级只接受当前请求。
 - 截图只在相册确认保存后显示成功；播放器在自身事件队列释放时不再同步等待自身队列。
 - 手动匹配或取消匹配会清除尚未发布的旧自动匹配结果；并发匹配中的重新查找不会因旧请求仍在执行而被丢弃。
-- 竖屏播放器底部操作具有至少 44 点高的触摸区域；交互测试连续打开关闭播放设置、字幕音轨、画面比例和选集。横屏播放/上下集移至进度条下方，锁屏与截图向内收。
+- 竖屏播放器底部操作具有至少 44 点高的触摸区域；竖屏信息页的清晰度、倍速、字幕、画面比例、解码五个入口都在按钮旁边弹出菜单（不是底部面板），右上角「…」只放定时关闭；交互测试连续打开关闭这些菜单和选集抽屉。横屏播放/上下集移至进度条下方，锁屏与截图向内收。
 
-云端回归同时运行业务单元测试、播放与手势交互测试、47 项深色截图、10 项浅色截图（含竖屏播放页的浅色），以及 BT 引擎生命周期和本地节点传输检查。真实账号登录、115 文件操作与外网资源可用性仍受账号和远端服务状态影响。
+云端回归同时运行业务单元测试、播放与手势交互测试、47 项深色截图、12 项浅色截图（含竖屏播放页及其定时关闭、倍速、字幕、画面比例菜单和选集的浅色），以及 BT 引擎生命周期和本地节点传输检查。真实账号登录、115 文件操作与外网资源可用性仍受账号和远端服务状态影响。
 
 | # | 原型画板 | 应用入口 / 状态 | 原生实现 |
 |---|---|---|---|
@@ -62,7 +62,7 @@
 | 41 | 磁力资源目录 | 磁力 → 解析完成 | [MagnetPlayerView](../ios-native/HPlayer/Views/MagnetPlayerView.swift) |
 | 42 | 竖屏播放器 | 播放器 → 切换竖屏 | [PlaybackControlsView](../ios-native/HPlayer/Views/PlaybackControlsView.swift) |
 | 43 | 横屏播放器 | 播放器 → 横屏 | [PlaybackControlsView](../ios-native/HPlayer/Views/PlaybackControlsView.swift) |
-| 44 | 播放设置面板 | 播放器 → 播放设置 | [PlaybackControlsView](../ios-native/HPlayer/Views/PlaybackControlsView.swift) |
-| 45 | 字幕与音轨面板 | 播放器 → 字幕 / 音轨 | [PlaybackControlsView](../ios-native/HPlayer/Views/PlaybackControlsView.swift) |
+| 44 | 竖屏倍速菜单（按钮旁弹出） | 播放器 → 竖屏 → 倍速 | [PlaybackControlsView](../ios-native/HPlayer/Views/PlaybackControlsView.swift) |
+| 45 | 竖屏字幕与音轨菜单（按钮旁弹出） | 播放器 → 竖屏 → 字幕 | [PlaybackControlsView](../ios-native/HPlayer/Views/PlaybackControlsView.swift) |
 | 46 | 播放器选集面板 | 播放器 → 选集 | [PlaybackControlsView](../ios-native/HPlayer/Views/PlaybackControlsView.swift) |
-| 47 | 画面比例面板 | 播放器 → 画面比例 | [PlaybackControlsView](../ios-native/HPlayer/Views/PlaybackControlsView.swift) |
+| 47 | 竖屏画面比例菜单（按钮旁弹出） | 播放器 → 竖屏 → 画面比例 | [PlaybackControlsView](../ios-native/HPlayer/Views/PlaybackControlsView.swift) |
