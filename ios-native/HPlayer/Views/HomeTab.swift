@@ -6,6 +6,8 @@ struct HomeTab: View {
     var onBrowseLibrary: () -> Void = {}
     var onSearch: () -> Void = {}
     var onOpenCatalog: (CatalogKind, CatalogSort) -> Void = { _, _ in }
+    /// 首页频道（推荐 / 片库 / 动漫）；这一页本身是「推荐」。
+    var channel: Binding<HomeChannel> = .constant(.recommend)
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// 系统（或「外观」设置）的深浅色。首页内容强制按深色显示，从首页推出去的页面要恢复成这个。
     @Environment(\.colorScheme) private var colorScheme
@@ -211,6 +213,14 @@ struct HomeTab: View {
 
     /// 搜索框、观看历史、添加：三个入口放在同一行，搜索框占满剩余宽度。
     private func topBar(_ continueItems: [ContinueEntry]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HomeChannelBar(selection: channel)
+                .padding(.horizontal, Theme.contentInset)
+            searchRow(continueItems)
+        }
+    }
+
+    private func searchRow(_ continueItems: [ContinueEntry]) -> some View {
         HStack(spacing: 4) {
             Button(action: onSearch) {
                 HStack(spacing: 8) {
@@ -261,7 +271,7 @@ struct HomeTab: View {
     /// 片名在 HeroPage 里按同一个高度往上排。
     fileprivate static let heroControlsLift: CGFloat = 40
 
-    /// 铺满屏幕上方的精选轮播：图片延伸到状态栏下面，搜索、历史、添加三个入口悬浮在左上角之上。
+    /// 铺满屏幕上方的精选轮播：图片延伸到状态栏下面，频道条和搜索、历史、添加三个入口悬浮在上方。
     private func heroCard(_ library: HomeSnapshot, continueItems: [ContinueEntry],
                           width: CGFloat, safeTop: CGFloat) -> some View {
         let height = min(width * 0.98, 480) + safeTop * 0.4 + Self.heroFade
@@ -281,15 +291,24 @@ struct HomeTab: View {
             .offset(y: -stretch)
         }
         .frame(height: height)
-        .overlay(alignment: .topTrailing) { floatingButtons(continueItems).padding(.top, safeTop + 4) }
+        .overlay(alignment: .top) {
+            // 频道条在左、搜索 / 历史 / 添加在右，都悬浮在精选图上
+            HStack(spacing: 8) {
+                HomeChannelBar(selection: channel)
+                Spacer(minLength: 8)
+                floatingButtons(continueItems)
+            }
+            .padding(.horizontal, Theme.contentInset)
+            .padding(.top, safeTop + 2)
+        }
     }
 
     private func floatingButton(_ icon: AppIcon) -> some View {
         Image(systemName: icon.name)
             .font(.system(size: 17, weight: Theme.iconWeight))
             .foregroundStyle(.white)
-            .frame(width: 38, height: 38)
-            .background(Color.white.opacity(0.2), in: Circle())
+            .frame(width: 36, height: 36)
+            .background(Color.white.opacity(0.16), in: Circle())
             .contentShape(Circle())
     }
 
@@ -311,7 +330,6 @@ struct HomeTab: View {
                 .accessibilityLabel("添加")
                 .accessibilityIdentifier("home.sources")
         }
-        .padding(.horizontal, Theme.contentInset)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("home.heroBar")
     }

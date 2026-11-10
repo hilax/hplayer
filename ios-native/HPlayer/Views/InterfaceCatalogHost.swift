@@ -38,7 +38,8 @@ struct InterfaceCatalogHost: View {
         switch screen {
         case "home", "home-more", "home-empty", "add", "film-menu": tabs(.home)
         case "library", "library-empty": tabs(.cloud)
-        case "catalog": tabs(.library)
+        case "catalog": tabs(.home, channel: .library)
+        case "magnet-tab": tabs(.magnet)
         case "settings": tabs(.mine)
         case "search", "search-results", "search-empty": tabs(.search)
         case "movies":
@@ -131,8 +132,8 @@ struct InterfaceCatalogHost: View {
         }
     }
 
-    private func tabs(_ section: HomeSection) -> some View {
-        HomeView(appState: fixture.account, initialSection: section, library: fixture.library, local: fixture.local,
+    private func tabs(_ section: HomeSection, channel: HomeChannel = .recommend) -> some View {
+        HomeView(appState: fixture.account, initialSection: section, initialChannel: channel, library: fixture.library, local: fixture.local,
                  metadata: fixture.metadata, recents: fixture.recents,
                  sourceStatus: screen == "library-empty" ? nil : P115Status(configured: true, userId: 999, userName: "Hilax 的私人片库", vip: 1, error: nil, message: nil),
                  sourceQuota: screen == "library-empty" ? nil : QuotaResponse(usedText: "2.4 TB", totalText: "5 TB", usedBytes: 2_640_000_000_000, totalBytes: 5_500_000_000_000),

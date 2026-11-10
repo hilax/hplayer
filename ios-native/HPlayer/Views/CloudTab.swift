@@ -6,7 +6,7 @@ enum CloudRoute: Hashable {
     case page(ManagementPage)
 }
 
-/// 网盘：115 账号卡片、四个工具入口，以及进入网盘文件浏览的入口。
+/// 网盘：115 账号卡片、全部文件、离线下载与本机视频（2.0：磁力播放和磁力聚合移到「磁力」Tab）。
 struct CloudTab: View {
     var onSearch: () -> Void = {}
     @EnvironmentObject private var appState: AppState
@@ -31,8 +31,8 @@ struct CloudTab: View {
                     }
                     .padding(.horizontal, -Theme.contentInset)
                     accountCard.reveal(0)
-                    toolGrid.reveal(1)
-                    browseRow.reveal(2)
+                    browseRow.reveal(1)
+                    toolRows.reveal(2)
                 }
                 .frame(maxWidth: 620)
                 .frame(maxWidth: .infinity)
@@ -131,48 +131,26 @@ struct CloudTab: View {
         .accessibilityIdentifier("library.account")
     }
 
-    /// 四个工具入口：磁力播放、离线下载、本机视频、磁力聚合。
-    /// 媒体库管理放在「我的」页，这里不再重复。
-    private var toolGrid: some View {
-        HStack(spacing: 8) {
-            NavigationLink { MagnetPlayerView().hidesTabBar() } label: {
-                toolTile(icon: .link, title: "磁力播放")
-            }
+    /// 离线下载与本机视频。磁力播放、磁力聚合在「磁力」Tab；第 7 阶段这里会换成传输中心。
+    private var toolRows: some View {
+        DesignGroup {
             Button {
                 openPage(.offline)
             } label: {
-                toolTile(icon: .cloudDownload, title: "离线下载")
+                LibraryActionRow(symbol: AppIcon.cloudDownload.name, title: "离线下载",
+                                 subtitle: "磁力、HTTP、ed2k 链接交给 115 云端下载")
             }
+            .buttonStyle(.pressable(scale: 0.985))
             .accessibilityIdentifier("library.offline")
+            Divider().padding(.leading, 60)
             NavigationLink { LocalVideosView().hidesTabBar() } label: {
-                toolTile(icon: .device, title: "本机视频", badge: localStore.files.isEmpty ? "" : "\(localStore.files.count)")
+                LibraryActionRow(symbol: AppIcon.device.name, title: "本机视频",
+                                 subtitle: "导入的视频和下载到手机的视频",
+                                 value: localStore.files.isEmpty ? "" : "\(localStore.files.count)")
             }
-            NavigationLink { MagnetSearchView().hidesTabBar() } label: {
-                toolTile(icon: .search, title: "磁力聚合")
-            }
-            .accessibilityIdentifier("library.magnet")
+            .buttonStyle(.pressable(scale: 0.985))
+            .accessibilityIdentifier("cloud.local")
         }
-        .buttonStyle(.pressable(scale: 0.94))
-    }
-
-    private func toolTile(icon: AppIcon, title: String, badge: String = "") -> some View {
-        VStack(spacing: 7) {
-            IconTile(icon: icon, size: 34)
-            Text(title).font(.system(size: 12)).foregroundStyle(.primary).lineLimit(1).minimumScaleFactor(0.85)
-        }
-        .frame(maxWidth: .infinity, minHeight: 78)
-        .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.tile + 2, style: .continuous))
-        .overlay(alignment: .topTrailing) {
-            if !badge.isEmpty {
-                Text(badge)
-                    .font(.system(size: 10, weight: .bold).monospacedDigit())
-                    .foregroundStyle(Theme.onPrimary)
-                    .padding(.horizontal, 5).frame(minWidth: 16, minHeight: 16)
-                    .background(Theme.gold, in: Capsule())
-                    .padding(6)
-            }
-        }
-        .contentShape(Rectangle())
     }
 
     /// 全部文件入口：登录后进入网盘根目录。

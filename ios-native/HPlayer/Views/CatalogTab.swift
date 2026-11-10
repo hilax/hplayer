@@ -160,7 +160,9 @@ struct CatalogTab: View {
     @EnvironmentObject private var librarySnapshots: LibrarySnapshotStore
     private var snapshot: HomeSnapshot { librarySnapshots.home }
     private var entries: [CatalogEntry] { librarySnapshots.catalogEntries }
-    @State private var source: CatalogSource = .library
+    /// 首页频道：片库 → 我的片库；动漫 → 在线番剧（2.0：片库并入首页，不再是独立 Tab）。
+    private var channel: Binding<HomeChannel>
+    private var source: CatalogSource { channel.wrappedValue == .anime ? .anime : .library }
     @State private var kind: CatalogKind = .all
     @State private var region: CatalogRegion = .all
     @State private var year: CatalogYear = .all
@@ -169,22 +171,35 @@ struct CatalogTab: View {
     @State private var matching: MatchRequest?
     @State private var showManagement = false
 
-    init(onSearch: @escaping () -> Void = {}, preset: Binding<CatalogPreset?> = .constant(nil)) {
+    init(onSearch: @escaping () -> Void = {}, preset: Binding<CatalogPreset?> = .constant(nil),
+         channel: Binding<HomeChannel> = .constant(.library)) {
         self.onSearch = onSearch
         _preset = preset
+        self.channel = channel
     }
 
     var body: some View {
         NavigationStack {
             GeometryReader { proxy in
                 VStack(spacing: 0) {
-                    ScreenTitleBar(title: "片库", subtitle: source == .library ? subtitle : "在线番剧") {
-                        BarIconButton(icon: .search, label: "搜索片库", identifier: "catalog.search", action: onSearch)
+                    HStack(spacing: 8) {
+                        HomeChannelBar(selection: channel)
+                        Spacer(minLength: 8)
+                        BarIconButton(icon: .search, label: source == .library ? "搜索片库" : "搜索动漫",
+                                      identifier: "catalog.search", action: onSearch)
                     }
+                    .padding(.leading, Theme.contentInset)
+                    .padding(.trailing, 6)
+                    .padding(.bottom, 4)
 
-                    sourcePicker
-                        .padding(.horizontal, Theme.contentInset)
-                        .padding(.bottom, 8)
+                    if source == .library {
+                        Text(subtitle)
+                            .font(.caption)
+                            .foregroundStyle(Theme.textTertiary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, Theme.contentInset)
+                            .padding(.bottom, 6)
+                    }
 
                     if source == .library {
                         ScrollView {
@@ -242,33 +257,6 @@ struct CatalogTab: View {
             region = .all
             year = .all
         }
-    }
-
-    private var sourcePicker: some View {
-        HStack(spacing: 0) {
-            ForEach(CatalogSource.allCases) { item in
-                let isSelected = (source == item)
-                Button(action: {
-                    Haptics.select()
-                    withAnimation(reduceMotion ? nil : Motion.snappy) {
-                        source = item
-                    }
-                }) {
-                    Text(item.title)
-                        .font(.system(size: 13, weight: isSelected ? .bold : .medium))
-                        .foregroundStyle(isSelected ? Theme.onPrimary : Theme.textSecondary)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 6)
-                        .background(
-                            isSelected ? Theme.primaryAction : Color.clear,
-                            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        )
-                }
-                .buttonStyle(.pressable)
-            }
-        }
-        .padding(3)
-        .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
     }
 
     // MARK: 数据

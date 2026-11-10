@@ -51,6 +51,13 @@ func mergeUnique<T: Identifiable>(_ existing: [T], with new: [T]) -> (merged: [T
 /// 影片、女优、片商都是普通的逐层跳转（左上角返回上一层）；在磁力详情页点播放，
 /// 播放页盖在详情页上面，关掉就回到详情页。版式见 docs/ui-design-system.md「磁力聚合」。
 struct MagnetSearchView: View {
+    /// 作为「磁力」Tab 的根页面时用大标题，并在右上角提供「粘贴链接播放」。
+    var isTabRoot = false
+
+    init(isTabRoot: Bool = false) {
+        self.isTabRoot = isTabRoot
+    }
+
     // 镜像域名变化时（在设置里保存后）自动重新加载。
     @AppStorage(JavBusSource.hostDefaultsKey) private var customHost = ""
 
@@ -106,9 +113,21 @@ struct MagnetSearchView: View {
         .scrollIndicators(.hidden)
         .scrollDismissesKeyboard(.interactively)
         .background(Theme.pageBackground.ignoresSafeArea())
-        .navigationTitle("磁力聚合")
-        .navigationBarTitleDisplayMode(.inline)
+        .navigationTitle(isTabRoot ? "磁力" : "磁力聚合")
+        .navigationBarTitleDisplayMode(isTabRoot ? .large : .inline)
         .toolbar {
+            if isTabRoot {
+                ToolbarItem(placement: .primaryAction) {
+                    NavigationLink {
+                        MagnetPlayerView().hidesTabBar()
+                    } label: {
+                        Image(systemName: AppIcon.link.name)
+                            .foregroundStyle(Theme.textPrimary)
+                    }
+                    .accessibilityLabel("粘贴磁力链接播放")
+                    .accessibilityIdentifier("magnet.linkPlayer")
+                }
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button {
                     showingSettingsSheet = true

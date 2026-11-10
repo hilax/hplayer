@@ -90,20 +90,19 @@ final class HomeUITests: XCTestCase {
         XCTAssertFalse(app.buttons["home.scanStatus"].exists, "Home never shows scan or matching maintenance")
         XCTAssertFalse(app.otherElements["home.matchingState"].exists)
         app.tabButton("网盘").tap()
-        let magnet = app.buttons["library.magnet"]
-        if !magnet.isHittable { app.swipeUp() }
-        XCTAssertTrue(magnet.waitForExistence(timeout: 5), "Cloud tab offers the magnet aggregation entry")
+        XCTAssertTrue(app.buttons["library.offline"].waitForExistence(timeout: 5), "Cloud tab keeps the offline download entry")
         XCTAssertFalse(app.buttons["library.manage"].exists, "Library management lives in the Mine tab only")
-        // 磁力聚合：搜索框 + 四个分类标签；专题是固定的片商入口，不依赖网络
-        magnet.tap()
-        XCTAssertTrue(app.textFields["magnet.search"].waitForExistence(timeout: 5), "Magnet page offers one search field")
+        // 2.0：磁力是一级 Tab。磁力聚合：搜索框 + 四个分类标签；专题是固定的片商入口，不依赖网络
+        app.tabButton("磁力").tap()
+        XCTAssertTrue(app.textFields["magnet.search"].waitForExistence(timeout: 5), "Magnet tab offers one search field")
+        XCTAssertTrue(app.buttons["magnet.linkPlayer"].exists, "Magnet tab offers the paste-a-link player")
         for key in ["latest", "topics", "actresses", "hot"] {
             XCTAssertTrue(app.buttons["magnet.category.\(key)"].exists, "Category tab \(key) exists")
         }
         app.buttons["magnet.category.topics"].tap()
         XCTAssertTrue(app.buttons["magnet.studio.s1"].waitForExistence(timeout: 5), "Topics lists the studios")
-        app.navigationBars.buttons.element(boundBy: 0).tap()
-        XCTAssertTrue(app.buttons["library.magnet"].waitForExistence(timeout: 5), "Back returns to the Cloud tab")
+        app.tabButton("网盘").tap()
+        XCTAssertTrue(app.buttons["library.offline"].waitForExistence(timeout: 5), "Switching back shows the Cloud tab")
         capture("Resources - redesign", in: app)
         // 媒体库管理只留在「我的」页
         app.tabButton("我的").tap()

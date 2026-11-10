@@ -10,7 +10,7 @@ import SwiftUI
 ///    `ios-native/scripts/check-icons.py` 会在云端构建里检查。
 enum AppIcon: String, CaseIterable {
     // MARK: 底部导航
-    case home, library, cloud, mine
+    case home, library, magnet, cloud, mine
 
     // MARK: 通用动作
     case search, back, forward, expand, collapse, close, clear, more, add, remove
@@ -47,6 +47,7 @@ enum AppIcon: String, CaseIterable {
         switch self {
         case .home: return "house"
         case .library: return "square.grid.2x2"
+        case .magnet: return "link.circle"
         case .cloud: return "icloud"
         case .mine: return "person"
 
@@ -179,6 +180,7 @@ enum AppIcon: String, CaseIterable {
         switch self {
         case .home: return "house.fill"
         case .library: return "square.grid.2x2.fill"
+        case .magnet: return "link.circle.fill"
         case .cloud: return "icloud.fill"
         case .mine: return "person.fill"
         default: return name

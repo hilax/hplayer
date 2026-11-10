@@ -25,6 +25,8 @@ struct HomeView: View {
     @State private var searchCreated = false
     /// 首页分类入口带过来的筛选；片库读取后会清空。
     @State private var catalogPreset: CatalogPreset?
+    /// 首页当前频道：推荐 / 片库 / 动漫（2.0：原「片库」Tab 并入首页）。
+    @State private var channel: HomeChannel = .recommend
     @State private var restored = false
     @ObservedObject private var appState: AppState
 
@@ -35,7 +37,7 @@ struct HomeView: View {
     private var initialSearch = ""
     private var searchFiles: [P115File] = []
 
-    init(appState: AppState, initialSection: HomeSection = .home,
+    init(appState: AppState, initialSection: HomeSection = .home, initialChannel: HomeChannel = .recommend,
          library: MediaLibraryStore? = nil, local: LocalMediaStore? = nil,
          metadata: MediaMetadataStore? = nil, recents: RecentStore? = nil,
          accountInfo: P115AccountInfoStore? = nil,
@@ -45,6 +47,7 @@ struct HomeView: View {
         _selection = State(initialValue: initialSection == .search ? .home : initialSection)
         _searchOpen = State(initialValue: initialSection == .search)
         _searchCreated = State(initialValue: initialSection == .search)
+        _channel = State(initialValue: initialChannel)
         if let library { _mediaLibrary = StateObject(wrappedValue: library) }
         if let local { _localStore = StateObject(wrappedValue: local) }
         if let metadata { _metadataStore = StateObject(wrappedValue: metadata) }
@@ -284,14 +287,20 @@ struct HomeView: View {
     private func page(for section: HomeSection) -> some View {
         switch section {
         case .home:
-            HomeTab(onBrowseLibrary: { selection = .cloud },
-                    onSearch: { openSearch() },
-                    onOpenCatalog: { kind, sort in
-                        catalogPreset = CatalogPreset(kind: kind, sort: sort)
-                        selection = .library
-                    })
-        case .library:
-            CatalogTab(onSearch: { openSearch() }, preset: $catalogPreset)
+            // 推荐是沉浸式首页；片库、动漫共用 CatalogTab（四行筛选海报墙 / 在线番剧）。
+            if channel == .recommend {
+                HomeTab(onBrowseLibrary: { selection = .cloud },
+                        onSearch: { openSearch() },
+                        onOpenCatalog: { kind, sort in
+                            catalogPreset = CatalogPreset(kind: kind, sort: sort)
+                            channel = .library
+                        },
+                        channel: $channel)
+            } else {
+                CatalogTab(onSearch: { openSearch() }, preset: $catalogPreset, channel: $channel)
+            }
+        case .magnet:
+            MagnetTab()
         case .cloud:
             CloudTab(onSearch: { openSearch() })
         case .mine:
