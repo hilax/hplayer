@@ -155,6 +155,10 @@ final class AnimeCrypto {
 
     func decryptAPIResponse(_ body: String) throws -> String {
         let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        // 弹幕拉取、评论验证码等接口直接返回明文 JSON（API 文档 §6.1 / §6.5）
+        if trimmed.hasPrefix("{") || trimmed.hasPrefix("[") {
+            return trimmed
+        }
         guard trimmed.contains(".") else {
             // 非加密明文（例如某些异常 JSON）
             return trimmed

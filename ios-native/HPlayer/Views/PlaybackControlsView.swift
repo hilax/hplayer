@@ -210,6 +210,9 @@ struct PlaybackControlsView: View {
     var selectedQuality = ""
     /// 边下边播时的网络状态，例如「12 个节点 · 1.2 MB/s」
     var networkStatus = ""
+    /// 在线动漫才有：弹幕和评论
+    var danmaku: DanmakuStore? = nil
+    var commentsVid: Int? = nil
     var onSelect: (String) -> Void = { _ in }
     var onQuality: (String) -> Void = { _ in }
     var onRetry: () -> Void = { }
@@ -262,6 +265,8 @@ struct PlaybackControlsView: View {
     @State private var isLandscapeWindow = PlayerWindowController.startsInLandscape
     /// 正在柔和关闭：整个播放页淡出并轻轻缩小
     @State private var closeFade = false
+    @State private var infoTab: PlayerInfoTab = .intro
+    @State private var showDanmakuSettings = false
     @AppStorage("player.autoPlayNext") private var autoPlayNext = true
 
     /// 竖屏时顶部小窗播放器的高度（不含状态栏）
@@ -558,6 +563,9 @@ struct PlaybackControlsView: View {
                     .accessibilityValue("\(String(format: "%g", playback.rate))×")
                     .accessibilityIdentifier("playback.speed")
                     .playerAnchor(.popover(.speed))
+                    if let danmaku {
+                        PlayerDanmakuButton(store: danmaku)
+                    }
                 }
                 // 图标四周有留白，往外挪一点，让图标本身和左边的时间文字对齐
                 .padding(.leading, -10)
@@ -1394,6 +1402,10 @@ struct PlaybackControlsView: View {
             Theme.playerBackground
             PlayerVideoSurface(playback: playback)
                 .allowsHitTesting(false)
+            if let danmaku {
+                DanmakuOverlay(store: danmaku, time: playback.currentTime, playing: playback.playing,
+                               rate: Double(playback.effectiveRate))
+            }
             PlaybackGestureSurface(
                 status: gestureStatus,
                 onTap: toggleControls,
@@ -1545,7 +1557,29 @@ struct PlaybackControlsView: View {
         (badges + (statusLine.isEmpty ? [] : [statusLine])).joined(separator: " · ")
     }
 
+    /// 在线动漫多一行「简介 | 评论」和弹幕开关；其它来源保持原来的信息页。
+    @ViewBuilder
     private func infoPage(bottomInset: CGFloat) -> some View {
+        if let commentsVid {
+            VStack(spacing: 0) {
+                PlayerInfoTabBar(selection: $infoTab, danmaku: danmaku) { showDanmakuSettings = true }
+                if infoTab == .comments {
+                    AnimeCommentsView(vid: commentsVid, bottomInset: bottomInset)
+                        .transition(.opacity)
+                } else {
+                    introPage(bottomInset: bottomInset)
+                        .transition(.opacity)
+                }
+            }
+            .sheet(isPresented: $showDanmakuSettings) {
+                if let danmaku { DanmakuSettingsSheet(store: danmaku) }
+            }
+        } else {
+            introPage(bottomInset: bottomInset)
+        }
+    }
+
+    private func introPage(bottomInset: CGFloat) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 VStack(alignment: .leading, spacing: 6) {

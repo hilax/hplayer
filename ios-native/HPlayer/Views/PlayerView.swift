@@ -5,6 +5,7 @@ struct PlayerView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.dismissPlayerWindow) private var dismissPlayerWindow
     @StateObject private var playback = PlaybackController()
+    @StateObject private var danmaku = DanmakuStore()
     @State private var current: PlaybackSource
     private let playlist: [PlaybackSource]
     @State private var loading = true
@@ -35,6 +36,8 @@ struct PlayerView: View {
             selectedID: current.id,
             qualities: qualityChoices,
             selectedQuality: selectedQuality,
+            danmaku: animeRef == nil ? nil : danmaku,
+            commentsVid: animeRef?.animeId,
             onSelect: { id in
                 guard let selected = playlist.first(where: { $0.id == id }), selected != current else { return }
                 saveProgress(force: true)
@@ -52,9 +55,13 @@ struct PlayerView: View {
         .task(id: current.id) {
             // 不等转屏：要播放地址是网络请求，不占主线程，和转屏同时进行；
             // load 里只有真正打开视频那一步才等转屏结束。
+            danmaku.configure(animeRef)
             await load(current)
         }
-        .onChange(of: playback.currentTime) { _ in saveProgress(force: false) }
+        .onChange(of: playback.currentTime) { time in
+            saveProgress(force: false)
+            if animeRef != nil { danmaku.update(time: time) }
+        }
         .onChange(of: appState.sessionID) { _ in
             guard case .p115 = current else { return }
             requestID = UUID()
@@ -63,6 +70,11 @@ struct PlayerView: View {
             error = "115 登录已变更，请重新打开视频"
         }
         .onDisappear { saveProgress(force: true); visible = false; requestID = UUID(); playback.stop() }
+    }
+
+    private var animeRef: AnimeEpisodeRef? {
+        if case .anime(let ref) = current { return ref }
+        return nil
     }
 
     /// UI 测试不写播放记录，免得下次启动从中间开始

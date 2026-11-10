@@ -61,6 +61,28 @@ final class AnimeClient {
         return payload
     }
 
+    /// 不按固定模型解码，直接返回外壳里的 `data`（JSON 对象）。评论接口的字段 API 文档没有展开，
+    /// 用这个拿到原始结构再宽松解析（见 AnimeComment）。
+    private func requestJSON(path: String) async throws -> Any {
+        let cleanPath = path.replacingOccurrences(of: "/?", with: "?")
+        let transport = AnimeTransport(host: host, fallbackIPs: fallbackIPs)
+        let result = try await transport.send(path: cleanPath, method: "GET",
+                                              headers: AnimeSigner.shared.headers(), body: nil)
+        guard let rawString = String(data: result.data, encoding: .utf8) else {
+            throw AnimeClientError.networkError("无法解析服务器响应内容")
+        }
+        let plainJSON = try AnimeCrypto.shared.decryptAPIResponse(rawString)
+        guard let jsonData = plainJSON.data(using: .utf8),
+              let object = try JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
+            throw AnimeClientError.networkError("解密后数据编码异常")
+        }
+        let code = (object["code"] as? Int) ?? Int("\(object["code"] ?? "")") ?? 0
+        guard code == 20000 else {
+            throw AnimeClientError.serverError(code: code, message: object["message"] as? String ?? "")
+        }
+        return object["data"] ?? NSNull()
+    }
+
     // MARK: - 业务接口方法
 
     /// 顶级频道分类列表
@@ -95,6 +117,31 @@ final class AnimeClient {
     /// 视频详情（含选集与多线路）
     func fetchDetail(id: Int) async throws -> AnimeVideoDetail {
         try await request(path: "/app/video/detail?id=\(id)")
+    }
+
+    /// 一段弹幕：按播放进度 60 秒一段拉取（毫秒时间点）。没有弹幕时返回空数组。
+    func fetchDanmaku(id: Int, play: String, part: String, startMs: Int, endMs: Int) async throws -> [AnimeDanmaku] {
+        guard let encodedPart = part.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let encodedPlay = play.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else {
+            throw AnimeClientError.invalidURL
+        }
+        let path = "/app/danmu?vid=\(id)&play=\(encodedPlay)&part=\(encodedPart)&start_time_point=\(startMs)&end_time_point=\(endMs)"
+        let data = try await requestJSON(path: path)
+        return AnimeDanmaku.list(from: data)
+    }
+
+    /// 评论：置顶（gettop）、高赞（gethitstop）、分页列表（getlist）。
+    func fetchComments(_ kind: AnimeCommentKind, vid: Int, page: Int = 1, limit: Int = 20) async throws -> AnimeCommentPage {
+        let path: String
+        switch kind {
+        case .top: path = "/app/vod_comment/gettop?vid=\(vid)"
+        case .hot: path = "/app/vod_comment/gethitstop?vid=\(vid)"
+        case .list: path = "/app/vod_comment/getlist?vid=\(vid)&limit=\(limit)&page=\(page)"
+        }
+        let data = try await requestJSON(path: path)
+        let records = AnimeJSON.records(in: data)
+        return AnimeCommentPage(items: records.compactMap { AnimeComment(json: $0, kind: kind) },
+                                rawCount: records.count)
     }
 
     /// 获取播放凭证 (POST)

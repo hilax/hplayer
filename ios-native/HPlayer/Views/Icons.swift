@@ -18,6 +18,7 @@ enum AppIcon: String, CaseIterable {
     case refresh, history, clock, sortAscending, sortDescending, tune, settings
     case copy, trash, openExternal, returnKey, sparkles, hidden, hot, topics, mirror
     case heart, heartFill, bolt
+    case comment, like, pin
 
     // MARK: 播放
     case play, playCircle, pause, stop, previous, next, skip, seek, fullscreen, exitFullscreen
@@ -76,6 +77,9 @@ enum AppIcon: String, CaseIterable {
         case .sortDescending: return "arrow.down"
         case .tune: return "slider.horizontal.3"
         case .settings: return "gearshape"
+        case .comment: return "bubble.left"
+        case .like: return "hand.thumbsup"
+        case .pin: return "pin"
         case .copy: return "doc.on.doc"
         case .trash: return "trash"
         case .hidden: return "eye.slash"
