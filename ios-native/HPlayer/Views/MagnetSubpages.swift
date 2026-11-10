@@ -514,7 +514,7 @@ struct MagnetDetailView: View {
 
     private var hero: some View {
         HStack(alignment: .top, spacing: 16) {
-            MagnetCover(url: item.coverURL)
+            MagnetCover(url: item.coverURL, code: item.code)
                 .frame(width: 120, height: 160)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
                 .overlay {

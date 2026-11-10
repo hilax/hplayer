@@ -147,7 +147,7 @@ actor DMMClient {
         request.httpMethod = "HEAD"
         request.httpShouldHandleCookies = false
         request.timeoutInterval = 8
-        guard await waitForSlot(interval: 0.25), !Task.isCancelled else { return nil }
+        guard await waitForSlot(interval: 0.1), !Task.isCancelled else { return nil }
         let result: (Data, URLResponse)
         do {
             result = try await session.data(for: request)
@@ -185,7 +185,7 @@ actor DMMClient {
         return metadata
     }
 
-    /// 排队间隔：官方接口每秒一次，图片服务每 0.25 秒一次。被取消时返回 false。
+    /// 排队间隔：官方接口每秒一次，图片服务每 0.1 秒一次。被取消时返回 false。
     private func waitForSlot(interval: TimeInterval) async -> Bool {
         let now = Date()
         let scheduled = max(now, nextRequestAt)

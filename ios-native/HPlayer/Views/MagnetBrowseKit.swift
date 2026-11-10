@@ -90,6 +90,9 @@ struct MagnetCover: View {
     /// 这样不会给每张封面同时发两个请求（一屏九张封面时，请求翻倍容易被图床限流，表现就是封面空着）。
     static let thumbnailDelay: UInt64 = 1_200_000_000
 
+    /// 番号。JavBus 自己的两张图都取不到时，用它去 DMM 找官方封面。
+    var code: String = ""
+
     @State private var thumbnailWanted = false
 
     var body: some View {
@@ -98,7 +101,7 @@ struct MagnetCover: View {
                 switch phase {
                 case let .loaded(image):
                     if let crop = Self.crop(for: image.size) {
-                        front(of: image, crop: crop)
+                        Self.front(of: image, crop: crop)
                     } else {
                         thumbnail
                     }
@@ -119,11 +122,21 @@ struct MagnetCover: View {
         }
     }
 
+    /// 小图；小图也没有（JavBus 对刚登记的新片经常两张图都还没上传，一直回 404）就换 DMM 的官方封面。
     private var thumbnail: some View {
-        MagnetArtwork(url: url, maxPixel: 420, placeholder: AppIcon.poster.name)
+        PipelineImage(url: url, maxPixel: 420) { phase in
+            switch phase {
+            case let .loaded(image):
+                Image(uiImage: image).resizable().scaledToFill()
+            case .loading:
+                Rectangle().fill(Theme.surfaceRaised)
+            case .failed:
+                MagnetFallbackCover(code: code)
+            }
+        }
     }
 
-    private func front(of image: UIImage, crop: Crop) -> some View {
+    static func front(of image: UIImage, crop: Crop) -> some View {
         GeometryReader { proxy in
             let aspect = image.size.width / image.size.height
             let width: CGFloat = {
@@ -144,6 +157,55 @@ struct MagnetCover: View {
                 )
                 .clipped()
         }
+    }
+}
+
+/// DMM 的官方封面（横版，正面在右边，和 JavBus 的大图版式一致，取法也一样）。
+/// 查到之前只显示底色；确实没有（还没发行、DMM 也没收录）才显示占位图标。
+struct MagnetFallbackCover: View {
+    let code: String
+    @State private var url: URL?
+    @State private var finished = false
+
+    var body: some View {
+        Group {
+            if let url {
+                PipelineImage(url: url, maxPixel: 800) { phase in
+                    switch phase {
+                    case let .loaded(image):
+                        // DMM 对没有封面的片会回一张 90×122 的「暂无图片」占位图（状态码还是 200），当作没有。
+                        if max(image.size.width, image.size.height) < 200 {
+                            placeholder
+                        } else {
+                            MagnetCover.front(of: image, crop: MagnetCover.crop(for: image.size) ?? .full)
+                        }
+                    case .loading:
+                        Rectangle().fill(Theme.surfaceRaised)
+                    case .failed:
+                        placeholder
+                    }
+                }
+            } else if finished || code.isEmpty {
+                placeholder
+            } else {
+                Rectangle().fill(Theme.surfaceRaised)
+            }
+        }
+        .task(id: code) {
+            url = nil
+            finished = false
+            guard !code.isEmpty else { return }
+            let found = await MagnetCoverFallback.shared.url(for: code)
+            guard !Task.isCancelled else { return }
+            url = found
+            finished = true
+        }
+    }
+
+    private var placeholder: some View {
+        Rectangle()
+            .fill(Theme.surfaceRaised)
+            .overlay { Image(systemName: AppIcon.poster.name).foregroundStyle(.secondary) }
     }
 }
 
@@ -197,7 +259,7 @@ struct MagnetPosterCard: View {
                 Color.clear
                     .aspectRatio(MagnetLayout.posterRatio, contentMode: .fit)
                     .overlay {
-                        MagnetCover(url: movie.coverURL)
+                        MagnetCover(url: movie.coverURL, code: movie.code)
                     }
                     .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
                     .overlay {
@@ -264,7 +326,7 @@ struct MagnetListRow: View {
                         .accessibilityLabel("第 \(rank) 名")
                 }
 
-                MagnetCover(url: movie.coverURL)
+                MagnetCover(url: movie.coverURL, code: movie.code)
                     .frame(width: 72, height: 96)
                     .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
                     .overlay {
