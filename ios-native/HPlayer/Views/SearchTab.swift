@@ -20,7 +20,7 @@ struct SearchTab: View {
 /// 搜索：「片库」在首页媒体库里按片名即时筛选，「115 网盘」按搜索键后请求网盘。
 struct SearchView: View {
     enum Scope: String, CaseIterable, Identifiable {
-        case all, library, cloud
+        case all, library, anime, cloud
 
         var id: String { rawValue }
 
@@ -28,6 +28,7 @@ struct SearchView: View {
             switch self {
             case .all: return "全部"
             case .library: return "片库"
+            case .anime: return "在线动漫"
             case .cloud: return "115 网盘"
             }
         }
@@ -54,6 +55,8 @@ struct SearchView: View {
     private var error: String { cloudSearch.error }
     @State private var playing: PlaybackQueue?
     @State private var openSeriesID: String?
+    @State private var animeResults: [AnimeVideoItem] = []
+    @State private var isAnimeLoading = false
     /// 键盘占掉的高度。搜索页整体不跟系统的键盘避让（那样它的布局会随键盘收起被拖着变），
     /// 改成自己量键盘高度、只给列表底部留白；退出时冻结，收起键盘不再引起任何布局变化。
     @State private var keyboardHeight: CGFloat = 0
@@ -93,14 +96,17 @@ struct SearchView: View {
                 )
                 .frame(minHeight: 380)
                 .searchRow()
-            } else if (scope == .cloud || hits.count == 0) && (scope == .library || results.isEmpty) && !loading && error.isEmpty && (scope == .library || searchedKeyword == query) {
+            } else if (scope == .cloud || hits.count == 0) && (scope == .library || results.isEmpty) && (scope == .library || animeResults.isEmpty) && !loading && !isAnimeLoading && error.isEmpty && (scope == .library || searchedKeyword == query) {
                 EmptyStateView(icon: AppIcon.search.name, title: "暂时没有找到", message: "试试更短的片名，或检查文件名。也可以切换搜索范围后再试。", actionTitle: "重新搜索", action: { searchFocused = true })
                     .frame(minHeight: 380).searchRow()
             } else {
-                if scope != .cloud {
+                if scope != .cloud && scope != .anime {
                     librarySection(hits, library: library)
                 }
-                if scope != .library {
+                if scope == .all || scope == .anime {
+                    animeSection
+                }
+                if scope != .library && scope != .anime {
                     cloudSection
                 }
             }
@@ -166,14 +172,19 @@ struct SearchView: View {
                 }
             }
         }
+        .navigationDestination(for: AnimeDetailRoute.self) { route in
+            AnimeDetailView(animeId: route.animeId)
+                .id(route.animeId)
+        }
         .onChange(of: keyword) { _ in
             searchTask?.cancel()
             cloudSearch.invalidate(clearResults: query.isEmpty)
+            if query.isEmpty { animeResults = [] }
         }
         .onChange(of: scope) { value in
             searchTask?.cancel()
             cloudSearch.invalidate()
-            if value != .library, !query.isEmpty, searchedKeyword != query { startSearch() }
+            if value != .library, !query.isEmpty { startSearch() }
         }
         .onChange(of: appState.sessionID) { _ in
             searchTask?.cancel()
@@ -422,6 +433,38 @@ struct SearchView: View {
         }
     }
 
+    // MARK: 在线动漫
+
+    @ViewBuilder
+    private var animeSection: some View {
+        if !animeResults.isEmpty {
+            sectionTitle("在线动漫 · \(animeResults.count) 部")
+
+            ForEach(Array(animeResults.enumerated()), id: \.element.id) { index, item in
+                NavigationLink(value: AnimeDetailRoute(animeId: item.id)) {
+                    LibraryResultRow(
+                        posterURL: item.safePicURLString,
+                        title: item.name,
+                        meta: [item.year, item.area, item.continu].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "),
+                        detail: ["在线动漫", item.tags.prefix(2).joined(separator: " / ")].filter { !$0.isEmpty }.joined(separator: " · "),
+                        showsPlay: false
+                    )
+                }
+                .buttonStyle(.pressable(scale: 0.98))
+                .searchRow()
+            }
+        } else if isAnimeLoading {
+            HStack {
+                Spacer()
+                ProgressView()
+                    .tint(Theme.accent)
+                Spacer()
+            }
+            .padding(.vertical, 24)
+            .searchRow()
+        }
+    }
+
     // MARK: 行
 
     private func sectionTitle(_ text: String) -> some View {
@@ -443,9 +486,25 @@ struct SearchView: View {
     private func startSearch() {
         searchTask?.cancel()
         let text = query
-        guard !text.isEmpty, scope != .library, appState.isAuthenticated,
-              let direct = appState.directClient() else { return }
-        searchTask = Task { await cloudSearch.search(text) { try await direct.search($0) } }
+        guard !text.isEmpty else { return }
+
+        searchTask = Task {
+            if scope != .library && scope != .anime && appState.isAuthenticated,
+               let direct = appState.directClient() {
+                await cloudSearch.search(text) { try await direct.search($0) }
+            }
+
+            if scope == .all || scope == .anime {
+                isAnimeLoading = true
+                do {
+                    let res = try await AnimeClient.shared.search(keyword: text, limit: 20)
+                    self.animeResults = res.items
+                } catch {
+                    self.animeResults = []
+                }
+                isAnimeLoading = false
+            }
+        }
     }
 
 }

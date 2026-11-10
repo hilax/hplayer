@@ -377,7 +377,7 @@ struct SeriesDetailView: View {
 
 /// iOS 26 的导航栏按钮自带液态玻璃底，去掉导航栏底色就能直接压在背景图上；
 /// 更早的系统按钮没有底，保留系统默认的导航栏底色，免得返回键在亮色背景图上看不清。
-private struct TransparentNavigationBar: ViewModifier {
+struct TransparentNavigationBar: ViewModifier {
     @ViewBuilder func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
             content.toolbarBackground(.hidden, for: .navigationBar)

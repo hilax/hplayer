@@ -19,24 +19,37 @@ final class RecentStore: ObservableObject {
     /// 开始播放时调用：新建或刷新记录并移到最前面，保留已有的观看位置
     func record(_ source: PlaybackSource) {
         let key = Self.key(for: source)
-        var entry = items.first { Self.key(of: $0) == key } ?? RecentItem(
+        var entry = items.first { Self.key(of: $0) == key }
+        // 老版本的动漫记录按带签名的流地址存，升级后按标题认领回来，续播位置和「已看完」不丢。
+        if entry == nil, case .anime(let ref) = source {
+            entry = items.first { $0.animeRef == nil && $0.isAnime && $0.title == ref.episodeTitle }
+        }
+        var updated = entry ?? RecentItem(
             id: UUID().uuidString,
             title: source.title,
             url: "",
             playedAt: Date()
         )
-        entry.title = source.title
-        entry.playedAt = Date()
+        updated.title = source.title
+        updated.playedAt = Date()
         switch source {
-        case .direct(_, let url):
-            entry.url = url.absoluteString
-            entry.pickCode = nil
+        case .direct(_, let url), .online(_, let url, _, _, _):
+            updated.url = url.absoluteString
+            updated.pickCode = nil
         case .p115(_, let pickCode):
-            entry.url = ""
-            entry.pickCode = pickCode
+            updated.url = ""
+            updated.pickCode = pickCode
+        case .anime(let ref):
+            updated.url = ""
+            updated.pickCode = nil
+            updated.animeId = ref.animeId
+            updated.animePlay = ref.play
+            updated.animeRoute = ref.routeIndex
+            updated.animePart = ref.part
         }
-        items.removeAll { Self.key(of: $0) == key }
-        items.insert(entry, at: 0)
+        // 认领来的旧记录 id 相同但 key 不同，两个条件都要清，否则会留下重复的一条。
+        items.removeAll { Self.key(of: $0) == key || $0.id == updated.id }
+        items.insert(updated, at: 0)
         if items.count > limit {
             items = Array(items.prefix(limit))
         }
@@ -59,6 +72,12 @@ final class RecentStore: ObservableObject {
         return items.first { Self.key(of: $0) == key }?.progress
     }
 
+    /// 动漫单集记录。解析出的流地址带时效签名，每次解析都不一样，用 URL 做 key 必然查不到，
+    /// 所以按稳定标题「番剧名 第XX集」匹配。items 已按最近播放排序，first 就是最近一次。
+    func animeEpisode(title: String) -> RecentItem? {
+        items.first { $0.title == title }
+    }
+
     /// 刚开头或快看完时不记位置，下次从头播放
     func savePosition(for source: PlaybackSource, seconds: Double, duration: Double) {
         guard seconds.isFinite, duration.isFinite, duration > 0 else { return }
@@ -66,7 +85,10 @@ final class RecentStore: ObservableObject {
         guard let index = items.firstIndex(where: { Self.key(of: $0) == key }) else { return }
         var entry = items[index]
         if seconds < 10 || seconds > duration - 30 || seconds / duration > 0.95 {
-            guard entry.position != nil else { return }
+            // 片尾判定为看完，单独留标记；开头就退出不算看完。
+            let reachedEnd = seconds > duration - 30 || seconds / duration > 0.95
+            if reachedEnd { entry.finished = true }
+            guard entry.position != nil || reachedEnd else { return }
             entry.position = nil
             entry.duration = nil
         } else {
@@ -80,10 +102,17 @@ final class RecentStore: ObservableObject {
 
     /// 把记录还原成播放源。本地文件在重装后路径会变，按文件名到媒体目录里再找一次。
     func source(for item: RecentItem, localDirectory: URL? = nil) -> PlaybackSource? {
+        // 动漫按集数坐标还原，打开时重新解析；记录里那个签名地址早就过期了。
+        if let ref = item.animeRef {
+            return .anime(ref)
+        }
         if let pickCode = item.pickCode, !pickCode.isEmpty {
             return .p115(title: item.title, pickCode: pickCode)
         }
         guard let url = URL(string: item.url) else { return nil }
+        if item.isAnime {
+            return .online(title: item.title, url: url, headers: ["User-Agent": ""])
+        }
         if url.isFileURL, !FileManager.default.fileExists(atPath: url.path), let localDirectory {
             let moved = localDirectory.appendingPathComponent(url.lastPathComponent)
             guard FileManager.default.fileExists(atPath: moved.path) else { return nil }
@@ -118,17 +147,20 @@ final class RecentStore: ObservableObject {
         save()
     }
 
-    /// 同一个视频只留一条：115 按 pickCode，本地文件按文件名，网络地址按完整地址
+    /// 同一个视频只留一条：115 按 pickCode，动漫按集数坐标，本地文件按文件名，网络地址按完整地址
     static func key(for source: PlaybackSource) -> String {
         switch source {
         case .p115(_, let pickCode):
             return "p115|\(pickCode)"
-        case .direct(_, let url):
+        case .anime(let ref):
+            return ref.id
+        case .direct(_, let url), .online(_, let url, _, _, _):
             return url.isFileURL ? "file|\(url.lastPathComponent)" : "url|\(url.absoluteString)"
         }
     }
 
     private static func key(of item: RecentItem) -> String {
+        if let ref = item.animeRef { return ref.id }
         if let pickCode = item.pickCode, !pickCode.isEmpty { return "p115|\(pickCode)" }
         guard let url = URL(string: item.url) else { return "url|\(item.url)" }
         return url.isFileURL ? "file|\(url.lastPathComponent)" : "url|\(url.absoluteString)"

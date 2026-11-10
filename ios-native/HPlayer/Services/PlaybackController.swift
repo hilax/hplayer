@@ -202,6 +202,7 @@ final class PlaybackController: ObservableObject {
     private var currentURL: URL?
     private var currentDirect115 = false
     private var currentCookie = ""
+    private var currentCustomHeaders: [String: String] = [:]
     private var urlRefresher: (() async throws -> URL)?
     private var watchdogEnabled = true
     private var openTimeoutSeconds: UInt64 = 45
@@ -427,6 +428,7 @@ final class PlaybackController: ObservableObject {
         _ url: URL,
         direct115: Bool = false,
         directCookie: String = "",
+        customHeaders: [String: String] = [:],
         preservingPosition: Bool = false,
         startTime: Double? = nil,
         refreshURL: (() async throws -> URL)? = nil,
@@ -452,16 +454,17 @@ final class PlaybackController: ObservableObject {
             aspect = .fit
             zoom = 1
         }
-        start(url, direct115: direct115, cookie: directCookie, position: position, keepPlaying: keepPlaying, keepDuration: preservingPosition)
+        start(url, direct115: direct115, cookie: directCookie, customHeaders: customHeaders, position: position, keepPlaying: keepPlaying, keepDuration: preservingPosition)
     }
 
-    private func start(_ url: URL, direct115: Bool, cookie: String, position: Double, keepPlaying: Bool, keepDuration: Bool) {
+    private func start(_ url: URL, direct115: Bool, cookie: String, customHeaders: [String: String] = [:], position: Double, keepPlaying: Bool, keepDuration: Bool) {
         guard !closingPlayback else { return }
         cancelAddressResolution()
         logEvent("打开 \(url.host ?? url.lastPathComponent)，从 \(Self.clock(position))（距播放页创建 \(Self.milliseconds(since: createdAt)) 毫秒）")
         currentURL = url
         currentDirect115 = direct115
         currentCookie = cookie
+        currentCustomHeaders = customHeaders
         resetState(keepDuration: keepDuration)
         resumePoint = position
         errorDetail = ""
@@ -479,7 +482,7 @@ final class PlaybackController: ObservableObject {
         guard let engine else {
             // 画面还没准备好：等图层交过来再打开
             pendingOpen = { [weak self] in
-                self?.start(url, direct115: direct115, cookie: cookie, position: position, keepPlaying: keepPlaying, keepDuration: keepDuration)
+                self?.start(url, direct115: direct115, cookie: cookie, customHeaders: customHeaders, position: position, keepPlaying: keepPlaying, keepDuration: keepDuration)
             }
             return
         }
@@ -488,8 +491,17 @@ final class PlaybackController: ObservableObject {
 
         engine.set("hwdec", decoding == .hardware ? "videotoolbox" : "no")
         applyCacheOptions(engine)
-        engine.set("user-agent", direct115 ? Direct115Client.userAgent : "HPlayer")
-        engine.set("referrer", direct115 ? "https://115.com/" : "")
+        engine.set("hls-bitrate", "max")
+        if let ua = customHeaders["User-Agent"] {
+            engine.set("user-agent", ua)
+        } else {
+            engine.set("user-agent", direct115 ? Direct115Client.userAgent : "HPlayer")
+        }
+        if let ref = customHeaders["Referer"] {
+            engine.set("referrer", ref)
+        } else {
+            engine.set("referrer", direct115 ? "https://115.com/" : "")
+        }
         let cookieHeader = Self.cookieHeader(cookie)
         engine.set("http-header-fields", direct115 && !cookieHeader.isEmpty ? "Cookie: \(cookieHeader.replacingOccurrences(of: ",", with: "%2C"))" : "")
         engine.set("start", position > 0 ? String(format: "%.3f", position) : "none")
@@ -499,7 +511,7 @@ final class PlaybackController: ObservableObject {
         let currentSession = session
         let generation = addressGeneration
         addressTask = Task { @MainActor [weak self, weak engine] in
-            let address = await Self.engineAddress(for: url, direct115: direct115, cookieHeader: cookieHeader)
+            let address = await Self.engineAddress(for: url, direct115: direct115, cookieHeader: cookieHeader, customHeaders: customHeaders)
             guard let self, let engine, !Task.isCancelled, !self.closingPlayback,
                   self.session == currentSession, self.addressGeneration == generation,
                   self.engine === engine else { return }
@@ -1374,7 +1386,7 @@ final class PlaybackController: ObservableObject {
     }
 
     /// 网络视频交给本机中转，由系统网络栈去连 115（mpv 自带的 TLS 连 115 会被断开）；本机地址（磁力边下边播）直接给内核
-    private static func engineAddress(for url: URL, direct115: Bool, cookieHeader: String) async -> String {
+    private static func engineAddress(for url: URL, direct115: Bool, cookieHeader: String, customHeaders: [String: String] = [:]) async -> String {
         if url.isFileURL { return url.path }
         guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return url.absoluteString }
         let host = url.host?.lowercased() ?? ""
@@ -1388,6 +1400,9 @@ final class PlaybackController: ObservableObject {
         if direct115 {
             headers["Referer"] = "https://115.com/"
             if !cookieHeader.isEmpty { headers["Cookie"] = cookieHeader }
+        }
+        for (k, v) in customHeaders {
+            headers[k] = v
         }
         return await LocalStreamProxy.shared.localURL(for: url, headers: headers)?.absoluteString ?? url.absoluteString
     }

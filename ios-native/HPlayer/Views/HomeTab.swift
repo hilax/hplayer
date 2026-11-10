@@ -561,7 +561,8 @@ struct HomeTab: View {
                 match = nil
             }
             let parsed = MediaNameParser.parse(recent.title).title
-            var detail: [String] = [recent.isCloud ? "115 网盘" : (recent.isLocalFile ? "本地视频" : "网络地址")]
+            let sourceLabel = recent.isAnime ? "在线动漫" : (recent.isCloud ? "115 网盘" : (recent.isLocalFile ? "本地视频" : "网络地址"))
+            var detail: [String] = [sourceLabel]
             if let episode = match?.episodeLabel { detail.append(episode) }
             if let position = recent.position {
                 detail.append("看到 \(playbackTimeText(position))")
@@ -574,12 +575,13 @@ struct HomeTab: View {
             } else {
                 artwork = ""
             }
+            let tagLabel = recent.isAnime ? "动漫" : (recent.isCloud ? "115" : (recent.isLocalFile ? "本地" : "网络"))
             entries.append(ContinueEntry(
                 id: "recent|\(recent.id)",
                 target: .recent(recent),
                 title: match?.title ?? (parsed.isEmpty ? recent.title : parsed),
                 subtitle: detail.joined(separator: " · "),
-                tag: recent.isCloud ? "115" : (recent.isLocalFile ? "本地" : "网络"),
+                tag: tagLabel,
                 artworkURL: artwork,
                 progress: recent.progress,
                 date: recent.playedAt,

@@ -73,6 +73,42 @@ targets:
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
           NSAllowsLocalNetworking: true
+          NSExceptionDomains:
+            120.240.157.64:
+              NSExceptionAllowsInsecureHTTPLoads: true
+            111.29.14.203:
+              NSExceptionAllowsInsecureHTTPLoads: true
+            183.214.145.89:
+              NSExceptionAllowsInsecureHTTPLoads: true
+            183.232.189.187:
+              NSExceptionAllowsInsecureHTTPLoads: true
+            cenmo.fun:
+              NSIncludesSubdomains: true
+              NSExceptionAllowsInsecureHTTPLoads: true
+            hzhcbkj.cn:
+              NSIncludesSubdomains: true
+              NSExceptionAllowsInsecureHTTPLoads: true
+            adukwai.com:
+              NSIncludesSubdomains: true
+              NSExceptionAllowsInsecureHTTPLoads: true
+            yximgs.com:
+              NSIncludesSubdomains: true
+              NSExceptionAllowsInsecureHTTPLoads: true
+            kwaicdn.com:
+              NSIncludesSubdomains: true
+              NSExceptionAllowsInsecureHTTPLoads: true
+            meituan.net:
+              NSIncludesSubdomains: true
+              NSExceptionAllowsInsecureHTTPLoads: true
+            qpic.cn:
+              NSIncludesSubdomains: true
+              NSExceptionAllowsInsecureHTTPLoads: true
+            zhimg.com:
+              NSIncludesSubdomains: true
+              NSExceptionAllowsInsecureHTTPLoads: true
+            baidu.com:
+              NSIncludesSubdomains: true
+              NSExceptionAllowsInsecureHTTPLoads: true
         NSPhotoLibraryAddUsageDescription: "截图时把当前画面保存到相册。"
         NSLocalNetworkUsageDescription: "用于磁力播放时在本机播放缓存并发现局域网节点。"
         CFBundleURLTypes:
@@ -110,10 +146,52 @@ targets:
       - path: HPlayerTests
     dependencies:
       - target: HPlayer
+    info:
+      path: HPlayerTests/Info.plist
+      properties:
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+          NSAllowsLocalNetworking: true
+          NSExceptionDomains:
+            120.240.157.64:
+              NSExceptionAllowsInsecureHTTPLoads: true
+            111.29.14.203:
+              NSExceptionAllowsInsecureHTTPLoads: true
+            183.214.145.89:
+              NSExceptionAllowsInsecureHTTPLoads: true
+            183.232.189.187:
+              NSExceptionAllowsInsecureHTTPLoads: true
+            cenmo.fun:
+              NSIncludesSubdomains: true
+              NSExceptionAllowsInsecureHTTPLoads: true
+            hzhcbkj.cn:
+              NSIncludesSubdomains: true
+              NSExceptionAllowsInsecureHTTPLoads: true
+            adukwai.com:
+              NSIncludesSubdomains: true
+              NSExceptionAllowsInsecureHTTPLoads: true
+            yximgs.com:
+              NSIncludesSubdomains: true
+              NSExceptionAllowsInsecureHTTPLoads: true
+            kwaicdn.com:
+              NSIncludesSubdomains: true
+              NSExceptionAllowsInsecureHTTPLoads: true
+            meituan.net:
+              NSIncludesSubdomains: true
+              NSExceptionAllowsInsecureHTTPLoads: true
+            qpic.cn:
+              NSIncludesSubdomains: true
+              NSExceptionAllowsInsecureHTTPLoads: true
+            zhimg.com:
+              NSIncludesSubdomains: true
+              NSExceptionAllowsInsecureHTTPLoads: true
+            baidu.com:
+              NSIncludesSubdomains: true
+              NSExceptionAllowsInsecureHTTPLoads: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.hplayer.tests
-        GENERATE_INFOPLIST_FILE: YES
+        GENERATE_INFOPLIST_FILE: NO
 
 schemes:
   HPlayer:
