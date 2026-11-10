@@ -164,6 +164,8 @@ struct AnimeTransport {
         guard (200..<400).contains(http.statusCode) else {
             throw AnimeTransportError.badStatus(http.statusCode)
         }
+        // 游客令牌由服务端在响应头里下发，见 AnimeSigner.token
+        AnimeSigner.shared.adoptIssuedToken(http.value(forHTTPHeaderField: "new-token"))
         return AnimeHTTPResult(data: data, status: http.statusCode,
                                location: http.value(forHTTPHeaderField: "Location"))
     }

@@ -27,7 +27,7 @@ final class AnimeClient {
     // MARK: - 基础请求执行流水线
 
     private func request<T: Codable>(path: String, method: String = "GET", body: Data? = nil,
-                                     redirectDepth: Int = 0) async throws -> T {
+                                     redirectDepth: Int = 0, tokenRetried: Bool = false) async throws -> T {
         let cleanPath = path.replacingOccurrences(of: "/?", with: "?")
         let transport = AnimeTransport(host: host, fallbackIPs: fallbackIPs)
         let result = try await transport.send(path: cleanPath, method: method,
@@ -51,6 +51,11 @@ final class AnimeClient {
 
         let apiRes = try JSONDecoder().decode(AnimeAPIResponse<T>.self, from: jsonData)
         guard apiRes.code == 20000 else {
+            // 50014 = 令牌失效：丢掉手里的令牌，不带令牌重发一次，让服务端重新下发
+            if apiRes.code == 50014, !tokenRetried {
+                AnimeSigner.shared.discardIssuedToken()
+                return try await request(path: path, method: method, body: body, tokenRetried: true)
+            }
             throw AnimeClientError.serverError(code: apiRes.code, message: apiRes.message)
         }
 
@@ -63,7 +68,7 @@ final class AnimeClient {
 
     /// 不按固定模型解码，直接返回外壳里的 `data`（JSON 对象）。评论接口的字段 API 文档没有展开，
     /// 用这个拿到原始结构再宽松解析（见 AnimeComment）。
-    private func requestJSON(path: String) async throws -> Any {
+    private func requestJSON(path: String, tokenRetried: Bool = false) async throws -> Any {
         let cleanPath = path.replacingOccurrences(of: "/?", with: "?")
         let transport = AnimeTransport(host: host, fallbackIPs: fallbackIPs)
         let result = try await transport.send(path: cleanPath, method: "GET",
@@ -78,6 +83,10 @@ final class AnimeClient {
         }
         let code = (object["code"] as? Int) ?? Int("\(object["code"] ?? "")") ?? 0
         guard code == 20000 else {
+            if code == 50014, !tokenRetried {
+                AnimeSigner.shared.discardIssuedToken()
+                return try await requestJSON(path: path, tokenRetried: true)
+            }
             throw AnimeClientError.serverError(code: code, message: object["message"] as? String ?? "")
         }
         return object["data"] ?? NSNull()

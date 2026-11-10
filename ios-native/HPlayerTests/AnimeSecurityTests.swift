@@ -78,6 +78,48 @@ final class AnimeSecurityTests: XCTestCase {
         XCTAssertFalse(headers["authentication"]?.isEmpty ?? true)
     }
 
+    func testSignerPrefersIssuedTokenAndDropsExpiredOnes() {
+        let suite = "signer-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let signer = AnimeSigner(defaults: defaults)
+        func jwt(exp: TimeInterval) -> String {
+            let payload = Data("{\"UUID\":\"u\",\"exp\":\(Int(exp))}".utf8).base64EncodedString()
+                .replacingOccurrences(of: "=", with: "")
+            return "eyJhbGciOiJIUzI1NiJ9.\(payload).sig"
+        }
+        let fresh = jwt(exp: Date().timeIntervalSince1970 + 3600)
+        let stale = jwt(exp: Date().timeIntervalSince1970 - 10)
+        XCTAssertTrue(AnimeSigner.isExpired(stale))
+        XCTAssertFalse(AnimeSigner.isExpired(fresh))
+        signer.adoptIssuedToken("not-a-jwt")
+        XCTAssertNotEqual(signer.token, "not-a-jwt")
+        signer.adoptIssuedToken(" \(fresh)\n")
+        XCTAssertEqual(signer.token, fresh)
+        XCTAssertEqual(signer.headers()["x-token"], fresh)
+        signer.adoptIssuedToken(stale)
+        XCTAssertNotEqual(signer.token, stale, "过期的令牌不再带上")
+        signer.discardIssuedToken()
+        signer.discardIssuedToken()
+        XCTAssertEqual(signer.token, "", "内置令牌被拒后不带令牌，等服务端重新下发")
+        XCTAssertNil(signer.headers()["x-token"])
+    }
+
+    func testCommentReadsRealFieldNames() {
+        let json: [String: Any] = ["id": 264121, "uname": "用户", "comments": "正文", "hits": 621, "istop": 1,
+                                   "isvip": true, "children_total": 135, "created_at": "2026-09-02T13:00:36+08:00",
+                                   "roles": [["group_name": "管理员"]]]
+        let comment = AnimeComment(json: json, kind: .list)
+        XCTAssertEqual(comment?.userName, "用户")
+        XCTAssertEqual(comment?.content, "正文")
+        XCTAssertEqual(comment?.likes, 621)
+        XCTAssertEqual(comment?.replies, 135)
+        XCTAssertEqual(comment?.pinned, true)
+        XCTAssertEqual(comment?.role, "管理员")
+        XCTAssertEqual(comment?.time, "09-02 13:00")
+        XCTAssertEqual(AnimeJSON.records(in: ["total": 1, "items": [json]] as [String: Any]).count, 1)
+    }
+
     func testDecodesRealWorldAnimePayloads() throws {
         // 接口真实样本：stars 在列表里是字符串、在详情里是数字。
         let listJSON = """

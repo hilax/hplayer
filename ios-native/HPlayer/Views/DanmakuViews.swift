@@ -470,6 +470,7 @@ private struct AnimeCommentRow: View {
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(Theme.textSecondary)
                         .lineLimit(1)
+                    if !comment.role.isEmpty { badge(comment.role, color: Theme.info) }
                     if comment.pinned { badge("置顶", color: Theme.accent) }
                     if comment.hot { badge("热评", color: Theme.rating) }
                     Spacer(minLength: 0)
