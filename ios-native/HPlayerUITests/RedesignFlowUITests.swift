@@ -189,8 +189,19 @@ final class RedesignFlowUITests: XCTestCase {
         let app = launch("portrait")
         defer { app.terminate() }
         XCTAssertTrue(app.buttons["playback.more"].waitForExistence(timeout: 20))
+        // 右上角「…」只放定时关闭：在按钮下面展开，选一项就收起；提前缓存、复制诊断信息不在竖屏出现
         app.buttons["playback.more"].tap()
+        let sleepEnd = app.buttons["playback.sleep.end"]
+        XCTAssertTrue(sleepEnd.waitForExistence(timeout: 5), "The ellipsis opens the sleep timer menu")
+        XCTAssertTrue(app.buttons["playback.sleep.off"].exists)
+        XCTAssertFalse(app.buttons["提前缓存"].exists)
+        sleepEnd.tap()
+        XCTAssertTrue(wait { !sleepEnd.exists }, "Picking an option closes the menu")
+        // 快捷入口打开播放设置：画质、倍速、解码
+        app.buttons["playback.quality"].tap()
         XCTAssertTrue(app.staticTexts["播放设置"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["提前缓存"].exists, "Read-ahead is a landscape-only setting")
+        XCTAssertFalse(app.staticTexts["定时关闭"].exists, "The sleep timer lives behind the ellipsis")
         app.buttons["1.5"].tap()
         app.buttons["关闭设置"].tap()
         app.buttons["playback.tracks"].tap()

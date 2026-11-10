@@ -106,7 +106,7 @@ struct InterfaceCatalogHost: View {
         case "magnet": NavigationStack { MagnetPlayerView(initialMagnet: "magnet:?xt=urn:btih:0123456789012345678901234567890123456789") }
         case "resolving": NavigationStack { MagnetPlayerView(controller: .interfaceFixture()) }
         case "magnet-files": NavigationStack { MagnetPlayerView(controller: .interfaceFixture(catalog: fixture.magnetCatalog)) }
-        case "portrait", "landscape", "playback", "tracks", "episodes", "aspect":
+        case "portrait", "landscape", "playback", "tracks", "episodes", "aspect", "sleep":
             InterfacePlayerHost()
         default: Text("未知原型页面：\(screen)")
         }

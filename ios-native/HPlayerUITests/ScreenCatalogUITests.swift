@@ -55,6 +55,11 @@ final class ScreenCatalogUITests: XCTestCase {
     func test51MetadataLight() { capture("metadata", expected: "资料来源", style: "light") }
     func test52SettingsLight() { capture("settings", expected: "我的", style: "light") }
     func test53Catalog() { capture("catalog", expected: "片库") }
+    func test54Sleep() { capture("sleep", expected: "定时关闭") }
+    func test55PortraitLight() { capture("portrait", expected: "portrait", style: "light") }
+    func test56SleepLight() { capture("sleep", expected: "定时关闭", style: "light") }
+    func test57EpisodesLight() { capture("episodes", expected: "选集", style: "light") }
+    func test58PlaybackLight() { capture("playback", expected: "播放设置", style: "light") }
 
     private func capture(_ screen: String, expected: String, style: String = "dark") {
         continueAfterFailure = false
@@ -68,7 +73,7 @@ final class ScreenCatalogUITests: XCTestCase {
         app.launchEnvironment["HPLAYER_UI_TEST_URL"] = "http://127.0.0.1:8765/hls-fixture/index.m3u8"
         app.launch()
         defer { app.terminate(); XCUIDevice.shared.orientation = .portrait }
-        if ["portrait", "landscape", "playback", "tracks", "episodes", "aspect"].contains(screen) {
+        if ["portrait", "landscape", "playback", "tracks", "episodes", "aspect", "sleep"].contains(screen) {
             XCTAssertTrue(app.buttons["playback.close"].waitForExistence(timeout: 25))
             if screen == "portrait" || screen == "landscape" {
                 // 播放器在独立窗口里：按钮写着「竖屏」就是在横屏，此时播放画面区域也是真的宽大于高
@@ -104,7 +109,11 @@ final class ScreenCatalogUITests: XCTestCase {
             XCTAssertTrue(menu.waitForExistence(timeout: 10))
             menu.tap()
         }
-        if screen != "portrait" && screen != "landscape" {
+        if screen == "sleep" {
+            XCTAssertTrue(app.buttons["playback.sleep.off"].waitForExistence(timeout: 10), "Sleep timer menu should be open")
+            XCTAssertTrue(app.buttons["playback.sleep.30"].isSelected, "The preset 30 minute option is marked")
+        }
+        if screen != "portrait" && screen != "landscape" && screen != "sleep" {
             XCTAssertTrue(wait {
                 if screen == "home" { return app.buttons["home.heroPlay"].exists }
                 return self.shows(expected, in: app)
