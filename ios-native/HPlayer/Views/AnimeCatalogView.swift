@@ -264,9 +264,11 @@ struct AnimeCatalogView: View {
     private func channelContent(metrics: GridMetrics) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             // 接口只支持 channel / sort / limit / page，没有年份与类型筛选，所以这里只放排序。
+            // sort 实测（2026-11-12）：addtime 与 weight 在多数频道返回的顺序完全一样，
+            // 所以第二个选项用 hits（按播放量），这才是一组明显不同的结果；其他值服务端不认，退回按 id 排。
             HStack(spacing: 2) {
                 sortPill(title: "最新上架", value: "addtime")
-                sortPill(title: "推荐权重", value: "weight")
+                sortPill(title: "最多播放", value: "hits")
                 Spacer(minLength: 8)
                 if totalCount > 0 {
                     Text("共 \(totalCount) 部")

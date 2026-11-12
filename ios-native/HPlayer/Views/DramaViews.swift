@@ -13,6 +13,7 @@ struct DramaCover: View {
     let urlString: String
     let title: String
     @State private var image: UIImage?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ZStack {
@@ -21,7 +22,7 @@ struct DramaCover: View {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFill()
-                    .transition(.opacity)
+                    .transition(ArtworkReveal.insertion(reduceMotion: reduceMotion))
             } else {
                 Text(String(title.prefix(1)))
                     .font(.system(size: 28, weight: .bold))
@@ -34,7 +35,7 @@ struct DramaCover: View {
             guard !urlString.isEmpty, !InterfacePreview.active else { return }
             let loaded = await DramaCoverStore.shared.image(for: urlString)
             guard !Task.isCancelled else { return }
-            withAnimation(.easeOut(duration: 0.2)) { image = loaded }
+            withAnimation(ArtworkReveal.animation) { image = loaded }
         }
         .accessibilityHidden(true)
     }

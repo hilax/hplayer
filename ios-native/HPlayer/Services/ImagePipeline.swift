@@ -397,7 +397,7 @@ struct PipelineImage<Content: View>: View {
             guard !Task.isCancelled else { return }
             if let loaded {
                 shownURL = url
-                withAnimation(.easeInOut(duration: 0.25)) { phase = .loaded(loaded) }
+                withAnimation(ArtworkReveal.animation) { phase = .loaded(loaded) }
                 return
             }
             phase = .failed

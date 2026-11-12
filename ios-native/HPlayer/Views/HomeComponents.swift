@@ -687,12 +687,17 @@ struct ArtworkView: View {
     /// 加载失败、或根本没有图片地址时是否画「空白海报」。虚化背景不需要。
     var drawsFallback = true
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
         PipelineImage(url: Self.url(urlString), maxPixel: maxPixel) { phase in
             switch phase {
-            case .loaded(let image): artwork(image)
-            case .loading: loadingView
-            case .failed: secondaryArtwork
+            case .loaded(let image):
+                artwork(image).transition(ArtworkReveal.insertion(reduceMotion: reduceMotion))
+            case .loading:
+                loadingView.transition(ArtworkReveal.placeholder)
+            case .failed:
+                secondaryArtwork.transition(.opacity)
             }
         }
         // 换了地址就整个重建，第一帧直接从内存缓存取新图，不会先留着上一张。
@@ -711,7 +716,7 @@ struct ArtworkView: View {
 
     @ViewBuilder private var loadingView: some View {
         switch loading {
-        case .neutral: Color(uiColor: .secondarySystemBackground)
+        case .neutral: Theme.surfaceRaised
         case .clear: Color.clear
         }
     }
@@ -734,6 +739,37 @@ struct ArtworkView: View {
         } else {
             Color.clear
         }
+    }
+}
+
+/// 封面从网络取回后的出场：淡入的同时从 1.06 倍轻轻落回原尺寸，像照片慢慢对上焦。
+/// 只有真正联网取回的图才有这段动画——内存缓存里已有的图在第一帧就直接显示，
+/// 过渡只在 PipelineImage 的 withAnimation 里生效。打开「减弱动态效果」时只淡入。
+enum ArtworkReveal {
+    static let duration: Double = 0.5
+    static let animation = Animation.timingCurve(0.2, 0.8, 0.2, 1, duration: duration)
+
+    static func insertion(reduceMotion: Bool) -> AnyTransition {
+        let reveal: AnyTransition = reduceMotion
+            ? .opacity
+            : .modifier(active: ArtworkRevealEffect(progress: 0), identity: ArtworkRevealEffect(progress: 1))
+        return .asymmetric(insertion: reveal, removal: .identity)
+    }
+
+    /// 底色等新图完全显出来以后再撤：两者同时淡出淡入时，中途会透出卡片后面的黑底，看起来像闪了一下。
+    static let placeholder: AnyTransition = .asymmetric(
+        insertion: .identity,
+        removal: .opacity.animation(.easeOut(duration: 0.2).delay(duration * 0.7))
+    )
+}
+
+struct ArtworkRevealEffect: ViewModifier {
+    let progress: Double
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(progress)
+            .scaleEffect(1 + 0.06 * (1 - progress))
     }
 }
 
