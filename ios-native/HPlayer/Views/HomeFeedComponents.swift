@@ -148,11 +148,13 @@ struct HomeSlideCard: View {
     // MARK: 画面
 
     private func artwork(urlString: String, fallback: String, title: String) -> some View {
-        ArtworkView(urlString: urlString, fallbackURLString: fallback, title: title,
-                    maxPixel: ArtworkSize.hero, loading: .clear)
-            .scaledToFill()
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .carouselParallax()
+        // 图片只铺在一块透明底上：「填满」裁出来的大图不能把卡片撑大（撑大了片名、按钮会被挤出卡片，翻页也对不齐）
+        Color.clear
+            .overlay {
+                ArtworkView(urlString: urlString, fallbackURLString: fallback, title: title,
+                            maxPixel: ArtworkSize.hero, loading: .clear)
+                    .scaledToFill()
+            }
             .clipped()
             .background(Theme.surfaceRaised)
             .allowsHitTesting(false)

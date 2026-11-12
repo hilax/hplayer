@@ -28,6 +28,8 @@ struct LoopingCarousel<Item: Identifiable, Page: View>: View {
     @State private var onScreen = true
     /// 手指在轮播上（iOS 18 起由滚动阶段得出）
     @State private var interacting = false
+    /// 滚动位置（每帧都在变，放在不触发重绘的对象里）
+    @State private var metrics = ScrollMetrics()
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -101,7 +103,8 @@ struct LoopingCarousel<Item: Identifiable, Page: View>: View {
                     LazyHStack(spacing: 0) {
                         ForEach(Array(pages.enumerated()), id: \.offset) { index, item in
                             pageView(item, index: index)
-                                .containerRelativeFrame(.horizontal)
+                                .containerRelativeFrame([.horizontal, .vertical])
+                                .clipped()
                                 .id(index)
                         }
                     }
@@ -110,10 +113,24 @@ struct LoopingCarousel<Item: Identifiable, Page: View>: View {
                 .scrollTargetBehavior(.paging)
                 .scrollIndicators(.hidden)
                 .scrollPosition(id: $position)
+                .onScrollGeometryChange(for: ScrollMetrics.Sample.self) { geometry in
+                    ScrollMetrics.Sample(offset: geometry.contentOffset.x, width: geometry.containerSize.width)
+                } action: { _, sample in
+                    metrics.sample = sample
+                }
                 .onScrollPhaseChange { _, phase in
                     let busy = phase != .idle
                     if interacting != busy { interacting = busy }
-                    if !busy { wrapIfNeeded() }
+                    guard !busy else { return }
+                    // 停下来却没对齐（停在两页中间）：吸到最近的一整页
+                    if let nearest = metrics.misalignedPage {
+                        withAnimation(.easeOut(duration: 0.25)) {
+                            position = nearest
+                            proxy.scrollTo(nearest, anchor: .leading)
+                        }
+                        return
+                    }
+                    wrapIfNeeded()
                 }
                 // 第一次出现时停在第一张真页上（它前面是最后一张的复制页）
                 .onAppear { proxy.scrollTo(current, anchor: .leading) }
@@ -211,6 +228,23 @@ struct LoopingCarousel<Item: Identifiable, Page: View>: View {
     }
 }
 
+/// 横向滚动的实时位置，只给「停下来时有没有对齐」用，不发布、不触发重绘。
+private final class ScrollMetrics {
+    struct Sample: Equatable {
+        var offset: CGFloat = 0
+        var width: CGFloat = 0
+    }
+    var sample = Sample()
+
+    /// 停在两页中间时，最近的那一页；对齐了返回 nil。
+    var misalignedPage: Int? {
+        guard sample.width > 1 else { return nil }
+        let page = (sample.offset / sample.width).rounded()
+        guard abs(sample.offset - page * sample.width) > 1 else { return nil }
+        return max(0, Int(page))
+    }
+}
+
 private struct AutoplayKey: Hashable {
     let page: Int
     let running: Bool
@@ -256,31 +290,5 @@ enum HeroLoop {
         if page == 0 { return count }
         if page == count + 1 { return 1 }
         return nil
-    }
-}
-
-extension View {
-    /// 翻页时封面比卡片慢半拍：卡片滑走一整页，封面只挪一小段，像隔着一层玻璃。
-    /// 只在 iOS 18 的翻页滚动视图里生效；减弱动态效果时关闭。
-    func carouselParallax() -> some View { modifier(CarouselParallax()) }
-}
-
-private struct CarouselParallax: ViewModifier {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    func body(content: Content) -> some View {
-        if #available(iOS 17.0, *) {
-            if reduceMotion {
-                content
-            } else {
-                content.scrollTransition(.interactive, axis: .horizontal) { view, phase in
-                    view
-                        .scaleEffect(1.12)
-                        .offset(x: -phase.value * 56, y: 0)
-                }
-            }
-        } else {
-            content
-        }
     }
 }

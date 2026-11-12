@@ -118,7 +118,7 @@
 ## 操作反馈与滚动动效
 
 - 关键操作用 `.successPop(_:particle:tint:)` / `.failureShake(_:)`（Pow）：只在状态变成成功 / 失败的那一刻触发；减弱动态效果时关闭。已用于追番、存到 115、复制链接。
-- iOS 17 起：横滑货架用 `.shelfContent()` + `.shelfScrolling()` 按卡片吸附，卡片加 `.shelfCard()`（边缘略缩小变淡）；网格卡片加 `.gridCardEntrance()`（从底部浮起）；轮播在 iOS 18 起是按页吸附的滚动视图（能拿到滚动阶段，手指在上面时暂停自动翻页），封面有翻页视差；更早的系统用分页 TabView。iOS 16 的货架、网格保持原样。
+- iOS 17 起：横滑货架用 `.shelfContent()` + `.shelfScrolling()` 按卡片吸附，卡片加 `.shelfCard()`（边缘略缩小变淡）；网格卡片加 `.gridCardEntrance()`（从底部浮起）；轮播在 iOS 18 起是按页吸附的滚动视图（能拿到滚动阶段：手指在上面时暂停自动翻页，停下时没对齐会吸到最近的一整页），翻页就是整张卡片平移、不加视差；更早的系统用分页 TabView。轮播卡片里的封面一律用 `Color.clear.overlay { 图.scaledToFill() }.clipped()`，不能写 `.scaledToFill().frame(maxWidth: .infinity, maxHeight: .infinity)`——比例不是 16:9 的图会把整页撑大，片名和按钮被挤出卡片、翻页对不齐。iOS 16 的货架、网格保持原样。
 
 ## 短剧竖屏播放器（DramaFeedView）
 

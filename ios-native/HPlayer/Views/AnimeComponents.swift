@@ -33,11 +33,13 @@ struct AnimeHeroBanner: View {
             Theme.surfaceRaised
 
             // 背景封面图（通过 HPlayer 专属 ImagePipeline 磁盘与内存缓存）
-            ArtworkView(urlString: banner.safePicURLString, title: banner.displayTitle,
-                        maxPixel: ArtworkSize.hero, loading: .clear, drawsFallback: false)
-                .scaledToFill()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .carouselParallax()
+            // 图片只铺在透明底上，「填满」裁出来的大图不会把卡片撑大
+            Color.clear
+                .overlay {
+                    ArtworkView(urlString: banner.safePicURLString, title: banner.displayTitle,
+                                maxPixel: ArtworkSize.hero, loading: .clear, drawsFallback: false)
+                        .scaledToFill()
+                }
                 .clipped()
                 .allowsHitTesting(false)
 

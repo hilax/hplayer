@@ -55,8 +55,14 @@ final class RedesignFlowUITests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [changed], timeout: 10), .completed)
         XCTAssertEqual(movies.frame.minY, shelfFrame.minY, accuracy: 1, "Swiping the carousel must not scroll the page")
         // Only the visible slide is exposed, so its play button is the one found.
-        XCTAssertTrue(app.buttons["home.heroPlay"].firstMatch.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["home.heroPlay"].firstMatch.isHittable)
+        let play = app.buttons["home.heroPlay"].firstMatch
+        XCTAssertTrue(play.waitForExistence(timeout: 5))
+        Thread.sleep(forTimeInterval: 1)
+        XCTAssertTrue(play.isHittable)
+        // The page snapped to a whole card: the button sits at the card's leading inset, not half a page away.
+        XCTAssertEqual(play.frame.minX, 16 + 14, accuracy: 3, "The carousel must settle on a whole page")
+        // Nothing is pushed out of the card: the button ends above the page dots at the card's bottom edge.
+        XCTAssertLessThanOrEqual(play.frame.maxY, position.frame.maxY + 1, "Buttons must stay inside the card")
         let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         screenshot.name = "Home carousel after swipe"
         screenshot.lifetime = .keepAlways
