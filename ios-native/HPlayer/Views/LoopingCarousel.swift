@@ -1,16 +1,21 @@
 import SwiftUI
 
-/// 顶部轮播（首页「推荐」、动漫频道共用）：首尾相接，可以手动左右滑，也会每隔几秒自动翻到下一张。
+/// 顶部轮播（首页「推荐」、动漫频道共用），照参考视频的翻页方式：
 ///
-/// 自动翻页只在用户「看得见、没在碰」的时候走：
-/// - 打开「减弱动态效果」时不自动翻；
-/// - 手指正按着 / 正在拖轮播时暂停（iOS 18 起按滚动阶段判断）；
-/// - 轮播滑出屏幕、切到别的标签或推进下一页、App 进后台时暂停；
-/// - 手动翻过一页，计时从头开始。
+/// - **卡片不动、图片不动**：下一张图从卡片右下以一道弧形边「揭」出来，弧线往左上扫过整张卡片。
+///   两张图都钉在原地，变的只是露出多少。
+/// - **只有文字在动**：片名、信息和按钮在揭过一半时换成下一张的，旧的往左滑出、新的从右滑入（往回翻反过来）。
+/// - 手动左右拖：弧线跟着手指走，松手吸到最近的一张；每 4 秒自动翻一张；首尾相接。
 ///
-/// 循环：首尾各多放一张复制页（见 HeroLoop），停在复制页上就无动画换回真的那页，看起来一直往前翻。
-/// 每一页由调用方画，`isCurrent` 告诉它是不是当前页；非当前页对辅助功能隐藏，同一个按钮不会出现两次。
-struct LoopingCarousel<Item: Identifiable, Page: View>: View {
+/// 自动翻页只在用户「看得见、没在碰」的时候走：打开「减弱动态效果」、手指在轮播上、轮播滑出屏幕、
+/// 切到别的页面、App 进后台时都暂停；手动翻过一页，计时从头开始。
+///
+/// 分三层：
+/// 1. 画面层（`background`）：当前图 + 正在揭出来的那张（弧形遮罩），不接触摸；
+/// 2. 手势层：一排透明的整页（`hitArea`，点它就是点这一张：进详情 / 播放）。iOS 18 起放在按页吸附的横向滚动视图里，
+///    由滚动位置算出「揭到哪儿」；更早的系统用分页 TabView，翻完一页再补放揭开动画；
+/// 3. 文字层（`foreground`）：只画一张，换的时候左右滑动。
+struct LoopingCarousel<Item: Identifiable, Background: View, Foreground: View, HitArea: View>: View {
     let items: [Item]
     /// 自动翻页间隔（秒）
     var interval: TimeInterval = 4
@@ -18,93 +23,152 @@ struct LoopingCarousel<Item: Identifiable, Page: View>: View {
     var label: String
     /// 指示器的辅助功能标识（UI 测试读它的 value 判断翻到了第几张）
     var positionIdentifier: String
-    /// 翻到了第几张（不含复制页，0 起）
+    /// 文字换成了第几张（0 起）：页面氛围色跟着它变
     var onSelect: (Int) -> Void = { _ in }
-    @ViewBuilder let page: (Item, Bool) -> Page
+    @ViewBuilder let background: (Item) -> Background
+    @ViewBuilder let foreground: (Item) -> Foreground
+    @ViewBuilder let hitArea: (Item) -> HitArea
 
-    /// 当前停在第几页（含复制页）。iOS 18 的滚动视图直接绑定它，旧系统的 TabView 用它做选中项。
-    @State private var position: Int?
+    /// 停稳的那一张（0 起）
+    @State private var current = 0
+    /// 正在揭开：from 在下面，to 从右下揭出来，progress 0…1
+    @State private var reveal: Reveal?
+    /// 文字层画的是哪一张；换的方向（往后翻 = 新文字从右边进来）
+    @State private var captionIndex = 0
+    @State private var captionForward = true
+    /// 手势层停在第几页（含首尾复制页）
+    @State private var page: Int?
+    @State private var dragging = false
     @State private var appeared = false
     @State private var onScreen = true
-    /// 手指在轮播上（iOS 18 起由滚动阶段得出）
-    @State private var interacting = false
-    /// 滚动位置（每帧都在变，放在不触发重绘的对象里）
-    @State private var metrics = ScrollMetrics()
+    /// 自动翻页（或点指示点）的揭开动画进行中
+    @State private var turning = false
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// 揭开动画时长；文字在不到一半时换
+    private static var turnDuration: TimeInterval { 0.9 }
+
     init(items: [Item], interval: TimeInterval = 4, label: String, positionIdentifier: String,
          onSelect: @escaping (Int) -> Void = { _ in },
-         @ViewBuilder page: @escaping (Item, Bool) -> Page) {
+         @ViewBuilder background: @escaping (Item) -> Background,
+         @ViewBuilder foreground: @escaping (Item) -> Foreground,
+         @ViewBuilder hitArea: @escaping (Item) -> HitArea) {
         self.items = items
         self.interval = interval
         self.label = label
         self.positionIdentifier = positionIdentifier
         self.onSelect = onSelect
-        self.page = page
-        _position = State(initialValue: HeroLoop.page(forReal: 0, count: items.count))
+        self.background = background
+        self.foreground = foreground
+        self.hitArea = hitArea
+        _page = State(initialValue: HeroLoop.page(forReal: 0, count: items.count))
     }
 
-    private var pages: [Item] { HeroLoop.pages(items) }
-    private var current: Int { position ?? HeroLoop.page(forReal: 0, count: items.count) }
-    private var selection: Int { HeroLoop.real(current, count: items.count) }
+    private var count: Int { items.count }
 
     private var canAutoplay: Bool {
-        items.count > 1 && CarouselAutoplay.enabled && !reduceMotion && !interacting
+        count > 1 && CarouselAutoplay.enabled && !reduceMotion && !dragging && !turning
             && appeared && onScreen && scenePhase == .active
     }
 
     var body: some View {
-        pager
-            .overlay(alignment: .bottomTrailing) {
-                if items.count > 1 {
-                    indicator
-                        .padding(.trailing, 8)
-                        .padding(.bottom, 6)
-                }
+        ZStack {
+            artwork
+            driver
+            captionLayer
+        }
+        .overlay(alignment: .bottomTrailing) {
+            if count > 1 {
+                indicator
+                    .padding(.trailing, 8)
+                    .padding(.bottom, 6)
             }
-            .background {
-                GeometryReader { proxy in
-                    Color.clear.preference(key: CarouselOnScreenKey.self, value: Self.isOnScreen(proxy.frame(in: .global)))
-                }
+        }
+        .background {
+            GeometryReader { proxy in
+                Color.clear.preference(key: CarouselOnScreenKey.self, value: Self.isOnScreen(proxy.frame(in: .global)))
             }
-            .onPreferenceChange(CarouselOnScreenKey.self) { visible in
-                if onScreen != visible { onScreen = visible }
-            }
-            .onAppear {
-                appeared = true
-                onSelect(selection)
-            }
-            .onDisappear { appeared = false }
-            .onChange(of: items.map(\.id)) { _ in
-                // 换了一批：回到第一张
-                jump(to: HeroLoop.page(forReal: 0, count: items.count))
-                onSelect(0)
-            }
-            .onChange(of: current) { value in
-                onSelect(HeroLoop.real(value, count: items.count))
-                wrapAfterTransition(from: value)
-            }
-            .task(id: AutoplayKey(page: current, running: canAutoplay)) {
-                guard canAutoplay else { return }
-                try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
-                guard !Task.isCancelled, canAutoplay else { return }
-                advance()
-            }
-            .accessibilityElement(children: .contain)
+        }
+        .onPreferenceChange(CarouselOnScreenKey.self) { visible in
+            if onScreen != visible { onScreen = visible }
+        }
+        .onAppear {
+            appeared = true
+            onSelect(captionIndex)
+        }
+        .onDisappear { appeared = false }
+        .onChange(of: items.map(\.id)) { _ in reset() }
+        .onChange(of: captionIndex) { index in onSelect(index) }
+        .task(id: AutoplayKey(page: current, running: canAutoplay)) {
+            guard canAutoplay else { return }
+            try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+            guard !Task.isCancelled, canAutoplay else { return }
+            turn(to: (current + 1) % count, forward: true)
+        }
+        .accessibilityElement(children: .contain)
     }
 
-    // MARK: 翻页容器
+    // MARK: 画面层
 
-    @ViewBuilder private var pager: some View {
+    private var artwork: some View {
+        let base = reveal?.from ?? current
+        return ZStack {
+            if items.indices.contains(base) {
+                background(items[base])
+                    .id("base-\(base)")
+            }
+            if let reveal, items.indices.contains(reveal.to) {
+                background(items[reveal.to])
+                    .id("reveal-\(reveal.to)")
+                    .mask { ArcReveal(progress: reveal.progress) }
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    // MARK: 文字层
+
+    private var captionLayer: some View {
+        ZStack {
+            if items.indices.contains(captionIndex) {
+                foreground(items[captionIndex])
+                    .id(captionIndex)
+                    .transition(captionTransition)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
+    }
+
+    private var captionTransition: AnyTransition {
+        if reduceMotion { return .opacity }
+        let enter: Edge = captionForward ? .trailing : .leading
+        let leave: Edge = captionForward ? .leading : .trailing
+        return .asymmetric(insertion: .move(edge: enter).combined(with: .opacity),
+                           removal: .move(edge: leave).combined(with: .opacity))
+    }
+
+    private func showCaption(_ index: Int, forward: Bool) {
+        guard index != captionIndex else { return }
+        captionForward = forward
+        withAnimation(reduceMotion ? .easeInOut(duration: 0.2) : .easeOut(duration: 0.4)) { captionIndex = index }
+    }
+
+    // MARK: 手势层
+
+    @ViewBuilder private var driver: some View {
+        let pages = HeroLoop.pages(items)
         if #available(iOS 18.0, *) {
             ScrollViewReader { proxy in
                 ScrollView(.horizontal) {
                     LazyHStack(spacing: 0) {
                         ForEach(Array(pages.enumerated()), id: \.offset) { index, item in
-                            pageView(item, index: index)
+                            hitArea(item)
                                 .containerRelativeFrame([.horizontal, .vertical])
-                                .clipped()
+                                .contentShape(Rectangle())
+                                .accessibilityHidden(index != (page ?? -1))
                                 .id(index)
                         }
                     }
@@ -112,84 +176,153 @@ struct LoopingCarousel<Item: Identifiable, Page: View>: View {
                 }
                 .scrollTargetBehavior(.paging)
                 .scrollIndicators(.hidden)
-                .scrollPosition(id: $position)
-                .onScrollGeometryChange(for: ScrollMetrics.Sample.self) { geometry in
-                    ScrollMetrics.Sample(offset: geometry.contentOffset.x, width: geometry.containerSize.width)
+                .scrollPosition(id: $page)
+                .onScrollGeometryChange(for: DriverSample.self) { geometry in
+                    DriverSample(offset: geometry.contentOffset.x, width: geometry.containerSize.width)
                 } action: { _, sample in
-                    metrics.sample = sample
+                    follow(sample)
                 }
                 .onScrollPhaseChange { _, phase in
-                    let busy = phase != .idle
-                    if interacting != busy { interacting = busy }
-                    guard !busy else { return }
-                    // 停下来却没对齐（停在两页中间）：吸到最近的一整页
-                    if let nearest = metrics.misalignedPage {
-                        withAnimation(.easeOut(duration: 0.25)) {
-                            position = nearest
-                            proxy.scrollTo(nearest, anchor: .leading)
-                        }
-                        return
-                    }
-                    wrapIfNeeded()
+                    let touching = phase == .interacting || phase == .tracking || phase == .decelerating
+                    if touching != dragging { dragging = touching }
+                    if phase == .idle { settle(proxy: proxy) }
                 }
-                // 第一次出现时停在第一张真页上（它前面是最后一张的复制页）
-                .onAppear { proxy.scrollTo(current, anchor: .leading) }
+                .onAppear { proxy.scrollTo(page ?? 0, anchor: .leading) }
             }
         } else {
-            TabView(selection: Binding(get: { current }, set: { position = $0 })) {
+            TabView(selection: Binding(get: { page ?? 0 }, set: { newValue in
+                let oldReal = HeroLoop.real(page ?? 0, count: count)
+                page = newValue
+                legacyPageChanged(from: oldReal, toPage: newValue)
+            })) {
                 ForEach(Array(pages.enumerated()), id: \.offset) { index, item in
-                    pageView(item, index: index).tag(index)
+                    hitArea(item)
+                        .contentShape(Rectangle())
+                        .accessibilityHidden(index != (page ?? -1))
+                        .tag(index)
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
         }
     }
 
-    private func pageView(_ item: Item, index: Int) -> some View {
-        let isCurrent = index == current
-        return page(item, isCurrent)
-            .accessibilityHidden(!isCurrent)
+    /// 手指拖动（和松手后的减速）时：滚动位置换算成「哪两张、揭到哪儿」，画面和文字跟着走。
+    /// 程序跳页（换回真页、自动翻页前对齐）不在拖动中，忽略，画面不会跳。
+    private func follow(_ sample: DriverSample) {
+        guard dragging, !turning, sample.width > 1, count > 1 else { return }
+        let position = max(0, sample.offset / sample.width)
+        let lower = floor(position)
+        let fraction = position - lower
+        let from = HeroLoop.real(Int(lower), count: count)
+        let to = HeroLoop.real(Int(lower) + 1, count: count)
+        if fraction < 0.001 {
+            if reveal != nil { reveal = nil }
+            if current != from { current = from }
+        } else {
+            if current != from { current = from }
+            reveal = Reveal(from: from, to: to, progress: fraction)
+        }
+        let settled = CGFloat(page ?? Int(lower))
+        showCaption(fraction < 0.5 ? from : to, forward: position >= settled)
     }
 
-    // MARK: 翻页与循环
-
-    private func advance() {
-        guard items.count > 1 else { return }
-        // 还停在复制页上（换回真页没赶上）：先换回去，下一轮再翻
-        if HeroLoop.wrapTarget(current, count: items.count) != nil {
-            wrapIfNeeded()
+    /// 停稳：停在两页中间就吸到最近的整页；复制页换回真页；画面收成一张。
+    @available(iOS 18.0, *)
+    private func settle(proxy: ScrollViewProxy) {
+        guard !turning, let target = page else { return }
+        if let reveal, reveal.progress > 0.002, reveal.progress < 0.998 {
+            let nearest = reveal.progress >= 0.5 ? reveal.to : reveal.from
+            withAnimation(.easeOut(duration: 0.25)) {
+                proxy.scrollTo(pageIndex(showing: nearest, near: target), anchor: .leading)
+            }
             return
         }
-        withAnimation(.easeInOut(duration: 0.55)) { position = current + 1 }
+        let real = HeroLoop.real(target, count: count)
+        current = real
+        reveal = nil
+        showCaption(real, forward: true)
+        if let wrapped = HeroLoop.wrapTarget(target, count: count) { jumpDriver(to: wrapped) }
     }
 
-    private func select(_ index: Int) {
-        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.45)) {
-            position = HeroLoop.page(forReal: index, count: items.count)
+    /// 离 near 最近、显示第 real 张的页码（含首尾复制页）
+    private func pageIndex(showing real: Int, near: Int) -> Int {
+        let candidates = [HeroLoop.page(forReal: real, count: count), 0, count + 1]
+            .filter { HeroLoop.real($0, count: count) == real }
+        return candidates.min { abs($0 - near) < abs($1 - near) } ?? HeroLoop.page(forReal: real, count: count)
+    }
+
+    /// iOS 16 / 17：TabView 翻完一页才告诉我们，补放一次揭开动画；复制页过一会儿换回真页。
+    private func legacyPageChanged(from oldReal: Int, toPage newPage: Int) {
+        let newReal = HeroLoop.real(newPage, count: count)
+        if let wrapped = HeroLoop.wrapTarget(newPage, count: count) {
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 450_000_000)
+                if page == newPage { jumpDriver(to: wrapped) }
+            }
+        }
+        guard newReal != oldReal, !turning else { return }
+        let forward = (oldReal + 1) % count == newReal
+        animateReveal(from: oldReal, to: newReal, forward: forward, moveDriver: false)
+    }
+
+    // MARK: 翻页
+
+    /// 自动翻页、点指示点：画面揭开、文字在中途换；手势层先无动画对齐到目标页。
+    private func turn(to target: Int, forward: Bool) {
+        guard count > 1, target != current, !turning else { return }
+        animateReveal(from: current, to: target, forward: forward, moveDriver: true)
+    }
+
+    private func animateReveal(from: Int, to: Int, forward: Bool, moveDriver: Bool) {
+        if moveDriver { jumpDriver(to: HeroLoop.page(forReal: to, count: count)) }
+        var instant = Transaction()
+        instant.disablesAnimations = true
+        if reduceMotion {
+            withTransaction(instant) {
+                current = to
+                reveal = nil
+            }
+            showCaption(to, forward: forward)
+            return
+        }
+        turning = true
+        // 遮罩只从右下往左上揭：往后翻是「新图揭出来」，往回翻是「当前图往右下收回去，露出前一张」
+        let start = forward ? Reveal(from: from, to: to, progress: 0) : Reveal(from: to, to: from, progress: 1)
+        withTransaction(instant) { reveal = start }
+        withAnimation(.easeInOut(duration: Self.turnDuration)) {
+            reveal?.progress = forward ? 1 : 0
+        }
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(Self.turnDuration * 0.4 * 1_000_000_000))
+            showCaption(to, forward: forward)
+            try? await Task.sleep(nanoseconds: UInt64(Self.turnDuration * 0.65 * 1_000_000_000))
+            withTransaction(instant) {
+                current = to
+                reveal = nil
+            }
+            turning = false
         }
     }
 
-    /// 无动画换页：复制页换回真页、换了一批时用。两页画面一样，看不出跳了一下。
-    private func jump(to page: Int) {
-        guard position != page else { return }
+    /// 手势层无动画换页（画面不受影响）
+    private func jumpDriver(to target: Int) {
+        guard page != target else { return }
         var transaction = Transaction()
         transaction.disablesAnimations = true
-        withTransaction(transaction) { position = page }
+        withTransaction(transaction) { page = target }
     }
 
-    private func wrapIfNeeded() {
-        if let target = HeroLoop.wrapTarget(current, count: items.count) { jump(to: target) }
-    }
-
-    /// 翻到复制页后等翻页动画走完再换回真页。旧系统的 TabView 拿不到滚动阶段，全靠这里；
-    /// iOS 18 停稳时滚动阶段会先换一次，这里是兜底（手指还在上面就不动，等它停稳再换）。
-    private func wrapAfterTransition(from page: Int) {
-        guard HeroLoop.wrapTarget(page, count: items.count) != nil else { return }
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 600_000_000)
-            guard current == page, !interacting else { return }
-            wrapIfNeeded()
+    private func reset() {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            current = 0
+            reveal = nil
+            captionIndex = 0
+            page = HeroLoop.page(forReal: 0, count: count)
         }
+        turning = false
+        onSelect(0)
     }
 
     private static func isOnScreen(_ frame: CGRect) -> Bool {
@@ -200,27 +333,28 @@ struct LoopingCarousel<Item: Identifiable, Page: View>: View {
 
     // MARK: 指示器
 
-    /// 右下角的小圆点：当前页拉长成胶囊。轻点圆点跳到那一张；旁白可以上下滑动切换。
+    /// 右下角的小圆点：当前页拉长成胶囊，跟着文字换。轻点圆点跳到那一张；旁白可以上下滑动切换。
     private var indicator: some View {
-        HStack(spacing: 0) {
-            ForEach(0..<items.count, id: \.self) { index in
+        let selection = captionIndex
+        return HStack(spacing: 0) {
+            ForEach(0..<count, id: \.self) { index in
                 Capsule()
                     .fill(index == selection ? Color.white : Color.white.opacity(0.45))
                     .frame(width: index == selection ? 14 : 4, height: 4)
                     .frame(width: index == selection ? 22 : 12, height: 20)
                     .contentShape(Rectangle())
-                    .onTapGesture { select(index) }
+                    .onTapGesture { turn(to: index, forward: index > current) }
             }
         }
         .shadow(color: .black.opacity(0.25), radius: 2, y: 0.5)
         .animation(reduceMotion ? nil : Motion.snappy, value: selection)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(label)
-        .accessibilityValue("第 \(selection + 1) 张，共 \(items.count) 张")
+        .accessibilityValue("第 \(selection + 1) 张，共 \(count) 张")
         .accessibilityAdjustableAction { direction in
             switch direction {
-            case .increment: select((selection + 1) % items.count)
-            case .decrement: select((selection + items.count - 1) % items.count)
+            case .increment: turn(to: (current + 1) % count, forward: true)
+            case .decrement: turn(to: (current + count - 1) % count, forward: false)
             @unknown default: break
             }
         }
@@ -228,20 +362,34 @@ struct LoopingCarousel<Item: Identifiable, Page: View>: View {
     }
 }
 
-/// 横向滚动的实时位置，只给「停下来时有没有对齐」用，不发布、不触发重绘。
-private final class ScrollMetrics {
-    struct Sample: Equatable {
-        var offset: CGFloat = 0
-        var width: CGFloat = 0
-    }
-    var sample = Sample()
+/// 正在揭开的两张：from 在下，to 从右下以弧形揭出来。
+private struct Reveal: Equatable {
+    var from: Int
+    var to: Int
+    var progress: CGFloat
+}
 
-    /// 停在两页中间时，最近的那一页；对齐了返回 nil。
-    var misalignedPage: Int? {
-        guard sample.width > 1 else { return nil }
-        let page = (sample.offset / sample.width).rounded()
-        guard abs(sample.offset - page * sample.width) > 1 else { return nil }
-        return max(0, Int(page))
+private struct DriverSample: Equatable {
+    var offset: CGFloat
+    var width: CGFloat
+}
+
+/// 揭开用的遮罩：圆心在卡片右下角外面，半径随进度从「刚碰到卡片右边」长到「盖住左上角」。
+/// 露出来的边是一道向左上方鼓的弧，从右下往左上扫过去，和参考视频一样。
+struct ArcReveal: Shape {
+    var progress: CGFloat
+
+    var animatableData: CGFloat {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        let center = CGPoint(x: rect.maxX + rect.width * 0.12, y: rect.minY + rect.height * 0.9)
+        let start = rect.width * 0.12
+        let end = hypot(center.x - rect.minX, center.y - rect.minY) + 2
+        let radius = start + (end - start) * min(max(progress, 0), 1)
+        return Path(ellipseIn: CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2))
     }
 }
 

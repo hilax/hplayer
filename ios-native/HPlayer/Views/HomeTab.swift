@@ -309,25 +309,54 @@ struct HomeTab: View {
         .background(Theme.track, in: Capsule())
     }
 
-    /// 顶部轮播：圆角 16:9 卡片，片库精选和热播动漫交替；自动翻页 + 手动左右滑，首尾相接。
+    /// 顶部轮播：圆角 16:9 卡片，片库精选和热播动漫交替。卡片和图都不动，下一张图从右下以弧形揭出来，
+    /// 只有文字左右滑；自动翻页 + 手动拖，首尾相接（见 LoopingCarousel）。
     private func carousel(_ slides: [HomeSlide], library: HomeSnapshot, width: CGFloat) -> some View {
         let cardWidth = max(width - Theme.contentInset * 2, 1)
         let tint = carouselTint
         return LoopingCarousel(items: slides, label: "精选推荐", positionIdentifier: "home.carouselPosition",
                                onSelect: { index in
                                    if slides.indices.contains(index) { tint.key = slides[index].palette.key }
-                               }) { slide, isCurrent in
-            HomeSlideCard(slide: slide, isCurrent: isCurrent, playTitle: slidePlayTitle(slide), onPlay: {
-                if case .library(let item) = slide.content {
-                    playing = HomeLibrary.queue(for: item, in: library.items)
-                }
+                               }) { slide in
+            HomeSlideArtwork(slide: slide)
+        } foreground: { slide in
+            HomeSlideCaption(slide: slide, playTitle: slidePlayTitle(slide), onPlay: {
+                playSlide(slide, library: library)
             }, onOptions: {
                 if case .library(let item) = slide.content { actionItem = item }
             })
+        } hitArea: { slide in
+            slideHitArea(slide, library: library)
         }
         .frame(height: (cardWidth * 9 / 16).rounded())
         .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
         .padding(.horizontal, Theme.contentInset)
+    }
+
+    /// 点卡片空白处：片库精选直接播放，热播动漫进详情。
+    @ViewBuilder
+    private func slideHitArea(_ slide: HomeSlide, library: HomeSnapshot) -> some View {
+        switch slide.content {
+        case .library(let item):
+            Button { playSlide(slide, library: library) } label: {
+                Color.clear.contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("播放 \(item.title)")
+        case .anime(let banner):
+            NavigationLink(value: AnimeDetailRoute(animeId: banner.vid ?? banner.id)) {
+                Color.clear.contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(banner.displayTitle)
+            .accessibilityIdentifier("home.slide.anime.\(banner.vid ?? banner.id)")
+        }
+    }
+
+    private func playSlide(_ slide: HomeSlide, library: HomeSnapshot) {
+        if case .library(let item) = slide.content {
+            playing = HomeLibrary.queue(for: item, in: library.items)
+        }
     }
 
     private func slidePlayTitle(_ slide: HomeSlide) -> String {

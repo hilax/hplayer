@@ -47,125 +47,46 @@ struct HomeSlide: Identifiable {
     }
 }
 
-/// 轮播里一张卡片的画面。片库精选：左下角片名、信息、播放和「影片选项」；
-/// 热播动漫：整张点进动漫详情。卡片上的字一律白色，压在底部的暗色渐变上。
-struct HomeSlideCard: View {
+/// 轮播一张的画面层：图（只有竖海报时铺虚化底、海报立在右边）+ 底部暗色渐变 + 右上角角标。
+/// 翻页时这一层原地不动，由轮播的弧形遮罩揭开。
+struct HomeSlideArtwork: View {
     let slide: HomeSlide
-    /// 是不是轮播当前停着的那一张。只有当前这张放按钮：首尾复制页和相邻页上不会再有一套同名按钮。
-    var isCurrent = true
-    var playTitle = "播放"
-    var onPlay: () -> Void = {}
-    var onOptions: () -> Void = {}
 
     var body: some View {
+        ZStack {
+            switch slide.content {
+            case .library(let item):
+                if HomeSlide.hasWideArtwork(item) {
+                    HomeSlideImage(urlString: HomeArtwork.heroURL(item), fallback: item.posterURL, title: item.title)
+                } else {
+                    posterOnlyArtwork(item)
+                }
+            case .anime(let banner):
+                HomeSlideImage(urlString: banner.safePicURLString, fallback: "", title: banner.displayTitle)
+            }
+            LinearGradient(stops: [
+                .init(color: .clear, location: 0.38),
+                .init(color: .black.opacity(0.42), location: 0.66),
+                .init(color: .black.opacity(0.74), location: 1),
+            ], startPoint: .top, endPoint: .bottom)
+        }
+        .overlay(alignment: .topTrailing) { badge }
+        .clipped()
+    }
+
+    private var badge: some View {
+        let text: String
         switch slide.content {
-        case .library(let item):
-            libraryCard(item)
-        case .anime(let banner):
-            NavigationLink(value: AnimeDetailRoute(animeId: banner.vid ?? banner.id)) {
-                ZStack(alignment: .bottomLeading) {
-                    artwork(urlString: banner.safePicURLString, fallback: "", title: banner.displayTitle)
-                    scrim
-                    caption(title: banner.displayTitle,
-                            subtitle: ["在线动漫", banner.displayRemarks].filter { !$0.isEmpty }.joined(separator: " · "),
-                            trailingInset: 64)
-                }
-                .overlay(alignment: .topTrailing) { badge("热播") }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.pressable(scale: 0.985))
-            .accessibilityIdentifier("home.slide.anime.\(banner.vid ?? banner.id)")
+        case .library: text = "精选"
+        case .anime: text = "热播"
         }
-    }
-
-    private func libraryCard(_ item: HomeMediaItem) -> some View {
-        let wide = HomeSlide.hasWideArtwork(item)
-        return ZStack(alignment: .bottomLeading) {
-            // 点画面任意位置也是播放；旁白只读下面那个「播放」按钮，不重复
-            Button(action: onPlay) {
-                Group {
-                    if wide {
-                        artwork(urlString: HomeArtwork.heroURL(item), fallback: item.posterURL, title: item.title)
-                    } else {
-                        posterOnlyArtwork(item)
-                    }
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityHidden(true)
-
-            scrim
-
-            VStack(alignment: .leading, spacing: 0) {
-                caption(title: item.title, subtitle: librarySubtitle(item), trailingInset: 0)
-                    .accessibilityIdentifier("home.heroTitle")
-                Group {
-                    if isCurrent {
-                        HStack(spacing: 8) {
-                            Button(action: onPlay) {
-                                HStack(spacing: 5) {
-                                    Image(systemName: AppIcon.play.name)
-                                        .font(.system(size: 11, weight: .bold))
-                                    Text(playTitle)
-                                        .font(.system(size: 13, weight: .bold))
-                                }
-                                .foregroundStyle(Color.black)
-                                .padding(.horizontal, 14)
-                                .frame(height: 32)
-                                .background(Color.white, in: Capsule())
-                                .contentShape(Capsule())
-                            }
-                            .buttonStyle(.pressable)
-                            .accessibilityIdentifier("home.heroPlay")
-
-                            Button(action: onOptions) {
-                                Image(systemName: AppIcon.more.name)
-                                    .font(.system(size: 14, weight: .semibold))
-                                    .foregroundStyle(.white)
-                                    .frame(width: 32, height: 32)
-                                    .background(Color.white.opacity(0.22), in: Circle())
-                                    .contentShape(Circle())
-                            }
-                            .buttonStyle(.pressable)
-                            .accessibilityLabel("影片选项")
-                        }
-                    } else {
-                        Color.clear.frame(width: 1, height: 32)
-                    }
-                }
-                .padding(.top, 8)
-            }
-            .padding(.leading, 14)
-            .padding(.bottom, 12)
-            .padding(.trailing, wide ? 64 : 124)
-        }
-        .overlay(alignment: .topTrailing) { badge("精选") }
-    }
-
-    private func librarySubtitle(_ item: HomeMediaItem) -> String {
-        var parts = ["我的片库"]
-        if !item.year.isEmpty { parts.append(item.year) }
-        if let genres = item.metadata?.genres, !genres.isEmpty {
-            parts.append(genres.prefix(2).joined(separator: " / "))
-        }
-        if !item.rating.isEmpty { parts.append("★ \(item.rating)") }
-        return parts.joined(separator: " · ")
-    }
-
-    // MARK: 画面
-
-    private func artwork(urlString: String, fallback: String, title: String) -> some View {
-        // 图片只铺在一块透明底上：「填满」裁出来的大图不能把卡片撑大（撑大了片名、按钮会被挤出卡片，翻页也对不齐）
-        Color.clear
-            .overlay {
-                ArtworkView(urlString: urlString, fallbackURLString: fallback, title: title,
-                            maxPixel: ArtworkSize.hero, loading: .clear)
-                    .scaledToFill()
-            }
-            .clipped()
-            .background(Theme.surfaceRaised)
-            .allowsHitTesting(false)
+        return Text(text)
+            .font(.system(size: 11, weight: .bold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 7)
+            .frame(height: 20)
+            .background(Theme.accentFill, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+            .padding(10)
     }
 
     /// 只有竖海报：铺一层这张海报的虚化，海报本身立在右边，不硬裁成横图。
@@ -192,21 +113,103 @@ struct HomeSlideCard: View {
             .frame(width: proxy.size.width, height: height)
         }
         .background(Theme.surfaceRaised)
-        .allowsHitTesting(false)
+    }
+}
+
+/// 铺满卡片的图。图只铺在一块透明底上：「填满」裁出来的大图不会把卡片撑大。
+struct HomeSlideImage: View {
+    let urlString: String
+    let fallback: String
+    let title: String
+
+    var body: some View {
+        Color.clear
+            .overlay {
+                ArtworkView(urlString: urlString, fallbackURLString: fallback, title: title,
+                            maxPixel: ArtworkSize.hero, loading: .clear)
+                    .scaledToFill()
+            }
+            .clipped()
+            .background(Theme.surfaceRaised)
+    }
+}
+
+/// 轮播一张的文字层：左下角白字片名和信息；片库精选再加「播放」和「影片选项」。
+/// 翻页时只有这一层左右滑动。
+struct HomeSlideCaption: View {
+    let slide: HomeSlide
+    var playTitle = "播放"
+    var onPlay: () -> Void = {}
+    var onOptions: () -> Void = {}
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Spacer(minLength: 0)
+            switch slide.content {
+            case .library(let item):
+                titleBlock(title: item.title, subtitle: librarySubtitle(item))
+                    .accessibilityIdentifier("home.heroTitle")
+                actions
+                    .padding(.top, 8)
+            case .anime(let banner):
+                titleBlock(title: banner.displayTitle,
+                           subtitle: ["在线动漫", banner.displayRemarks].filter { !$0.isEmpty }.joined(separator: " · "))
+            }
+        }
+        .padding(.leading, 14)
+        .padding(.bottom, 12)
+        .padding(.trailing, trailingInset)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
     }
 
-    /// 只压下半截：上半截保留原图色彩，下半截保证白字可读。
-    private var scrim: some View {
-        LinearGradient(stops: [
-            .init(color: .clear, location: 0.38),
-            .init(color: .black.opacity(0.42), location: 0.66),
-            .init(color: .black.opacity(0.74), location: 1),
-        ], startPoint: .top, endPoint: .bottom)
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
+    /// 右边留给页码点；只有竖海报的片库影片，海报立在右边，文字再让开一些
+    private var trailingInset: CGFloat {
+        if case .library(let item) = slide.content, !HomeSlide.hasWideArtwork(item) { return 124 }
+        return 64
     }
 
-    private func caption(title: String, subtitle: String, trailingInset: CGFloat) -> some View {
+    private var actions: some View {
+        HStack(spacing: 8) {
+            Button(action: onPlay) {
+                HStack(spacing: 5) {
+                    Image(systemName: AppIcon.play.name)
+                        .font(.system(size: 11, weight: .bold))
+                    Text(playTitle)
+                        .font(.system(size: 13, weight: .bold))
+                }
+                .foregroundStyle(Color.black)
+                .padding(.horizontal, 14)
+                .frame(height: 32)
+                .background(Color.white, in: Capsule())
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.pressable)
+            .accessibilityIdentifier("home.heroPlay")
+
+            Button(action: onOptions) {
+                Image(systemName: AppIcon.more.name)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 32, height: 32)
+                    .background(Color.white.opacity(0.22), in: Circle())
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.pressable)
+            .accessibilityLabel("影片选项")
+        }
+    }
+
+    private func librarySubtitle(_ item: HomeMediaItem) -> String {
+        var parts = ["我的片库"]
+        if !item.year.isEmpty { parts.append(item.year) }
+        if let genres = item.metadata?.genres, !genres.isEmpty {
+            parts.append(genres.prefix(2).joined(separator: " / "))
+        }
+        if !item.rating.isEmpty { parts.append("★ \(item.rating)") }
+        return parts.joined(separator: " · ")
+    }
+
+    private func titleBlock(title: String, subtitle: String) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(title)
                 .font(.system(size: 22, weight: .heavy))
@@ -221,22 +224,8 @@ struct HomeSlideCard: View {
                     .lineLimit(1)
             }
         }
-        .padding(.leading, trailingInset > 0 ? 14 : 0)
-        .padding(.bottom, trailingInset > 0 ? 12 : 0)
-        .padding(.trailing, trailingInset)
         .frame(maxWidth: .infinity, alignment: .leading)
         .allowsHitTesting(false)
-    }
-
-    private func badge(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 11, weight: .bold))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 7)
-            .frame(height: 20)
-            .background(Theme.accentFill, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
-            .padding(10)
-            .allowsHitTesting(false)
     }
 }
 

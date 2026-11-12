@@ -11,28 +11,29 @@ struct AnimeHeroBanner: View {
 
     var body: some View {
         if !banners.isEmpty {
-            // 和首页「推荐」同一个轮播：每 4 秒自动翻一张，也能手动左右滑，首尾相接。
-            LoopingCarousel(items: banners, label: "热播轮播", positionIdentifier: "anime.bannerPosition") { banner, _ in
-                link(banner)
+            // 和首页「推荐」同一个轮播：图不动、下一张从右下以弧形揭出来，只有文字左右滑；
+            // 每 4 秒自动翻一张，也能手动拖，首尾相接。
+            LoopingCarousel(items: banners, label: "热播轮播", positionIdentifier: "anime.bannerPosition") { banner in
+                artwork(banner)
+            } foreground: { banner in
+                caption(banner)
+            } hitArea: { banner in
+                NavigationLink(value: AnimeDetailRoute(animeId: banner.vid ?? banner.id)) {
+                    Color.clear.contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(banner.displayTitle)
+                .accessibilityIdentifier("anime.banner.\(banner.id)")
             }
             .frame(height: Self.height)
             .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
         }
     }
 
-    private func link(_ banner: AnimeBanner) -> some View {
-        NavigationLink(value: AnimeDetailRoute(animeId: banner.vid ?? banner.id)) {
-            bannerCard(banner: banner)
-        }
-        .buttonStyle(.pressable(scale: 0.985))
-        .accessibilityIdentifier("anime.banner.\(banner.id)")
-    }
-
-    private func bannerCard(banner: AnimeBanner) -> some View {
-        ZStack(alignment: .bottomLeading) {
+    /// 画面层：封面 + 只压下半截的暗色渐变（上半截保留原图色彩，下半截保证白字可读）
+    private func artwork(_ banner: AnimeBanner) -> some View {
+        ZStack {
             Theme.surfaceRaised
-
-            // 背景封面图（通过 HPlayer 专属 ImagePipeline 磁盘与内存缓存）
             // 图片只铺在透明底上，「填满」裁出来的大图不会把卡片撑大
             Color.clear
                 .overlay {
@@ -41,9 +42,6 @@ struct AnimeHeroBanner: View {
                         .scaledToFill()
                 }
                 .clipped()
-                .allowsHitTesting(false)
-
-            // 只压下半部分：上半部分保留原图色彩，下半部分保证白字可读
             LinearGradient(
                 stops: [
                     .init(color: .clear, location: 0.35),
@@ -53,42 +51,44 @@ struct AnimeHeroBanner: View {
                 startPoint: .top,
                 endPoint: .bottom
             )
+        }
+    }
 
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(spacing: 6) {
-                    Text("热播")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 6)
-                        .frame(height: 18)
-                        .glassBadge()
-
-                    if !banner.displayRemarks.isEmpty {
-                        Text(banner.displayRemarks)
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(Theme.textSecondaryOnArtwork)
-                            .lineLimit(1)
-                    }
-                }
-
-                Text(banner.displayTitle)
-                    .font(.system(size: 18, weight: .bold))
+    /// 文字层：玻璃「热播」角标 + 连载信息、片名、简介。翻页时只有这一层左右滑。
+    private func caption(_ banner: AnimeBanner) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 6) {
+                Text("热播")
+                    .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(.white)
-                    .lineLimit(1)
+                    .padding(.horizontal, 6)
+                    .frame(height: 18)
+                    .glassBadge()
 
-                if !banner.displayDesc.isEmpty {
-                    Text(banner.displayDesc)
-                        .font(.system(size: 12))
+                if !banner.displayRemarks.isEmpty {
+                    Text(banner.displayRemarks)
+                        .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(Theme.textSecondaryOnArtwork)
                         .lineLimit(1)
                 }
             }
-            .padding(14)
-            .padding(.trailing, 60)
-            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Text(banner.displayTitle)
+                .font(.system(size: 18, weight: .bold))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+
+            if !banner.displayDesc.isEmpty {
+                Text(banner.displayDesc)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.textSecondaryOnArtwork)
+                    .lineLimit(1)
+            }
         }
-        .contentShape(Rectangle())
-        .accessibilityElement(children: .combine)
+        .padding(14)
+        .padding(.trailing, 60)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+        .allowsHitTesting(false)
     }
 }
 
