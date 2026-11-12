@@ -91,6 +91,10 @@ struct HomeTab: View {
                     .id(route.animeId)
                     .restoringAppearance(colorScheme)
             }
+            .navigationDestination(for: AnimeBrowseRoute.self) { route in
+                AnimeBrowseView(route: route)
+                    .restoringAppearance(colorScheme)
+            }
             .navigationDestination(for: PerformerListRoute.self) { _ in
                 PerformerGridView(groups: library.performers)
                     .restoringAppearance(colorScheme)
@@ -545,7 +549,8 @@ struct HomeTab: View {
         let items = Array(online.trending.prefix(6))
         return VStack(alignment: .leading, spacing: 10) {
             ShelfHeader(title: "热门新番", identifier: "home.shelf.trending", inset: 0) {
-                Button { channel.wrappedValue = .anime } label: {
+                // 「更多」推进完整的热门列表（按播放量），不跳到动漫频道
+                NavigationLink(value: AnimeBrowseRoute(channelId: nil, title: "热门新番", sort: "hits")) {
                     ShelfLinkLabel(text: "更多")
                         .frame(minWidth: 44, minHeight: 44, alignment: .trailing)
                 }
@@ -597,7 +602,7 @@ struct HomeTab: View {
     private func animeShelf(_ title: String, items: [AnimeVideoItem], identifier: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             ShelfHeader(title: title, identifier: identifier, inset: 0) {
-                Button { channel.wrappedValue = .anime } label: {
+                NavigationLink(value: AnimeBrowseRoute(channelId: nil, title: title, sort: "addtime")) {
                     ShelfLinkLabel(text: "全部")
                         .frame(minWidth: 44, minHeight: 44, alignment: .trailing)
                 }

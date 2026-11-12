@@ -20,6 +20,12 @@ final class HomeOnlineFeed: ObservableObject {
         if InterfacePreview.active { trending = Self.previewTrending }
     }
 
+    /// 下拉刷新：不管十分钟的间隔，重新拉一遍
+    func refresh() async {
+        loadedAt = nil
+        await loadIfNeeded()
+    }
+
     /// 进入首页时调用；十分钟内不重复拉。界面截图（InterfacePreview）不联网。
     func loadIfNeeded() async {
         // 单元测试把 App 当宿主启动，这时不去请求真实的动漫接口，免得和测试里的网络桩抢资源

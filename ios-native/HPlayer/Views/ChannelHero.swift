@@ -14,6 +14,8 @@ struct ChannelHeroSection<Trailing: View, HitArea: View>: View {
     var onFilter: (() -> Void)? = nil
     var filterIdentifier = ""
     let slides: [HomeSlide]
+    /// 轮播还没有内容时也留出它的位置（灰色占位），数据到了再填，页面不跳
+    var reservesCarousel = false
     var carouselLabel: String
     var carouselIdentifier: String
     let safeTop: CGFloat
@@ -23,11 +25,11 @@ struct ChannelHeroSection<Trailing: View, HitArea: View>: View {
     let hitArea: (HomeSlide) -> HitArea
 
     /// 取色和当前是哪一张：放在不被页面订阅的对象里，翻页时只有顶部氛围色重画。
-    @State private var palette = HeroPalette()
+    @State private var palette = HeroPalette.shared
     @State private var tint = CarouselTintState()
 
     init(channel: Binding<HomeChannel>, searchPlaceholder: String, searchIdentifier: String, onSearch: @escaping () -> Void,
-         onFilter: (() -> Void)? = nil, filterIdentifier: String = "", slides: [HomeSlide],
+         onFilter: (() -> Void)? = nil, filterIdentifier: String = "", slides: [HomeSlide], reservesCarousel: Bool = false,
          carouselLabel: String, carouselIdentifier: String, safeTop: CGFloat, width: CGFloat,
          @ViewBuilder trailing: @escaping () -> Trailing,
          @ViewBuilder hitArea: @escaping (HomeSlide) -> HitArea) {
@@ -38,6 +40,7 @@ struct ChannelHeroSection<Trailing: View, HitArea: View>: View {
         self.onFilter = onFilter
         self.filterIdentifier = filterIdentifier
         self.slides = slides
+        self.reservesCarousel = reservesCarousel
         self.carouselLabel = carouselLabel
         self.carouselIdentifier = carouselIdentifier
         self.safeTop = safeTop
@@ -65,6 +68,13 @@ struct ChannelHeroSection<Trailing: View, HitArea: View>: View {
             if !slides.isEmpty {
                 carousel
                     .padding(.top, 6)
+            } else if reservesCarousel {
+                RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
+                    .fill(Theme.surfaceRaised)
+                    .frame(height: (max(width - Theme.contentInset * 2, 1) * 9 / 16).rounded())
+                    .padding(.horizontal, Theme.contentInset)
+                    .padding(.top, 6)
+                    .accessibilityLabel("正在加载轮播")
             }
         }
         .padding(.bottom, 4)
@@ -99,12 +109,12 @@ struct ChannelHeroSection<Trailing: View, HitArea: View>: View {
 
 extension ChannelHeroSection where Trailing == EmptyView {
     init(channel: Binding<HomeChannel>, searchPlaceholder: String, searchIdentifier: String, onSearch: @escaping () -> Void,
-         onFilter: (() -> Void)? = nil, filterIdentifier: String = "", slides: [HomeSlide],
+         onFilter: (() -> Void)? = nil, filterIdentifier: String = "", slides: [HomeSlide], reservesCarousel: Bool = false,
          carouselLabel: String, carouselIdentifier: String, safeTop: CGFloat, width: CGFloat,
          @ViewBuilder hitArea: @escaping (HomeSlide) -> HitArea) {
         self.init(channel: channel, searchPlaceholder: searchPlaceholder, searchIdentifier: searchIdentifier,
                   onSearch: onSearch, onFilter: onFilter, filterIdentifier: filterIdentifier, slides: slides,
-                  carouselLabel: carouselLabel, carouselIdentifier: carouselIdentifier, safeTop: safeTop, width: width,
+                  reservesCarousel: reservesCarousel, carouselLabel: carouselLabel, carouselIdentifier: carouselIdentifier, safeTop: safeTop, width: width,
                   trailing: { EmptyView() }, hitArea: hitArea)
     }
 }

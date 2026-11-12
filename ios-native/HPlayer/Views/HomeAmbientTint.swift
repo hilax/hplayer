@@ -91,6 +91,9 @@ enum HeroTint: Hashable {
 /// 轮播每一张的取色。用的是首页本来就会预取的背景小图（160px），每张算一次就记住。
 /// key 是这一张显示的图片地址；图片加载失败时用 fallback（例如背景图失败退回海报）。
 final class HeroPalette: ObservableObject {
+    /// 推荐、动漫、片库三个频道共用：切频道时页面重建，算过的颜色还在，不会先闪一下灰色
+    static let shared = HeroPalette()
+
     struct Source: Hashable {
         let key: String
         var fallback = ""
