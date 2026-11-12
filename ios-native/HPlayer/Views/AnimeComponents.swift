@@ -1,204 +1,182 @@
 import SwiftUI
 
-// MARK: - 频道分类标签栏 (AnimeChannelBar)
-//
-// 推荐 + 各频道横向标签，选中项白字加粗、下方一条金色滑条（滑条用 matchedGeometryEffect
-// 在标签之间平移，和 App 其余分段选择器一致）。nil 代表「推荐」。
-
-struct AnimeChannelBar: View {
-    let channels: [AnimeChannel]
-    @Binding var selectedChannelId: Int?
-    var onSelect: (Int?) -> Void
-
-    @Namespace private var underline
-
-    var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 18) {
-                tab(title: "推荐", id: nil)
-                ForEach(channels) { channel in
-                    tab(title: channel.name, id: channel.id)
-                }
-            }
-            .padding(.horizontal, Theme.contentInset)
-            .padding(.top, 2)
-        }
-    }
-
-    private func tab(title: String, id: Int?) -> some View {
-        let isSelected = (selectedChannelId == id)
-        return Button {
-            Haptics.select()
-            withAnimation(Motion.snappy) { onSelect(id) }
-        } label: {
-            VStack(spacing: 4) {
-                Text(title)
-                    .font(.system(size: 15, weight: isSelected ? .bold : .regular))
-                    .foregroundStyle(isSelected ? Theme.textPrimary : Theme.textTertiary)
-                ZStack {
-                    if isSelected {
-                        Capsule()
-                            .fill(Theme.primaryAction)
-                            .frame(width: 22, height: 3)
-                            .matchedGeometryEffect(id: "anime.channel.underline", in: underline)
-                    } else {
-                        Capsule().fill(Color.clear).frame(width: 22, height: 3)
-                    }
-                }
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.pressable(scale: 0.94))
-        .accessibilityIdentifier("anime.channel.\(id.map(String.init) ?? "recommend")")
-    }
-}
-
 // MARK: - 轮播大图 (AnimeHeroBanner)
+//
+// 圆角卡片 + 底部暗色渐变 + 玻璃角标，和片库海报的角标、首页精选的指示条同一套语言。
 
 struct AnimeHeroBanner: View {
+    static let height: CGFloat = 196
+
     let banners: [AnimeBanner]
 
     @State private var currentIndex = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        if banners.isEmpty {
-            EmptyView()
-        } else {
-            // 不做自动轮播：定时器会让外层 ScrollView 每几秒重排一次，
-            // 也违反界面规范「不做无限循环动画」。用户手动左右滑动即可。
-            TabView(selection: $currentIndex) {
-                ForEach(Array(banners.enumerated()), id: \.element.id) { index, banner in
-                    NavigationLink(value: AnimeDetailRoute(animeId: banner.vid ?? banner.id)) {
-                        bannerCard(banner: banner)
+        if !banners.isEmpty {
+            VStack(spacing: 8) {
+                // 不做自动轮播：定时器会让外层 ScrollView 每几秒重排一次，
+                // 也违反界面规范「不做无限循环动画」。用户手动左右滑动即可。
+                TabView(selection: $currentIndex) {
+                    ForEach(Array(banners.enumerated()), id: \.element.id) { index, banner in
+                        NavigationLink(value: AnimeDetailRoute(animeId: banner.vid ?? banner.id)) {
+                            bannerCard(banner: banner)
+                        }
+                        .buttonStyle(.pressable(scale: 0.98))
+                        .accessibilityIdentifier("anime.banner.\(banner.id)")
+                        .tag(index)
                     }
-                    .buttonStyle(.plain)
-                    .tag(index)
+                }
+                .tabViewStyle(.page(indexDisplayMode: .never))
+                .frame(height: Self.height)
+
+                if banners.count > 1 {
+                    indicator
                 }
             }
-            .tabViewStyle(.page(indexDisplayMode: .automatic))
-            .frame(height: 170)
-            .padding(.horizontal, Theme.contentInset)
+        }
+    }
+
+    private var indicator: some View {
+        HStack(spacing: 4) {
+            ForEach(banners.indices, id: \.self) { index in
+                Capsule()
+                    .fill(index == currentIndex ? Theme.textPrimary : Theme.textTertiary.opacity(0.5))
+                    .frame(width: index == currentIndex ? 14 : 4, height: 4)
+                    .contentShape(Rectangle().inset(by: -8))
+                    .onTapGesture {
+                        withAnimation(reduceMotion ? nil : Motion.smooth) { currentIndex = index }
+                    }
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: 12)
+        .animation(reduceMotion ? nil : Motion.snappy, value: currentIndex)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("热播轮播")
+        .accessibilityValue("第 \(currentIndex + 1) 张，共 \(banners.count) 张")
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .increment: currentIndex = (currentIndex + 1) % banners.count
+            case .decrement: currentIndex = (currentIndex + banners.count - 1) % banners.count
+            @unknown default: break
+            }
         }
     }
 
     private func bannerCard(banner: AnimeBanner) -> some View {
         ZStack(alignment: .bottomLeading) {
+            Theme.surfaceRaised
+
             // 背景封面图（通过 HPlayer 专属 ImagePipeline 磁盘与内存缓存）
             ArtworkView(urlString: banner.safePicURLString, title: banner.displayTitle,
                         maxPixel: ArtworkSize.hero, loading: .clear, drawsFallback: false)
                 .scaledToFill()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
+                .allowsHitTesting(false)
 
-            // 渐变蒙层
+            // 只压下半部分：上半部分保留原图色彩，下半部分保证白字可读
             LinearGradient(
-                colors: [
-                    Color.clear,
-                    Color.black.opacity(0.3),
-                    Color.black.opacity(0.85)
+                stops: [
+                    .init(color: .clear, location: 0.35),
+                    .init(color: Color.black.opacity(0.45), location: 0.65),
+                    .init(color: Color.black.opacity(0.82), location: 1)
                 ],
                 startPoint: .top,
                 endPoint: .bottom
             )
 
-            // 文字与更新信息
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 6) {
-                    Text("HOT 热播")
-                        .font(.system(size: 9, weight: .black))
-                        .foregroundStyle(Theme.onPrimary)
+                    Text("热播")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.white)
                         .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Theme.gold, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+                        .frame(height: 18)
+                        .glassBadge()
 
                     if !banner.displayRemarks.isEmpty {
                         Text(banner.displayRemarks)
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(Color.white.opacity(0.85))
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(Theme.textSecondaryOnArtwork)
                             .lineLimit(1)
                     }
                 }
 
                 Text(banner.displayTitle)
-                    .font(.display(16))
+                    .font(.system(size: 18, weight: .bold))
                     .foregroundStyle(.white)
                     .lineLimit(1)
-                    .truncationMode(.tail)
 
                 if !banner.displayDesc.isEmpty {
                     Text(banner.displayDesc)
-                        .font(.system(size: 11))
+                        .font(.system(size: 12))
                         .foregroundStyle(Theme.textSecondaryOnArtwork)
                         .lineLimit(1)
-                        .truncationMode(.tail)
                 }
             }
-            .padding(12)
+            .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
-                .stroke(Theme.hairline, lineWidth: 1)
+                .strokeBorder(Theme.hairline, lineWidth: 0.5)
         )
+        .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
+        .accessibilityElement(children: .combine)
     }
 }
 
 // MARK: - 动漫海报卡片 (AnimePosterCard)
 //
-// 横滑货架和两列网格共用这一张卡片：固定宽高、同一套文字行数，
-// 保证任何一屏里所有卡片的几何尺寸完全一致，不会出现高低错落。
+// 和片库的剧集卡（SeriesPosterCard）同一套规格：2:3 海报、左上角玻璃角标、
+// 13pt 标题 + 11pt 次要信息。横滑货架和网格共用，宽度锁死、文字行数固定，任何一屏都对齐。
 
 struct AnimePosterCard: View {
     let item: AnimeVideoItem
     var width: CGFloat = 105
 
-    private var posterHeight: CGFloat { width * 1.5 }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ZStack(alignment: .bottomTrailing) {
-                // 封面（基于 ImagePipeline 磁盘+内存缓存与异步解码，自带固定 frame）
-                PosterArtwork(urlString: item.safePicURLString, title: item.name, width: width)
-                    .allowsHitTesting(false)
-
-                // 右下角连载状态角标
-                if let continu = item.continu, !continu.isEmpty {
-                    Text(continu)
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(Theme.gold)
-                        .lineLimit(1)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 2)
-                        .background(Color.black.opacity(0.8), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
-                        .padding(4)
+        VStack(alignment: .leading, spacing: 7) {
+            PosterArtwork(urlString: item.safePicURLString, title: item.name, width: width)
+                .allowsHitTesting(false)
+                .overlay(alignment: .topLeading) {
+                    // 连载状态（「更新至 12 集」「已完结」）。之前是金色字压黑底，
+                    // 金色在浅色模式下是深灰，看不清；统一换成白字玻璃角标。
+                    if let continu = item.continu?.trimmingCharacters(in: .whitespaces), !continu.isEmpty {
+                        EpisodeCountBadge(text: continu)
+                            .frame(maxWidth: width - 12, alignment: .leading)
+                            .padding(6)
+                    }
                 }
-            }
-            .frame(width: width, height: posterHeight, alignment: .bottomTrailing)
 
-            // 标题与分类：宽度锁死，长片名统一尾部截断
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.name)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Theme.textPrimary)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.primary)
                     .lineLimit(1)
-                    .truncationMode(.tail)
-
                 Text(subtitle)
-                    .font(.system(size: 10))
-                    .foregroundStyle(Theme.textTertiary)
+                    .font(.system(size: 11))
+                    .secondaryTextStyle()
                     .lineLimit(1)
-                    .truncationMode(.tail)
             }
             .frame(width: width, alignment: .leading)
         }
         .frame(width: width, alignment: .top)
+        .accessibilityElement(children: .combine)
     }
 
+    /// 「类型 · 年份」；两者都没有时写「在线动漫」，保证每张卡片都是两行字、高度一致。
     private var subtitle: String {
-        let tags = item.tags.prefix(2).joined(separator: ", ")
-        guard let year = item.year, !year.isEmpty else { return tags }
-        return tags.isEmpty ? year : "\(tags) · \(year)"
+        let tags = item.tags.prefix(2).joined(separator: " · ")
+        let year = item.year?.trimmingCharacters(in: .whitespaces) ?? ""
+        switch (tags.isEmpty, year.isEmpty) {
+        case (false, false): return "\(tags) · \(year)"
+        case (false, true): return tags
+        case (true, false): return year
+        case (true, true): return "在线动漫"
+        }
     }
 }
 

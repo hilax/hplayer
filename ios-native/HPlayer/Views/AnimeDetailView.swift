@@ -48,26 +48,17 @@ struct AnimeDetailView: View {
                 .scrollIndicators(.hidden)
                 .ignoresSafeArea(edges: .top)
             } else if isLoading {
-                VStack(spacing: 12) {
-                    ProgressView()
-                        .tint(Theme.accent)
-                    Text("加载番剧详情...")
-                        .font(.system(size: 13))
-                        .foregroundStyle(Theme.textSecondary)
-                }
+                ProgressView()
+                    .tint(Theme.textSecondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .accessibilityLabel("正在加载番剧详情")
             } else {
-                VStack(spacing: 12) {
-                    Image(icon: .alert)
-                        .iconStyle(size: 36, color: Theme.accent)
-                    Text(errorMessage ?? "番剧详情加载失败")
-                        .font(.system(size: 14))
-                        .foregroundStyle(Theme.textPrimary)
-                    Button("重试") {
-                        Task { await loadDetail() }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Theme.primaryAction)
+                EmptyStateView(icon: AppIcon.alert.name, title: "番剧详情没有加载出来",
+                               message: errorMessage ?? "网络不太稳定，稍后再试。",
+                               actionTitle: "重新加载") {
+                    Task { await loadDetail() }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
         }
@@ -170,7 +161,7 @@ struct AnimeDetailView: View {
                                 .iconStyle(size: 10, color: Theme.rating)
                             Text(stars)
                         }
-                        .foregroundStyle(Theme.gold)
+                        .foregroundStyle(Theme.rating)
                     }
                 }
                 .font(.system(size: 13, weight: .semibold))

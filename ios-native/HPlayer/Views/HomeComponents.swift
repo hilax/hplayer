@@ -314,6 +314,7 @@ struct EpisodeCountBadge: View {
         Text(text)
             .font(.system(size: 10, weight: .medium))
             .foregroundStyle(.white)
+            .lineLimit(1)
             .padding(.horizontal, 6)
             .frame(height: 18)
             .glassBadge()

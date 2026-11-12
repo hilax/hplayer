@@ -40,16 +40,17 @@ struct AnimeCatalogView: View {
     @State private var loadGeneration = 0
     @State private var loadTask: Task<Void, Never>?
 
+    @Namespace private var channelSpace
+    @Namespace private var sortSpace
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
         GeometryReader { proxy in
             let metrics = gridMetrics(width: proxy.size.width)
 
             VStack(spacing: 0) {
-                AnimeChannelBar(
-                    channels: channels,
-                    selectedChannelId: $selectedChannelId,
-                    onSelect: { channelId in selectChannel(channelId) }
-                )
+                // 二级筛选和片库、短剧一样用 SelectionPill，不再单独做一套下划线标签
+                channelPills
 
                 // 频道切换时重建滚动容器：回到顶部，不把旧频道滚到底的偏移带到新列表
                 ScrollView {
@@ -78,17 +79,40 @@ struct AnimeCatalogView: View {
         }
     }
 
-    // MARK: - 推荐页：轮播 + 热门新番 + 各频道货架
+    // MARK: - 频道胶囊
+
+    private var channelPills: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 2) {
+                channelPill("推荐", id: nil)
+                ForEach(channels) { channel in
+                    channelPill(channel.name, id: channel.id)
+                }
+            }
+            .padding(.horizontal, Theme.contentInset - 4)
+        }
+        .scrollIndicators(.hidden)
+        .padding(.bottom, 6)
+    }
+
+    private func channelPill(_ title: String, id: Int?) -> some View {
+        SelectionPill(title: title, selected: selectedChannelId == id, namespace: channelSpace) {
+            withAnimation(reduceMotion ? nil : Motion.snappy) { selectChannel(id) }
+        }
+        .accessibilityIdentifier("anime.channel.\(id.map(String.init) ?? "recommend")")
+    }
+
+    // MARK: - 推荐页：轮播 + 热门新番 + 各频道货架（版式与首页推荐的货架一致）
 
     private var recommendContent: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: 28) {
             if !banners.isEmpty {
                 AnimeHeroBanner(banners: banners)
-                    .padding(.top, 4)
             }
 
             if !trendingItems.isEmpty {
-                shelf(title: "热门新番", items: trendingItems, detail: "共 \(trendingItems.count) 部", destination: nil)
+                shelf(title: "热门新番", identifier: "anime.shelf.trending", items: trendingItems,
+                      detail: "\(trendingItems.count) 部", destination: nil)
             }
 
             ForEach(channels) { channel in
@@ -98,48 +122,34 @@ struct AnimeCatalogView: View {
             if isReloading && banners.isEmpty && trendingItems.isEmpty && shelves.isEmpty {
                 recommendSkeleton
             } else if !isReloading && banners.isEmpty && trendingItems.isEmpty && channels.isEmpty {
-                // 全部板块都没拉到时必须给出说明和重试入口，否则整页一片空白，
-                // 看起来就是「首页加载不出来」，用户也不知道该做什么。
-                recommendFailedState
+                // 全部板块都没拉到时必须给出说明和重试入口，否则整页一片空白。
+                EmptyStateView(icon: AppIcon.alert.name, title: "推荐内容没加载出来",
+                               message: "接口没有连上。下拉可以刷新，或点下面的按钮重试。",
+                               actionTitle: "重新加载") {
+                    Task { await reload(channel: nil) }
+                }
+                .frame(maxWidth: .infinity, minHeight: 320)
             }
         }
-        .padding(.bottom, 80)
-    }
-
-    private var recommendFailedState: some View {
-        VStack(spacing: 12) {
-            Image(icon: .alert)
-                .iconStyle(size: 36, color: Theme.textTertiary)
-            Text("推荐内容没加载出来")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(Theme.textPrimary)
-            Text("接口没能连上。下拉可以刷新，或点下面的按钮重试。")
-                .font(.system(size: 13))
-                .foregroundStyle(Theme.textSecondary)
-                .multilineTextAlignment(.center)
-            Button("重新加载") {
-                Task { await reload(channel: nil) }
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(Theme.primaryAction)
-        }
-        .frame(maxWidth: .infinity)
         .padding(.horizontal, Theme.contentInset)
-        .padding(.vertical, 48)
+        .padding(.top, 4)
+        .padding(.bottom, 40)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// 单个频道的货架：没拉过就在出现时拉一次；拉失败给出重试入口。
     @ViewBuilder
     private func channelShelf(_ channel: AnimeChannel) -> some View {
+        let identifier = "anime.shelf.\(channel.id)"
         if failedShelves.contains(channel.id) {
             VStack(alignment: .leading, spacing: 8) {
-                ShelfHeader("推荐 · \(channel.name)")
+                ShelfHeader(title: channel.name, identifier: identifier, inset: 0) { EmptyView() }
                 Button {
                     Task { await loadShelf(channel.id, retry: true) }
                 } label: {
-                    HStack(spacing: 6) {
+                    HStack(spacing: 8) {
                         Image(icon: .refresh).iconStyle(size: 13, color: Theme.accent)
-                        Text("加载失败，点按重试")
+                        Text("没有加载出来，点按重试")
                             .font(.system(size: 13))
                             .foregroundStyle(Theme.textSecondary)
                     }
@@ -147,27 +157,26 @@ struct AnimeCatalogView: View {
                     .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous))
                 }
                 .buttonStyle(.pressable(scale: 0.98))
-                .padding(.horizontal, Theme.contentInset)
             }
         } else if let items = shelves[channel.id] {
             // 成功但确实没内容就不占版面
             if !items.isEmpty {
-                shelf(title: "推荐 · \(channel.name)", items: items, detail: nil, destination: channel.id)
+                shelf(title: channel.name, identifier: identifier, items: items, detail: nil, destination: channel.id)
             }
         } else if loadingShelves.contains(channel.id) {
-            shelfSkeleton(title: "推荐 · \(channel.name)")
+            shelfSkeleton(title: channel.name)
         } else {
-            // 占位一行，滚到可见时触发加载；不占高度太多，避免首屏被空货架撑长
-            ShelfHeader("推荐 · \(channel.name)")
+            // 占位一行，滚到可见时触发加载；不占太多高度，避免首屏被空货架撑长
+            ShelfHeader(title: channel.name, identifier: identifier, inset: 0) { EmptyView() }
                 .onAppear { Task { await loadShelf(channel.id) } }
         }
     }
 
-    /// 货架：标题走 ShelfHeader（18pt 粗体），右侧「查看更多」走 ShelfLinkLabel（12pt caption 次要灰），
-    /// 和首页电影/剧集货架完全同一套规格。
-    private func shelf(title: String, items: [AnimeVideoItem], detail: String?, destination: Int?) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            ShelfHeader(title: title) {
+    /// 货架：和首页「在线 · 热门新番」同一套规格——18pt 标题、右侧「全部 ›」、108pt 海报横滑。
+    private func shelf(title: String, identifier: String, items: [AnimeVideoItem],
+                       detail: String?, destination: Int?) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ShelfHeader(title: title, identifier: identifier, inset: 0) {
                 HStack(spacing: 10) {
                     if let detail {
                         Text(detail)
@@ -176,78 +185,97 @@ struct AnimeCatalogView: View {
                     }
                     if let destination {
                         Button {
-                            selectChannel(destination)
+                            withAnimation(reduceMotion ? nil : Motion.snappy) { selectChannel(destination) }
                         } label: {
-                            ShelfLinkLabel(text: "查看更多")
+                            ShelfLinkLabel(text: "全部")
                                 .frame(minWidth: 44, minHeight: 44, alignment: .trailing)
                         }
                         .buttonStyle(.pressable(scale: 0.92))
                     }
                 }
+                .frame(minHeight: 44)
             }
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(alignment: .top, spacing: 12) {
-                    ForEach(items) { item in
+            ScrollView(.horizontal) {
+                LazyHStack(alignment: .top, spacing: 12) {
+                    ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                         AnimeDetailLink(animeId: item.id) {
                             AnimePosterCard(item: item, width: 108)
                         }
+                        .reveal(index, id: "\(identifier).\(item.id)")
                     }
                 }
                 .padding(.horizontal, Theme.contentInset)
+                .padding(.vertical, 4)
             }
+            .padding(.horizontal, -Theme.contentInset)
+            .scrollIndicators(.hidden)
         }
     }
 
     private func shelfSkeleton(title: String) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            ShelfHeader(title)
-            ScrollView(.horizontal, showsIndicators: false) {
+        VStack(alignment: .leading, spacing: 8) {
+            ShelfHeader(title: title, inset: 0) { EmptyView() }
+                .frame(minHeight: 44, alignment: .leading)
+            ScrollView(.horizontal) {
                 HStack(alignment: .top, spacing: 12) {
                     ForEach(0..<4, id: \.self) { _ in
-                        VStack(alignment: .leading, spacing: 6) {
-                            RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous)
-                                .fill(Theme.surfaceRaised)
-                                .frame(width: 108, height: 162)
-                            RoundedRectangle(cornerRadius: 3, style: .continuous)
-                                .fill(Theme.surfaceRaised)
-                                .frame(width: 78, height: 11)
-                        }
+                        posterSkeleton(width: 108)
                     }
                 }
                 .padding(.horizontal, Theme.contentInset)
+                .padding(.vertical, 4)
             }
+            .padding(.horizontal, -Theme.contentInset)
+            .scrollIndicators(.hidden)
+            .allowsHitTesting(false)
         }
     }
 
+    /// 首次进入：用轮播和两排货架的骨架占位，和最终版式一致，加载完不会整页跳动。
     private var recommendSkeleton: some View {
-        VStack(spacing: 12) {
-            ProgressView().tint(Theme.accent)
-            Text("正在加载推荐…")
-                .font(.system(size: 13))
-                .foregroundStyle(Theme.textSecondary)
+        VStack(alignment: .leading, spacing: 28) {
+            RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
+                .fill(Theme.surfaceRaised)
+                .frame(height: AnimeHeroBanner.height)
+            shelfSkeleton(title: "热门新番")
+            shelfSkeleton(title: " ")
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 40)
+        .accessibilityLabel("正在加载推荐")
     }
 
-    // MARK: - 频道页：排序 + 完整分页网格
+    private func posterSkeleton(width: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous)
+                .fill(Theme.surfaceRaised)
+                .frame(width: width, height: width * 1.5)
+            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                .fill(Theme.surfaceRaised)
+                .frame(width: width * 0.72, height: 12)
+            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                .fill(Theme.surfaceRaised)
+                .frame(width: width * 0.48, height: 10)
+        }
+        .frame(width: width, alignment: .topLeading)
+    }
+
+    // MARK: - 频道页：排序 + 完整分页网格（网格规格与片库一致）
 
     private func channelContent(metrics: GridMetrics) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             // 接口只支持 channel / sort / limit / page，没有年份与类型筛选，所以这里只放排序。
-            HStack(spacing: 6) {
+            HStack(spacing: 2) {
                 sortPill(title: "最新上架", value: "addtime")
                 sortPill(title: "推荐权重", value: "weight")
                 Spacer(minLength: 8)
                 if totalCount > 0 {
                     Text("共 \(totalCount) 部")
-                        .font(.system(size: 12))
-                        .tertiaryTextStyle()
+                        .font(.caption)
+                        .foregroundStyle(Theme.textTertiary)
+                        .padding(.trailing, 4)
                 }
             }
-            .padding(.horizontal, Theme.contentInset)
-            .padding(.top, 4)
+            .padding(.horizontal, Theme.contentInset - 4)
 
             if isReloading && gridItems.isEmpty {
                 loadingGrid(metrics: metrics)
@@ -271,33 +299,20 @@ struct AnimeCatalogView: View {
                 .transaction { $0.animation = nil }
                 .id("anime-grid-\(selectedChannelId ?? 0)-\(sort)")
 
-                if isLoadingMore {
-                    loadMoreIndicator
-                }
+                listFooter
             }
         }
-        .padding(.bottom, 80)
+        .padding(.top, 4)
+        .padding(.bottom, 40)
     }
 
     private func sortPill(title: String, value: String) -> some View {
-        let selected = (sort == value)
-        return Button {
+        SelectionPill(title: title, selected: sort == value, namespace: sortSpace) {
             guard sort != value else { return }
-            Haptics.select()
-            sort = value
+            withAnimation(reduceMotion ? nil : Motion.snappy) { sort = value }
             beginLoad(channel: selectedChannelId)
-        } label: {
-            Text(title)
-                .font(.system(size: 12, weight: selected ? .bold : .medium))
-                .foregroundStyle(selected ? Theme.onPrimary : Theme.textSecondary)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(
-                    selected ? Theme.primaryAction : Theme.surfaceRaised,
-                    in: Capsule()
-                )
         }
-        .buttonStyle(.pressable)
+        .accessibilityIdentifier("anime.sort.\(value)")
     }
 
     // MARK: - 网格尺寸
@@ -308,13 +323,12 @@ struct AnimeCatalogView: View {
         let spacing: CGFloat
     }
 
-    /// 和原生片库一致：按屏宽算出固定列宽，不用 .flexible()。
-    /// flexible 列嵌套在外层 ScrollView 里时，图片异步返回后列宽会被重新协商，
-    /// 海报忽宽忽窄、行高参差，就是列表「显示混乱」的主因。
+    /// 和片库同一套算法：至少三列、按屏宽算出固定列宽，不用 .flexible()。
+    /// flexible 列嵌套在外层 ScrollView 里时，图片异步返回后列宽会被重新协商，海报忽宽忽窄。
     private func gridMetrics(width: CGFloat) -> GridMetrics {
-        let spacing: CGFloat = 12
-        let available = max(width - Theme.contentInset * 2, 240)
-        let columns = max(2, min(4, Int((available + spacing) / (140 + spacing))))
+        let spacing: CGFloat = 10
+        let available = max(width - Theme.contentInset * 2, 200)
+        let columns = max(3, Int((available + spacing) / (118 + spacing)))
         let cell = floor((available - spacing * CGFloat(columns - 1)) / CGFloat(columns))
         return GridMetrics(columns: columns, cell: cell, spacing: spacing)
     }
@@ -326,53 +340,40 @@ struct AnimeCatalogView: View {
 
     private func loadingGrid(metrics: GridMetrics) -> some View {
         LazyVGrid(columns: gridColumns(metrics), alignment: .leading, spacing: 16) {
-            ForEach(0..<6, id: \.self) { _ in
-                VStack(alignment: .leading, spacing: 6) {
-                    RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous)
-                        .fill(Theme.surfaceRaised)
-                        .frame(width: metrics.cell, height: metrics.cell * 1.5)
-                    RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        .fill(Theme.surfaceRaised)
-                        .frame(width: metrics.cell * 0.72, height: 11)
-                    RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        .fill(Theme.surfaceRaised)
-                        .frame(width: metrics.cell * 0.48, height: 9)
-                }
-                .frame(width: metrics.cell, alignment: .top)
+            ForEach(0..<9, id: \.self) { _ in
+                posterSkeleton(width: metrics.cell)
             }
         }
         .padding(.horizontal, Theme.contentInset)
+        .accessibilityLabel("正在加载")
     }
 
     @ViewBuilder private var emptyOrErrorState: some View {
-        VStack(spacing: 12) {
-            Image(icon: errorMessage == nil ? .video : .alert)
-                .iconStyle(size: 36, color: Theme.textTertiary)
-            Text(errorMessage ?? "暂无番剧内容")
-                .font(.system(size: 13))
-                .foregroundStyle(Theme.textSecondary)
-                .multilineTextAlignment(.center)
-            if errorMessage != nil {
-                Button("重新加载") {
+        Group {
+            if let errorMessage {
+                EmptyStateView(icon: AppIcon.alert.name, title: "这个频道没有加载出来", message: errorMessage,
+                               actionTitle: "重新加载") {
                     beginLoad(channel: selectedChannelId)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(Theme.primaryAction)
+            } else {
+                EmptyStateView(icon: AppIcon.video.name, title: "暂时没有番剧",
+                               message: "这个频道下还没有内容，换个频道看看。")
             }
         }
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal, Theme.contentInset)
-        .padding(.vertical, 40)
+        .frame(maxWidth: .infinity, minHeight: 320)
     }
 
-    private var loadMoreIndicator: some View {
-        HStack {
-            Spacer()
-            ProgressView()
-                .tint(Theme.accent)
-            Spacer()
+    @ViewBuilder private var listFooter: some View {
+        Group {
+            if isLoadingMore {
+                ProgressView().tint(Theme.textSecondary)
+            } else if !hasMore {
+                Text("已经到底了")
+                    .font(.caption)
+                    .foregroundStyle(Theme.textTertiary)
+            }
         }
-        .padding(.vertical, 16)
+        .frame(maxWidth: .infinity, minHeight: 56)
     }
 
     // MARK: - 数据加载流水线
