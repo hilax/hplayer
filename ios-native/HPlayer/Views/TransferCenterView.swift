@@ -42,7 +42,7 @@ struct TransferCenterView: View {
                         .buttonStyle(.pressable(scale: 0.985))
                         .accessibilityIdentifier("transfers.offline")
                         ForEach(cloudRunning.prefix(3)) { task in
-                            Divider().padding(.leading, 60)
+                            Divider().padding(.leading, LibraryActionRow.dividerInset)
                             progressRow(title: task.name, fraction: task.percent / 100,
                                         detail: task.status == .waiting ? "排队中" : "\(Int(task.percent))%")
                         }
@@ -61,7 +61,7 @@ struct TransferCenterView: View {
                         .buttonStyle(.pressable(scale: 0.985))
                         .accessibilityIdentifier("transfers.downloads")
                         ForEach(localActive.prefix(3)) { item in
-                            Divider().padding(.leading, 60)
+                            Divider().padding(.leading, LibraryActionRow.dividerInset)
                             progressRow(title: item.name, fraction: item.fraction,
                                         detail: item.state == .paused ? "已暂停" : item.state == .queued ? "排队中" : "\(Int(item.fraction * 100))%")
                         }

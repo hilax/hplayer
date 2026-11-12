@@ -374,13 +374,13 @@ struct HomeLibraryScanView: View {
 
     // MARK: 封面与资料
 
-    private var rowDivider: some View { Divider().padding(.leading, 60) }
+    private var rowDivider: some View { Divider().padding(.leading, LibraryActionRow.dividerInset) }
 
     private var coverGroup: some View {
         DesignGroup {
             Toggle(isOn: $automaticMatching) {
                 HStack(spacing: 12) {
-                    IconTile(icon: .autoMatch, size: 34)
+                    RowIcon(icon: .autoMatch)
                     VStack(alignment: .leading, spacing: 3) {
                         Text("自动匹配封面").font(.system(size: 14, weight: .medium))
                         Text("关闭后只在手动重新匹配时查找").font(.caption).foregroundStyle(Theme.textSecondary)
@@ -443,7 +443,7 @@ struct HomeLibraryScanView: View {
     private var performerCard: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 12) {
-                IconTile(icon: .people, size: 34)
+                RowIcon(icon: .people)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("演员资料").font(.system(size: 14, weight: .medium))
                     Text(performerSummary).font(.caption).foregroundStyle(Theme.textSecondary)

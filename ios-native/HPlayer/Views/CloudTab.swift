@@ -37,8 +37,7 @@ struct CloudTab: View {
                     }
                     .padding(.horizontal, -Theme.contentInset)
                     accountCard.reveal(0)
-                    browseRow.reveal(1)
-                    toolRows.reveal(2)
+                    toolRows.reveal(1)
                 }
                 .frame(maxWidth: 620)
                 .frame(maxWidth: .infinity)
@@ -137,40 +136,35 @@ struct CloudTab: View {
         .accessibilityIdentifier("library.account")
     }
 
-    /// 传输中心与本机视频。云端离线、本机下载、磁力边下边播统一放进传输中心。
+    /// 全部文件、传输中心、本机视频：一组简洁的列表，只写标题，右边是数量。
     private var toolRows: some View {
         DesignGroup {
+            Button { Task { await open115() } } label: {
+                LibraryActionRow(symbol: AppIcon.allFiles.name, title: "全部文件",
+                                 value: appState.isAuthenticated ? "" : "未登录")
+            }
+            .buttonStyle(.pressable(scale: 0.985))
+            .disabled(connecting)
+            .accessibilityIdentifier("cloud.browse")
+            Divider().padding(.leading, LibraryActionRow.dividerInset)
             Button {
                 // 本机下载和边下边播不需要 115 登录，传输中心直接进；里面的云端离线再按需登录
                 path.append(.page(.transfers))
             } label: {
-                LibraryActionRow(symbol: AppIcon.cloudDownload.name, title: "传输中心",
-                                 subtitle: "云端离线、下载到本机、磁力边下边播",
-                                 value: activeDownloads == 0 ? "" : "\(activeDownloads) 个下载中")
+                LibraryActionRow(symbol: AppIcon.transfers.name, title: "传输中心",
+                                 value: activeDownloads == 0 ? "" : "\(activeDownloads) 个下载中",
+                                 valueHighlighted: activeDownloads > 0)
             }
             .buttonStyle(.pressable(scale: 0.985))
             .accessibilityIdentifier("cloud.transfers")
-            Divider().padding(.leading, 60)
+            Divider().padding(.leading, LibraryActionRow.dividerInset)
             NavigationLink { LocalVideosView().hidesTabBar() } label: {
                 LibraryActionRow(symbol: AppIcon.device.name, title: "本机视频",
-                                 subtitle: "导入的视频和下载到手机的视频",
                                  value: localStore.files.isEmpty ? "" : "\(localStore.files.count)")
             }
             .buttonStyle(.pressable(scale: 0.985))
             .accessibilityIdentifier("cloud.local")
         }
-    }
-
-    /// 全部文件入口：登录后进入网盘根目录。
-    private var browseRow: some View {
-        Button { Task { await open115() } } label: {
-            LibraryActionRow(symbol: AppIcon.folder.name, title: "全部文件",
-                             subtitle: appState.isAuthenticated ? "按目录浏览，选中文件夹加入首页" : "登录 115 后浏览网盘文件")
-                .surfaceCard()
-        }
-        .buttonStyle(.pressable(scale: 0.98))
-        .disabled(connecting)
-        .accessibilityIdentifier("cloud.browse")
     }
 
     // MARK: 路径

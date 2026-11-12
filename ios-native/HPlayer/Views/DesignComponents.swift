@@ -149,18 +149,32 @@ struct LibraryActionRow: View {
     var value: String = ""
     var showsChevron = true
     var tone: IconTile.Tone = .accent
+    /// 右侧数值高亮（例如「3 部更新」用玫红）
+    var valueHighlighted = false
+
+    /// 图标列宽：分隔线从这里往右对齐标题（14 + 24 + 14）
+    static let dividerInset: CGFloat = 52
 
     var body: some View {
-        HStack(spacing: 12) {
-            IconTile(symbolName: symbol, size: 34, tone: tone)
+        HStack(spacing: 14) {
+            // 图标不再垫底色方块：线框图标直接摆在行首，和标题同色
+            Image(systemName: symbol)
+                .font(.system(size: 19, weight: Theme.iconWeight))
+                .foregroundStyle(tone == .danger ? Theme.danger : Theme.textPrimary)
+                .frame(width: 24)
             VStack(alignment: .leading, spacing: 3) {
-                Text(title).font(.system(size: 14, weight: .medium)).foregroundStyle(.primary)
+                Text(title).font(.system(size: 15)).foregroundStyle(tone == .danger ? Theme.danger : Color.primary)
                 if !subtitle.isEmpty {
                     Text(subtitle).font(.caption).foregroundStyle(Theme.textSecondary)
                 }
             }
             Spacer(minLength: 8)
-            if !value.isEmpty { Text(value).font(.caption).foregroundStyle(Theme.textSecondary) }
+            if !value.isEmpty {
+                Text(value)
+                    .font(.system(size: 13, weight: valueHighlighted ? .semibold : .regular))
+                    .foregroundStyle(valueHighlighted ? Theme.accent : Theme.textTertiary)
+                    .lineLimit(1)
+            }
             if showsChevron {
                 Image(systemName: AppIcon.forward.name)
                     .font(.system(size: 12, weight: .semibold))
@@ -169,8 +183,21 @@ struct LibraryActionRow: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .frame(minHeight: 58)
+        .frame(minHeight: 52)
         .contentShape(Rectangle())
+    }
+}
+
+/// 列表行首的图标：线框图标直接摆着，不垫底色。和 LibraryActionRow 的图标同一个规格。
+struct RowIcon: View {
+    let icon: AppIcon
+    var tint: Color = Theme.textPrimary
+
+    var body: some View {
+        Image(systemName: icon.name)
+            .font(.system(size: 19, weight: Theme.iconWeight))
+            .foregroundStyle(tint)
+            .frame(width: 24)
     }
 }
 

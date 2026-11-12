@@ -77,7 +77,7 @@ struct LibraryCleanupView: View {
                 }
                 .buttonStyle(.pressable(scale: 0.985))
                 .accessibilityIdentifier("cleanup.all")
-                Divider().padding(.leading, 62)
+                Divider().padding(.leading, LibraryActionRow.dividerInset)
                 Button { pickingFolder = true } label: {
                     LibraryActionRow(symbol: AppIcon.folder.name, title: "只核对某个文件夹",
                                      subtitle: "选一个你删过东西的文件夹，只读它和它下面的子文件夹")

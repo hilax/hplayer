@@ -14,9 +14,9 @@ struct AddMediaSheet: View {
             }
             DesignGroup {
                 action(.local, AppIcon.folder.name, "导入本机视频", "从系统「文件」选择视频")
-                Divider().padding(.leading, 62)
+                Divider().padding(.leading, LibraryActionRow.dividerInset)
                 action(.cloud, AppIcon.cloud.name, "添加 115 文件夹", "浏览目录，加入你的首页")
-                Divider().padding(.leading, 62)
+                Divider().padding(.leading, LibraryActionRow.dividerInset)
                 action(.magnet, AppIcon.link.name, "打开磁力链接", "使用 115 或本机引擎解析")
             }
             Text("添加后的影片会整理到你的片库。")
@@ -60,19 +60,19 @@ struct MediaActionSheet: View {
                     LibraryActionRow(symbol: AppIcon.play.name, title: position == nil ? "播放" : "继续播放",
                                      subtitle: position.map { "从 \(playbackTimeText($0)) 继续" } ?? "开始观看这部影片")
                 }.buttonStyle(.plain)
-                Divider().padding(.leading, 62)
+                Divider().padding(.leading, LibraryActionRow.dividerInset)
                 Button(action: onMatch) {
                     LibraryActionRow(symbol: AppIcon.poster.name, title: "匹配封面", subtitle: "选择或更正影片资料")
                 }.buttonStyle(.plain)
                 if let onHideFeatured {
-                    Divider().padding(.leading, 62)
+                    Divider().padding(.leading, LibraryActionRow.dividerInset)
                     Button(action: onHideFeatured) {
                         LibraryActionRow(symbol: AppIcon.hidden.name, title: "不在精选中显示", subtitle: "首页大图不再出现它，影片仍在片库里")
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("film.hideFeatured")
                 }
-                Divider().padding(.leading, 62)
+                Divider().padding(.leading, LibraryActionRow.dividerInset)
                 Button { confirmRemove = true } label: {
                     LibraryActionRow(symbol: AppIcon.trash.name, title: item.isCloud ? "从首页移除" : "删除本机文件",
                                      subtitle: item.isCloud ? "保留网盘中的原始文件" : "删除导入到 HPlayer 的副本")

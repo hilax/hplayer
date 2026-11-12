@@ -13,9 +13,9 @@ struct MetadataSourcesView: View {
             GroupLabel(title: "影视资料")
             DesignGroup {
                 LibraryActionRow(symbol: AppIcon.sparkles.name, title: "番组计划", subtitle: "动画与亚洲影视资料", value: "自动使用", showsChevron: false)
-                Divider().padding(.leading, 62)
+                Divider().padding(.leading, LibraryActionRow.dividerInset)
                 LibraryActionRow(symbol: AppIcon.video.name, title: "IMDb / Cinemeta", subtitle: "电影与剧集资料", value: "自动使用", showsChevron: false)
-                Divider().padding(.leading, 62)
+                Divider().padding(.leading, LibraryActionRow.dividerInset)
                 Button { credentials = true } label: {
                     LibraryActionRow(symbol: AppIcon.key.name, title: "TMDB", subtitle: "可选的中文海报与影片资料", value: tmdbEnabled ? "已开启" : "未配置")
                 }.buttonStyle(.plain)

@@ -43,6 +43,9 @@ enum AppIcon: String, CaseIterable {
     // MARK: 外观
     case appearance, appearanceLight, appearanceDark, appearanceSystem
 
+    // MARK: 「我的」「网盘」列表
+    case transfers, danmaku, metadataSources, appIconStyle, license, version, allFiles
+
     /// 线框款（默认）或本来就只有一种样子的图标。
     var name: String {
         switch self {
@@ -176,6 +179,14 @@ enum AppIcon: String, CaseIterable {
         case .appearanceLight: return "sun.max.fill"
         case .appearanceDark: return "moon.fill"
         case .appearanceSystem: return "circle.lefthalf.filled"
+
+        case .transfers: return "arrow.down.circle"
+        case .danmaku: return "text.bubble"
+        case .metadataSources: return "books.vertical"
+        case .appIconStyle: return "app"
+        case .license: return "doc.plaintext"
+        case .version: return "number.circle"
+        case .allFiles: return "folder"
         }
     }
 

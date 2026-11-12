@@ -69,7 +69,7 @@ private struct FolderList: View {
                     Button { onOpen(Crumb(cid: folder.id, name: folder.name)) } label: {
                         LibraryActionRow(symbol: AppIcon.folder.name, title: folder.name, subtitle: "进入文件夹")
                     }.buttonStyle(.pressable(scale: 0.985))
-                    if folder.id != folders.last?.id { Divider().padding(.leading, 62) }
+                    if folder.id != folders.last?.id { Divider().padding(.leading, LibraryActionRow.dividerInset) }
                 }
             }
             DesignNotice(text: cid == "0" ? "整个网盘文件较多时耗时较长，建议只选择存放影片的文件夹。" : "会扫描「\(name)」及其中的所有子文件夹。")

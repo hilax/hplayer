@@ -213,24 +213,24 @@ struct SettingsView: View {
     }
 
     private var rowDivider: some View {
-        Divider().padding(.leading, 60)
+        Divider().padding(.leading, LibraryActionRow.dividerInset)
     }
 
-    /// 我的内容：追番、传输中心（观看历史在首页右上角）
+    /// 我的内容：追番、传输中心。列表只写标题，右边是数量（有更新、在下载时玫红）
     private var contentGroup: some View {
         group("我的内容") {
             NavigationLink(value: MineRoute.watchlist) {
                 LibraryActionRow(symbol: AppIcon.heart.name, title: "我的追番",
-                                 subtitle: watchUpdates > 0 ? "\(watchUpdates) 部有更新" : "在线动漫的追番列表",
-                                 value: watchlist.items.isEmpty ? "" : "\(watchlist.items.count)")
+                                 value: watchUpdates > 0 ? "\(watchUpdates) 部更新" : (watchlist.items.isEmpty ? "" : "\(watchlist.items.count)"),
+                                 valueHighlighted: watchUpdates > 0)
             }
             .buttonStyle(.pressable(scale: 0.985))
             .accessibilityIdentifier("mine.watchlist")
             rowDivider
             NavigationLink(value: MineRoute.transfers) {
-                LibraryActionRow(symbol: AppIcon.cloudDownload.name, title: "传输中心",
-                                 subtitle: "云端离线、下载到本机、磁力边下边播",
-                                 value: activeDownloads == 0 ? "" : "\(activeDownloads) 个下载中")
+                LibraryActionRow(symbol: AppIcon.transfers.name, title: "传输中心",
+                                 value: activeDownloads == 0 ? "" : "\(activeDownloads) 个下载中",
+                                 valueHighlighted: activeDownloads > 0)
             }
             .buttonStyle(.pressable(scale: 0.985))
             .accessibilityIdentifier("mine.transfers")
@@ -239,27 +239,19 @@ struct SettingsView: View {
 
     /// 播放偏好：弹幕默认开关（样式在播放页的弹幕设置里调）
     private var playbackGroup: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            group("播放") {
-                HStack(spacing: 12) {
-                    IconTile(symbolName: AppIcon.comment.name, size: 34, tone: .accent)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("显示弹幕").font(.system(size: 14, weight: .medium)).foregroundStyle(.primary)
-                        Text("在线动漫播放时默认显示弹幕").font(.caption).foregroundStyle(Theme.textSecondary)
-                    }
-                    Spacer(minLength: 8)
-                    Toggle("显示弹幕", isOn: $danmakuEnabled)
-                        .labelsHidden()
-                        .tint(Theme.accent)
-                        .accessibilityIdentifier("mine.danmaku")
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .frame(minHeight: 58)
+        group("播放") {
+            HStack(spacing: 14) {
+                RowIcon(icon: .danmaku)
+                Text("显示弹幕").font(.system(size: 15)).foregroundStyle(.primary)
+                Spacer(minLength: 8)
+                Toggle("显示弹幕", isOn: $danmakuEnabled)
+                    .labelsHidden()
+                    .tint(Theme.accent)
+                    .accessibilityIdentifier("mine.danmaku")
             }
-            Text("弹幕的区域、透明度、字号和速度可以在播放页「评论」旁的设置里调整。")
-                .font(.caption).foregroundStyle(Theme.textTertiary)
-                .padding(.leading, 6)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .frame(minHeight: 52)
         }
     }
 
@@ -272,8 +264,7 @@ struct SettingsView: View {
     private var mediaGroup: some View {
         group("媒体库") {
             Button { showManagement = true } label: {
-                LibraryActionRow(symbol: AppIcon.folderSettings.name, title: "媒体库管理",
-                                 subtitle: "扫描网盘、匹配封面、整理未匹配影片")
+                LibraryActionRow(symbol: AppIcon.folderSettings.name, title: "媒体库管理")
             }
             .buttonStyle(.pressable(scale: 0.985))
             .accessibilityIdentifier("mine.manage")
@@ -281,8 +272,7 @@ struct SettingsView: View {
             NavigationLink {
                 MetadataSourcesView().hidesTabBar()
             } label: {
-                LibraryActionRow(symbol: AppIcon.tune.name, title: "资料来源",
-                                 subtitle: "番组计划、IMDb、TMDB 与番号资料")
+                LibraryActionRow(symbol: AppIcon.metadataSources.name, title: "资料来源")
             }
             .buttonStyle(.pressable(scale: 0.985))
             .accessibilityIdentifier("mine.sources")
@@ -298,7 +288,7 @@ struct SettingsView: View {
             .accessibilityIdentifier("settings.appearance")
             rowDivider
             NavigationLink { AppIconSettingsView().hidesTabBar() } label: {
-                LibraryActionRow(symbol: AppIcon.playback.name, title: "应用图标", subtitle: "选择主屏幕上的图标样式")
+                LibraryActionRow(symbol: AppIcon.appIconStyle.name, title: "应用图标")
             }
             .buttonStyle(.pressable(scale: 0.985))
             .accessibilityIdentifier("settings.appIcon")
@@ -306,23 +296,18 @@ struct SettingsView: View {
     }
 
     private var aboutGroup: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            group("关于") {
-                LibraryActionRow(symbol: AppIcon.info.name, title: "版本", value: appVersion, showsChevron: false)
+        group("关于") {
+                LibraryActionRow(symbol: AppIcon.version.name, title: "版本", value: appVersion, showsChevron: false)
                 rowDivider
                 NavigationLink {
                     LicensesView()
                         .toolbar(.visible, for: .navigationBar)
                         .hidesTabBar()
                 } label: {
-                    LibraryActionRow(symbol: AppIcon.document.name, title: "开源许可")
+                    LibraryActionRow(symbol: AppIcon.license.name, title: "开源许可")
                 }
                 .buttonStyle(.pressable(scale: 0.985))
                 .accessibilityIdentifier("settings.licenses")
-            }
-            Text("播放功能使用的开源组件，可在开源许可中查看。")
-                .font(.caption).foregroundStyle(Theme.textTertiary)
-                .padding(.leading, 6)
         }
     }
 
@@ -416,7 +401,7 @@ struct LicensesView: View {
                     NavigationLink { LicenseTextView(title: entry.title, url: entry.url) } label: {
                         LibraryActionRow(symbol: AppIcon.document.name, title: entry.title, subtitle: entryDetail(entry.id))
                     }.buttonStyle(.plain)
-                    if entry.id != entries.last?.id { Divider().padding(.leading, 62) }
+                    if entry.id != entries.last?.id { Divider().padding(.leading, LibraryActionRow.dividerInset) }
                 }
             }
             DesignNotice(text: "许可文件随应用打包，可在离线状态下阅读。")
