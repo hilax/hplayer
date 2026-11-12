@@ -512,6 +512,7 @@ private final class ProxyConnection {
     private var renewCount = 0
     /// 文件总长度（Content-Range 里的 /总长），换地址续传时用它确认还是同一个文件
     private var bodyTotal: Int64?
+    private var profile = ""
     private var pending = 0
     private var suspended = false
     private var closed = false
