@@ -18,7 +18,12 @@ struct HPlayerApp: App {
         WindowGroup {
             Group {
                 #if DEBUG
-                if let screen = InterfacePreview.screen {
+                if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
+                    // 单元测试的宿主：只要一个空页面。完整界面会在后台联网（首页在线内容、追番更新、封面……），
+                    // 请求超时后的回调和正在跑的测试撞在一起，曾经让宿主 App 偶发崩溃（SEGV），测试整轮失败。
+                    // UI 测试由 XCUIApplication 另起 App，不带这个环境变量，不受影响。
+                    Color.clear
+                } else if let screen = InterfacePreview.screen {
                     InterfaceCatalogHost(screen: screen)
                 } else if ProcessInfo.processInfo.environment["HPLAYER_ACCOUNT_TEST"] == "1" {
                     AccountInfoUITestHost()
