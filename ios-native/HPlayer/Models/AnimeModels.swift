@@ -41,7 +41,8 @@ struct AnimeBanner: Identifiable, Codable, Hashable {
     let vname: String
     let continu: String?
     let content: String?
-    let gold: Int?
+    /// 评分。接口里有整数也有小数（实测 2026-11-12 出现过 9.5），按 Double 读
+    let gold: Double?
     let oid: Int?
     let pid: Int?
 
@@ -56,6 +57,39 @@ struct AnimeBanner: Identifiable, Codable, Hashable {
     var displayRemarks: String { continu ?? "" }
     var displayDesc: String {
         (content ?? "").replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+    }
+}
+
+extension AnimeBanner {
+    enum CodingKeys: String, CodingKey {
+        case id, vid, img, vname, continu, content, gold, oid, pid
+    }
+
+    /// 宽松解码：数字字段可能是整数、小数或字符串，单个字段类型不对只丢这个字段，不让整组轮播解码失败。
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(Int.self, forKey: .id)
+        vid = Self.int(c, .vid)
+        img = (try? c.decode(String.self, forKey: .img)) ?? ""
+        vname = (try? c.decode(String.self, forKey: .vname)) ?? ""
+        continu = try? c.decodeIfPresent(String.self, forKey: .continu)
+        content = try? c.decodeIfPresent(String.self, forKey: .content)
+        if let value = try? c.decodeIfPresent(Double.self, forKey: .gold) {
+            gold = value
+        } else if let text = try? c.decodeIfPresent(String.self, forKey: .gold) {
+            gold = Double(text)
+        } else {
+            gold = nil
+        }
+        oid = Self.int(c, .oid)
+        pid = Self.int(c, .pid)
+    }
+
+    private static func int(_ c: KeyedDecodingContainer<CodingKeys>, _ key: CodingKeys) -> Int? {
+        if let value = try? c.decodeIfPresent(Int.self, forKey: key) { return value }
+        if let value = try? c.decodeIfPresent(Double.self, forKey: key) { return Int(value) }
+        if let text = try? c.decodeIfPresent(String.self, forKey: key) { return Int(text) }
+        return nil
     }
 }
 

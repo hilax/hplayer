@@ -100,6 +100,19 @@ final class HomeAmbientTintTests: XCTestCase {
         }
     }
 
+    func testBannerWithFractionalRatingStillDecodes() throws {
+        // 2026-11-12 实测 /app/banners 第一条的 gold 是 9.5，按 Int 解码会让整组轮播变空
+        let json = """
+        [{"id":143,"pid":0,"oid":0,"vid":196801,"img":"https://pica.zhimg.com/a.webp","vname":"A","continu":"抢先版","content":"x","gold":9.5},
+         {"id":137,"pid":0,"oid":"1","vid":180904,"img":"https://picx.zhimg.com/b.png","vname":"B","gold":10}]
+        """
+        let banners = try JSONDecoder().decode([AnimeBanner].self, from: Data(json.utf8))
+        XCTAssertEqual(banners.count, 2)
+        XCTAssertEqual(banners[0].gold, 9.5)
+        XCTAssertEqual(banners[1].oid, 1)
+        XCTAssertEqual(HomeSlide.anime(banners).count, 2)
+    }
+
     func testSlidesAlternateLibraryAndOnlineUntilTheLimit() {
         let banners = (1...3).map { AnimeBanner(id: $0, vid: 100 + $0, img: "https://example.com/\($0).webp", vname: "B\($0)",
                                                  continu: nil, content: nil, gold: nil, oid: nil, pid: nil) }

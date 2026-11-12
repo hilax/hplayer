@@ -31,7 +31,11 @@ final class HomeOnlineFeed: ObservableObject {
         // 单元测试把 App 当宿主启动，这时不去请求真实的动漫接口，免得和测试里的网络桩抢资源
         let hostedUnitTest = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
         guard !InterfacePreview.active, !hostedUnitTest, !loading else { return }
-        if let loadedAt, Date().timeIntervalSince(loadedAt) < 600, !trending.isEmpty { return }
+        // 十分钟内不重复拉；但轮播还空着（上次没拉到）就单独补拉一次
+        if let loadedAt, Date().timeIntervalSince(loadedAt) < 600, !trending.isEmpty {
+            if banners.isEmpty { await loadBanners() }
+            return
+        }
         loading = true
         defer { loading = false }
         async let hot = try? AnimeClient.shared.fetchVideoList(sort: "hits", limit: 12, page: 1)
@@ -43,6 +47,15 @@ final class HomeOnlineFeed: ObservableObject {
         if let bannerResult, !bannerResult.isEmpty { banners = bannerResult.filter { !$0.img.isEmpty } }
         if hotResult != nil || freshResult != nil { loadedAt = Date() }
         AnimeWatchlistStore.shared.refreshUpdates(from: trending + latest)
+    }
+
+    private func loadBanners() async {
+        guard !loading else { return }
+        loading = true
+        defer { loading = false }
+        if let result = try? await AnimeClient.shared.fetchBanners(), !result.isEmpty {
+            banners = result.filter { !$0.img.isEmpty }
+        }
     }
 
     /// 界面截图里的热门新番：没有封面地址，卡片画占位海报，不联网。
