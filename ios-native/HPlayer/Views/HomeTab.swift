@@ -81,6 +81,7 @@ struct HomeTab: View {
                     }
                     .tracksPageScroll()
                 }
+                .pageScrollContainer()
                 .scrollIndicators(.hidden)
                 .ignoresSafeArea(edges: .top)
             }

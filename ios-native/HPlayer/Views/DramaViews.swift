@@ -123,6 +123,7 @@ struct DramaTab: View {
             }
             .tracksPageScroll()
         }
+        .pageScrollContainer()
         .scrollIndicators(.hidden)
         .ignoresSafeArea(edges: .top)
         .refreshable { await feed.reload(category) }

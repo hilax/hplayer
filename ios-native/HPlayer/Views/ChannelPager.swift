@@ -4,7 +4,7 @@ import Combine
 // MARK: - 顶部固定头 + 左右滑动分页
 
 /// 首页四个频道（推荐 / 动漫 / 片库 / 短剧）、磁力四个分类（最新 / 专题 / 女优 / 最热）共用的骨架：
-/// - 内容是左右滑动的分页（系统分页 TabView）。页里的横滑货架、轮播优先接手指，从空白处滑才翻页；
+/// - 内容是左右滑动的分页（iOS 17+ 横向分页 ScrollView，iOS 16 退回系统分页 TabView）。页里的横滑货架、轮播优先接手指，从空白处滑才翻页；
 /// - 顶部是盖在分页上面的两行：第一行分类条，第二行搜索框。往上滑时第一行跟着内容上移并淡出，
 ///   搜索框滑到屏幕顶端后固定住，下面的内容继续往上滚；固定后头部铺上页面底色；
 /// - 每一页自己的滚动位置各记各的，换页时头部按那一页的位置显示。
@@ -35,37 +35,99 @@ struct PagedHeaderContainer<Page: Hashable, FirstRow: View, SecondRow: View, Con
         self.content = content
     }
 
+    /// iOS 17+ 用横向分页 ScrollView 记当前页（和 selection 双向同步）
+    @State private var position: Page?
+    /// 去过的页和当前页左右两页才建内容；建过的一直留着（滚动位置、已加载的数据不丢）
+    @State private var visited: Set<Page> = []
+
     var body: some View {
         GeometryReader { proxy in
             let safeTop = proxy.safeAreaInsets.top
             let insets = ChannelPageInsets(safeTop: safeTop, top: safeTop + PagedHeader<FirstRow, SecondRow>.height)
             ZStack(alignment: .top) {
-                TabView(selection: $selection) {
-                    ForEach(pages, id: \.self) { page in
-                        content(page)
-                            .environment(\.channelPageInsets, insets)
-                            .environment(\.pageScrollReporter, PageScrollReporter(state: scroll, key: AnyHashable(page)))
-                            .tag(page)
-                    }
-                }
-                .tabViewStyle(.page(indexDisplayMode: .never))
-                // 只往上铺到状态栏后面；底部留给系统标签栏的安全区，最后一行内容不会被标签栏挡住
-                .ignoresSafeArea(edges: .top)
-                .opacity(overlay == nil ? 1 : 0)
-                .allowsHitTesting(overlay == nil)
+                pager(insets: insets, width: proxy.size.width)
+                    .opacity(overlay == nil ? 1 : 0)
+                    .allowsHitTesting(overlay == nil)
+                    .accessibilityHidden(overlay != nil)
 
                 if let overlay {
                     overlay
                         .environment(\.channelPageInsets, insets)
-                        .environment(\.pageScrollReporter, PageScrollReporter(state: scroll, key: AnyHashable("overlay")))
+                        .environment(\.pageScrollReporter, PageScrollReporter(state: scroll, key: AnyHashable(Self.overlayKey)))
                         .background(Theme.pageBackground.ignoresSafeArea())
                 }
 
-                PagedHeader(state: scroll, key: overlay == nil ? AnyHashable(selection) : AnyHashable("overlay"),
+                PagedHeader(state: scroll, key: overlay == nil ? AnyHashable(selection) : AnyHashable(Self.overlayKey),
                             safeTop: safeTop, firstRow: firstRow, secondRow: secondRow)
             }
             .ignoresSafeArea(edges: .top)
         }
+        .onAppear { markVisited(selection) }
+        .onChange(of: selection) { value in markVisited(value) }
+    }
+
+    private static var overlayKey: String { "paged.overlay" }
+
+    @ViewBuilder
+    private func pager(insets: ChannelPageInsets, width: CGFloat) -> some View {
+        if #available(iOS 17.0, *) {
+            // 纯 SwiftUI 的横向分页：安全区、滚动位置都按普通 ScrollView 走（系统分页 TabView 里页面的
+            // 顶部安全区和滚动回报都不可靠，内容会往下错位、头部收不起来）。
+            ScrollView(.horizontal) {
+                HStack(spacing: 0) {
+                    ForEach(pages, id: \.self) { page in
+                        pageView(page, insets: insets)
+                            .containerRelativeFrame(.horizontal)
+                            .id(page)
+                    }
+                }
+                .scrollTargetLayout()
+            }
+            .scrollTargetBehavior(.paging)
+            .scrollIndicators(.hidden)
+            .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+            .scrollPosition(id: $position)
+            .ignoresSafeArea(edges: .top)
+            .onAppear { position = selection }
+            .onChange(of: selection) { value in
+                guard position != value else { return }
+                withAnimation(Motion.smooth) { position = value }
+            }
+            .onChange(of: position) { value in
+                if let value, value != selection { selection = value }
+            }
+        } else {
+            TabView(selection: $selection) {
+                ForEach(pages, id: \.self) { page in
+                    pageView(page, insets: insets).tag(page)
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            .ignoresSafeArea(edges: .top)
+        }
+    }
+
+    @ViewBuilder
+    private func pageView(_ page: Page, insets: ChannelPageInsets) -> some View {
+        Group {
+            if visited.contains(page) || isNeighbour(page) {
+                content(page)
+            } else {
+                Theme.pageBackground
+            }
+        }
+        .environment(\.channelPageInsets, insets)
+        .environment(\.pageScrollReporter, PageScrollReporter(state: scroll, key: AnyHashable(page)))
+    }
+
+    private func isNeighbour(_ page: Page) -> Bool {
+        guard let a = pages.firstIndex(of: page), let b = pages.firstIndex(of: selection) else { return false }
+        return abs(a - b) <= 1
+    }
+
+    private func markVisited(_ page: Page) {
+        guard !visited.contains(page) else { return }
+        visited.insert(page)
     }
 }
 
@@ -163,25 +225,57 @@ extension EnvironmentValues {
 }
 
 extension View {
-    /// 放在分页里那个纵向 ScrollView 的内容上：把滚动距离报给顶部头部。
-    /// ScrollView 要忽略顶部安全区（内容从屏幕最顶上开始），这里按内容顶边在屏幕上的位置算。
+    /// 放在分页里那个纵向 ScrollView 上：iOS 18+ 直接读滚动距离报给顶部头部；
+    /// 更早的系统给 ScrollView 起一个坐标系，由内容上的 `.tracksPageScroll()` 量。
+    @ViewBuilder
+    func pageScrollContainer() -> some View {
+        if #available(iOS 18.0, *) {
+            modifier(PageScrollGeometryTracker())
+        } else {
+            coordinateSpace(name: PageScrollSpace.name)
+        }
+    }
+
+    /// 放在分页里那个纵向 ScrollView 的内容上（iOS 17 及更早用；iOS 18+ 由 `pageScrollContainer()` 负责）。
     func tracksPageScroll() -> some View { modifier(PageScrollTracker()) }
+}
+
+enum PageScrollSpace {
+    static let name = "paged.scroll"
+}
+
+@available(iOS 18.0, *)
+private struct PageScrollGeometryTracker: ViewModifier {
+    @Environment(\.pageScrollReporter) private var reporter
+
+    func body(content: Content) -> some View {
+        content.onScrollGeometryChange(for: CGFloat.self) { geometry in
+            geometry.contentOffset.y + geometry.contentInsets.top
+        } action: { _, offset in
+            reporter?.report(offset)
+        }
+    }
 }
 
 private struct PageScrollTracker: ViewModifier {
     @Environment(\.pageScrollReporter) private var reporter
 
     func body(content: Content) -> some View {
-        content
-            .background(alignment: .top) {
-                GeometryReader { proxy in
-                    Color.clear.preference(key: PageScrollOffsetKey.self, value: proxy.frame(in: .global).minY)
+        if #available(iOS 18.0, *) {
+            content
+        } else {
+            content
+                .background(alignment: .top) {
+                    GeometryReader { proxy in
+                        Color.clear.preference(key: PageScrollOffsetKey.self,
+                                               value: proxy.frame(in: .named(PageScrollSpace.name)).minY)
+                    }
+                    .frame(height: 0)
                 }
-                .frame(height: 0)
-            }
-            .onPreferenceChange(PageScrollOffsetKey.self) { minY in
-                reporter?.report(-minY)
-            }
+                .onPreferenceChange(PageScrollOffsetKey.self) { minY in
+                    reporter?.report(-minY)
+                }
+        }
     }
 }
 

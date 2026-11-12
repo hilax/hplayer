@@ -35,6 +35,53 @@ final class RedesignFlowUITests: XCTestCase {
         }
     }
 
+    /// 首页头部：搜索框紧贴在轮播上方；上滑后频道条收起、搜索框固定在顶端；左右滑换频道。
+    func testHomeHeaderPinsSearchAndPagesSwipe() throws {
+        let app = launch("home")
+        defer { app.terminate() }
+        let search = app.descendants(matching: .any)["home.search"].firstMatch
+        let play = app.buttons["home.heroPlay"].firstMatch
+        let channel = app.descendants(matching: .any)["home.channel.recommend"].firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 25))
+        XCTAssertTrue(play.waitForExistence(timeout: 10))
+        Thread.sleep(forTimeInterval: 1)
+        let restSearch = search.frame
+        let gap = play.frame.minY - restSearch.maxY
+        XCTAssertGreaterThanOrEqual(gap, 0, "The carousel must not slide under the search bar")
+        XCTAssertLessThanOrEqual(gap, 30, "The carousel starts right below the search bar (gap \(gap))")
+        XCTAssertTrue(channel.isHittable)
+
+        let low = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8))
+        let high = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
+        low.press(forDuration: 0.05, thenDragTo: high, withVelocity: .slow, thenHoldForDuration: 0.3)
+        Thread.sleep(forTimeInterval: 1)
+        let pinned = search.frame
+        XCTAssertLessThan(pinned.minY, restSearch.minY - 40, "The search bar moves up into the channel row's place")
+        XCTAssertGreaterThan(pinned.minY, 20, "The search bar stays below the status bar")
+        XCTAssertFalse(channel.isHittable, "The channel row is hidden once the header collapses")
+        let pinnedShot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        pinnedShot.name = "Home header pinned"
+        pinnedShot.lifetime = .keepAlways
+        add(pinnedShot)
+
+        high.press(forDuration: 0.05, thenDragTo: low, withVelocity: .fast, thenHoldForDuration: 0.1)
+        high.press(forDuration: 0.05, thenDragTo: low, withVelocity: .fast, thenHoldForDuration: 0.1)
+        XCTAssertTrue(channel.waitForExistence(timeout: 3))
+        Thread.sleep(forTimeInterval: 1)
+        // 在货架标题那一行横滑（不碰横滑货架和轮播），翻到下一个频道
+        let screen = app.frame
+        let titles = ["home.shelf.continue", "home.shelf.trending", "home.shelf.movies", "home.shelf.watchlist"]
+            .map { app.descendants(matching: .any)[$0].firstMatch }
+        let title = try XCTUnwrap(titles.first { $0.exists && $0.frame.minY > 200 && $0.frame.maxY < screen.maxY - 120 },
+                                  "A shelf title is on screen")
+        let row = title.frame.midY / screen.height
+        let right = app.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: row))
+        let left = app.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: row))
+        right.press(forDuration: 0.05, thenDragTo: left, withVelocity: .fast, thenHoldForDuration: 0.1)
+        XCTAssertTrue(app.descendants(matching: .any)["anime.search"].firstMatch.waitForExistence(timeout: 5),
+                      "Swiping left moves from 推荐 to 动漫")
+    }
+
     func testHomeCarouselSwipeKeepsTheShelvesInPlace() throws {
         continueAfterFailure = false
         let app = launch("home")

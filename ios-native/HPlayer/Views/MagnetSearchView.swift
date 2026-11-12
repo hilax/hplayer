@@ -118,7 +118,6 @@ struct MagnetSearchView: View {
             MagnetCategoryPage(category: category) { insets, width in
                 pageContent(category, insets: insets, width: width)
             }
-            .onAppear { loadIfNeeded(category) }
         }
         .background(Theme.pageBackground.ignoresSafeArea())
         .navigationTitle(isTabRoot ? "磁力" : "磁力聚合")
@@ -638,6 +637,7 @@ private struct MagnetCategoryPage<Content: View>: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .tracksPageScroll()
             }
+            .pageScrollContainer()
             .scrollIndicators(.hidden)
             .scrollDismissesKeyboard(.interactively)
             .ignoresSafeArea(edges: .top)

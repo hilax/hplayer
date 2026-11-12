@@ -115,6 +115,7 @@ struct AnimeCatalogView: View {
                 }
                 .tracksPageScroll()
             }
+            .pageScrollContainer()
             .scrollIndicators(.hidden)
             .ignoresSafeArea(edges: .top)
             .refreshable {

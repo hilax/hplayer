@@ -263,6 +263,7 @@ struct CatalogTab: View {
                     .padding(.bottom, 32)
                     .tracksPageScroll()
                 }
+                .pageScrollContainer()
                 .scrollIndicators(.hidden)
                 .ignoresSafeArea(edges: .top)
                 .onChange(of: filterRequest) { _ in
