@@ -118,3 +118,12 @@
 
 - 关键操作用 `.successPop(_:particle:tint:)` / `.failureShake(_:)`（Pow）：只在状态变成成功 / 失败的那一刻触发；减弱动态效果时关闭。已用于追番、存到 115、复制链接。
 - iOS 17 起：横滑货架用 `.shelfContent()` + `.shelfScrolling()` 按卡片吸附，卡片加 `.shelfCard()`（边缘略缩小变淡）；网格卡片加 `.gridCardEntrance()`（从底部浮起）；动漫热播轮播改为按页吸附的滚动视图，封面有翻页视差。iOS 16 保持原样。
+
+## 短剧竖屏播放器（DramaFeedView）
+
+- 从短剧详情页播放时打开，独立播放窗口以竖屏弹出（`.playerWindow(item:landscape: false)`）。
+- 上滑下一集、下滑上一集（自绘翻页，iOS 16/17 一致）；第一集 / 最后一集再拉只有橡皮筋回弹和提示。播完自动翻到下一集。
+- 每集一个 AVPlayer，同时只留当前集和前后各一集；前后两集提前缓冲，翻页立即出画面。
+- 竖屏视频等比铺满（resizeAspectFill）；横屏视频居中完整显示，下方「全屏观看」在同一播放器里转横屏（`PlayerWindowController.setLandscape`），横屏页有返回、播放、进度和退出全屏。
+- 单击暂停 / 播放，长按 2 倍速（松手恢复），底部细进度条可拖动（拖动时加粗并显示时间）；右侧「选集」（半屏面板）和「倍速」（1 / 1.25 / 1.5 / 2 循环）。
+- 续播位置、「继续看第 N 集」沿用 RecentStore 和 DramaEpisodeRef。

@@ -166,6 +166,8 @@ final class PlayerWindowController {
     /// 播放页里的「横屏 / 竖屏」按钮
     func setLandscape(_ landscape: Bool) {
         guard let window, let scene = window.windowScene else { return }
+        // 竖屏打开的播放器（短剧竖屏播放）要转横屏时，主窗口还可见；它只支持竖屏，会让系统拒绝横屏请求。
+        if landscape { hideMain(in: scene) }
         window.allowedOrientations = landscape ? .landscape : .portrait
         requestOrientation(landscape ? Self.preferredLandscape() : .portrait, in: scene)
     }
@@ -410,6 +412,8 @@ extension EnvironmentValues {
 private struct PlayerWindowModifier<Root: View>: ViewModifier {
     @EnvironmentObject private var appState: AppState
     @Binding var isPresented: Bool
+    /// nil = 按全局默认（直接横屏）；短剧竖屏播放器传 false
+    var landscape: Bool? = nil
     let root: () -> Root
     /// 这个入口弹出的窗口的标记；关闭时只关自己弹出的那个
     @State private var token: UUID?
@@ -436,7 +440,7 @@ private struct PlayerWindowModifier<Root: View>: ViewModifier {
             .environment(\.dismissPlayerWindow, { binding.wrappedValue = false })
         token = PlayerWindowController.shared.present(
             AnyView(view),
-            landscape: PlayerWindowController.startsInLandscape,
+            landscape: landscape ?? PlayerWindowController.startsInLandscape,
             onDismissed: { binding.wrappedValue = false }
         )
     }
@@ -444,17 +448,20 @@ private struct PlayerWindowModifier<Root: View>: ViewModifier {
 
 extension View {
     /// 代替 `fullScreenCover(isPresented:)`：把播放器放进独立窗口里横屏播放
-    func playerWindow<Root: View>(isPresented: Binding<Bool>, @ViewBuilder content: @escaping () -> Root) -> some View {
-        modifier(PlayerWindowModifier(isPresented: isPresented, root: content))
+    func playerWindow<Root: View>(isPresented: Binding<Bool>, landscape: Bool? = nil,
+                                  @ViewBuilder content: @escaping () -> Root) -> some View {
+        modifier(PlayerWindowModifier(isPresented: isPresented, landscape: landscape, root: content))
     }
 
     /// 代替 `fullScreenCover(item:)`
-    func playerWindow<Item: Identifiable, Root: View>(item: Binding<Item?>, @ViewBuilder content: @escaping (Item) -> Root) -> some View {
+    func playerWindow<Item: Identifiable, Root: View>(item: Binding<Item?>, landscape: Bool? = nil,
+                                                      @ViewBuilder content: @escaping (Item) -> Root) -> some View {
         playerWindow(
             isPresented: Binding(
                 get: { item.wrappedValue != nil },
                 set: { if !$0 { item.wrappedValue = nil } }
             ),
+            landscape: landscape,
             content: {
                 if let value = item.wrappedValue { content(value) }
             }

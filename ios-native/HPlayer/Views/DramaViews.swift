@@ -244,7 +244,8 @@ struct DramaDetailView: View {
     @State private var error = ""
     @State private var lastWatched: Int?
     @State private var expanded = false
-    @State private var playing: PlaybackQueue?
+    /// 竖屏连播播放器（上滑下一集）
+    @State private var feed: DramaFeedStart?
 
     private let episodeColumns = [GridItem(.adaptive(minimum: 56), spacing: 8)]
 
@@ -277,12 +278,12 @@ struct DramaDetailView: View {
         .toolbar(.visible, for: .navigationBar)
         .designScreen("drama-detail")
         .task { await load() }
-        .onChange(of: playing == nil) { closed in
+        .onChange(of: feed == nil) { closed in
             if closed { lastWatched = DramaEpisodeRef.lastWatched(videoId: route.id) }
         }
-        .playerWindow(item: $playing) { queue in
-            PlayerView(source: queue.source, playlist: queue.items)
-                .environmentObject(appState)
+        // 竖屏打开；横屏视频在播放器里点「全屏观看」再转横屏
+        .playerWindow(item: $feed, landscape: false) { start in
+            DramaFeedView(detail: start.detail, startIndex: start.index)
         }
     }
 
@@ -407,8 +408,7 @@ struct DramaDetailView: View {
 
     private func play(_ episode: DramaEpisode, in detail: DramaDetail) {
         Haptics.tap()
-        playing = PlaybackQueue(source: source(episode, in: detail),
-                                items: detail.episodes.map { source($0, in: detail) })
+        feed = DramaFeedStart(detail: detail, index: detail.episodes.firstIndex(of: episode) ?? 0)
     }
 
     private func load() async {
