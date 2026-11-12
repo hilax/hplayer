@@ -3,7 +3,7 @@ import XCTest
 /// Every reviewed artboard is exercised through a real native view or state.
 final class ScreenCatalogUITests: XCTestCase {
     func test01Home() { capture("home", expected: "播放") }
-    func test02HomeMore() { capture("home-more", expected: "电影") }
+    func test02HomeMore() { capture("home-more", expected: "我的片库 · 电影") }
     func test03HomeEmpty() { capture("home-empty", expected: "让好内容，在这里相遇") }
     func test04Movies() { capture("movies", expected: "电影") }
     func test05Series() { capture("series", expected: "剧集") }

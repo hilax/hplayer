@@ -316,8 +316,8 @@ struct HomeTab: View {
         return LoopingCarousel(items: slides, label: "精选推荐", positionIdentifier: "home.carouselPosition",
                                onSelect: { index in
                                    if slides.indices.contains(index) { tint.key = slides[index].palette.key }
-                               }) { slide, _ in
-            HomeSlideCard(slide: slide, playTitle: slidePlayTitle(slide), onPlay: {
+                               }) { slide, isCurrent in
+            HomeSlideCard(slide: slide, isCurrent: isCurrent, playTitle: slidePlayTitle(slide), onPlay: {
                 if case .library(let item) = slide.content {
                     playing = HomeLibrary.queue(for: item, in: library.items)
                 }
@@ -612,12 +612,10 @@ struct HomeTab: View {
                 .buttonStyle(.pressable(scale: 0.92))
                 .accessibilityIdentifier("home.trending.all")
             }
-            LazyVGrid(columns: Array(repeating: GridItem(.fixed(cardWidth), spacing: spacing, alignment: .top), count: 3),
-                      alignment: .leading, spacing: 16) {
-                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                    HomeAnimeGridCard(item: item, rank: index + 1, width: cardWidth)
-                        .reveal(index, id: "trending.\(item.id)")
-                }
+            // 只有几张：直接排成固定的行，不用懒加载网格（懒加载在屏幕外不建视图，滚到之前找不到这些卡片）
+            FixedGrid(items: items, columns: 3, spacing: spacing) { index, item in
+                HomeAnimeGridCard(item: item, rank: index + 1, width: cardWidth)
+                    .reveal(index)
             }
             .onAppear {
                 let urls = items.compactMap { URL(string: $0.safePicURLString) }
@@ -696,18 +694,15 @@ struct HomeTab: View {
                     posterCard(item, library: library, width: width)
                 }
             }
-            LazyVGrid(columns: Array(repeating: GridItem(.fixed(cardWidth), spacing: spacing, alignment: .top), count: 2),
-                      alignment: .leading, spacing: 16) {
-                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                    LibraryWideCard(item: item, width: cardWidth) {
-                        playing = HomeLibrary.queue(for: item, in: library.items)
-                    } onDelete: {
-                        delete(item)
-                    } onMatch: {
-                        matching = MatchRequest(item: item)
-                    }
-                    .reveal(index, id: item.id)
+            FixedGrid(items: items, columns: 2, spacing: spacing) { index, item in
+                LibraryWideCard(item: item, width: cardWidth) {
+                    playing = HomeLibrary.queue(for: item, in: library.items)
+                } onDelete: {
+                    delete(item)
+                } onMatch: {
+                    matching = MatchRequest(item: item)
                 }
+                .reveal(index)
             }
         }
     }

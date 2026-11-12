@@ -51,6 +51,8 @@ struct HomeSlide: Identifiable {
 /// 热播动漫：整张点进动漫详情。卡片上的字一律白色，压在底部的暗色渐变上。
 struct HomeSlideCard: View {
     let slide: HomeSlide
+    /// 是不是轮播当前停着的那一张。只有当前这张放按钮：首尾复制页和相邻页上不会再有一套同名按钮。
+    var isCurrent = true
     var playTitle = "播放"
     var onPlay: () -> Void = {}
     var onOptions: () -> Void = {}
@@ -98,33 +100,39 @@ struct HomeSlideCard: View {
             VStack(alignment: .leading, spacing: 0) {
                 caption(title: item.title, subtitle: librarySubtitle(item), trailingInset: 0)
                     .accessibilityIdentifier("home.heroTitle")
-                HStack(spacing: 8) {
-                    Button(action: onPlay) {
-                        HStack(spacing: 5) {
-                            Image(systemName: AppIcon.play.name)
-                                .font(.system(size: 11, weight: .bold))
-                            Text(playTitle)
-                                .font(.system(size: 13, weight: .bold))
-                        }
-                        .foregroundStyle(Color.black)
-                        .padding(.horizontal, 14)
-                        .frame(height: 32)
-                        .background(Color.white, in: Capsule())
-                        .contentShape(Capsule())
-                    }
-                    .buttonStyle(.pressable)
-                    .accessibilityIdentifier("home.heroPlay")
+                Group {
+                    if isCurrent {
+                        HStack(spacing: 8) {
+                            Button(action: onPlay) {
+                                HStack(spacing: 5) {
+                                    Image(systemName: AppIcon.play.name)
+                                        .font(.system(size: 11, weight: .bold))
+                                    Text(playTitle)
+                                        .font(.system(size: 13, weight: .bold))
+                                }
+                                .foregroundStyle(Color.black)
+                                .padding(.horizontal, 14)
+                                .frame(height: 32)
+                                .background(Color.white, in: Capsule())
+                                .contentShape(Capsule())
+                            }
+                            .buttonStyle(.pressable)
+                            .accessibilityIdentifier("home.heroPlay")
 
-                    Button(action: onOptions) {
-                        Image(systemName: AppIcon.more.name)
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .frame(width: 32, height: 32)
-                            .background(Color.white.opacity(0.22), in: Circle())
-                            .contentShape(Circle())
+                            Button(action: onOptions) {
+                                Image(systemName: AppIcon.more.name)
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundStyle(.white)
+                                    .frame(width: 32, height: 32)
+                                    .background(Color.white.opacity(0.22), in: Circle())
+                                    .contentShape(Circle())
+                            }
+                            .buttonStyle(.pressable)
+                            .accessibilityLabel("影片选项")
+                        }
+                    } else {
+                        Color.clear.frame(width: 1, height: 32)
                     }
-                    .buttonStyle(.pressable)
-                    .accessibilityLabel("影片选项")
                 }
                 .padding(.top, 8)
             }
@@ -460,6 +468,33 @@ struct LibraryWideCard: View {
             .frame(width: width, height: height)
             .background(Theme.surfaceRaised)
             .allowsHitTesting(false)
+        }
+    }
+}
+
+// MARK: - 固定行数的小网格
+
+/// 首页里只有几张卡片的网格（热门新番六张、片库电影四张）：按列数排成几行，一次建好。
+/// 不用 LazyVGrid——懒加载网格在屏幕外不建视图，首页往下才有的卡片在滚到之前根本不存在。
+struct FixedGrid<Item: Identifiable, Cell: View>: View {
+    let items: [Item]
+    let columns: Int
+    var spacing: CGFloat = 10
+    var rowSpacing: CGFloat = 16
+    @ViewBuilder let cell: (Int, Item) -> Cell
+
+    var body: some View {
+        let rows = stride(from: 0, to: items.count, by: max(columns, 1)).map { start in
+            Array(start..<min(start + columns, items.count))
+        }
+        VStack(alignment: .leading, spacing: rowSpacing) {
+            ForEach(rows, id: \.first) { row in
+                HStack(alignment: .top, spacing: spacing) {
+                    ForEach(row, id: \.self) { index in
+                        cell(index, items[index])
+                    }
+                }
+            }
         }
     }
 }
