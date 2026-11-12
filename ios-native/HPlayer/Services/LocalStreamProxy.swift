@@ -29,12 +29,15 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
     private var profileOrder: [String] = []
     private var tasks: [Int: ProxyConnection] = [:]
     private var connections: [ObjectIdentifier: ProxyConnection] = [:]
+    private var serialCounter = 0
     private var lastProblem = ""
     /// 最近几次上游出错的记录（带时间）。自动重试好几次之后，最初的出错原因不会被后面的覆盖掉。
     private var problemHistory: [String] = []
     /// 上游连不上、或下载到一半断了时，每次重试前等多久；用完了才把错误交给 mpv。
     /// 115 的服务器偶尔会掐掉连接再拒绝紧接着的新连接，隔一小会儿就恢复了。
     fileprivate var retryDelays: [TimeInterval] = [0.3, 0.8, 1.6, 3.0]
+    /// 新换的地址也被 115 拒绝（同一个文件的下载连接太多、请求太密）时，等这么久再试
+    fileprivate var refusalDelays: [TimeInterval] = [0.6, 1.5, 3.0]
     /// 115 的下载地址有时效，过期（或被 115 收回）后上游回 403。登记了换地址办法的视频，
     /// 中转自己去换新地址、从原来的字节位置接着下，mpv 那边不会断，也不用整个重开。
     /// 键是播放器拿到的原始地址（本机地址里编码的就是它）。
@@ -196,6 +199,10 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
     func setRetryDelaysForTesting(_ delays: [TimeInterval]) {
         queue.sync { retryDelays = delays }
     }
+
+    func setRefusalDelaysForTesting(_ delays: [TimeInterval]) {
+        queue.sync { refusalDelays = delays }
+    }
     #endif
 
     // MARK: 监听
@@ -304,6 +311,27 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
 
     fileprivate func closed(_ handler: ProxyConnection) {
         connections.removeValue(forKey: ObjectIdentifier(handler))
+        guard let key = handler.streamKey else { return }
+        // 让出过连接的那条（FFmpeg 跳转失败时会退回去接着读旧连接）：同一个视频没有别的下载了，就让它接着下
+        let same = connections.values.filter { $0.streamKey == key }
+        guard !same.contains(where: { $0.holdsUpstream }),
+              let waiting = same.filter({ $0.isYielding }).max(by: { $0.serial < $1.serial }) else { return }
+        waiting.resumeAfterYield()
+    }
+
+    /// 115 同一个文件同时只认一两条下载连接，多了新连接会被 403 拒绝。mpv 跳转时 FFmpeg 先开新连接、
+    /// 成功了才关旧的，旧连接的下载还挂着，新连接就被拒。所以同一个视频开新下载前，先把别的连接的下载停掉
+    /// （记住下到哪了）；它们之后要么被 mpv 关掉，要么等别的下载都结束了再从原位置接着下。
+    fileprivate func claimUpstream(for handler: ProxyConnection) {
+        guard let key = handler.streamKey else { return }
+        for other in connections.values where other !== handler && other.streamKey == key {
+            other.yieldUpstream()
+        }
+    }
+
+    fileprivate func nextSerial() -> Int {
+        serialCounter += 1
+        return serialCounter
     }
 
     // MARK: 地址
@@ -338,8 +366,18 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
         renewals[original.absoluteString] != nil
     }
 
+    /// 地址 `failed` 被拒绝了，值不值得换新地址：正在换、或者别的连接已经换好了 → 值得（直接用）；
+    /// 拒绝的就是几秒前刚换来的地址 → 不是过期的问题（多半是连接太多），换了也没用，等一会儿再试。
+    fileprivate func needsNewAddress(_ original: URL, failed: URL) -> Bool {
+        guard let renewal = renewals[original.absoluteString] else { return false }
+        if renewal.refreshing { return true }
+        if let current = renewal.current, current != failed { return true }
+        if let last = renewal.renewedAt, renewal.current == failed, Date().timeIntervalSince(last) < 20 { return false }
+        return true
+    }
+
     /// 地址 `failed` 被上游拒绝了：换一个新地址。好几条连接同时被拒时只换一次，大家共用结果；
-    /// 别的连接已经换好了就直接用。刚换来的新地址也马上被拒，说明不是过期的问题，不再换（回调 nil）。
+    /// 别的连接已经换好了就直接用。换不到回调 nil。
     fileprivate func renew(_ original: URL, failed: URL, completion: @escaping (URL?) -> Void) {
         guard let renewal = renewals[original.absoluteString] else {
             completion(nil)
@@ -347,11 +385,6 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
         }
         if let current = renewal.current, current != failed {
             completion(current)
-            return
-        }
-        if !renewal.refreshing, let last = renewal.renewedAt, renewal.current == failed, Date().timeIntervalSince(last) < 8 {
-            note("新换的地址也被拒绝，不再换")
-            completion(nil)
             return
         }
         renewal.waiters.append(completion)
@@ -508,8 +541,13 @@ private final class ProxyConnection {
     private var upstreamURL: URL?
     /// 播放器请求的原始地址（换地址时按它找）
     private var originalURL: URL?
-    /// 这条连接已经因为地址被拒换过几次地址
+    /// 这条连接已经因为地址被拒换过几次地址、等过几次再试
     private var renewCount = 0
+    private var refusalWaits = 0
+    /// 为了让同一个视频的新连接能连上，这条连接的下载先停了（mpv 还连着），之后从断开的位置接着下
+    private var yielded = false
+    /// 连接建立的先后（让出的连接里优先恢复最近的那条）
+    fileprivate let serial: Int
     /// 文件总长度（Content-Range 里的 /总长），换地址续传时用它确认还是同一个文件
     private var bodyTotal: Int64?
     private var profile = ""
@@ -535,6 +573,47 @@ private final class ProxyConnection {
     init(connection: NWConnection, proxy: LocalStreamProxy) {
         self.connection = connection
         self.proxy = proxy
+        self.serial = proxy.nextSerial()
+    }
+
+    /// 同一个 115 视频的连接用同一个键（只有登记了换地址办法的视频才限制连接数）
+    fileprivate var streamKey: String? {
+        guard let originalURL, proxy.canRenew(originalURL) else { return nil }
+        return originalURL.absoluteString
+    }
+
+    /// 这条连接的下载正在进行（或者马上要重发）
+    fileprivate var holdsUpstream: Bool { !closed && (task != nil || retryWork != nil) }
+
+    fileprivate var isYielding: Bool { !closed && yielded }
+
+    /// 把上游下载停掉，给同一个视频的新连接腾位置。只停已经在传内容、能续传的；其余的不动。
+    fileprivate func yieldUpstream() {
+        guard !closed, !yielded, headersSent, !isHead, !isPlaylist, bodyEnd != nil, !bodyComplete else { return }
+        guard task != nil || retryWork != nil else { return }
+        retryWork?.cancel()
+        retryWork = nil
+        if let task {
+            proxy.detach(task)
+            task.cancel()
+        }
+        task = nil
+        resumeFrom = nil
+        suspended = false
+        yielded = true
+        proxy.note("同一个视频开了新连接，旧连接先停在 \(bodyStart + deliveredBody) 字节")
+    }
+
+    /// 同一个视频别的下载都结束了，mpv 还连着这条：从停下的位置接着下
+    fileprivate func resumeAfterYield() {
+        guard yielded, !closed else { return }
+        yielded = false
+        if bodyComplete {
+            finish()
+            return
+        }
+        proxy.note("接着下旧连接，从 \(bodyStart + deliveredBody) 字节开始")
+        relaunch(resumingAt: bodyStart + deliveredBody)
     }
 
     func start() {
@@ -604,6 +683,7 @@ private final class ProxyConnection {
         // 不要压缩：视频的字节位置要和 Range 对得上
         request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
         baseRequest = request
+        if !isHead { proxy.claimUpstream(for: self) }
         task = proxy.startTask(request, for: self)
     }
 
@@ -754,28 +834,53 @@ private final class ProxyConnection {
         return true
     }
 
-    /// 上游拒绝了这个地址（115 的下载地址过期）：换新地址重发；响应头已经发给 mpv 的，从断开的位置接着下。
-    /// 返回 false：这个视频没有登记换地址的办法，或者这条连接已经换过两次了，由调用方照常处理。
+    /// 上游拒绝了这个地址（115 回 403）：地址过期就换新地址重发；刚换来的地址也被拒（同一个文件的连接太多、
+    /// 请求太密），就停掉同一个视频别的下载，等一会儿再试。响应头已经发给 mpv 的，从断开的位置接着下。
+    /// 返回 false：这个视频没有登记换地址的办法，或者换地址、等待重试都用完了，由调用方照常处理。
     private func renewUpstream(_ detail: String, cancelling running: URLSessionDataTask?, resumeAt: Int64?) -> Bool {
-        guard let original = originalURL, let failed = upstreamURL, renewCount < 2, proxy.canRenew(original) else { return false }
+        guard let original = originalURL, let failed = upstreamURL, proxy.canRenew(original) else { return false }
         if headersSent && resumeAt == nil { return false }
-        renewCount += 1
-        proxy.note("\(detail)，地址可能过期了，换新地址" + (resumeAt.map { "后从 \($0) 字节接着下" } ?? "后重发"))
+        let renew = renewCount < 2 && proxy.needsNewAddress(original, failed: failed)
+        let waits = proxy.refusalDelays
+        guard renew || refusalWaits < waits.count else {
+            proxy.note("\(detail)；换地址、等待重试都没成功")
+            return false
+        }
         if let running { proxy.detach(running) }
         task = nil
         if !headersSent {
             playlistData = Data()
             isPlaylist = false
         }
-        proxy.renew(original, failed: failed) { [weak self] fresh in
-            guard let self, !self.closed else { return }
-            guard let fresh else {
-                if self.headersSent { self.close() } else { self.respond(status: 403, text: "Forbidden") }
-                return
+        // 先把同一个视频别的下载停掉，免得新请求又因为连接太多被拒
+        proxy.claimUpstream(for: self)
+        let tail = resumeAt.map { "后从 \($0) 字节接着下" } ?? "后重发"
+        if renew {
+            renewCount += 1
+            proxy.note("\(detail)，地址可能过期了，换新地址\(tail)")
+            proxy.renew(original, failed: failed) { [weak self] fresh in
+                guard let self, !self.closed else { return }
+                guard let fresh else {
+                    if self.headersSent { self.close() } else { self.respond(status: 403, text: "Forbidden") }
+                    return
+                }
+                self.upstreamURL = fresh
+                self.baseRequest?.url = fresh
+                self.relaunch(resumingAt: resumeAt)
             }
-            self.upstreamURL = fresh
-            self.baseRequest?.url = fresh
-            self.relaunch(resumingAt: resumeAt)
+        } else {
+            let delay = waits[refusalWaits]
+            refusalWaits += 1
+            proxy.note("\(detail)；新地址也被拒，多半是同一个文件的连接太多，\(delay) 秒后再试\(tail)")
+            let work = DispatchWorkItem { [weak self] in
+                guard let self, !self.closed else { return }
+                let current = self.proxy.currentUpstream(for: original)
+                self.upstreamURL = current
+                self.baseRequest?.url = current
+                self.relaunch(resumingAt: resumeAt)
+            }
+            retryWork = work
+            proxy.queue.asyncAfter(deadline: .now() + delay, execute: work)
         }
         return true
     }
@@ -789,6 +894,7 @@ private final class ProxyConnection {
         }
         // 旧的下载已经没了，积压的数据发完之后别去恢复它
         suspended = false
+        proxy.claimUpstream(for: self)
         task = proxy.startTask(request, for: self)
     }
 

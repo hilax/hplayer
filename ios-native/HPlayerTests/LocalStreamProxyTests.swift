@@ -274,15 +274,13 @@ final class LocalStreamProxyTests: XCTestCase {
         XCTAssertTrue(history.contains("已换新地址"), history)
     }
 
-    /// 换来的新地址马上也被拒：不是过期的问题，不反复换，照实告诉 mpv
-    func testDoesNotLoopWhenTheFreshAddressIsAlsoRefused() async throws {
+    /// 换来的新地址马上也被拒：不是过期的问题（多半是同一个文件的连接太多），不反复换地址，
+    /// 等一会儿用同一个新地址再试；等待次数用完才照实告诉 mpv
+    func testWaitsInsteadOfRenewingAgainWhenTheFreshAddressIsAlsoRefused() async throws {
         let fresh = try XCTUnwrap(URL(string: "https://example.com/b/fresh.mp4"))
-        ScriptedUpstream.install([
-            .reply(status: 403, headers: [:], body: Data()),
-            .reply(status: 403, headers: [:], body: Data()),
-            .reply(status: 200, headers: ["Content-Length": "5"], body: Data("hello".utf8)),
-        ])
+        ScriptedUpstream.install(Array(repeating: .reply(status: 403, headers: [:], body: Data()), count: 6))
         let proxy = LocalStreamProxy(protocolClasses: [ScriptedUpstream.self])
+        proxy.setRefusalDelaysForTesting([0.05, 0.05])
         let calls = RenewCounter()
         let upstream = try XCTUnwrap(URL(string: "https://example.com/a/video.mp4"))
         let relayed = await proxy.localURL(for: upstream, headers: [:], renew: { calls.increment(); return fresh })
@@ -290,8 +288,112 @@ final class LocalStreamProxyTests: XCTestCase {
 
         let fetched = try fetch(local, range: nil)
         XCTAssertEqual(fetched.status, 403)
-        XCTAssertEqual(ScriptedUpstream.receivedURLs().count, 2)
+        XCTAssertEqual(ScriptedUpstream.receivedURLs(), [upstream, fresh, fresh, fresh])
         XCTAssertEqual(calls.value, 1)
+    }
+
+    /// 新地址第一次被拒、等一会儿再试就通了（115 那边旧连接刚断开）：mpv 拿到正常的视频
+    func testFreshAddressSucceedsAfterAShortWait() async throws {
+        let fresh = try XCTUnwrap(URL(string: "https://example.com/b/fresh.mp4"))
+        ScriptedUpstream.install([
+            .reply(status: 403, headers: [:], body: Data()),
+            .reply(status: 403, headers: [:], body: Data()),
+            .reply(status: 200, headers: ["Content-Length": "5"], body: Data("hello".utf8)),
+        ])
+        let proxy = LocalStreamProxy(protocolClasses: [ScriptedUpstream.self])
+        proxy.setRefusalDelaysForTesting([0.05, 0.05])
+        let calls = RenewCounter()
+        let upstream = try XCTUnwrap(URL(string: "https://example.com/a/video.mp4"))
+        let relayed = await proxy.localURL(for: upstream, headers: [:], renew: { calls.increment(); return fresh })
+        let local = try XCTUnwrap(relayed)
+
+        let fetched = try fetch(local, range: nil)
+        XCTAssertEqual(fetched.status, 200, proxy.problemHistoryLines.joined(separator: "\n"))
+        XCTAssertEqual(fetched.body, Data("hello".utf8))
+        XCTAssertEqual(ScriptedUpstream.receivedURLs(), [upstream, fresh, fresh])
+        XCTAssertEqual(calls.value, 1)
+    }
+
+    /// mpv 跳转：旧连接还开着就开新连接。中转先停掉旧连接的下载（115 同一个文件同时只认一两条），
+    /// 新连接正常拿到内容；新连接结束后旧连接还没关，就从停下的位置接着下，内容拼起来和原文件一样。
+    func testSeekingPausesTheOlderDownloadOfTheSameVideoAndResumesItLater() async throws {
+        let total = 1000
+        let full = pattern(total)
+        ScriptedUpstream.install([
+            .hold(status: 206, headers: ["Content-Range": "bytes 0-\(total - 1)/\(total)", "Content-Length": "\(total)"], body: Data(full.prefix(100))),
+            .reply(status: 206, headers: ["Content-Range": "bytes 500-\(total - 1)/\(total)", "Content-Length": "\(total - 500)"], body: Data(full.suffix(total - 500))),
+            .reply(status: 206, headers: ["Content-Range": "bytes 100-\(total - 1)/\(total)", "Content-Length": "\(total - 100)"], body: Data(full.suffix(total - 100))),
+        ])
+        let proxy = LocalStreamProxy(protocolClasses: [ScriptedUpstream.self])
+        let upstream = try XCTUnwrap(URL(string: "https://example.com/a/video.mp4"))
+        let relayed = await proxy.localURL(for: upstream, headers: [:], renew: { upstream })
+        let local = try XCTUnwrap(relayed)
+
+        // 旧连接：收到响应头和前 100 字节，连接一直开着
+        let older = try openStream(local, range: "bytes=0-\(total - 1)")
+        defer { close(older) }
+        var first = try readUntil(older, bodyBytes: 100)
+
+        // 新连接（跳转）
+        let seeked = try fetch(local, range: "bytes=500-\(total - 1)")
+        let history = proxy.problemHistoryLines.joined(separator: "\n")
+        XCTAssertEqual(seeked.status, 206, history)
+        XCTAssertTrue(seeked.body == full.suffix(total - 500), history)
+
+        // 新连接结束：旧连接从 100 字节接着下完
+        first.append(try readToEnd(older))
+        let body = try XCTUnwrap(first.range(of: Data("\r\n\r\n".utf8)).map { first[$0.upperBound...] })
+        XCTAssertTrue(Data(body) == full, "旧连接接上后内容完整；\(proxy.problemHistoryLines.joined(separator: "\n"))")
+        XCTAssertEqual(ScriptedUpstream.receivedRanges(), ["bytes=0-\(total - 1)", "bytes=500-\(total - 1)", "bytes=100-\(total - 1)"])
+        XCTAssertEqual(ScriptedUpstream.stoppedCount, 1, "The older download is stopped when the seek opens a new one")
+    }
+
+    private func openStream(_ url: URL, range: String) throws -> Int32 {
+        let descriptor = socket(AF_INET, SOCK_STREAM, 0)
+        XCTAssertGreaterThanOrEqual(descriptor, 0)
+        var timeout = timeval(tv_sec: 15, tv_usec: 0)
+        setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = UInt16(try XCTUnwrap(url.port)).bigEndian
+        address.sin_addr = in_addr(s_addr: UInt32(0x7F00_0001).bigEndian)
+        let connected = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        XCTAssertEqual(connected, 0)
+        let bytes = Array("GET \(url.path) HTTP/1.1\r\nHost: 127.0.0.1\r\nRange: \(range)\r\n\r\n".utf8)
+        XCTAssertEqual(send(descriptor, bytes, bytes.count, 0), bytes.count)
+        return descriptor
+    }
+
+    /// 读到响应头加上 `bodyBytes` 字节的内容为止
+    private func readUntil(_ descriptor: Int32, bodyBytes: Int) throws -> Data {
+        var received = Data()
+        var buffer = [UInt8](repeating: 0, count: 65536)
+        let capacity = buffer.count
+        while true {
+            if let end = received.range(of: Data("\r\n\r\n".utf8)), received.count - end.upperBound >= bodyBytes {
+                return received
+            }
+            let count = recv(descriptor, &buffer, capacity, 0)
+            guard count > 0 else { throw POSIXError(.ETIMEDOUT) }
+            received.append(contentsOf: buffer[0..<count])
+        }
+    }
+
+    private func readToEnd(_ descriptor: Int32) throws -> Data {
+        var received = Data()
+        var buffer = [UInt8](repeating: 0, count: 65536)
+        let capacity = buffer.count
+        while true {
+            let count = recv(descriptor, &buffer, capacity, 0)
+            if count == 0 { return received }
+            guard count > 0 else { throw POSIXError(.ETIMEDOUT) }
+            received.append(contentsOf: buffer[0..<count])
+        }
     }
 
     /// 看到一半地址过期：断开后续传被 403 拒绝，换新地址后从断开的字节接着下，内容拼起来和原文件一样
@@ -333,19 +435,31 @@ private final class ScriptedUpstream: URLProtocol {
     enum Step {
         case fail(URLError.Code)
         case reply(status: Int, headers: [String: String], body: Data)
+        /// 发出响应头和一部分内容，之后一直不结束（像一条还在下载的连接），直到被取消
+        case hold(status: Int, headers: [String: String], body: Data)
     }
 
     private static let lock = NSLock()
     private static var steps: [Step] = []
     private static var ranges: [String?] = []
     private static var urls: [URL] = []
+    private static var stops = 0
 
     static func install(_ steps: [Step]) {
         lock.lock(); defer { lock.unlock() }
         self.steps = steps
         ranges = []
         urls = []
+        stops = 0
     }
+
+    /// 被取消的 `.hold` 下载有几个
+    static var stoppedCount: Int {
+        lock.lock(); defer { lock.unlock() }
+        return stops
+    }
+
+    private var holding = false
 
     static func receivedURLs() -> [URL] {
         lock.lock(); defer { lock.unlock() }
@@ -378,10 +492,21 @@ private final class ScriptedUpstream: URLProtocol {
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
             if !body.isEmpty { client?.urlProtocol(self, didLoad: body) }
             client?.urlProtocolDidFinishLoading(self)
+        case .hold(let status, let headers, let body):
+            holding = true
+            let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers)!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            if !body.isEmpty { client?.urlProtocol(self, didLoad: body) }
         }
     }
 
-    override func stopLoading() {}
+    override func stopLoading() {
+        guard holding else { return }
+        holding = false
+        Self.lock.lock()
+        Self.stops += 1
+        Self.lock.unlock()
+    }
 }
 
 /// 本机的假 115 服务器：真正的 TCP 连接，按剧本一次回应一个请求。
