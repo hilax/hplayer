@@ -156,6 +156,8 @@ final class CarouselTintState: ObservableObject {
 struct HomeAmbientBackdrop: View {
     @ObservedObject var state: CarouselTintState
     @ObservedObject var palette: HeroPalette
+    /// 顶部这一段（占总高的比例）是实色：往下拉、页面回弹时露出来的仍是氛围色，不是空白
+    var solidTop: CGFloat = 0
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -182,9 +184,11 @@ struct HomeAmbientBackdrop: View {
             color = colorScheme == .dark ? value.color : value.pastel.color
         }
         let middle = colorScheme == .dark ? 0.45 : 0.55
+        let solid = min(max(solidTop, 0), 0.9)
         return [
             .init(color: color, location: 0),
-            .init(color: color.opacity(middle), location: 0.55),
+            .init(color: color, location: solid),
+            .init(color: color.opacity(middle), location: solid + 0.55 * (1 - solid)),
             .init(color: color.opacity(0), location: 1),
         ]
     }

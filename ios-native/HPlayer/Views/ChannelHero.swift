@@ -114,12 +114,18 @@ struct AmbientHeroSection<Top: View, HitArea: View>: View {
         .padding(.top, safeTop)
         .padding(.bottom, 4)
         .background(alignment: .top) {
-            HomeAmbientBackdrop(state: tint, palette: palette)
-                .frame(height: safeTop + 440)
+            // 往上多铺一段实色：下拉回弹、下拉刷新时，轮播上方露出来的也是氛围色
+            HomeAmbientBackdrop(state: tint, palette: palette,
+                                solidTop: Self.pullExtension / (Self.pullExtension + safeTop + 440))
+                .frame(height: Self.pullExtension + safeTop + 440)
+                .offset(y: -Self.pullExtension)
         }
         .onAppear { palette.prepare(slides.map(\.palette)) }
         .onChange(of: slides.map(\.id)) { _ in palette.prepare(slides.map(\.palette)) }
     }
+
+    /// 轮播氛围色往屏幕上方多铺的高度（下拉最多能拉出这么多）
+    private static var pullExtension: CGFloat { 800 }
 
     private var cardHeight: CGFloat {
         (max(width - Theme.contentInset * 2, 1) * 9 / 16).rounded()
