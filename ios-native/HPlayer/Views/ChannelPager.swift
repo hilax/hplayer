@@ -73,28 +73,36 @@ struct PagedHeaderContainer<Page: Hashable, FirstRow: View, SecondRow: View, Con
         if #available(iOS 17.0, *) {
             // 纯 SwiftUI 的横向分页：安全区、滚动位置都按普通 ScrollView 走（系统分页 TabView 里页面的
             // 顶部安全区和滚动回报都不可靠，内容会往下错位、头部收不起来）。
-            ScrollView(.horizontal) {
-                HStack(spacing: 0) {
-                    ForEach(pages, id: \.self) { page in
-                        pageView(page, insets: insets)
-                            .containerRelativeFrame(.horizontal)
-                            .id(page)
+            ScrollViewReader { reader in
+                ScrollView(.horizontal) {
+                    HStack(spacing: 0) {
+                        ForEach(pages, id: \.self) { page in
+                            pageView(page, insets: insets)
+                                .containerRelativeFrame(.horizontal)
+                                .id(page)
+                        }
                     }
+                    .scrollTargetLayout()
                 }
-                .scrollTargetLayout()
-            }
-            .scrollTargetBehavior(.paging)
-            .scrollIndicators(.hidden)
-            .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
-            .scrollPosition(id: $position)
-            .ignoresSafeArea(edges: .top)
-            .onAppear { position = selection }
-            .onChange(of: selection) { value in
-                guard position != value else { return }
-                withAnimation(Motion.smooth) { position = value }
-            }
-            .onChange(of: position) { value in
-                if let value, value != selection { selection = value }
+                .scrollTargetBehavior(.paging)
+                .scrollIndicators(.hidden)
+                .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+                .scrollPosition(id: $position)
+                .ignoresSafeArea(edges: .top)
+                .onAppear { position = selection }
+                .onChange(of: selection) { value in
+                    guard position != value else { return }
+                    withAnimation(Motion.smooth) { position = value }
+                }
+                .onChange(of: position) { value in
+                    if let value, value != selection { selection = value }
+                }
+                // 播放器横屏时主窗口被藏起来、跟着场景转成横的再转回来，宽度变了以后
+                // 横向滚动停在两页中间（露出半个旁边的频道）。宽度一变、主窗口重新露出来，都对齐回当前页。
+                .onChange(of: width) { _ in realign(reader) }
+                .onReceive(NotificationCenter.default.publisher(for: UIWindow.didBecomeVisibleNotification)) { _ in
+                    realign(reader)
+                }
             }
         } else {
             TabView(selection: $selection) {
@@ -118,6 +126,21 @@ struct PagedHeaderContainer<Page: Hashable, FirstRow: View, SecondRow: View, Con
         }
         .environment(\.channelPageInsets, insets)
         .environment(\.pageScrollReporter, PageScrollReporter(state: scroll, key: AnyHashable(page)))
+    }
+
+    /// 不带动画地把横向分页对齐到当前页；等这一轮布局结束再对齐，宽度才是新的
+    private func realign(_ reader: ScrollViewProxy) {
+        let target = selection
+        for delay in [0.0, 0.35] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    reader.scrollTo(target, anchor: .leading)
+                    position = target
+                }
+            }
+        }
     }
 
     private func isNeighbour(_ page: Page) -> Bool {
