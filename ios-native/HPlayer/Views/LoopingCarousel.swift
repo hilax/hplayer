@@ -2,9 +2,9 @@ import SwiftUI
 
 /// 顶部轮播（首页「推荐」、动漫频道共用），照参考视频的翻页方式：
 ///
-/// - **卡片不动、图片不动**：下一张图从卡片右下以一道弧形边「揭」出来，弧线往左上扫过整张卡片。
+/// - **卡片不动、图片不动**：下一张图从卡片右侧正中以一道弧形边「揭」出来，弧线往左扫过整张卡片。
 ///   两张图都钉在原地，变的只是露出多少。
-/// - **只有文字在动**：片名、信息和按钮在揭过一半时换成下一张的，旧的往左滑出、新的从右滑入（往回翻反过来）。
+/// - **文字和按钮原地换**：揭到一半时，片名、信息和按钮直接换成下一张的，不滑动、不淡入（和参考视频一样一帧换掉）。
 /// - 手动左右拖：弧线跟着手指走，松手吸到最近的一张；每 4 秒自动翻一张；首尾相接。
 ///
 /// 自动翻页只在用户「看得见、没在碰」的时候走：打开「减弱动态效果」、手指在轮播上、轮播滑出屏幕、
@@ -14,7 +14,7 @@ import SwiftUI
 /// 1. 画面层（`background`）：当前图 + 正在揭出来的那张（弧形遮罩），不接触摸；
 /// 2. 手势层：一排透明的整页（`hitArea`，点它就是点这一张：进详情 / 播放）。iOS 18 起放在按页吸附的横向滚动视图里，
 ///    由滚动位置算出「揭到哪儿」；更早的系统用分页 TabView，翻完一页再补放揭开动画；
-/// 3. 文字层（`foreground`）：只画一张，换的时候左右滑动。
+/// 3. 文字层（`foreground`）：只画一张，揭过一半时原地换成下一张。
 struct LoopingCarousel<Item: Identifiable, Background: View, Foreground: View, HitArea: View>: View {
     let items: [Item]
     /// 自动翻页间隔（秒）
@@ -31,11 +31,10 @@ struct LoopingCarousel<Item: Identifiable, Background: View, Foreground: View, H
 
     /// 停稳的那一张（0 起）
     @State private var current = 0
-    /// 正在揭开：from 在下面，to 从右下揭出来，progress 0…1
+    /// 正在揭开：from 在下面，to 从右侧正中揭出来，progress 0…1
     @State private var reveal: Reveal?
-    /// 文字层画的是哪一张；换的方向（往后翻 = 新文字从右边进来）
+    /// 文字层画的是哪一张
     @State private var captionIndex = 0
-    @State private var captionForward = true
     /// 手势层停在第几页（含首尾复制页）
     @State private var page: Int?
     @State private var dragging = false
@@ -46,7 +45,7 @@ struct LoopingCarousel<Item: Identifiable, Background: View, Foreground: View, H
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    /// 揭开动画时长；文字在不到一半时换
+    /// 揭开动画时长；文字在一半时换
     private static var turnDuration: TimeInterval { 0.9 }
 
     init(items: [Item], interval: TimeInterval = 4, label: String, positionIdentifier: String,
@@ -135,25 +134,19 @@ struct LoopingCarousel<Item: Identifiable, Background: View, Foreground: View, H
             if items.indices.contains(captionIndex) {
                 foreground(items[captionIndex])
                     .id(captionIndex)
-                    .transition(captionTransition)
+                    .transition(.identity)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
     }
 
-    private var captionTransition: AnyTransition {
-        if reduceMotion { return .opacity }
-        let enter: Edge = captionForward ? .trailing : .leading
-        let leave: Edge = captionForward ? .leading : .trailing
-        return .asymmetric(insertion: .move(edge: enter).combined(with: .opacity),
-                           removal: .move(edge: leave).combined(with: .opacity))
-    }
-
-    private func showCaption(_ index: Int, forward: Bool) {
+    /// 原地换文字：不带任何动画（参考视频里就是一帧换掉）
+    private func showCaption(_ index: Int) {
         guard index != captionIndex else { return }
-        captionForward = forward
-        withAnimation(reduceMotion ? .easeInOut(duration: 0.2) : .easeOut(duration: 0.4)) { captionIndex = index }
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { captionIndex = index }
     }
 
     // MARK: 手势层
@@ -222,8 +215,7 @@ struct LoopingCarousel<Item: Identifiable, Background: View, Foreground: View, H
             if current != from { current = from }
             reveal = Reveal(from: from, to: to, progress: fraction)
         }
-        let settled = CGFloat(page ?? Int(lower))
-        showCaption(fraction < 0.5 ? from : to, forward: position >= settled)
+        showCaption(fraction < 0.5 ? from : to)
     }
 
     /// 停稳：停在两页中间就吸到最近的整页；复制页换回真页；画面收成一张。
@@ -240,7 +232,7 @@ struct LoopingCarousel<Item: Identifiable, Background: View, Foreground: View, H
         let real = HeroLoop.real(target, count: count)
         current = real
         reveal = nil
-        showCaption(real, forward: true)
+        showCaption(real)
         if let wrapped = HeroLoop.wrapTarget(target, count: count) { jumpDriver(to: wrapped) }
     }
 
@@ -282,20 +274,20 @@ struct LoopingCarousel<Item: Identifiable, Background: View, Foreground: View, H
                 current = to
                 reveal = nil
             }
-            showCaption(to, forward: forward)
+            showCaption(to)
             return
         }
         turning = true
-        // 遮罩只从右下往左上揭：往后翻是「新图揭出来」，往回翻是「当前图往右下收回去，露出前一张」
+        // 遮罩只从右往左揭：往后翻是「新图揭出来」，往回翻是「当前图往右收回去，露出前一张」
         let start = forward ? Reveal(from: from, to: to, progress: 0) : Reveal(from: to, to: from, progress: 1)
         withTransaction(instant) { reveal = start }
         withAnimation(.easeInOut(duration: Self.turnDuration)) {
             reveal?.progress = forward ? 1 : 0
         }
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: UInt64(Self.turnDuration * 0.4 * 1_000_000_000))
-            showCaption(to, forward: forward)
-            try? await Task.sleep(nanoseconds: UInt64(Self.turnDuration * 0.65 * 1_000_000_000))
+            try? await Task.sleep(nanoseconds: UInt64(Self.turnDuration * 0.5 * 1_000_000_000))
+            showCaption(to)
+            try? await Task.sleep(nanoseconds: UInt64(Self.turnDuration * 0.55 * 1_000_000_000))
             withTransaction(instant) {
                 current = to
                 reveal = nil
@@ -362,7 +354,7 @@ struct LoopingCarousel<Item: Identifiable, Background: View, Foreground: View, H
     }
 }
 
-/// 正在揭开的两张：from 在下，to 从右下以弧形揭出来。
+/// 正在揭开的两张：from 在下，to 从右侧正中以弧形揭出来。
 private struct Reveal: Equatable {
     var from: Int
     var to: Int
@@ -374,8 +366,8 @@ private struct DriverSample: Equatable {
     var width: CGFloat
 }
 
-/// 揭开用的遮罩：圆心在卡片右下角外面，半径随进度从「刚碰到卡片右边」长到「盖住左上角」。
-/// 露出来的边是一道向左上方鼓的弧，从右下往左上扫过去，和参考视频一样。
+/// 揭开用的遮罩：圆心在卡片右边外侧、上下正中，半径随进度从「刚碰到右边正中」长到「盖住左边两个角」。
+/// 露出来的边是一道向左鼓的弧：先从右边中间冒出来，再往左扫过整张卡片，和参考视频一样。
 struct ArcReveal: Shape {
     var progress: CGFloat
 
@@ -385,8 +377,8 @@ struct ArcReveal: Shape {
     }
 
     func path(in rect: CGRect) -> Path {
-        let center = CGPoint(x: rect.maxX + rect.width * 0.12, y: rect.minY + rect.height * 0.9)
-        let start = rect.width * 0.12
+        let center = CGPoint(x: rect.maxX + rect.width * 0.3, y: rect.midY)
+        let start = rect.width * 0.3
         let end = hypot(center.x - rect.minX, center.y - rect.minY) + 2
         let radius = start + (end - start) * min(max(progress, 0), 1)
         return Path(ellipseIn: CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2))

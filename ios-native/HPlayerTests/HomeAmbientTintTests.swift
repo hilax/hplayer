@@ -84,19 +84,21 @@ final class HomeAmbientTintTests: XCTestCase {
 
     // MARK: 轮播内容与动漫卡片
 
-    func testArcRevealSweepsFromTheBottomRightToTheTopLeft() {
+    func testArcRevealStartsAtTheMiddleOfTheRightEdge() {
         let card = CGRect(x: 0, y: 0, width: 358, height: 201)
         let start = ArcReveal(progress: 0).path(in: card)
-        XCTAssertFalse(start.contains(CGPoint(x: 179, y: 100)), "Nothing of the next image shows before the turn starts")
+        XCTAssertFalse(start.contains(CGPoint(x: 350, y: 100)), "Nothing of the next image shows before the turn starts")
+        let early = ArcReveal(progress: 0.05).path(in: card)
+        XCTAssertTrue(early.contains(CGPoint(x: 350, y: 100)), "The middle of the right edge is uncovered first")
+        XCTAssertFalse(early.contains(CGPoint(x: 355, y: 2)), "The right corners come after the middle")
+        XCTAssertFalse(early.contains(CGPoint(x: 355, y: 199)))
         let half = ArcReveal(progress: 0.5).path(in: card)
-        XCTAssertTrue(half.contains(CGPoint(x: 340, y: 190)), "The bottom-right corner is uncovered first")
-        XCTAssertFalse(half.contains(CGPoint(x: 10, y: 10)), "The top-left corner is uncovered last")
+        XCTAssertFalse(half.contains(CGPoint(x: 10, y: 100)), "The left edge is uncovered last")
         let end = ArcReveal(progress: 1).path(in: card)
         for corner in [CGPoint(x: 0.5, y: 0.5), CGPoint(x: 357.5, y: 0.5), CGPoint(x: 0.5, y: 200.5), CGPoint(x: 357.5, y: 200.5)] {
             XCTAssertTrue(end.contains(corner), "The whole card is covered at the end")
         }
     }
-
 
     func testSlidesAlternateLibraryAndOnlineUntilTheLimit() {
         let banners = (1...3).map { AnimeBanner(id: $0, vid: 100 + $0, img: "https://example.com/\($0).webp", vname: "B\($0)",
