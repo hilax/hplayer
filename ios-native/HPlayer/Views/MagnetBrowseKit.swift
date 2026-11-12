@@ -1,7 +1,8 @@
 import SwiftUI
 
 // 磁力聚合各页面共用的组件：封面、海报卡片、影片行、分类标签、搜索框、状态页。
-// 版式和设计稿一致：深色底 + 琥珀金强调，封面用 3:4 海报，番号浮在封面左上角。
+// 版式和首页 / 动漫 / 片库同一套：频道条式的分类、胶囊搜索框、顶部轮播加氛围色、18pt 栏目标题；
+// 封面用 3:4 海报，番号浮在封面左上角。
 
 // MARK: - 版式常量
 
@@ -272,18 +273,18 @@ struct MagnetPosterCard: View {
                         }
                     }
 
+                // 和动漫、片库的海报卡同一套字：13pt 标题（两行，番号已经在封面上）、11pt 次要信息
                 Text(movie.title)
-                    .font(.caption)
+                    .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.primary)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(maxWidth: .infinity, minHeight: 32, alignment: .topLeading)
 
-                if let date = movie.releaseDate {
-                    Text(date)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
+                Text([movie.stars.first?.name ?? "", movie.releaseDate ?? ""].filter { !$0.isEmpty }.joined(separator: " · "))
+                    .font(.system(size: 11))
+                    .secondaryTextStyle()
+                    .lineLimit(1)
             }
         }
         .buttonStyle(.pressable(scale: 0.97))
@@ -342,13 +343,13 @@ struct MagnetListRow: View {
                 VStack(alignment: .leading, spacing: 4) {
                     if !movie.code.isEmpty {
                         Text(movie.code)
-                            .font(.caption2.weight(.bold))
-                            .foregroundStyle(Theme.accent)
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundStyle(Theme.textPrimary)
                     }
 
                     Text(movie.title)
-                        .font(.footnote)
-                        .foregroundStyle(.primary)
+                        .font(.system(size: 13))
+                        .foregroundStyle(Theme.textSecondary)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
 
@@ -357,14 +358,14 @@ struct MagnetListRow: View {
                     HStack(spacing: 8) {
                         if let star = movie.stars.first {
                             Text(star.name)
-                                .font(.caption.weight(.semibold))
+                                .font(.system(size: 12, weight: .semibold))
                                 .foregroundStyle(Theme.accent)
                                 .lineLimit(1)
                         }
                         if let date = movie.releaseDate {
                             Text(date)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .font(.system(size: 12))
+                                .foregroundStyle(Theme.textTertiary)
                         }
                     }
                 }
@@ -378,47 +379,47 @@ struct MagnetListRow: View {
 
 // MARK: - 分类标签、搜索框
 
-/// 浏览分类：四等分文字标签，选中项下面一条金色滑条。
+/// 浏览分类：和首页频道条（HomeChannelBar）同一个样子——选中项 20pt 加粗、下方 18×3 的棱镜光轨，在分类之间滑动。
 struct MagnetCategoryTabs: View {
     @Binding var selection: MagnetCategory
     @Namespace private var underline
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: 18) {
             ForEach(MagnetCategory.allCases) { category in
                 let selected = selection == category
                 Button {
                     guard !selected else { return }
                     Haptics.select()
-                    withAnimation(Motion.snappy) { selection = category }
+                    withAnimation(reduceMotion ? nil : Motion.snappy) { selection = category }
                 } label: {
                     Text(category.title)
-                        .font(.subheadline.weight(selected ? .bold : .medium))
-                        .foregroundStyle(selected ? Color.primary : Theme.textSecondary)
-                        .frame(maxWidth: .infinity, minHeight: 44)
-                        .contentShape(Rectangle())
+                        .font(.system(size: selected ? 20 : 16, weight: selected ? .heavy : .medium))
+                        .foregroundStyle(selected ? Theme.textPrimary : Theme.textSecondary)
+                        .frame(height: 40)
                         .overlay(alignment: .bottom) {
                             if selected {
                                 Capsule()
-                                    .fill(Theme.accent)
-                                    .frame(height: 2)
-                                    .padding(.horizontal, 24)
+                                    .fill(Theme.prismGradient)
+                                    .frame(width: 18, height: 3)
                                     .matchedGeometryEffect(id: "magnet.category.underline", in: underline)
+                                    .offset(y: -1)
                             }
                         }
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityAddTraits(selected ? .isSelected : [])
                 .accessibilityIdentifier("magnet.category.\(category.rawValue)")
             }
         }
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(Theme.hairline).frame(height: 0.5)
-        }
+        .accessibilityElement(children: .contain)
     }
 }
 
-/// 搜索框：一条输入框，键盘上的「搜索」键提交；有内容时右边出现清除按钮。
+/// 搜索框：和首页的搜索框同一个胶囊样子，但这里可以直接输入；键盘上的「搜索」键提交。
+/// 空着时右边是系统粘贴按钮（不会弹「允许粘贴」），有内容时换成清除按钮。
 struct MagnetSearchField: View {
     @Binding var text: String
     let onSubmit: () -> Void
@@ -426,13 +427,13 @@ struct MagnetSearchField: View {
     @FocusState private var focused: Bool
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             Image(systemName: AppIcon.search.name)
-                .font(.system(size: 16, weight: .semibold))
+                .font(.system(size: 15, weight: Theme.iconWeight))
                 .foregroundStyle(Theme.textSecondary)
 
             TextField("番号、女优，或粘贴磁力链接", text: $text)
-                .font(.body)
+                .font(.system(size: 14))
                 .submitLabel(.search)
                 .focused($focused)
                 .autocorrectionDisabled()
@@ -445,14 +446,13 @@ struct MagnetSearchField: View {
                     onClear()
                 } label: {
                     Image(systemName: AppIcon.clear.name)
-                        .foregroundStyle(Theme.textSecondary)
-                        .frame(width: 44, height: 44)
+                        .foregroundStyle(Theme.textTertiary)
+                        .frame(width: 38, height: 38)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("清除搜索")
             } else {
-                // 系统粘贴按钮：不会弹「允许粘贴」的询问
                 PasteButton(payloadType: String.self) { strings in
                     guard let first = strings.first else { return }
                     Task { @MainActor in text = first.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -461,18 +461,18 @@ struct MagnetSearchField: View {
                 .buttonBorderShape(.capsule)
                 .tint(Theme.surfaceHigh)
                 .foregroundStyle(Theme.textPrimary)
-                .controlSize(.small)
+                .controlSize(.mini)
                 .accessibilityIdentifier("magnet.paste")
             }
         }
         .padding(.leading, 14)
-        .padding(.trailing, text.isEmpty ? 8 : 2)
-        .frame(minHeight: 46)
-        .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous))
+        .padding(.trailing, text.isEmpty ? 6 : 0)
+        .frame(minHeight: 38)
+        .background(Theme.track, in: Capsule())
         .overlay {
-            RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous)
-                .strokeBorder(focused ? Theme.accent : Theme.hairline, lineWidth: focused ? 1 : 0.5)
+            Capsule().strokeBorder(Theme.accent.opacity(focused ? 0.6 : 0), lineWidth: 1)
         }
+        .animation(Motion.quick, value: focused)
     }
 }
 
@@ -573,6 +573,7 @@ struct MagnetStarChip: View {
 
 // MARK: - 栏目标题
 
+/// 栏目标题：和首页货架标题（ShelfHeader）一致，18pt 粗体，右边一行浅色说明。
 struct MagnetSectionHeader: View {
     let title: String
     var trailing: String?
@@ -580,13 +581,14 @@ struct MagnetSectionHeader: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
             Text(title)
-                .font(.subheadline)
-                .foregroundStyle(Theme.textSecondary)
+                .font(.system(size: 18, weight: .bold))
+                .foregroundStyle(Theme.textPrimary)
+                .accessibilityAddTraits(.isHeader)
             Spacer(minLength: 8)
             if let trailing {
                 Text(trailing)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.textTertiary)
             }
         }
     }

@@ -271,6 +271,8 @@ struct HomeTab: View {
             .buttonStyle(.plain)
             .accessibilityLabel(banner.displayTitle)
             .accessibilityIdentifier("home.slide.anime.\(banner.vid ?? banner.id)")
+        case .magnet:
+            EmptyView()
         }
     }
 

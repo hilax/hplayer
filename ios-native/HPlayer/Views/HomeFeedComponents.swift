@@ -8,6 +8,8 @@ struct HomeSlide: Identifiable {
     enum Content {
         case library(HomeMediaItem)
         case anime(AnimeBanner)
+        /// 磁力页「最新上架」：JavBus 的大封面（约 800×538 的横版封套）
+        case magnet(MagnetSearchItem)
     }
 
     let id: String
@@ -29,7 +31,19 @@ struct HomeSlide: Identifiable {
             return .init(key: item.posterURL, aspect: 2.0 / 3.0)
         case .anime(let banner):
             return .init(key: banner.safePicURLString)
+        case .magnet(let movie):
+            return .init(key: Self.magnetCover(movie), fallback: movie.coverURL?.absoluteString ?? "")
         }
+    }
+
+    /// 磁力影片用大封面；不是 JavBus 小图地址时退回列表里的封面
+    static func magnetCover(_ movie: MagnetSearchItem) -> String {
+        (MagnetCover.highResURL(for: movie.coverURL) ?? movie.coverURL)?.absoluteString ?? ""
+    }
+
+    /// 磁力页的轮播：最新上架的前 limit 部（有封面的）
+    static func magnet(_ movies: [MagnetSearchItem], limit: Int = 6) -> [HomeSlide] {
+        movies.filter { $0.coverURL != nil }.prefix(limit).map { HomeSlide(id: "magnet|\($0.id)", content: .magnet($0)) }
     }
 
     /// 片库频道的轮播：最近加入的电影，有横版背景图的排前面，最多 limit 张。
@@ -75,6 +89,9 @@ struct HomeSlideArtwork: View {
                 }
             case .anime(let banner):
                 HomeSlideImage(urlString: banner.safePicURLString, fallback: "", title: banner.displayTitle)
+            case .magnet(let movie):
+                HomeSlideImage(urlString: HomeSlide.magnetCover(movie), fallback: movie.coverURL?.absoluteString ?? "",
+                               title: movie.code)
             }
             LinearGradient(stops: [
                 .init(color: .clear, location: 0.38),
@@ -91,6 +108,7 @@ struct HomeSlideArtwork: View {
         switch slide.content {
         case .library: text = "精选"
         case .anime: text = "热播"
+        case .magnet: text = "最新"
         }
         return Text(text)
             .font(.system(size: 11, weight: .bold))
@@ -161,6 +179,10 @@ struct HomeSlideCaption: View {
             case .anime(let banner):
                 titleBlock(title: banner.displayTitle,
                            subtitle: ["在线动漫", banner.displayRemarks].filter { !$0.isEmpty }.joined(separator: " · "))
+            case .magnet(let movie):
+                titleBlock(title: movie.code.isEmpty ? movie.title : movie.code,
+                           subtitle: [movie.stars.first?.name ?? "", movie.releaseDate ?? ""].filter { !$0.isEmpty }
+                               .joined(separator: " · "))
             }
         }
         .padding(.leading, 14)

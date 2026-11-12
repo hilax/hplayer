@@ -24,10 +24,6 @@ struct ChannelHeroSection<Trailing: View, HitArea: View>: View {
     /// 点轮播空白处的那层（播放 / 进详情），可以挂长按菜单
     let hitArea: (HomeSlide) -> HitArea
 
-    /// 取色和当前是哪一张：放在不被页面订阅的对象里，翻页时只有顶部氛围色重画。
-    @State private var palette = HeroPalette.shared
-    @State private var tint = CarouselTintState()
-
     init(channel: Binding<HomeChannel>, searchPlaceholder: String, searchIdentifier: String, onSearch: @escaping () -> Void,
          onFilter: (() -> Void)? = nil, filterIdentifier: String = "", slides: [HomeSlide], reservesCarousel: Bool = false,
          carouselLabel: String, carouselIdentifier: String, safeTop: CGFloat, width: CGFloat,
@@ -50,7 +46,8 @@ struct ChannelHeroSection<Trailing: View, HitArea: View>: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        AmbientHeroSection(slides: slides, reservesCarousel: reservesCarousel, carouselLabel: carouselLabel,
+                           carouselIdentifier: carouselIdentifier, safeTop: safeTop, width: width) {
             HStack(spacing: 4) {
                 HomeChannelBar(selection: $channel)
                 Spacer(minLength: 8)
@@ -59,24 +56,62 @@ struct ChannelHeroSection<Trailing: View, HitArea: View>: View {
             .padding(.leading, Theme.contentInset)
             .padding(.trailing, 6)
             .frame(minHeight: 44)
-            .padding(.top, safeTop)
 
             ChannelSearchField(placeholder: searchPlaceholder, identifier: searchIdentifier, onSearch: onSearch,
                                onFilter: onFilter, filterIdentifier: filterIdentifier)
                 .padding(.horizontal, Theme.contentInset)
+        } hitArea: { slide in
+            hitArea(slide)
+        }
+    }
+}
 
+/// 顶部的通用骨架：上面是调用方给的几行（频道条、搜索框…），下面是轮播；整块铺当前轮播图的氛围色。
+/// 推荐 / 动漫 / 片库用 ChannelHeroSection 包一层；磁力页的顶部（分类条 + 可输入的搜索框）直接用它。
+struct AmbientHeroSection<Top: View, HitArea: View>: View {
+    let slides: [HomeSlide]
+    var reservesCarousel = false
+    var carouselLabel: String
+    var carouselIdentifier: String
+    let safeTop: CGFloat
+    let width: CGFloat
+    let top: () -> Top
+    let hitArea: (HomeSlide) -> HitArea
+
+    /// 取色和当前是哪一张：放在不被页面订阅的对象里，翻页时只有顶部氛围色重画。
+    @State private var palette = HeroPalette.shared
+    @State private var tint = CarouselTintState()
+
+    init(slides: [HomeSlide], reservesCarousel: Bool = false, carouselLabel: String, carouselIdentifier: String,
+         safeTop: CGFloat, width: CGFloat,
+         @ViewBuilder top: @escaping () -> Top,
+         @ViewBuilder hitArea: @escaping (HomeSlide) -> HitArea) {
+        self.slides = slides
+        self.reservesCarousel = reservesCarousel
+        self.carouselLabel = carouselLabel
+        self.carouselIdentifier = carouselIdentifier
+        self.safeTop = safeTop
+        self.width = width
+        self.top = top
+        self.hitArea = hitArea
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            top()
             if !slides.isEmpty {
                 carousel
                     .padding(.top, 6)
             } else if reservesCarousel {
                 RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
                     .fill(Theme.surfaceRaised)
-                    .frame(height: (max(width - Theme.contentInset * 2, 1) * 9 / 16).rounded())
+                    .frame(height: cardHeight)
                     .padding(.horizontal, Theme.contentInset)
                     .padding(.top, 6)
                     .accessibilityLabel("正在加载轮播")
             }
         }
+        .padding(.top, safeTop)
         .padding(.bottom, 4)
         .background(alignment: .top) {
             HomeAmbientBackdrop(state: tint, palette: palette)
@@ -86,9 +121,12 @@ struct ChannelHeroSection<Trailing: View, HitArea: View>: View {
         .onChange(of: slides.map(\.id)) { _ in palette.prepare(slides.map(\.palette)) }
     }
 
+    private var cardHeight: CGFloat {
+        (max(width - Theme.contentInset * 2, 1) * 9 / 16).rounded()
+    }
+
     /// 圆角 16:9 卡片。卡片和图都不动，下一张图从右侧正中以弧形揭出来，文字一半时原地换（见 LoopingCarousel）。
     private var carousel: some View {
-        let cardWidth = max(width - Theme.contentInset * 2, 1)
         let tint = tint
         let slides = slides
         return LoopingCarousel(items: slides, label: carouselLabel, positionIdentifier: carouselIdentifier,
@@ -101,7 +139,7 @@ struct ChannelHeroSection<Trailing: View, HitArea: View>: View {
         } hitArea: { slide in
             hitArea(slide)
         }
-        .frame(height: (cardWidth * 9 / 16).rounded())
+        .frame(height: cardHeight)
         .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
         .padding(.horizontal, Theme.contentInset)
     }

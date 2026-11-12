@@ -98,59 +98,51 @@ struct MagnetSearchView: View {
         searchActive && !trimmedKeyword.isEmpty && detectedLink == nil
     }
 
+    /// 顶部轮播：最新上架的前几部（大封面）。和「最新」分类共用第一页，切到别的分类时单独拉一次。
+    @State private var heroMovies: [MagnetSearchItem] = []
+    @State private var heroLoading = false
+
+    /// 搜索、粘贴链接时收起轮播，结果紧跟在搜索框下面
+    private var showsHero: Bool { !inSearchMode && detectedLink == nil }
+
+    /// 点分类：正在看搜索结果时先退出搜索
+    private var categorySelection: Binding<MagnetCategory> {
+        Binding(get: { selectedCategory }, set: { value in
+            if searchActive { clearSearch() }
+            selectedCategory = value
+        })
+    }
+
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                MagnetSearchField(text: $keyword, onSubmit: triggerSearch, onClear: clearSearch)
-                    .padding(.horizontal, Theme.contentInset)
-                    .padding(.top, 8)
+        GeometryReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    AmbientHeroSection(slides: showsHero ? HomeSlide.magnet(heroMovies) : [],
+                                       reservesCarousel: showsHero && heroMovies.isEmpty && (heroLoading || (isLoadingCategory && selectedCategory == .latest)),
+                                       carouselLabel: "最新上架", carouselIdentifier: "magnet.carouselPosition",
+                                       safeTop: isTabRoot ? proxy.safeAreaInsets.top : 8, width: proxy.size.width) {
+                        topRows
+                    } hitArea: { slide in
+                        heroHitArea(slide)
+                    }
 
-                if let link = detectedLink {
-                    MagnetLinkPanel(link: link) { playLaunch = MagnetLaunch(value: link.uri) }
+                    mainContent
                         .padding(.horizontal, Theme.contentInset)
-                        .padding(.top, 12)
-                        .transition(.opacity.combined(with: .move(edge: .top)))
+                        .padding(.top, 20)
+                        .padding(.bottom, 40)
                 }
-
-                if !inSearchMode {
-                    MagnetCategoryTabs(selection: $selectedCategory)
-                        .padding(.horizontal, Theme.contentInset)
-                        .padding(.top, 12)
-                }
-
-                mainContent
-                    .padding(.horizontal, Theme.contentInset)
-                    .padding(.top, inSearchMode ? 20 : 16)
-                    .padding(.bottom, 40)
             }
+            .scrollIndicators(.hidden)
+            .scrollDismissesKeyboard(.interactively)
+            .ignoresSafeArea(edges: isTabRoot ? .top : [])
         }
-        .scrollIndicators(.hidden)
-        .scrollDismissesKeyboard(.interactively)
         .background(Theme.pageBackground.ignoresSafeArea())
         .navigationTitle(isTabRoot ? "磁力" : "磁力聚合")
-        .navigationBarTitleDisplayMode(isTabRoot ? .large : .inline)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(isTabRoot ? .hidden : .automatic, for: .navigationBar)
         .toolbar {
-            if isTabRoot {
-                ToolbarItem(placement: .primaryAction) {
-                    NavigationLink {
-                        MagnetPlayerView().hidesTabBar()
-                    } label: {
-                        Image(systemName: AppIcon.link.name)
-                            .foregroundStyle(Theme.textPrimary)
-                    }
-                    .accessibilityLabel("粘贴磁力链接播放")
-                    .accessibilityIdentifier("magnet.linkPlayer")
-                }
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    showingSettingsSheet = true
-                } label: {
-                    Image(systemName: AppIcon.mirror.name)
-                        .foregroundStyle(Theme.textSecondary)
-                }
-                .accessibilityLabel("镜像域名设置")
-                .accessibilityIdentifier("magnet.settings")
+            if !isTabRoot {
+                ToolbarItem(placement: .primaryAction) { settingsButton }
             }
         }
         .sheet(isPresented: $showingSettingsSheet) {
@@ -168,17 +160,101 @@ struct MagnetSearchView: View {
             if categoryMovies.isEmpty && categoryStars.isEmpty && !isLoadingCategory {
                 loadCurrentCategory()
             }
+            if selectedCategory != .latest { loadHero() }
         }
         .onChange(of: selectedCategory) { _ in
             loadCurrentCategory()
         }
         .onChange(of: customHost) { _ in
+            heroMovies = []
             reloadForHostChange()
+            if selectedCategory != .latest { loadHero() }
         }
         .onChange(of: keyword) { _ in
             // 把输入框清空（包括手动删光）等于退出搜索，回到分类浏览。
             if trimmedKeyword.isEmpty && searchActive {
                 clearSearch()
+            }
+        }
+    }
+
+    // MARK: - 顶部
+
+    /// 第一行：分类（最新 / 专题 / 女优 / 最热，和首页频道条同一个样子），右边「粘贴链接播放」和「镜像域名」；
+    /// 第二行：搜索框（番号、女优，或粘贴磁力链接）；粘贴了链接时下面出现解析面板。
+    @ViewBuilder
+    private var topRows: some View {
+        HStack(spacing: 4) {
+            MagnetCategoryTabs(selection: categorySelection)
+            Spacer(minLength: 8)
+            if isTabRoot {
+                NavigationLink {
+                    MagnetPlayerView().hidesTabBar()
+                } label: {
+                    topIcon(.link)
+                }
+                .buttonStyle(.pressable(scale: 0.88))
+                .accessibilityLabel("粘贴磁力链接播放")
+                .accessibilityIdentifier("magnet.linkPlayer")
+                settingsButton
+            }
+        }
+        .padding(.leading, Theme.contentInset)
+        .padding(.trailing, 6)
+        .frame(minHeight: 44)
+
+        MagnetSearchField(text: $keyword, onSubmit: triggerSearch, onClear: clearSearch)
+            .padding(.horizontal, Theme.contentInset)
+
+        if let link = detectedLink {
+            MagnetLinkPanel(link: link) { playLaunch = MagnetLaunch(value: link.uri) }
+                .padding(.horizontal, Theme.contentInset)
+                .padding(.top, 2)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+        }
+    }
+
+    private var settingsButton: some View {
+        Button {
+            showingSettingsSheet = true
+        } label: {
+            topIcon(.mirror)
+        }
+        .buttonStyle(.pressable(scale: 0.88))
+        .accessibilityLabel("镜像域名设置")
+        .accessibilityIdentifier("magnet.settings")
+    }
+
+    private func topIcon(_ icon: AppIcon) -> some View {
+        Image(systemName: icon.name)
+            .font(.system(size: 19, weight: Theme.iconWeight))
+            .foregroundStyle(Theme.textPrimary)
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
+    }
+
+    /// 点轮播进磁力详情
+    @ViewBuilder
+    private func heroHitArea(_ slide: HomeSlide) -> some View {
+        if case .magnet(let movie) = slide.content {
+            NavigationLink {
+                MagnetDetailView(item: movie)
+            } label: {
+                Color.clear.contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(movie.code.isEmpty ? movie.title : movie.code)
+            .accessibilityIdentifier("magnet.hero.\(movie.id)")
+        }
+    }
+
+    private func loadHero() {
+        guard heroMovies.isEmpty, !heroLoading else { return }
+        heroLoading = true
+        Task { @MainActor in
+            defer { heroLoading = false }
+            if let movies = try? await JavBusSource.shared.fetchCategory(.latest, page: 1) {
+                heroMovies = movies
             }
         }
     }
@@ -277,13 +353,14 @@ struct MagnetSearchView: View {
 
     // MARK: - 四个分类
 
-    /// 最新：两列海报网格，分页加载。
+    /// 最新：三列海报网格，分页加载。
     private var latestContent: some View {
         Group {
             if categoryMovies.isEmpty {
                 emptyCategory
             } else {
-                VStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 12) {
+                    MagnetSectionHeader(title: "最新上架", trailing: "点按查看磁力")
                     MagnetPosterGrid(movies: categoryMovies, loadMore: loadMoreCategory)
                     PagingFooter(
                         isLoading: categoryPaging.isLoadingMore,
@@ -419,6 +496,7 @@ struct MagnetSearchView: View {
                     let movies = try await JavBusSource.shared.fetchCategory(category, page: 1)
                     guard !Task.isCancelled else { return }
                     categoryMovies = mergeUnique([], with: movies).merged
+                    if category == .latest { heroMovies = movies }
                     // 最热是一次算好的榜单，没有下一页。
                     categoryPaging.hasMore = category == .latest && !movies.isEmpty
                 case .topics:
