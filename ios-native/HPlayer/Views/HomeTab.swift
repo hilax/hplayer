@@ -31,8 +31,9 @@ struct HomeTab: View {
     @State private var playing: PlaybackQueue?
     @State private var importError = ""
     @State private var playError = ""
-    /// 横幅翻页和滚动状态独立保存，避免翻页时重算整个首页。
-    @State private var heroState = HeroState()
+    /// 轮播每一张的取色、当前是哪一张：都放在不被首页订阅的对象里，翻页时只有顶部氛围色重画。
+    @State private var palette = HeroPalette()
+    @State private var carouselTint = CarouselTintState()
     @State private var showCloudBrowser = false
     @State private var matching: MatchRequest?
     @State private var magnetLaunch: MagnetLaunch?
@@ -43,10 +44,17 @@ struct HomeTab: View {
     /// 第一份首页分组算好之前不显示内容（也不先闪空状态），算好后淡入。
     private var snapshotReady: Bool { librarySnapshots.ready }
 
-    /// 横幅每一页的大图和货架开头的海报提前下载好，滑到时直接有图；顺便把每一页的取色算好。
+    /// 轮播每一张的大图和货架开头的海报提前下载好，滑到时直接有图；顺便把每一张的取色算好。
     private func prefetchArtwork(_ library: HomeSnapshot) {
-        ImagePipeline.shared.prefetch(HomeArtwork.prefetchRequests(library, selection: heroState.realIndex(count: library.featured.count)))
-        heroState.palette.prepare(library.featured)
+        let slides = HomeSlide.interleave(featured: library.featured, banners: online.banners)
+        var requests = HomeArtwork.prefetchRequests(library)
+        for banner in online.banners {
+            if let url = URL(string: banner.safePicURLString) {
+                requests.append(ImageRequest(url: url, maxPixel: ArtworkSize.hero))
+            }
+        }
+        ImagePipeline.shared.prefetch(requests)
+        palette.prepare(slides.map(\.palette))
     }
 
 
@@ -65,27 +73,11 @@ struct HomeTab: View {
                         if !snapshotReady || metadataStore.isRestoring {
                             // 数据还在准备：只留空白页面底色，不显示空状态
                             Color.clear.frame(height: viewport.size.height)
-                        } else if library.featured.isEmpty {
-                            topBar(continueItems)
-                                .padding(.top, viewport.safeAreaInsets.top)
-                            VStack(alignment: .leading, spacing: 28) {
-                                emptyState
-                                if !continueItems.isEmpty {
-                                    continueShelf(continueItems)
-                                }
-                                onlineShelves
-                            }
-                            .padding(.horizontal, Theme.contentInset)
-                            .padding(.bottom, 40)
                         } else {
-                            Group {
-                                heroCard(library, continueItems: continueItems,
-                                         width: viewport.size.width, safeTop: viewport.safeAreaInsets.top)
-                                sections(library, continueItems: continueItems)
-                            }
-                            // 整页铺的是封面取色的深底：文字和卡片一律按深色显示，浅色模式下也一样（和参考视频一致）。
-                            .environment(\.colorScheme, .dark)
-                            .environment(\.artworkTinted, true)
+                            let slides = HomeSlide.interleave(featured: library.featured, banners: online.banners)
+                            header(library, slides: slides, continueItems: continueItems,
+                                   width: viewport.size.width, safeTop: viewport.safeAreaInsets.top)
+                            sections(library, continueItems: continueItems, width: viewport.size.width)
                         }
                     }
                 }
@@ -98,9 +90,7 @@ struct HomeTab: View {
                         .padding(16).background(Theme.surface, in: Capsule()).padding(.bottom, 12)
                 }
             }
-            .background {
-                HomeHeroBackdrop(items: HeroLoop.pages(library.featured), motion: heroState.motion, palette: heroState.palette)
-            }
+            .background(Theme.pageBackground.ignoresSafeArea())
             .navigationDestination(for: AnimeDetailRoute.self) { route in
                 AnimeDetailView(animeId: route.animeId)
                     .id(route.animeId)
@@ -157,13 +147,8 @@ struct HomeTab: View {
             .task { localStore.refresh() }
             .task { await online.loadIfNeeded() }
             .onChange(of: librarySnapshots.revision) { _ in prefetchArtwork(snapshot) }
+            .onChange(of: online.banners.count) { _ in prefetchArtwork(snapshot) }
             .onAppear { if snapshotReady { prefetchArtwork(snapshot) } }
-            .onChange(of: library.featured.count) { count in
-                // 精选换了一批：回到第一张（循环时它在第 1 页，前面是最后一张的复制页）
-                heroState.count = count
-                heroState.jump(to: HeroLoop.page(forReal: 0, count: count))
-                heroState.motion.reset(to: heroState.page)
-            }
         }
         .designScreen(library.featured.isEmpty ? "home-empty" : "home")
         .sheet(isPresented: $showAdd, onDismiss: performAddAction) {
@@ -220,123 +205,50 @@ struct HomeTab: View {
         }
     }
 
-    // MARK: 顶栏与分类
+    // MARK: 顶栏、搜索、轮播
 
-    /// 搜索框、观看历史、添加：三个入口放在同一行，搜索框占满剩余宽度。
-    private func topBar(_ continueItems: [ContinueEntry]) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HomeChannelBar(selection: channel)
+    /// 页面顶部：频道条（右边是观看历史、添加），搜索框，再下面是轮播。
+    /// 整块铺着当前这张轮播图的氛围色，从屏幕顶端往下淡进页面底色，跟着页面一起滚走。
+    private func header(_ library: HomeSnapshot, slides: [HomeSlide], continueItems: [ContinueEntry],
+                        width: CGFloat, safeTop: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 4) {
+                HomeChannelBar(selection: channel)
+                Spacer(minLength: 8)
+                topButtons(continueItems)
+            }
+            .padding(.leading, Theme.contentInset)
+            .padding(.trailing, 6)
+            .padding(.top, safeTop)
+
+            searchField
                 .padding(.horizontal, Theme.contentInset)
-            searchRow(continueItems)
+
+            if !slides.isEmpty {
+                carousel(slides, library: library, width: width)
+                    .padding(.top, 6)
+            }
+        }
+        .padding(.bottom, 4)
+        .background(alignment: .top) {
+            HomeAmbientBackdrop(state: carouselTint, palette: palette)
+                .frame(height: safeTop + 440)
         }
     }
 
-    private func searchRow(_ continueItems: [ContinueEntry]) -> some View {
-        HStack(spacing: 4) {
-            Button(action: onSearch) {
-                HStack(spacing: 8) {
-                    Image(systemName: AppIcon.search.name).font(.system(size: 15, weight: Theme.iconWeight))
-                    Text("搜索片名、演员或番号").font(.system(size: 14))
-                    Spacer(minLength: 0)
-                }
-                .foregroundStyle(Theme.textTertiary)
-                .padding(.horizontal, 14)
-                .frame(height: 38)
-                .background(Theme.surface, in: Capsule())
-                .contentShape(Capsule())
-            }
-            .buttonStyle(.pressable(scale: 0.98))
-            .accessibilityLabel("搜索")
-            .accessibilityIdentifier("home.search")
-
+    private func topButtons(_ continueItems: [ContinueEntry]) -> some View {
+        HStack(spacing: 0) {
             NavigationLink {
                 ContinueHistoryView(entries: continueItems, onOpen: openEntry, onRemove: remove)
+                    .restoringAppearance(colorScheme)
             } label: {
-                Image(systemName: AppIcon.history.name)
-                    .font(.system(size: 21, weight: Theme.iconWeight))
-                    .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
+                topIcon(.history)
             }
             .buttonStyle(.pressable(scale: 0.88))
             .accessibilityLabel("观看历史")
             .accessibilityIdentifier("home.history")
 
-            addMenu
-        }
-        .padding(.horizontal, Theme.contentInset)
-        .padding(.top, 6)
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("home.heroBar")
-    }
-
-    // MARK: 精选横幅
-
-    private func currentHero(_ library: HomeSnapshot, selection: Int) -> HomeMediaItem? {
-        let featured = library.featured
-        return featured.indices.contains(selection) ? featured[selection] : featured.first
-    }
-
-    /// 轮播图底部渐隐进页面背景的高度；按钮和指示点整体上移这么多，避开渐隐区。
-    private static let heroFade: CGFloat = 96
-    /// 按钮和页码点离轮播图底边的高度：落在渐隐区里，贴近下面的「继续观看」，中间不留大块空白。
-    /// 片名在 HeroPage 里按同一个高度往上排。
-    fileprivate static let heroControlsLift: CGFloat = 40
-
-    /// 铺满屏幕上方的精选轮播：图片延伸到状态栏下面，频道条和搜索、历史、添加三个入口悬浮在上方。
-    private func heroCard(_ library: HomeSnapshot, continueItems: [ContinueEntry],
-                          width: CGFloat, safeTop: CGFloat) -> some View {
-        let height = min(width * 0.98, 480) + safeTop * 0.4 + Self.heroFade
-        return GeometryReader { proxy in
-            let minY = proxy.frame(in: .global).minY
-            // 下拉时图片向上拉伸，顶部不会露出空白
-            let stretch = max(0, minY)
-            HeroObserver(state: heroState) { state in
-                heroPager(library, page: state.page, originX: proxy.frame(in: .global).minX)
-            }
-            .onPreferenceChange(HeroPagePositionKey.self) { samples in
-                heroState.motion.update(samples: samples, originX: proxy.frame(in: .global).minX,
-                                        width: proxy.size.width, count: HeroLoop.pages(library.featured).count)
-                heroState.positionChanged()
-            }
-            .frame(width: proxy.size.width, height: height + stretch)
-            .offset(y: -stretch)
-        }
-        .frame(height: height)
-        .overlay(alignment: .top) {
-            // 频道条在左、搜索 / 历史 / 添加在右，都悬浮在精选图上
-            HStack(spacing: 8) {
-                HomeChannelBar(selection: channel)
-                Spacer(minLength: 8)
-                floatingButtons(continueItems)
-            }
-            .padding(.horizontal, Theme.contentInset)
-            .padding(.top, safeTop + 2)
-        }
-    }
-
-    private func floatingButton(_ icon: AppIcon) -> some View {
-        Image(systemName: icon.name)
-            .font(.system(size: 17, weight: Theme.iconWeight))
-            .foregroundStyle(.white)
-            .frame(width: 36, height: 36)
-            .background(Color.white.opacity(0.16), in: Circle())
-            .contentShape(Circle())
-    }
-
-    private func floatingButtons(_ continueItems: [ContinueEntry]) -> some View {
-        HStack(spacing: 10) {
-            Button(action: onSearch) { floatingButton(.search) }
-                .buttonStyle(.pressable(scale: 0.88))
-                .accessibilityLabel("搜索")
-                .accessibilityIdentifier("home.search")
-            NavigationLink {
-                ContinueHistoryView(entries: continueItems, onOpen: openEntry, onRemove: remove)
-                    .restoringAppearance(colorScheme)
-            } label: { floatingButton(.history) }
-                .buttonStyle(.pressable(scale: 0.88))
-                .accessibilityLabel("观看历史")
-                .accessibilityIdentifier("home.history")
-            Button { showAdd = true } label: { floatingButton(.addCircle) }
+            Button { showAdd = true } label: { topIcon(.addCircle) }
                 .buttonStyle(.pressable(scale: 0.88))
                 .accessibilityLabel("添加")
                 .accessibilityIdentifier("home.sources")
@@ -345,117 +257,88 @@ struct HomeTab: View {
         .accessibilityIdentifier("home.heroBar")
     }
 
-    /// 翻页时图片不动、片名跟着页面滑，播放和更多两个按钮固定在原处，作用于当前这一页。
-    /// 首尾各多放一张复制页（最后一张放在最前、第一张放在最后），滑到复制页停稳后无动画换回真的那页，
-    /// 所以第一张往右滑是最后一张、最后一张往左滑回到第一张，可以一直循环。
-    private func heroPager(_ library: HomeSnapshot, page: Int, originX: CGFloat) -> some View {
-        let featured = library.featured
-        let pages = HeroLoop.pages(featured)
-        let selection = HeroLoop.real(page, count: featured.count)
-        let current = currentHero(library, selection: selection)
-        let binding = Binding<Int>(get: { page }, set: { heroState.page = $0 })
-        return TabView(selection: binding) {
-            ForEach(Array(pages.enumerated()), id: \.offset) { index, item in
-                HeroPage(item: item, index: index, originX: originX, featured: pages,
-                         motion: heroState.motion, palette: heroState.palette)
-                    .tag(index)
-            }
-        }
-        .tabViewStyle(.page(indexDisplayMode: .never))
-        .mask(
-            VStack(spacing: 0) {
-                Rectangle().fill(Color.black)
-                LinearGradient(
-                    stops: [
-                        .init(color: .black, location: 0),
-                        .init(color: .black.opacity(0.98), location: 0.125),
-                        .init(color: .black.opacity(0.92), location: 0.25),
-                        .init(color: .black.opacity(0.79), location: 0.375),
-                        .init(color: .black.opacity(0.61), location: 0.5),
-                        .init(color: .black.opacity(0.4), location: 0.625),
-                        .init(color: .black.opacity(0.2), location: 0.75),
-                        .init(color: .black.opacity(0.055), location: 0.875),
-                        .init(color: .clear, location: 1),
-                    ],
-                    startPoint: .top, endPoint: .bottom
-                )
-                .frame(height: Self.heroFade)
-            }
-        )
-        .overlay(alignment: .bottomLeading) {
-            if let current {
-                HeroActions(hasMetadata: current.metadata != nil, title: heroPlayTitle(current)) {
-                    playing = HomeLibrary.queue(for: current, in: library.items)
-                } onMatch: {
-                    actionItem = current
-                }
-                .padding(.leading, 18)
-                .padding(.bottom, 16 + Self.heroControlsLift)
-            }
-        }
-        .overlay(alignment: .bottomTrailing) {
-            if featured.count > 1 {
-                heroIndicator(count: featured.count, selection: selection)
-                    .padding(.trailing, 8)
-                    .padding(.bottom, 16 + Self.heroControlsLift)
-            }
-        }
+    private func topIcon(_ icon: AppIcon) -> some View {
+        Image(systemName: icon.name)
+            .font(.system(size: 20, weight: Theme.iconWeight))
+            .foregroundStyle(Theme.textPrimary)
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
     }
 
-    /// 这部正在精选里、而且不是精选里的最后一部，才给「不在精选中显示」（精选至少留一部，首页不会变成空的）
+    /// 搜索框：点进全局搜索（片库、在线动漫、网盘）；右边「筛选」直接去片库频道的分类筛选。
+    private var searchField: some View {
+        HStack(spacing: 0) {
+            Button(action: onSearch) {
+                HStack(spacing: 8) {
+                    Image(systemName: AppIcon.search.name)
+                        .font(.system(size: 15, weight: Theme.iconWeight))
+                    Text("搜索片库、动漫、网盘")
+                        .font(.system(size: 14))
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+                .foregroundStyle(Theme.textSecondary)
+                .padding(.leading, 14)
+                .frame(maxWidth: .infinity, minHeight: 38)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.pressable(scale: 0.98))
+            .accessibilityLabel("搜索")
+            .accessibilityIdentifier("home.search")
+
+            Rectangle()
+                .fill(Theme.textTertiary.opacity(0.4))
+                .frame(width: 1, height: 14)
+                .accessibilityHidden(true)
+
+            Button {
+                Haptics.select()
+                channel.wrappedValue = .library
+            } label: {
+                Text("筛选")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Theme.textPrimary)
+                    .padding(.horizontal, 14)
+                    .frame(minHeight: 38)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.pressable(scale: 0.94))
+            .accessibilityLabel("分类筛选")
+            .accessibilityIdentifier("home.filter")
+        }
+        .background(Theme.track, in: Capsule())
+    }
+
+    /// 顶部轮播：圆角 16:9 卡片，片库精选和热播动漫交替；自动翻页 + 手动左右滑，首尾相接。
+    private func carousel(_ slides: [HomeSlide], library: HomeSnapshot, width: CGFloat) -> some View {
+        let cardWidth = max(width - Theme.contentInset * 2, 1)
+        let tint = carouselTint
+        return LoopingCarousel(items: slides, label: "精选推荐", positionIdentifier: "home.carouselPosition",
+                               onSelect: { index in
+                                   if slides.indices.contains(index) { tint.key = slides[index].palette.key }
+                               }) { slide, _ in
+            HomeSlideCard(slide: slide, playTitle: slidePlayTitle(slide), onPlay: {
+                if case .library(let item) = slide.content {
+                    playing = HomeLibrary.queue(for: item, in: library.items)
+                }
+            }, onOptions: {
+                if case .library(let item) = slide.content { actionItem = item }
+            })
+        }
+        .frame(height: (cardWidth * 9 / 16).rounded())
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
+        .padding(.horizontal, Theme.contentInset)
+    }
+
+    private func slidePlayTitle(_ slide: HomeSlide) -> String {
+        guard case .library(let item) = slide.content else { return "播放" }
+        return recents.position(for: item.media.source) == nil ? "播放" : "继续播放"
+    }
+
+    /// 这部正在精选里、而且不是精选里的最后一部，才给「不在精选中显示」（精选至少留一部）
     private func canHideFromFeatured(_ item: HomeMediaItem) -> Bool {
         guard let id = item.metadata?.imdbID, snapshot.featured.count > 1 else { return false }
         return snapshot.featured.contains { $0.metadata?.imdbID == id }
-    }
-
-    private func heroPlayTitle(_ item: HomeMediaItem) -> String {
-        recents.position(for: item.media.source) == nil ? "播放" : "继续播放"
-    }
-
-    /// 右下角的小圆点：当前页拉长成胶囊，切换时弹簧过渡。
-    private func heroIndicator(count: Int, selection: Int) -> some View {
-        HStack(spacing: 4) {
-            ForEach(0..<count, id: \.self) { index in
-                Capsule()
-                    .fill(index == selection ? Color.white : Color.white.opacity(0.4))
-                    .frame(width: index == selection ? 14 : 4, height: 4)
-                    .contentShape(Rectangle().inset(by: -8))
-                    .onTapGesture {
-                        withAnimation(reduceMotion ? nil : Motion.smooth) {
-                            heroState.page = HeroLoop.page(forReal: index, count: count)
-                        }
-                    }
-            }
-        }
-        .padding(.horizontal, 8)
-        .frame(height: 24)
-        .animation(reduceMotion ? nil : Motion.snappy, value: selection)
-        .changeEffect(.shine(duration: 0.45), value: selection, isEnabled: !reduceMotion)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("精选影片")
-        .accessibilityValue("第 \(selection + 1) 张，共 \(count) 张")
-        .accessibilityAdjustableAction { direction in
-            switch direction {
-            case .increment: heroState.page = HeroLoop.page(forReal: (selection + 1) % count, count: count)
-            case .decrement: heroState.page = HeroLoop.page(forReal: (selection + count - 1) % count, count: count)
-            @unknown default: break
-            }
-        }
-        .accessibilityIdentifier("home.carouselPosition")
-    }
-
-    // MARK: 顶部按钮
-
-    private var addMenu: some View {
-        Button { showAdd = true } label: {
-            Image(systemName: AppIcon.addCircle.name)
-                .font(.system(size: 22, weight: Theme.iconWeight))
-                .frame(width: 44, height: 44)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.pressable(scale: 0.88))
-        .accessibilityLabel("添加")
-        .accessibilityIdentifier("home.sources")
     }
 
     private func performAddAction() {
@@ -472,24 +355,36 @@ struct HomeTab: View {
 
     // MARK: 内容区
 
-    private func sections(_ library: HomeSnapshot, continueItems: [ContinueEntry]) -> some View {
-        VStack(alignment: .leading, spacing: 28) {
+    /// 内容区从上到下：继续观看、我的追番、热门新番（三列竖海报）、我的片库·电影（两列横卡）、剧集、最新更新、演员合集。
+    /// 片库还什么都没有时，在轮播下面放引导。
+    private func sections(_ library: HomeSnapshot, continueItems: [ContinueEntry], width: CGFloat) -> some View {
+        let contentWidth = max(width - Theme.contentInset * 2, 1)
+        return VStack(alignment: .leading, spacing: 28) {
+            if library.items.isEmpty {
+                emptyState
+            }
             if !continueItems.isEmpty {
                 continueShelf(continueItems)
             }
-            onlineShelves
+            watchlistShelf
+            if !online.trending.isEmpty {
+                trendingGrid(width: contentWidth)
+            }
             if !library.movies.isEmpty {
-                movieShelf(library)
+                movieGrid(library, width: contentWidth)
             }
             if !library.series.isEmpty {
                 seriesShelf(library)
+            }
+            if !online.latest.isEmpty {
+                animeShelf("最新更新", items: online.latest, identifier: "home.shelf.latest")
             }
             if !library.performers.isEmpty {
                 performerShelf(library)
             }
         }
         .padding(.horizontal, Theme.contentInset)
-        .padding(.top, 12)
+        .padding(.top, 18)
         .padding(.bottom, 40)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -553,7 +448,7 @@ struct HomeTab: View {
                         Button {
                             openEntry(entry)
                         } label: {
-                            ContinueCard(entry: entry)
+                            ContinueCard(entry: entry, width: 168)
                         }
                         .buttonStyle(PosterButtonStyle())
                         .reveal(index, id: entry.id)
@@ -675,7 +570,7 @@ struct HomeTab: View {
     // MARK: 在线内容（追番、热门新番、最新更新）
 
     @ViewBuilder
-    private var onlineShelves: some View {
+    private var watchlistShelf: some View {
         if !watchlist.items.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 let updates = watchlist.items.filter(\.hasUpdate).count
@@ -701,11 +596,33 @@ struct HomeTab: View {
                 .scrollIndicators(.hidden)
             }
         }
-        if !online.trending.isEmpty {
-            animeShelf("在线 · 热门新番", items: online.trending, identifier: "home.shelf.trending")
-        }
-        if !online.latest.isEmpty {
-            animeShelf("在线 · 最新更新", items: online.latest, identifier: "home.shelf.latest")
+    }
+
+    /// 热门新番：最多播放的前六部，三列竖版海报。「更多」去动漫频道。
+    private func trendingGrid(width: CGFloat) -> some View {
+        let spacing: CGFloat = 10
+        let cardWidth = ((width - spacing * 2) / 3).rounded(.down)
+        let items = Array(online.trending.prefix(6))
+        return VStack(alignment: .leading, spacing: 10) {
+            ShelfHeader(title: "热门新番", identifier: "home.shelf.trending", inset: 0) {
+                Button { channel.wrappedValue = .anime } label: {
+                    ShelfLinkLabel(text: "更多")
+                        .frame(minWidth: 44, minHeight: 44, alignment: .trailing)
+                }
+                .buttonStyle(.pressable(scale: 0.92))
+                .accessibilityIdentifier("home.trending.all")
+            }
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(cardWidth), spacing: spacing, alignment: .top), count: 3),
+                      alignment: .leading, spacing: 16) {
+                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                    HomeAnimeGridCard(item: item, rank: index + 1, width: cardWidth)
+                        .reveal(index, id: "trending.\(item.id)")
+                }
+            }
+            .onAppear {
+                let urls = items.compactMap { URL(string: $0.safePicURLString) }
+                ImagePipeline.shared.prefetch(urls.map { ImageRequest(url: $0, maxPixel: ArtworkSize.poster) })
+            }
         }
     }
 
@@ -768,29 +685,30 @@ struct HomeTab: View {
 
     // MARK: 电影与剧集
 
-    private func movieShelf(_ library: HomeSnapshot) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            shelfHeader("电影", detail: "\(library.movies.count) 部", identifier: "home.shelf.movies") {
+    /// 我的片库 · 电影：两列横卡，先放四部；「全部」进完整的海报墙。
+    private func movieGrid(_ library: HomeSnapshot, width: CGFloat) -> some View {
+        let spacing: CGFloat = 10
+        let cardWidth = ((width - spacing) / 2).rounded(.down)
+        let items = Array(library.movies.prefix(4))
+        return VStack(alignment: .leading, spacing: 10) {
+            shelfHeader("我的片库 · 电影", detail: "\(library.movies.count) 部", identifier: "home.shelf.movies") {
                 PosterGridScreen(title: "电影", items: library.movies) { item, width in
                     posterCard(item, library: library, width: width)
                 }
             }
-
-            ScrollView(.horizontal) {
-                LazyHStack(alignment: .top, spacing: 14) {
-                    ForEach(Array(library.movies.enumerated()), id: \.element.id) { index, item in
-                        posterCard(item, library: library, width: 108)
-                            .reveal(index, id: item.id)
-                            .shelfCard()
-                            .prefetchArtwork(after: index, in: library.movies, count: 4) { $0.posterURL }
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(cardWidth), spacing: spacing, alignment: .top), count: 2),
+                      alignment: .leading, spacing: 16) {
+                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                    LibraryWideCard(item: item, width: cardWidth) {
+                        playing = HomeLibrary.queue(for: item, in: library.items)
+                    } onDelete: {
+                        delete(item)
+                    } onMatch: {
+                        matching = MatchRequest(item: item)
                     }
+                    .reveal(index, id: item.id)
                 }
-                .shelfContent()
-                .padding(.vertical, 4)
             }
-            .shelfScrolling()
-            .padding(.horizontal, -Theme.contentInset)
-            .scrollIndicators(.hidden)
         }
     }
 
@@ -925,246 +843,8 @@ struct HomeTab: View {
 
 }
 
-/// 只比较数量和状态，不比较整份片库。扫描中每新增 300 个视频才重新匹配一次，
-/// 否则每扫一页就把整个片库重新过一遍，界面会卡死。
-final class HeroState: ObservableObject {
-    /// TabView 里的页码（含首尾两张复制页，见 HeroLoop）。
-    @Published var page = 0 {
-        didSet {
-            // 页面位置报上来之前，底色先跟着选中项走
-            motion.follow(selection: page)
-            wrapWhenSettled()
-        }
-    }
-    /// 精选的张数（不含复制页）
-    var count = 0
-    let motion = HeroMotionState()
-    /// 每一页的封面取色
-    let palette = HeroPalette()
-
-    /// 当前是第几张精选（0 起，不含复制页）
-    func realIndex(count: Int) -> Int { HeroLoop.real(page, count: count) }
-
-    /// 无动画换页：复制页换回真页、换了一批精选时用。两页画面一样，看不出跳了一下。
-    func jump(to page: Int) {
-        guard self.page != page else { return }
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction) { self.page = page }
-    }
-
-    /// 页面位置更新后调用：停稳在复制页上就换回真页。
-    func positionChanged() { wrapWhenSettled() }
-
-    private func wrapWhenSettled() {
-        guard let target = HeroLoop.wrapTarget(page, count: count) else { return }
-        if let position = motion.position {
-            // 还在滑动的话等它停稳；停稳时页面位置会再报一次
-            if abs(position - CGFloat(page)) < 0.001 { jump(to: target) }
-            return
-        }
-        // 拿不到页面位置时，等翻页动画结束再换
-        let sentinel = page
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in
-            guard let self, self.page == sentinel, self.motion.position == nil else { return }
-            self.jump(to: target)
-        }
-    }
-}
-
-/// 轮播首尾相接：把最后一张复制到最前、第一张复制到最后。只有一张时不循环。
-enum HeroLoop {
-    static func pages<Item>(_ items: [Item]) -> [Item] {
-        guard items.count > 1, let first = items.first, let last = items.last else { return items }
-        return [last] + items + [first]
-    }
-
-    /// 页码 → 第几张精选
-    static func real(_ page: Int, count: Int) -> Int {
-        guard count > 1 else { return min(max(page, 0), max(count - 1, 0)) }
-        return ((page - 1) % count + count) % count
-    }
-
-    /// 第几张精选 → 页码
-    static func page(forReal index: Int, count: Int) -> Int {
-        count > 1 ? index + 1 : index
-    }
-
-    /// 停在复制页上时要换回的真页页码；不在复制页上返回 nil。
-    static func wrapTarget(_ page: Int, count: Int) -> Int? {
-        guard count > 1 else { return nil }
-        if page == 0 { return count }
-        if page == count + 1 { return 1 }
-        return nil
-    }
-}
-
-/// 只在横幅状态变化时重算自己的内容，父页面不订阅这个对象。
-private struct HeroObserver<Content: View>: View {
-    @ObservedObject var state: HeroState
-    let content: (HeroState) -> Content
-    init(state: HeroState, @ViewBuilder content: @escaping (HeroState) -> Content) {
-        self.state = state
-        self.content = content
-    }
-    var body: some View { content(state) }
-}
-
-// MARK: - 横幅单页
-
-/// 精选横幅的一页（参考视频的效果）：翻页时图片钉在屏幕上不动，页面边缘像一扇窗从图上扫过去，
-/// 新的一页就这样被「揭」出来；片名跟着页面一起走。画面下半截先柔化，再融进封面取色，和整页底色连成一片。
-/// 卡片上的文字固定用白色：首页整页都是封面色的深底。
-private struct HeroPage: View {
-    let item: HomeMediaItem
-    let index: Int
-    let originX: CGFloat
-    let featured: [HomeMediaItem]
-    let motion: HeroMotionState
-    let palette: HeroPalette
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        GeometryReader { geometry in
-            let width = max(geometry.size.width, 1)
-            let rawX = geometry.frame(in: .global).minX
-            // 这一页离开原位多少。打开「减少动态效果」时不做窗口效果，图片跟着页面一起平移。
-            let pageX = reduceMotion ? 0 : max(-width, min(width, rawX - originX))
-            ZStack(alignment: .bottomLeading) {
-                ZStack {
-                    // 滑到这一页时图通常已经预取好；还没到就先露出底色，不画默认图。
-                    ArtworkView(
-                        urlString: HomeArtwork.heroURL(item),
-                        fallbackURLString: item.posterURL,
-                        title: item.title,
-                        maxPixel: ArtworkSize.hero,
-                        loading: .clear
-                    )
-                    .scaledToFill()
-                    .frame(width: width, height: geometry.size.height)
-                    .clipped()
-
-                    softenedArtwork(size: geometry.size)
-                }
-                // 反向抵消页面的位移，图片停在原地；露出多少由这一页的边界（下面的 clipped）决定。
-                .offset(x: -pageX)
-
-                HeroTintOverlay(items: featured, motion: motion, palette: palette)
-
-                content
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 62 + HomeTab.heroControlsLift)
-            }
-            .frame(width: geometry.size.width, height: geometry.size.height)
-            .clipped()
-            .preference(key: HeroPagePositionKey.self, value: [index: rawX])
-        }
-    }
-
-    /// 同一张图先失去细节再融进底色；小尺寸模糊后放大，避免对每页做全尺寸模糊。
-    /// 裁切比例和清晰图一致，并跟清晰图一起钉在原地，柔化时不会出现第二个轮廓。
-    private func softenedArtwork(size: CGSize) -> some View {
-        let width = max(size.width, 1)
-        return ArtworkView(urlString: HomeArtwork.heroURL(item), fallbackURLString: item.posterURL,
-                           title: "", maxPixel: ArtworkSize.backdrop, loading: .clear, drawsFallback: false)
-            .scaledToFill()
-            .frame(width: width / 4, height: size.height / 4)
-            .clipped()
-            .blur(radius: 10)
-            .scaleEffect(4)
-            .frame(width: width, height: size.height)
-            .clipped()
-            .mask {
-                LinearGradient(stops: [
-                    .init(color: .clear, location: 0.42),
-                    .init(color: .black.opacity(0.12), location: 0.58),
-                    .init(color: .black.opacity(0.5), location: 0.74),
-                    .init(color: .black.opacity(0.9), location: 0.9),
-                    .init(color: .black, location: 1),
-                ], startPoint: .top, endPoint: .bottom)
-            }
-            .accessibilityHidden(true)
-    }
-
-    private var content: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if let logoURL = item.metadata?.logoURL, !logoURL.isEmpty {
-                ArtworkView(urlString: logoURL, title: item.title)
-                    .scaledToFit()
-                    .frame(maxWidth: 200, maxHeight: 44, alignment: .leading)
-            } else {
-                Text(item.title)
-                    .accessibilityIdentifier("home.heroTitle")
-                    .font(.display(24))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-                    .shadow(color: .black.opacity(0.4), radius: 6, y: 1)
-            }
-
-            HStack(spacing: 8) {
-                if !item.year.isEmpty { Text(item.year) }
-                if !item.countryLabel.isEmpty { Text(item.countryLabel) }
-                if !item.rating.isEmpty {
-                    HStack(spacing: 3) {
-                        Image(systemName: AppIcon.rating.name)
-                            .font(.system(size: 9, weight: .bold))
-                        Text(item.rating)
-                    }
-                    .foregroundStyle(Theme.rating)
-                }
-                if let episode = item.episodeLabel { Text(episode) }
-                if let genres = item.metadata?.genres, !genres.isEmpty {
-                    Text(genres.prefix(2).joined(separator: " / "))
-                }
-            }
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(Color.white.opacity(0.82))
-            .lineLimit(1)
-        }
-    }
-}
-
-/// 精选播放优先；更正影片资料收在主动打开的更多菜单中。
-private struct HeroActions: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    static let height: CGFloat = 38
-    let hasMetadata: Bool
-    var title = "播放"
-    let onPlay: () -> Void
-    let onMatch: () -> Void
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Button(action: onPlay) {
-                Label(title, systemImage: AppIcon.play.name)
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(Theme.onPrimary)
-                    .padding(.horizontal, 18)
-                    .frame(height: Self.height)
-                    .background(Theme.gold, in: Capsule())
-                    .contentShape(Capsule())
-                    .contentTransition(.opacity)
-                    .animation(reduceMotion ? nil : Motion.fade, value: title)
-            }
-            .buttonStyle(.pressable)
-            .accessibilityIdentifier("home.heroPlay")
-            Button(action: onMatch) {
-                Image(systemName: AppIcon.more.name)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: Self.height, height: Self.height)
-                    .background(Color.white.opacity(0.2), in: Circle())
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.pressable)
-            .accessibilityLabel("影片选项")
-        }
-    }
-}
-
 private extension View {
-    /// 首页内容强制按深色显示；从首页进入的页面恢复成系统（或「外观」设置）的深浅色，次要文字也恢复主题灰。
+    /// 从首页推进去的页面：深浅色跟系统（或「外观」设置）走，次要文字用主题灰。
     func restoringAppearance(_ scheme: ColorScheme) -> some View {
         environment(\.colorScheme, scheme)
             .environment(\.artworkTinted, false)

@@ -9,52 +9,14 @@ struct AnimeHeroBanner: View {
 
     let banners: [AnimeBanner]
 
-    @State private var currentIndex = 0
-    /// iOS 17 翻页滚动视图当前停在哪一页（scrollPosition 绑定）
-    @State private var scrolledIndex: Int?
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
     var body: some View {
         if !banners.isEmpty {
-            VStack(spacing: 8) {
-                // 不做自动轮播：定时器会让外层 ScrollView 每几秒重排一次，
-                // 也违反界面规范「不做无限循环动画」。用户手动左右滑动即可。
-                pager
-                    .frame(height: Self.height)
-
-                if banners.count > 1 {
-                    indicator
-                }
+            // 和首页「推荐」同一个轮播：每 4 秒自动翻一张，也能手动左右滑，首尾相接。
+            LoopingCarousel(items: banners, label: "热播轮播", positionIdentifier: "anime.bannerPosition") { banner, _ in
+                link(banner)
             }
-        }
-    }
-
-    /// iOS 17 起用按页吸附的横向滚动，翻页时封面比卡片慢半拍（视差）；iOS 16 用系统分页 TabView。
-    @ViewBuilder private var pager: some View {
-        if #available(iOS 17.0, *) {
-            ScrollView(.horizontal) {
-                LazyHStack(spacing: 0) {
-                    ForEach(Array(banners.enumerated()), id: \.element.id) { index, banner in
-                        link(banner)
-                            .containerRelativeFrame(.horizontal)
-                            .id(index)
-                    }
-                }
-                .scrollTargetLayout()
-            }
-            .scrollTargetBehavior(.paging)
-            .scrollIndicators(.hidden)
-            .scrollPosition(id: $scrolledIndex)
-            .onChange(of: scrolledIndex) { value in
-                if let value, value != currentIndex { currentIndex = value }
-            }
-        } else {
-            TabView(selection: $currentIndex) {
-                ForEach(Array(banners.enumerated()), id: \.element.id) { index, banner in
-                    link(banner).tag(index)
-                }
-            }
-            .tabViewStyle(.page(indexDisplayMode: .never))
+            .frame(height: Self.height)
+            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
         }
     }
 
@@ -62,39 +24,8 @@ struct AnimeHeroBanner: View {
         NavigationLink(value: AnimeDetailRoute(animeId: banner.vid ?? banner.id)) {
             bannerCard(banner: banner)
         }
-        .buttonStyle(.pressable(scale: 0.98))
+        .buttonStyle(.pressable(scale: 0.985))
         .accessibilityIdentifier("anime.banner.\(banner.id)")
-    }
-
-    private func select(_ index: Int) {
-        withAnimation(reduceMotion ? nil : Motion.smooth) {
-            currentIndex = index
-            scrolledIndex = index
-        }
-    }
-
-    private var indicator: some View {
-        HStack(spacing: 4) {
-            ForEach(banners.indices, id: \.self) { index in
-                Capsule()
-                    .fill(index == currentIndex ? Theme.textPrimary : Theme.textTertiary.opacity(0.5))
-                    .frame(width: index == currentIndex ? 14 : 4, height: 4)
-                    .contentShape(Rectangle().inset(by: -8))
-                    .onTapGesture { select(index) }
-            }
-        }
-        .frame(maxWidth: .infinity, minHeight: 12)
-        .animation(reduceMotion ? nil : Motion.snappy, value: currentIndex)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("热播轮播")
-        .accessibilityValue("第 \(currentIndex + 1) 张，共 \(banners.count) 张")
-        .accessibilityAdjustableAction { direction in
-            switch direction {
-            case .increment: select((currentIndex + 1) % banners.count)
-            case .decrement: select((currentIndex + banners.count - 1) % banners.count)
-            @unknown default: break
-            }
-        }
     }
 
     private func bannerCard(banner: AnimeBanner) -> some View {
@@ -106,7 +37,7 @@ struct AnimeHeroBanner: View {
                         maxPixel: ArtworkSize.hero, loading: .clear, drawsFallback: false)
                 .scaledToFill()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .bannerParallax()
+                .carouselParallax()
                 .clipped()
                 .allowsHitTesting(false)
 
@@ -151,41 +82,11 @@ struct AnimeHeroBanner: View {
                 }
             }
             .padding(14)
+            .padding(.trailing, 60)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
-                .strokeBorder(Theme.hairline, lineWidth: 0.5)
-        )
-        .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
+        .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
-    }
-}
-
-private extension View {
-    /// 轮播翻页时封面比卡片慢半拍：卡片滑走一整页，封面只挪 1/5，看起来像隔着一层玻璃。
-    /// 只在 iOS 17 的翻页滚动视图里生效；减弱动态效果时关闭。
-    func bannerParallax() -> some View { modifier(BannerParallax()) }
-}
-
-private struct BannerParallax: ViewModifier {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    func body(content: Content) -> some View {
-        if #available(iOS 17.0, *) {
-            if reduceMotion {
-                content
-            } else {
-                content.scrollTransition(.interactive, axis: .horizontal) { view, phase in
-                    view
-                        .scaleEffect(1.12)
-                        .offset(x: -phase.value * 56, y: 0)
-                }
-            }
-        } else {
-            content
-        }
     }
 }
 

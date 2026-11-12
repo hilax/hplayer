@@ -1,18 +1,24 @@
 import Foundation
 import Combine
 
-/// 首页「推荐」频道里的在线内容：热门新番与最新更新。
-/// 只拉两页列表，失败时安静地留空（不影响片库货架）；顺便用结果给「我的追番」标更新。
+/// 首页「推荐」里的在线内容：顶部轮播的热播横图、热门新番（最多播放）、最新更新（最新上架）。
+/// 和动漫频道共用 AnimeClient；数据只在内存里，进首页时按需拉取。
 @MainActor
 final class HomeOnlineFeed: ObservableObject {
     static let shared = HomeOnlineFeed()
 
+    /// 热播横图（/app/banners），约 1700×920 的 16:9 图，和片库精选一起放进首页轮播
+    @Published private(set) var banners: [AnimeBanner] = []
+    /// 热门新番：按播放量排（sort=hits）。接口的 weight 排序和 addtime 一模一样，不能拿来当「热门」。
     @Published private(set) var trending: [AnimeVideoItem] = []
+    /// 最新更新：按上架时间排（sort=addtime）
     @Published private(set) var latest: [AnimeVideoItem] = []
     private var loadedAt: Date?
     private var loading = false
 
-    private init() {}
+    private init() {
+        if InterfacePreview.active { trending = Self.previewTrending }
+    }
 
     /// 进入首页时调用；十分钟内不重复拉。界面截图（InterfacePreview）不联网。
     func loadIfNeeded() async {
@@ -22,12 +28,24 @@ final class HomeOnlineFeed: ObservableObject {
         if let loadedAt, Date().timeIntervalSince(loadedAt) < 600, !trending.isEmpty { return }
         loading = true
         defer { loading = false }
-        async let hot = try? AnimeClient.shared.fetchVideoList(sort: "weight", limit: 12, page: 1)
+        async let hot = try? AnimeClient.shared.fetchVideoList(sort: "hits", limit: 12, page: 1)
         async let fresh = try? AnimeClient.shared.fetchVideoList(sort: "addtime", limit: 12, page: 1)
-        let (hotResult, freshResult) = await (hot, fresh)
+        async let heroes = try? AnimeClient.shared.fetchBanners()
+        let (hotResult, freshResult, bannerResult) = await (hot, fresh, heroes)
         if let items = hotResult?.items, !items.isEmpty { trending = items }
         if let items = freshResult?.items, !items.isEmpty { latest = items }
+        if let bannerResult, !bannerResult.isEmpty { banners = bannerResult.filter { !$0.img.isEmpty } }
         if hotResult != nil || freshResult != nil { loadedAt = Date() }
         AnimeWatchlistStore.shared.refreshUpdates(from: trending + latest)
     }
+
+    /// 界面截图里的热门新番：没有封面地址，卡片画占位海报，不联网。
+    private static let previewTrending: [AnimeVideoItem] = [
+        AnimeVideoItem(id: 900001, name: "雪王来了！", continu: "28|周四五11:00更", total: 28, isend: 0, type: "搞笑,日常"),
+        AnimeVideoItem(id: 900002, name: "东大高武学院", continu: "更新至26集", total: 52, isend: 0, type: "热血,玄幻"),
+        AnimeVideoItem(id: 900003, name: "大夏守墓人", continu: "更新至18集", total: 40, isend: 0, type: "国创,玄幻"),
+        AnimeVideoItem(id: 900004, name: "逆天邪神 年番", continu: "全52集", total: 52, isend: 1, type: "国创,热血"),
+        AnimeVideoItem(id: 900005, name: "黑色五叶草 第二季", continu: "6#周六23:00更", total: 12, isend: 0, type: "战斗,奇幻"),
+        AnimeVideoItem(id: 900006, name: "新网球王子 U-17 世界杯", continu: "7#周四00:30更", total: 12, isend: 0, type: "运动,漫画改"),
+    ]
 }

@@ -862,7 +862,10 @@ enum HomeArtwork {
             add(value, ArtworkSize.hero)
             add(value, ArtworkSize.backdrop)
         }
-        for item in library.movies.prefix(shelfLimit) { add(item.posterURL, ArtworkSize.poster) }
+        // 电影货架是横卡：有横版背景图先取它
+        for item in library.movies.prefix(shelfLimit) {
+            add(item.backgroundURL.isEmpty ? item.posterURL : item.backgroundURL, ArtworkSize.poster)
+        }
         for group in library.performers.prefix(shelfLimit) { add(group.posterURL, ArtworkSize.poster) }
         for group in library.series.prefix(shelfLimit) { add(group.posterURL, ArtworkSize.poster) }
         return requests
@@ -871,7 +874,7 @@ enum HomeArtwork {
 
 // MARK: - 首页卡片
 
-// 首页整页的底色是精选封面的取色，见 HomeHeroMotion.swift 里的 HomeHeroBackdrop。
+// 首页顶部的氛围色是当前轮播图的取色，见 HomeAmbientTint.swift 里的 HomeAmbientBackdrop。
 
 extension View {
     /// 首页列表里的卡片：半透明磨砂，透出下面精选图的颜色

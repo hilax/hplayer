@@ -35,20 +35,14 @@ final class RedesignFlowUITests: XCTestCase {
         }
     }
 
-    func testHomeCarouselTracksTheDragWithoutMovingTheShelves() throws {
+    func testHomeCarouselSwipeKeepsTheShelvesInPlace() throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
-        app.launchEnvironment["HPLAYER_DESIGN_SCREEN"] = "home"
-        app.launchEnvironment["HPLAYER_HOME_MOTION_TEST"] = "1"
-        app.launch()
+        let app = launch("home")
         defer { app.terminate() }
         let position = app.descendants(matching: .any)["home.carouselPosition"].firstMatch
         XCTAssertTrue(position.waitForExistence(timeout: 25))
-        let play = app.buttons["home.heroPlay"].firstMatch
         let movies = app.staticTexts["home.shelf.movies"].firstMatch
-        XCTAssertTrue(play.waitForExistence(timeout: 10))
         XCTAssertTrue(movies.waitForExistence(timeout: 10))
-        let playFrame = play.frame
         let shelfFrame = movies.frame
         let before = position.value as? String
 
@@ -59,22 +53,36 @@ final class RedesignFlowUITests: XCTestCase {
             (position.value as? String) != before
         }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [changed], timeout: 10), .completed)
-        let probe = app.descendants(matching: .any)["home.motionProbe"].firstMatch
-        XCTAssertTrue(probe.waitForExistence(timeout: 5))
-        XCTAssertEqual(probe.value as? String, "interactive", "The carousel position must follow the drag before a page settles")
-        XCTAssertEqual(play.frame.minX, playFrame.minX, accuracy: 1)
-        XCTAssertEqual(play.frame.minY, playFrame.minY, accuracy: 1)
-        XCTAssertEqual(movies.frame.minY, shelfFrame.minY, accuracy: 1)
+        XCTAssertEqual(movies.frame.minY, shelfFrame.minY, accuracy: 1, "Swiping the carousel must not scroll the page")
+        // Only the visible slide is exposed, so its play button is the one found.
+        XCTAssertTrue(app.buttons["home.heroPlay"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["home.heroPlay"].firstMatch.isHittable)
         let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
-        screenshot.name = "Home artwork tint after swipe"
+        screenshot.name = "Home carousel after swipe"
         screenshot.lifetime = .keepAlways
         add(screenshot)
     }
 
+    func testHomeCarouselAdvancesOnItsOwn() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["HPLAYER_DESIGN_SCREEN"] = "home"
+        app.launchEnvironment["HPLAYER_CAROUSEL_AUTOPLAY"] = "1"
+        app.launch()
+        defer { app.terminate() }
+        let position = app.descendants(matching: .any)["home.carouselPosition"].firstMatch
+        XCTAssertTrue(position.waitForExistence(timeout: 25))
+        let before = position.value as? String
+        let advanced = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (position.value as? String) != before
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [advanced], timeout: 12), .completed, "The carousel turns the page by itself")
+    }
+
     private func backgroundSample(_ screenshot: XCUIScreenshot) throws -> [Int] {
         let image = try XCTUnwrap(screenshot.image.cgImage)
-        // The narrow left margin below the hero is clear of cards and text.
-        let rect = CGRect(x: CGFloat(image.width / 100), y: CGFloat(image.height * 7 / 10),
+        // The narrow left margin at the very top carries the ambient colour of the current slide.
+        let rect = CGRect(x: CGFloat(image.width / 100), y: CGFloat(image.height * 5 / 100),
                           width: CGFloat(max(1, image.width / 100)), height: CGFloat(max(1, image.height / 100)))
         let sample = try XCTUnwrap(image.cropping(to: rect))
         var pixel = [UInt8](repeating: 0, count: 4)

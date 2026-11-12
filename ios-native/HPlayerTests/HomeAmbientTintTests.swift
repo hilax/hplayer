@@ -3,65 +3,7 @@ import CoreGraphics
 import UIKit
 @testable import HPlayer
 
-final class HomeHeroMotionTests: XCTestCase {
-    // MARK: 跟手位置
-
-    func testBothVisiblePagesReportTheSameFractionalPosition() throws {
-        // A quarter swipe on a 400-point pager, inset 24 points from the window.
-        let outgoing = try XCTUnwrap(HeroPagePosition.position(samples: [0: -76], originX: 24, width: 400, count: 3))
-        let incoming = try XCTUnwrap(HeroPagePosition.position(samples: [1: 324], originX: 24, width: 400, count: 3))
-        XCTAssertEqual(outgoing, 0.25, accuracy: 0.001)
-        XCTAssertEqual(incoming, outgoing, accuracy: 0.001)
-    }
-
-    func testOverscrollStaysOnTheFirstOrLastPage() throws {
-        XCTAssertEqual(try XCTUnwrap(HeroPagePosition.position(samples: [0: 80], originX: 0, width: 400, count: 3)), 0)
-        XCTAssertEqual(try XCTUnwrap(HeroPagePosition.position(samples: [2: -80], originX: 0, width: 400, count: 3)), 2)
-    }
-
-    func testBackdropSwitchesOnlyAfterTheDragPassesHalfway() {
-        let state = HeroMotionState()
-        state.update(samples: [0: -160, 1: 240], originX: 0, width: 400, count: 3)
-        XCTAssertEqual(state.position ?? -1, 0.4, accuracy: 0.001)
-        XCTAssertEqual(state.settledIndex, 0, "Less than half a page keeps the current colour")
-
-        state.update(samples: [0: -220, 1: 180], originX: 0, width: 400, count: 3)
-        XCTAssertEqual(state.settledIndex, 1, "Past halfway the next page's colour takes over before release")
-
-        // Dragging back and letting go returns to the first page and its colour.
-        state.update(samples: [0: 0, 1: 400], originX: 0, width: 400, count: 3)
-        XCTAssertEqual(state.position, 0)
-        XCTAssertEqual(state.settledIndex, 0)
-    }
-
-    func testSelectionDrivesTheBackdropOnlyUntilPagesReportTheirPosition() {
-        let state = HeroMotionState()
-        state.follow(selection: 2)
-        XCTAssertEqual(state.settledIndex, 2)
-
-        state.update(samples: [1: 0], originX: 0, width: 400, count: 3)
-        XCTAssertEqual(state.settledIndex, 1)
-        // A late selection update must not pull the colour back once geometry is known.
-        state.follow(selection: 2)
-        XCTAssertEqual(state.settledIndex, 1)
-
-        state.reset(to: 0)
-        XCTAssertNil(state.position)
-        XCTAssertEqual(state.settledIndex, 0)
-    }
-
-    func testInvalidOrOffscreenGeometryKeepsTheCurrentPage() {
-        let state = HeroMotionState()
-        state.reset(to: 1)
-        state.update(samples: [0: -800, 2: 800], originX: 0, width: 400, count: 3)
-        XCTAssertNil(state.position)
-        XCTAssertEqual(state.settledIndex, 1)
-        state.update(samples: [0: 0], originX: 0, width: 0, count: 3)
-        state.update(samples: [0: .nan], originX: 0, width: 400, count: 3)
-        XCTAssertEqual(state.settledIndex, 1)
-        XCTAssertNil(HeroPagePosition.position(samples: [:], originX: 0, width: 400, count: 0))
-    }
-
+final class HomeAmbientTintTests: XCTestCase {
     // MARK: 循环
 
     func testCarouselWrapsBothWays() {
@@ -77,27 +19,6 @@ final class HomeHeroMotionTests: XCTestCase {
         XCTAssertNil(HeroLoop.wrapTarget(2, count: 3))
         XCTAssertNil(HeroLoop.wrapTarget(0, count: 1))
         XCTAssertEqual(HeroLoop.real(0, count: 1), 0)
-    }
-
-    func testSettlingOnACopyJumpsToTheRealPage() {
-        let state = HeroState()
-        state.count = 3
-        state.jump(to: 1)
-        // Swipe right from the first artwork onto the copy of the last one.
-        state.page = 0
-        state.motion.update(samples: [0: 0], originX: 0, width: 400, count: 5)
-        state.positionChanged()
-        XCTAssertEqual(state.page, 3)
-        XCTAssertEqual(state.realIndex(count: 3), 2)
-
-        // Still sliding onto the copy after the last artwork: wait until it settles.
-        state.page = 4
-        state.motion.update(samples: [4: 120], originX: 0, width: 400, count: 5)
-        state.positionChanged()
-        XCTAssertEqual(state.page, 4)
-        state.motion.update(samples: [4: 0], originX: 0, width: 400, count: 5)
-        state.positionChanged()
-        XCTAssertEqual(state.page, 1)
     }
 
     // MARK: 封面取色
@@ -144,9 +65,50 @@ final class HomeHeroMotionTests: XCTestCase {
         XCTAssertEqual(grey.green, grey.blue, accuracy: 0.01)
     }
 
-    func testNoFeaturedArtworkKeepsThePlainPageBackground() {
+    func testNoCarouselKeepsThePlainPageBackground() {
         let palette = HeroPalette()
-        XCTAssertEqual(palette.tint(items: [], index: 0), .plain)
+        XCTAssertEqual(palette.tint(forKey: nil), .plain)
+        XCTAssertEqual(palette.tint(forKey: ""), .plain)
+        XCTAssertEqual(palette.tint(forKey: "https://example.com/a.jpg"), .pending, "Not measured yet")
+    }
+
+    func testPastelKeepsTheHueAndStaysLight() {
+        let blue = ArtworkTint(red: 0.08, green: 0.28, blue: 0.35)
+        let pastel = blue.pastel
+        XCTAssertGreaterThan(min(pastel.red, pastel.green, pastel.blue), 0.5, "Dark text must stay readable on it")
+        XCTAssertEqual(hue(pastel.red, pastel.green, pastel.blue), hue(blue.red, blue.green, blue.blue), accuracy: 6)
+        XCTAssertGreaterThan(pastel.blue, pastel.red)
+        let black = ArtworkTint(red: 0, green: 0, blue: 0).pastel
+        XCTAssertEqual(black.red, 0.957, accuracy: 0.001)
+    }
+
+    // MARK: 轮播内容与动漫卡片
+
+    func testSlidesAlternateLibraryAndOnlineUntilTheLimit() {
+        let banners = (1...3).map { AnimeBanner(id: $0, vid: 100 + $0, img: "https://example.com/\($0).webp", vname: "B\($0)",
+                                                 continu: nil, content: nil, gold: nil, oid: nil, pid: nil) }
+        XCTAssertEqual(HomeSlide.interleave(featured: [], banners: banners).map(\.id), ["anime|1", "anime|2", "anime|3"])
+        XCTAssertEqual(HomeSlide.interleave(featured: [], banners: banners, limit: 2).count, 2)
+        XCTAssertTrue(HomeSlide.interleave(featured: [], banners: []).isEmpty)
+    }
+
+    func testAnimeCardEpisodeTextReadsEveryFormat() {
+        func item(_ continu: String?, total: Int? = nil, isend: Int? = nil) -> AnimeVideoItem {
+            AnimeVideoItem(id: 1, name: "x", continu: continu, total: total, isend: isend)
+        }
+        XCTAssertEqual(AnimeEpisodeText.short(item("28|周四五11:00更")), "更新至 28 集")
+        XCTAssertEqual(AnimeEpisodeText.short(item("6#周六23:00更")), "更新至 6 集")
+        XCTAssertEqual(AnimeEpisodeText.short(item("更新至26集")), "更新至 26 集")
+        XCTAssertEqual(AnimeEpisodeText.short(item("全52集")), "全 52 集")
+        XCTAssertEqual(AnimeEpisodeText.short(item("双语 1080P", total: 1, isend: 1)), "全 1 集")
+        XCTAssertEqual(AnimeEpisodeText.short(item("抢先版 AI修复")), "抢先版 AI修复")
+        XCTAssertNil(AnimeEpisodeText.short(item("一段非常非常长的连载说明文字")))
+        XCTAssertNil(AnimeEpisodeText.short(item(nil)))
+
+        XCTAssertEqual(AnimeEpisodeText.status(item("28|周四五11:00更")), .init(title: "更新", highlighted: true))
+        XCTAssertEqual(AnimeEpisodeText.status(item("全52集")), .init(title: "完结", highlighted: false))
+        XCTAssertEqual(AnimeEpisodeText.status(item("双语", isend: 1)), .init(title: "完结", highlighted: false))
+        XCTAssertNil(AnimeEpisodeText.status(item("抢先版 AI修复")))
     }
 
     // MARK: Helpers
