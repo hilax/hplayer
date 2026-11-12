@@ -13,7 +13,9 @@ struct AnimeDetailView: View {
     @State private var lastPosition: Double? = nil
     @State private var hasWatchedBefore: Bool = false
     @State private var isOverviewExpanded = false
-    @State private var showEpisodeSheet = false
+    /// 选集栏展开成完整网格（点「全部」）
+    @State private var episodesExpanded = false
+    @State private var isDescending = false
     /// 评论预览（前三条）；nil = 还没拉到 / 拉失败
     @State private var commentPreview: [AnimeComment]?
     @State private var commentsLoading = false
@@ -106,17 +108,6 @@ struct AnimeDetailView: View {
         .task(id: animeId) { await loadComments() }
         .onChange(of: selectedRouteIndex) { index in
             UserDefaults.standard.set(index, forKey: "anime.last_route.\(animeId)")
-        }
-        .sheet(isPresented: $showEpisodeSheet) {
-            if let detail {
-                AnimeEpisodeSheet(detail: detail, routeIndex: $selectedRouteIndex, activeEpisode: activeEpisode,
-                                  progress: { episodeProgress($0, detail: detail) }) { episode in
-                    activeEpisode = episode
-                    startPlay(episode: episode, detail: detail)
-                }
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
-            }
         }
         .playerWindow(item: $playingQueue) { queue in
             PlayerView(source: queue.source, playlist: queue.items)
@@ -272,14 +263,28 @@ struct AnimeDetailView: View {
         return VStack(alignment: .leading, spacing: 12) {
             ShelfHeader(title: "选集", inset: 0) {
                 HStack(spacing: 10) {
-                    Text(episodeSummary(detail, route: route))
-                        .font(.system(size: 12))
-                        .tertiaryTextStyle()
-                        .lineLimit(1)
+                    if episodesExpanded {
+                        orderToggle
+                    } else {
+                        Text(episodeSummary(detail, route: route))
+                            .font(.system(size: 12))
+                            .tertiaryTextStyle()
+                            .lineLimit(1)
+                    }
                     if episodes.count > 1 {
-                        Button { showEpisodeSheet = true } label: {
-                            ShelfLinkLabel(text: "全部")
-                                .frame(minWidth: 44, minHeight: 44, alignment: .trailing)
+                        Button {
+                            Haptics.select()
+                            withAnimation(Motion.smooth) { episodesExpanded.toggle() }
+                        } label: {
+                            HStack(spacing: 3) {
+                                Text(episodesExpanded ? "收起" : "全部")
+                                    .font(.system(size: 13))
+                                Image(icon: episodesExpanded ? .collapse : .expand)
+                                    .iconStyle(size: 10, color: Theme.textSecondary)
+                            }
+                            .foregroundStyle(Theme.textSecondary)
+                            .frame(minWidth: 44, minHeight: 44, alignment: .trailing)
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(.pressable(scale: 0.92))
                         .accessibilityIdentifier("anime.episodes.all")
@@ -306,7 +311,18 @@ struct AnimeDetailView: View {
             }
 
             if !episodes.isEmpty {
-                episodeStrip(episodes, detail: detail)
+                if episodesExpanded {
+                    // 「全部」：在选集栏里原地展开成五列网格，超过 50 集分段
+                    AnimeEpisodePanel(episodes: episodes, activeEpisode: activeEpisode, isDescending: isDescending,
+                                      progress: { episodeProgress($0, detail: detail) }) { episode in
+                        activeEpisode = episode
+                        startPlay(episode: episode, detail: detail)
+                    }
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                } else {
+                    episodeStrip(episodes, detail: detail)
+                        .transition(.opacity)
+                }
 
                 if let ep = activeEpisode, let line = episodeDetailLine(ep, detail: detail) {
                     Text(line)
@@ -316,6 +332,35 @@ struct AnimeDetailView: View {
                 }
             }
         }
+    }
+
+    /// 正序 / 倒序（展开时才显示）
+    private var orderToggle: some View {
+        HStack(spacing: 0) {
+            orderPill("正序", icon: .sortAscending, selected: !isDescending) { isDescending = false }
+            orderPill("倒序", icon: .sortDescending, selected: isDescending) { isDescending = true }
+        }
+        .padding(2)
+        .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private func orderPill(_ title: String, icon: AppIcon, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button {
+            Haptics.select()
+            withAnimation(Motion.snappy) { action() }
+        } label: {
+            HStack(spacing: 3) {
+                Image(icon: icon)
+                    .iconStyle(size: 11, color: selected ? Theme.onPrimary : Theme.textSecondary)
+                Text(title)
+                    .font(.system(size: 11, weight: selected ? .bold : .medium))
+                    .foregroundStyle(selected ? Theme.onPrimary : Theme.textSecondary)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(selected ? Theme.primaryAction : Color.clear, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        }
+        .buttonStyle(.pressable)
     }
 
     /// 「国语 · 更新至 166 集」「共 12 集」

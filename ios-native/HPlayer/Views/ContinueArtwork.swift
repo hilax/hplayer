@@ -106,7 +106,7 @@ final class ContinueArtworkStore: ObservableObject {
 }
 
 /// 继续观看卡片 / 观看历史行里的封面：片库影片用自己的图；在线动漫、短剧、磁力用 ContinueArtworkStore 找到的封面。
-/// 竖海报不硬裁成横图：铺一层虚化，海报立在中间。
+/// 不管横图竖图都等比例铺满卡片、居中裁切。
 struct ContinueArtworkView: View {
     let entry: ContinueEntry
     let width: CGFloat
@@ -122,18 +122,12 @@ struct ContinueArtworkView: View {
                 case .wide(let url)?:
                     wide(url)
                 case .poster(let url)?:
-                    poster {
-                        ArtworkView(urlString: url, title: entry.title)
-                    } background: {
-                        ArtworkView(urlString: url, title: "", maxPixel: ArtworkSize.backdrop,
-                                    loading: .neutral, drawsFallback: false)
-                    }
+                    // 竖海报也等比例铺满、居中裁切
+                    wide(url)
                 case .drama(let url)?:
-                    poster {
-                        DramaCover(urlString: url, title: entry.title)
-                    } background: {
-                        DramaCover(urlString: url, title: "")
-                    }
+                    Color.clear
+                        .overlay { DramaCover(urlString: url, title: entry.title) }
+                        .clipped()
                 case nil:
                     ArtworkView(urlString: "", title: entry.title)
                         .scaledToFill()
@@ -154,27 +148,5 @@ struct ContinueArtworkView: View {
                     .scaledToFill()
             }
             .clipped()
-    }
-
-    private func poster<Front: View, Back: View>(@ViewBuilder _ front: () -> Front,
-                                                 @ViewBuilder background: () -> Back) -> some View {
-        ZStack {
-            background()
-                .scaledToFill()
-                .frame(width: width / 3, height: height / 3)
-                .clipped()
-                .blur(radius: 5)
-                .scaleEffect(3.4)
-                .frame(width: width, height: height)
-                .clipped()
-                .overlay(Color.black.opacity(0.15))
-            front()
-                .scaledToFill()
-                .frame(width: height * 0.86 / 1.5, height: height * 0.86)
-                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-                .shadow(color: .black.opacity(0.3), radius: 5, y: 2)
-        }
-        .frame(width: width, height: height)
-        .background(Theme.surfaceRaised)
     }
 }

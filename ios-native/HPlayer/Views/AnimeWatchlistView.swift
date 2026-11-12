@@ -12,6 +12,17 @@ struct AnimeWatchlistView: View {
         }
     }
 
+    /// 进页面时的先后顺序。点进详情会清掉那一部的「更新」标记，如果马上按新状态重排，
+    /// 网格在推页面的同时变了样，返回时位置也乱；所以停留期间保持进来时的顺序，回到这页再重排。
+    @State private var order: [Int] = []
+
+    private var displayed: [AnimeWatchItem] {
+        let byID = Dictionary(store.items.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let kept = order.compactMap { byID[$0] }
+        let known = Set(order)
+        return kept + sorted.filter { !known.contains($0.id) }
+    }
+
     private var columns: [GridItem] {
         Array(repeating: GridItem(.flexible(), spacing: 12, alignment: .top), count: sizeClass == .regular ? 5 : 3)
     }
@@ -25,7 +36,7 @@ struct AnimeWatchlistView: View {
             } else {
                 ScrollView {
                     LazyVGrid(columns: columns, spacing: 18) {
-                        ForEach(sorted) { item in
+                        ForEach(displayed) { item in
                             AnimeDetailLink(animeId: item.id) { card(item) }
                                 .contextMenu {
                                     Button(role: .destructive) {
@@ -49,6 +60,7 @@ struct AnimeWatchlistView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
         .designScreen("watchlist")
+        .onAppear { order = sorted.map(\.id) }
     }
 
     private func card(_ item: AnimeWatchItem) -> some View {

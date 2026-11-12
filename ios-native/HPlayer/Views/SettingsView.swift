@@ -17,7 +17,10 @@ struct SettingsView: View {
     @AppStorage(AppearanceMode.storageKey) private var appearance: AppearanceMode = .system
     @State private var confirmLogout = false
     @State private var showManagement = false
-    @State private var transferPage: ManagementPage?
+    /// 「我的」这一栈的路由。追番、传输中心及其子页、动漫详情都走值路由压进同一条 path：
+    /// 之前子页用 navigationDestination(isPresented:)，「我的」页一刷新（例如进详情时追番的「更新」标记被清掉）
+    /// 系统就把刚推进去的详情页弹回来，表现为在追番列表里点了进不去。
+    @State private var path = NavigationPath()
     @AppStorage(DanmakuPrefs.enabled) private var danmakuEnabled = true
     @ObservedObject private var watchlist = AnimeWatchlistStore.shared
     @ObservedObject private var downloads = DownloadManager.shared
@@ -28,7 +31,7 @@ struct SettingsView: View {
     private var error: String { appState.isAuthenticated ? accountInfo.error(for: appState.sessionID) : "" }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             VStack(spacing: 0) {
             // 标题栏固定在顶部，内容在它下面滚动
             ScreenTitleBar("我的")
@@ -59,12 +62,20 @@ struct SettingsView: View {
             .navigationDestination(for: AnimeDetailRoute.self) { route in
                 AnimeDetailView(animeId: route.animeId).id(route.animeId)
             }
-            .navigationDestination(isPresented: Binding(get: { transferPage != nil }, set: { if !$0 { transferPage = nil } })) {
-                switch transferPage {
-                case .offline: OfflineTasksView().hidesTabBar()
-                case .downloads: DownloadsView().hidesTabBar()
-                case .recycleBin: RecycleBinView().hidesTabBar()
-                case .transfers, .none: EmptyView()
+            .navigationDestination(for: MineRoute.self) { route in
+                switch route {
+                case .watchlist:
+                    AnimeWatchlistView().hidesTabBar()
+                case .transfers:
+                    TransferCenterView(onOpenPage: { path.append(MineRoute.page($0)) }).hidesTabBar()
+                case .page(.offline):
+                    OfflineTasksView().hidesTabBar()
+                case .page(.downloads):
+                    DownloadsView().hidesTabBar()
+                case .page(.recycleBin):
+                    RecycleBinView().hidesTabBar()
+                case .page(.transfers):
+                    TransferCenterView(onOpenPage: { path.append(MineRoute.page($0)) }).hidesTabBar()
                 }
             }
         }
@@ -208,7 +219,7 @@ struct SettingsView: View {
     /// 我的内容：追番、传输中心（观看历史在首页右上角）
     private var contentGroup: some View {
         group("我的内容") {
-            NavigationLink { AnimeWatchlistView().hidesTabBar() } label: {
+            NavigationLink(value: MineRoute.watchlist) {
                 LibraryActionRow(symbol: AppIcon.heart.name, title: "我的追番",
                                  subtitle: watchUpdates > 0 ? "\(watchUpdates) 部有更新" : "在线动漫的追番列表",
                                  value: watchlist.items.isEmpty ? "" : "\(watchlist.items.count)")
@@ -216,7 +227,7 @@ struct SettingsView: View {
             .buttonStyle(.pressable(scale: 0.985))
             .accessibilityIdentifier("mine.watchlist")
             rowDivider
-            NavigationLink { TransferCenterView(onOpenPage: { transferPage = $0 }).hidesTabBar() } label: {
+            NavigationLink(value: MineRoute.transfers) {
                 LibraryActionRow(symbol: AppIcon.cloudDownload.name, title: "传输中心",
                                  subtitle: "云端离线、下载到本机、磁力边下边播",
                                  value: activeDownloads == 0 ? "" : "\(activeDownloads) 个下载中")
@@ -556,4 +567,11 @@ private struct AppearancePreview: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
+}
+
+/// 「我的」页里压进导航栈的页面
+enum MineRoute: Hashable {
+    case watchlist
+    case transfers
+    case page(ManagementPage)
 }
