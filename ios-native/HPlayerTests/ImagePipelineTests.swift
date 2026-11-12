@@ -65,6 +65,7 @@ final class ImagePipelineTests: XCTestCase {
         let first = makePipeline()
         _ = await first.image(url, maxPixel: 600)
         XCTAssertTrue(first.hasOnDisk(url))
+        first.flushDiskCache()
 
         RoutedURLProtocol.install { _ in .init(status: 500) }
         let relaunched = makePipeline()
@@ -146,13 +147,13 @@ final class ImagePipelineTests: XCTestCase {
         guard started else { XCTFail("Prefetch did not start"); return }
         let visible = Task { await pipeline.image(url, maxPixel: 1280) }
         defer { visible.cancel(); HeldImageURLProtocol.complete(url, data: Data()) }
-        let shared = await eventually { await pipeline.waitingConsumersForTesting(url, maxPixel: 1280).data == 2 }
-        guard shared else { XCTFail("Different image sizes should share the in-flight download"); return }
+        // 给第二个尺寸一点时间挂到同一个下载上（Nuke 按原始数据合并下载）
+        try await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertEqual(HeldImageURLProtocol.requestCount(for: url), 1, "Different image sizes should share the in-flight download")
 
         pipeline.prefetch([])
-        let detached = await eventually { await pipeline.waitingConsumersForTesting(url, maxPixel: 1280).data == 1 }
-        XCTAssertTrue(detached)
-        XCTAssertEqual(HeldImageURLProtocol.cancelCount(for: url), 0)
+        try await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertEqual(HeldImageURLProtocol.cancelCount(for: url), 0, "Stopping the prefetch must not cancel a download someone still needs")
         HeldImageURLProtocol.complete(url, data: png(width: 80, height: 120))
         let image = await visible.value
         XCTAssertNotNil(image)
@@ -169,12 +170,11 @@ final class ImagePipelineTests: XCTestCase {
         guard started else { XCTFail("Image request did not start"); return }
         let second = Task { await pipeline.image(url, maxPixel: 600) }
         defer { second.cancel() }
-        let shared = await eventually { await pipeline.waitingConsumersForTesting(url, maxPixel: 600).images == 2 }
-        guard shared else { XCTFail("The image request was not shared"); return }
+        try await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertEqual(HeldImageURLProtocol.requestCount(for: url), 1, "The image request was not shared")
 
         first.cancel()
-        let detached = await eventually { await pipeline.waitingConsumersForTesting(url, maxPixel: 600).images == 1 }
-        XCTAssertTrue(detached)
+        try await Task.sleep(nanoseconds: 300_000_000)
         XCTAssertEqual(HeldImageURLProtocol.cancelCount(for: url), 0)
         let firstFinished = expectation(description: "cancelled consumer returns before the shared download")
         Task {
@@ -217,6 +217,22 @@ final class ImagePipelineTests: XCTestCase {
             try? await Task.sleep(nanoseconds: 10_000_000)
         }
         return false
+    }
+
+    func testAheadPrefetchQueueStaysBounded() async throws {
+        HeldImageURLProtocol.reset()
+        let pipeline = ImagePipeline(directory: directory, session: HeldImageURLProtocol.session())
+        let urls = try (0..<(ImagePipeline.aheadLimit + 10)).map { try XCTUnwrap(URL(string: "https://images.example/a\($0).png")) }
+        defer { urls.forEach { HeldImageURLProtocol.complete($0, data: Data()) } }
+        pipeline.prefetchAhead(urls.map { ImageRequest(url: $0, maxPixel: 600) })
+        // 再报一次同样的地址不会重复排队
+        pipeline.prefetchAhead(urls.suffix(5).map { ImageRequest(url: $0, maxPixel: 600) })
+        let started = await eventually { urls.contains { HeldImageURLProtocol.requestCount(for: $0) > 0 } }
+        XCTAssertTrue(started, "Prefetching ahead did not start")
+        try await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertTrue(urls.allSatisfy { HeldImageURLProtocol.requestCount(for: $0) <= 1 }, "The same cover is never queued twice")
+        XCTAssertLessThanOrEqual(urls.filter { HeldImageURLProtocol.requestCount(for: $0) > 0 }.count, 2,
+                                 "Prefetching ahead uses at most two connections so visible covers come first")
     }
 
     func testDiskTrimDropsTheOldestFilesFirst() throws {

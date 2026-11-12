@@ -94,6 +94,8 @@ struct MagnetLinkPanel: View {
                 }
                 .buttonStyle(MagnetActionStyle(prominent: false))
                 .disabled(saveState == .saving || saveState == .saved)
+                .successPop(saveState == .saved, particle: .check, tint: Theme.success)
+                .failureShake(saveFailed)
                 .accessibilityIdentifier("magnet.link.save115")
 
                 Button(action: copy) {
@@ -103,6 +105,7 @@ struct MagnetLinkPanel: View {
                 }
                 .buttonStyle(MagnetActionStyle(prominent: false))
                 .frame(width: 52)
+                .successPop(copied)
                 .accessibilityLabel(copied ? "已复制" : "复制链接")
                 .accessibilityIdentifier("magnet.link.copy")
             }
@@ -146,6 +149,11 @@ struct MagnetLinkPanel: View {
     private var noticeColor: Color {
         if case .failed = saveState { return Theme.danger }
         return Theme.textSecondary
+    }
+
+    private var saveFailed: Bool {
+        if case .failed = saveState { return true }
+        return false
     }
 
     private func save() {

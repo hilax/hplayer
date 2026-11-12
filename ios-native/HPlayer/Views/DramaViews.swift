@@ -159,14 +159,18 @@ struct DramaTab: View {
         } else {
             ScrollView {
                 LazyVGrid(columns: columns, spacing: 18) {
-                    ForEach(shelf.items) { item in
+                    ForEach(Array(shelf.items.enumerated()), id: \.element.id) { index, item in
                         NavigationLink(value: DramaRoute(id: item.id, title: item.title, cover: item.cover)) {
                             DramaPosterCard(item: item)
                         }
                         .buttonStyle(PosterButtonStyle())
                         .accessibilityIdentifier("drama.poster.\(item.id)")
+                        .gridCardEntrance()
                         .onAppear {
                             if item.id == shelf.items.last?.id { Task { await feed.loadMore(category) } }
+                            // 提前取后面三行的封面
+                            let next = shelf.items.dropFirst(index + 1).prefix(9).map(\.cover)
+                            if !InterfacePreview.active { DramaCoverStore.shared.prefetch(Array(next)) }
                         }
                     }
                 }

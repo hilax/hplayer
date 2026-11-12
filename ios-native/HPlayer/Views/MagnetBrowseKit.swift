@@ -297,8 +297,13 @@ struct MagnetPosterGrid: View {
 
     var body: some View {
         LazyVGrid(columns: MagnetLayout.posterColumns, alignment: .leading, spacing: 16) {
-            ForEach(movies) { movie in
+            ForEach(Array(movies.enumerated()), id: \.element.id) { index, movie in
                 MagnetPosterCard(movie: movie)
+                    // 卡片优先显示大图（取右半边正面），所以提前取的也是大图
+                    .prefetchArtwork(after: index, in: movies, count: 9, maxPixel: 800) {
+                        MagnetCover.highResURL(for: $0.coverURL)?.absoluteString ?? ""
+                    }
+                    .gridCardEntrance()
                     .onAppear {
                         if movie.id == movies.last?.id { loadMore() }
                     }

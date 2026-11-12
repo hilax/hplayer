@@ -203,11 +203,14 @@ struct AnimeCatalogView: View {
                             AnimePosterCard(item: item, width: 108)
                         }
                         .reveal(index, id: "\(identifier).\(item.id)")
+                        .shelfCard()
+                        .prefetchArtwork(after: index, in: items, count: 4) { $0.safePicURLString }
                     }
                 }
-                .padding(.horizontal, Theme.contentInset)
+                .shelfContent()
                 .padding(.vertical, 4)
             }
+            .shelfScrolling()
             .padding(.horizontal, -Theme.contentInset)
             .scrollIndicators(.hidden)
         }
@@ -223,9 +226,10 @@ struct AnimeCatalogView: View {
                         posterSkeleton(width: 108)
                     }
                 }
-                .padding(.horizontal, Theme.contentInset)
+                .shelfContent()
                 .padding(.vertical, 4)
             }
+            .shelfScrolling()
             .padding(.horizontal, -Theme.contentInset)
             .scrollIndicators(.hidden)
             .allowsHitTesting(false)
@@ -285,10 +289,13 @@ struct AnimeCatalogView: View {
                 emptyOrErrorState
             } else {
                 LazyVGrid(columns: gridColumns(metrics), alignment: .leading, spacing: 16) {
-                    ForEach(gridItems) { item in
+                    ForEach(Array(gridItems.enumerated()), id: \.element.id) { index, item in
                         AnimeDetailLink(animeId: item.id) {
                             AnimePosterCard(item: item, width: metrics.cell)
                         }
+                        // 往下滑时提前取后面三行的封面
+                        .prefetchArtwork(after: index, in: gridItems, count: metrics.columns * 3) { $0.safePicURLString }
+                        .gridCardEntrance()
                         .onAppear {
                             if item.id == gridItems.last?.id {
                                 Task { await loadNextPage() }

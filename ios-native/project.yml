@@ -10,6 +10,9 @@ packages:
   Pow:
     url: https://github.com/EmergeTools/Pow
     exactVersion: 1.0.5
+  Nuke:
+    url: https://github.com/kean/Nuke
+    exactVersion: 13.2.3
   MPVKit:
     url: https://github.com/mpvkit/MPVKit
     exactVersion: 1.1.0-n9.0.2
@@ -35,6 +38,8 @@ targets:
         product: MPVKit
       - package: Pow
         product: Pow
+      - package: Nuke
+        product: Nuke
       - sdk: libc++.tbd
       - sdk: Security.framework
       - sdk: SystemConfiguration.framework

@@ -105,3 +105,16 @@
 - 选择态唯一来源是 `Services/AppIconStore.swift`：点按当帧乐观更新勾选并持久化到 `hplayer.home_icon_choice`；系统 `alternateIconName` 只做延迟校准（切换后 2 秒内不回读覆盖），失败回滚到切换前的选择。不再依赖异步回调或 scenePhase 的即时系统回读，避免「桌面已换、页内勾选不动」。
 - 确认提示用页内底部玻璃卡片 `IconChangeNoticeCard`（新图标预览 + 勾选角标 + 「图标已更新 / 主屏幕已同步为…」+ 撤销 + 关闭），4.5 秒自动收起；失败同卡片红色态。不再使用系统 `.alert` 承载成功提示。
 - 换图标优先走不弹系统确认框的静默接口（`_setAlternateIconName:completionHandler:`，运行时 `responds(to:)` 校验）；签名不存在时回退公开 `setAlternateIconName`，此时系统仍会弹自己的提示，页内卡片在其后出现。模拟器 `HPLAYER_HOME_TEST=1` 不触碰 SpringBoard，读写 `hplayer.simulated_alternate_icon`。
+
+
+## 图片加载与预取（Nuke）
+
+- 所有网络图片走 `ImagePipeline`（底层 Nuke 13）：下载合并、限流、优先级排队、内存（160 MB）+ 磁盘（400 MB，沿用 `Caches/HPlayerImages` 和原文件名）两级缓存，ImageIO 直接出缩略图并在后台解码。
+- 业务规则留在 `ImagePipeline` 这一层：按图床加请求头、拦截 200 错误页、临时错误重试两次、解不出图的缓存自动删掉。
+- 不能直接下载的图（短剧封面要先解密）用 `image(id:maxPixel:load:)` 接进同一套缓存。
+- 列表和货架用 `.prefetchArtwork(after:in:count:maxPixel:address:)`：卡片出现时低优先级取后面几张（网格三行、货架四张），最多两路并发、队列上限 36，不抢屏幕上的封面。`maxPixel` 必须和显示时一致。
+
+## 操作反馈与滚动动效
+
+- 关键操作用 `.successPop(_:particle:tint:)` / `.failureShake(_:)`（Pow）：只在状态变成成功 / 失败的那一刻触发；减弱动态效果时关闭。已用于追番、存到 115、复制链接。
+- iOS 17 起：横滑货架用 `.shelfContent()` + `.shelfScrolling()` 按卡片吸附，卡片加 `.shelfCard()`（边缘略缩小变淡）；网格卡片加 `.gridCardEntrance()`（从底部浮起）；动漫热播轮播改为按页吸附的滚动视图，封面有翻页视差。iOS 16 保持原样。

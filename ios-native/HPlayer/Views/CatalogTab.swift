@@ -433,6 +433,8 @@ struct CatalogTab: View {
                 ForEach(Array(list.enumerated()), id: \.element.id) { index, entry in
                     card(entry, width: cell)
                         .reveal(index, id: entry.id)
+                        .prefetchArtwork(after: index, in: list, count: columns * 3) { Self.posterURL(of: $0) }
+                        .gridCardEntrance()
                         .transition(.scale(scale: 0.92).combined(with: .opacity))
                 }
             }
@@ -470,6 +472,15 @@ struct CatalogTab: View {
             }
             .buttonStyle(PosterButtonStyle())
             .accessibilityIdentifier("catalog.performer.\(group.id)")
+        }
+    }
+
+    /// 卡片上显示的那张海报的地址（用于提前取图）。
+    private static func posterURL(of entry: CatalogEntry) -> String {
+        switch entry.payload {
+        case .movie(let item): return item.posterURL
+        case .series(let group): return group.posterURL
+        case .performer(let group): return group.posterURL
         }
     }
 

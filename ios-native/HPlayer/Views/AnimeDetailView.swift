@@ -77,6 +77,8 @@ struct AnimeDetailView: View {
                         Image(icon: watchlist.isWatched(id: detail.id) ? .heartFill : .heart)
                             .foregroundStyle(watchlist.isWatched(id: detail.id) ? Theme.accent : Theme.textPrimary)
                     }
+                    // 加入追番时爱心轻轻一跳并飘出几颗小心；取消时不动
+                    .successPop(watchlist.isWatched(id: detail.id), particle: .heartFill)
                     .accessibilityLabel(watchlist.isWatched(id: detail.id) ? "取消追番" : "追番")
                     .accessibilityIdentifier("anime.watchlist.\(detail.id)")
                 }

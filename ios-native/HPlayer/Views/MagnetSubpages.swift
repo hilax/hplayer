@@ -353,6 +353,11 @@ private struct MagnetTorrentCard: View {
     var onSave: () -> Void = {}
     let onCopy: () -> Void
 
+    private var saveFailed: Bool {
+        if case .failed = saveState { return true }
+        return false
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
@@ -423,6 +428,8 @@ private struct MagnetTorrentCard: View {
                 .buttonStyle(MagnetActionStyle(prominent: false))
                 .frame(width: 112)
                 .disabled(saveState == .saving || saveState == .saved)
+                .successPop(saveState == .saved, particle: .check, tint: Theme.success)
+                .failureShake(saveFailed)
                 .accessibilityIdentifier("magnet.save115")
 
                 Button(action: onCopy) {
@@ -432,6 +439,7 @@ private struct MagnetTorrentCard: View {
                 }
                 .buttonStyle(MagnetActionStyle(prominent: false))
                 .frame(width: 52)
+                .successPop(copied)
                 .accessibilityLabel(copied ? "已复制" : "复制磁力")
                 .accessibilityIdentifier("magnet.copy")
             }

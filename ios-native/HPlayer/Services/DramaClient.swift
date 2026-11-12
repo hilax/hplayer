@@ -226,26 +226,53 @@ final class DramaClient {
 }
 
 /// 短剧封面。封面地址返回的不是图片，而是 AES-128-CBC 密文，取回后在本机解密再显示。
-final class DramaCoverStore {
+/// 解密后的图片数据交给 ImagePipeline（Nuke）：后台缩图解码、内存与磁盘缓存、预取都和其他封面一样。
+final class DramaCoverStore: @unchecked Sendable {
     static let shared = DramaCoverStore()
 
     private static let key = Data("f5d965df75336270".utf8)
     private static let iv = Data("97b60394abc2fbe1".utf8)
-    private let cache = NSCache<NSString, UIImage>()
+    /// 短剧封面在列表和详情里显示的尺寸（最长边像素）
+    static let maxPixel = ArtworkSize.poster
 
-    private init() { cache.countLimit = 240 }
+    private init() {}
 
-    func cached(_ urlString: String) -> UIImage? { cache.object(forKey: urlString as NSString) }
+    private static func id(_ urlString: String) -> String { "drama-cover|\(urlString)" }
+
+    func cached(_ urlString: String) -> UIImage? {
+        ImagePipeline.shared.cached(id: Self.id(urlString), maxPixel: Self.maxPixel)
+    }
 
     func image(for urlString: String) async -> UIImage? {
-        if let image = cached(urlString) { return image }
-        guard let url = URL(string: urlString) else { return nil }
-        var request = URLRequest(url: url)
-        for (name, value) in DramaClient.shared.mediaHeaders { request.setValue(value, forHTTPHeaderField: name) }
-        guard let (data, _) = try? await URLSession.shared.data(for: request),
-              let image = Self.decode(data) else { return nil }
-        cache.setObject(image, forKey: urlString as NSString)
-        return image
+        guard let load = Self.loader(urlString) else { return nil }
+        return await ImagePipeline.shared.image(id: Self.id(urlString), maxPixel: Self.maxPixel, load: load)
+    }
+
+    /// 列表滑动时提前取后面几张。
+    func prefetch(_ urlStrings: [String]) {
+        let items = urlStrings.compactMap { value in Self.loader(value).map { (id: Self.id(value), load: $0) } }
+        ImagePipeline.shared.prefetchAhead(ids: items, maxPixel: Self.maxPixel)
+    }
+
+    private static func loader(_ urlString: String) -> (@Sendable () async throws -> Data)? {
+        guard !urlString.isEmpty, let url = URL(string: urlString) else { return nil }
+        let headers = DramaClient.shared.mediaHeaders
+        return {
+            var request = URLRequest(url: url)
+            for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
+            let (data, _) = try await URLSession.shared.data(for: request)
+            guard let plain = Self.plainData(data) else { throw URLError(.cannotDecodeContentData) }
+            return plain
+        }
+    }
+
+    /// 已经是图片的数据原样返回，否则解密；都不是图片就是 nil。
+    static func plainData(_ data: Data) -> Data? {
+        if ImagePipeline.isImage(data) { return data }
+        guard !data.isEmpty, data.count % 16 == 0,
+              let plain = AnimeCrypto.aes128CbcDecrypt(data: data, key: key, iv: iv),
+              ImagePipeline.isImage(plain) else { return nil }
+        return plain
     }
 
     /// 已经是图片就直接用，否则先解密。

@@ -773,6 +773,27 @@ struct ArtworkRevealEffect: ViewModifier {
     }
 }
 
+extension View {
+    /// 列表里第 index 张卡片出现时，提前把后面 count 张的封面取回来。
+    /// 低优先级、最多两路并发，不和屏幕上正在显示的封面抢带宽；已经在内存里或已经在排队的不会重复取。
+    /// maxPixel 必须和卡片显示时用的一致，缓存才对得上（海报都是 ArtworkSize.poster）。
+    func prefetchArtwork<Item>(after index: Int, in items: [Item], count: Int = 9,
+                               maxPixel: Int = ArtworkSize.poster,
+                               address: @escaping (Item) -> String) -> some View {
+        onAppear {
+            guard !InterfacePreview.active else { return }
+            let start = index + 1
+            guard start < items.count else { return }
+            let requests = items[start..<min(items.count, start + count)].compactMap { item -> ImageRequest? in
+                let value = address(item)
+                guard !value.isEmpty, let url = URL(string: value) else { return nil }
+                return ImageRequest(url: url, maxPixel: maxPixel)
+            }
+            ImagePipeline.shared.prefetchAhead(requests)
+        }
+    }
+}
+
 /// 没有封面时画的「海报」：按片名挑一组固定的深色渐变，左下角用衬线黑体写片名，
 /// 和原型里的占位海报一样；同一个片名永远是同一组颜色。
 struct PosterPlaceholder: View {

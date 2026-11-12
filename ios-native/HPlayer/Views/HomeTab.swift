@@ -557,6 +557,7 @@ struct HomeTab: View {
                         }
                         .buttonStyle(PosterButtonStyle())
                         .reveal(index, id: entry.id)
+                        .shelfCard()
                         .contextMenu {
                             Button("从继续观看移除", systemImage: AppIcon.remove.name, role: .destructive) {
                                 remove(entry)
@@ -564,9 +565,10 @@ struct HomeTab: View {
                         }
                     }
                 }
-                .padding(.horizontal, Theme.contentInset)
+                .shelfContent()
                 .padding(.vertical, 4)
             }
+            .shelfScrolling()
             .padding(.horizontal, -Theme.contentInset)
             .scrollIndicators(.hidden)
         }
@@ -687,11 +689,14 @@ struct HomeTab: View {
                         ForEach(Array(watchlist.items.enumerated()), id: \.element.id) { index, item in
                             AnimeDetailLink(animeId: item.id) { watchCard(item) }
                                 .reveal(index, id: "watch.\(item.id)")
+                                .shelfCard()
+                                .prefetchArtwork(after: index, in: watchlist.items, count: 4) { $0.pic ?? "" }
                         }
                     }
-                    .padding(.horizontal, Theme.contentInset)
+                    .shelfContent()
                     .padding(.vertical, 4)
                 }
+                .shelfScrolling()
                 .padding(.horizontal, -Theme.contentInset)
                 .scrollIndicators(.hidden)
             }
@@ -748,11 +753,14 @@ struct HomeTab: View {
                     ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                         AnimeDetailLink(animeId: item.id) { AnimePosterCard(item: item, width: 108) }
                             .reveal(index, id: "\(identifier).\(item.id)")
+                            .shelfCard()
+                            .prefetchArtwork(after: index, in: items, count: 4) { $0.safePicURLString }
                     }
                 }
-                .padding(.horizontal, Theme.contentInset)
+                .shelfContent()
                 .padding(.vertical, 4)
             }
+            .shelfScrolling()
             .padding(.horizontal, -Theme.contentInset)
             .scrollIndicators(.hidden)
         }
@@ -773,11 +781,14 @@ struct HomeTab: View {
                     ForEach(Array(library.movies.enumerated()), id: \.element.id) { index, item in
                         posterCard(item, library: library, width: 108)
                             .reveal(index, id: item.id)
+                            .shelfCard()
+                            .prefetchArtwork(after: index, in: library.movies, count: 4) { $0.posterURL }
                     }
                 }
-                .padding(.horizontal, Theme.contentInset)
+                .shelfContent()
                 .padding(.vertical, 4)
             }
+            .shelfScrolling()
             .padding(.horizontal, -Theme.contentInset)
             .scrollIndicators(.hidden)
         }
@@ -802,11 +813,13 @@ struct HomeTab: View {
                     ForEach(Array(library.performers.enumerated()), id: \.element.id) { index, group in
                         performerLink(group, width: 200)
                             .reveal(index, id: group.id)
+                            .shelfCard()
                     }
                 }
-                .padding(.horizontal, Theme.contentInset)
+                .shelfContent()
                 .padding(.vertical, 4)
             }
+            .shelfScrolling()
             .padding(.horizontal, -Theme.contentInset)
             .scrollIndicators(.hidden)
         }
@@ -834,11 +847,14 @@ struct HomeTab: View {
                     ForEach(Array(library.series.enumerated()), id: \.element.id) { index, group in
                         seriesLink(group, width: 108, scope: "shelf")
                             .reveal(index, id: group.id)
+                            .shelfCard()
+                            .prefetchArtwork(after: index, in: library.series, count: 4) { $0.posterURL }
                     }
                 }
-                .padding(.horizontal, Theme.contentInset)
+                .shelfContent()
                 .padding(.vertical, 4)
             }
+            .shelfScrolling()
             .padding(.horizontal, -Theme.contentInset)
             .scrollIndicators(.hidden)
         }
