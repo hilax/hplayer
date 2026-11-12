@@ -274,7 +274,10 @@ struct AnimeDetailView: View {
                     if episodes.count > 1 {
                         Button {
                             Haptics.select()
-                            withAnimation(Motion.smooth) { episodesExpanded.toggle() }
+                            // 不做过渡动画：展开的网格很高，边淡入边挤开下面的内容时会和评论区叠在一起
+                            var transaction = Transaction()
+                            transaction.disablesAnimations = true
+                            withTransaction(transaction) { episodesExpanded.toggle() }
                         } label: {
                             HStack(spacing: 3) {
                                 Text(episodesExpanded ? "收起" : "全部")
@@ -318,10 +321,8 @@ struct AnimeDetailView: View {
                         activeEpisode = episode
                         startPlay(episode: episode, detail: detail)
                     }
-                    .transition(.opacity.combined(with: .move(edge: .top)))
                 } else {
                     episodeStrip(episodes, detail: detail)
-                        .transition(.opacity)
                 }
 
                 if let ep = activeEpisode, let line = episodeDetailLine(ep, detail: detail) {

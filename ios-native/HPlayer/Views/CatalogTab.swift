@@ -188,9 +188,10 @@ struct CatalogTab: View {
     @EnvironmentObject private var librarySnapshots: LibrarySnapshotStore
     private var snapshot: HomeSnapshot { librarySnapshots.home }
     private var entries: [CatalogEntry] { librarySnapshots.catalogEntries }
-    /// 首页频道：片库 → 我的片库；动漫 → 在线番剧（2.0：片库并入首页，不再是独立 Tab）。
-    private var channel: Binding<HomeChannel>
-    private var source: CatalogSource { channel.wrappedValue == .anime ? .anime : .library }
+    /// 顶部头部「筛选」按一次加一：滚到筛选区
+    var filterRequest = 0
+    /// 内容从哪里开始（频道容器的固定头部盖在上面）
+    @Environment(\.channelPageInsets) private var insets
     @State private var kind: CatalogKind = .all
     @State private var region: CatalogRegion = .all
     @State private var year: CatalogYear = .all
@@ -199,31 +200,16 @@ struct CatalogTab: View {
     @State private var matching: MatchRequest?
     @State private var showManagement = false
 
-    init(onSearch: @escaping () -> Void = {}, preset: Binding<CatalogPreset?> = .constant(nil),
-         channel: Binding<HomeChannel> = .constant(.library)) {
+    init(onSearch: @escaping () -> Void = {}, preset: Binding<CatalogPreset?> = .constant(nil), filterRequest: Int = 0) {
         self.onSearch = onSearch
         _preset = preset
-        self.channel = channel
+        self.filterRequest = filterRequest
     }
 
     var body: some View {
-        NavigationStack {
-            Group {
-                if source == .library {
-                    libraryPage
-                } else {
-                    AnimeCatalogView(channel: channel, onSearch: onSearch)
-                }
-            }
-            .background(Theme.pageBackground.ignoresSafeArea())
-            .toolbar(.hidden, for: .navigationBar)
-            .navigationDestination(for: PerformerRoute.self) { route in
-                if let group = snapshot.performers.first(where: { $0.id == route.id }) {
-                    PerformerCollectionView(group: group).id(route.id)
-                } else {
-                    EmptyStateView(icon: AppIcon.people.name, title: "演员合集已更新", message: "返回片库后重新进入演员合集。")
-                }
-            }
+        Group {
+            libraryPage
+                .background(Theme.pageBackground.ignoresSafeArea())
             .onChange(of: preset) { value in
                 guard let value else { return }
                 apply(value)
@@ -257,15 +243,11 @@ struct CatalogTab: View {
             ScrollViewReader { reader in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
-                        ChannelHeroSection(channel: channel, searchPlaceholder: "搜索片库", searchIdentifier: "catalog.search",
-                                           onSearch: onSearch, onFilter: {
-                                               withAnimation(reduceMotion ? nil : Motion.smooth) {
-                                                   reader.scrollTo("catalog.filters", anchor: UnitPoint(x: 0.5, y: 0.1))
-                                               }
-                                           }, filterIdentifier: "catalog.filter",
-                                           slides: HomeSlide.recentLibrary(snapshot), carouselLabel: "最近加入",
+                        AmbientHeroSection(slides: HomeSlide.recentLibrary(snapshot), carouselLabel: "最近加入",
                                            carouselIdentifier: "catalog.carouselPosition",
-                                           safeTop: proxy.safeAreaInsets.top, width: proxy.size.width) { slide in
+                                           safeTop: insets.top, width: proxy.size.width) {
+                            EmptyView()
+                        } hitArea: { slide in
                             librarySlideHitArea(slide)
                         }
 
@@ -279,9 +261,16 @@ struct CatalogTab: View {
                         .padding(.top, 16)
                     }
                     .padding(.bottom, 32)
+                    .tracksPageScroll()
                 }
                 .scrollIndicators(.hidden)
                 .ignoresSafeArea(edges: .top)
+                .onChange(of: filterRequest) { _ in
+                    // 头部的「筛选」：滚到类型 / 地区 / 年份 / 排序那一块
+                    withAnimation(reduceMotion ? nil : Motion.smooth) {
+                        reader.scrollTo("catalog.filters", anchor: UnitPoint(x: 0.5, y: 0.22))
+                    }
+                }
             }
         }
     }

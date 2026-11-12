@@ -95,26 +95,17 @@ final class DramaFeed: ObservableObject {
 // MARK: - 首页「短剧」频道
 
 struct DramaTab: View {
-    @Binding var channel: HomeChannel
-    @EnvironmentObject private var appState: AppState
     @StateObject private var feed = DramaFeed()
     @State private var category: DramaCategory = .series
     @Namespace private var pills
+    /// 内容从哪里开始（频道容器的固定头部盖在上面）
+    @Environment(\.channelPageInsets) private var insets
 
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 12, alignment: .top), count: 3)
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                HStack(spacing: 8) {
-                    HomeChannelBar(selection: $channel)
-                    Spacer(minLength: 8)
-                }
-                .padding(.leading, Theme.contentInset)
-                .padding(.trailing, 6)
-                .frame(minHeight: 44)
-                .padding(.bottom, 4)
-
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 8) {
                     ForEach(DramaCategory.allCases) { item in
                         SelectionPill(title: item.title, selected: item == category, namespace: pills) {
@@ -125,18 +116,17 @@ struct DramaTab: View {
                     Spacer(minLength: 0)
                 }
                 .padding(.horizontal, Theme.contentInset)
-                .padding(.bottom, 8)
+                .padding(.top, insets.top + 4)
+                .padding(.bottom, 10)
 
                 content
             }
-            .background(Theme.pageBackground.ignoresSafeArea())
-            .toolbar(.hidden, for: .navigationBar)
-            .navigationDestination(for: DramaRoute.self) { route in
-                DramaDetailView(route: route)
-                    .environmentObject(appState)
-                    .hidesTabBar()
-            }
+            .tracksPageScroll()
         }
+        .scrollIndicators(.hidden)
+        .ignoresSafeArea(edges: .top)
+        .refreshable { await feed.reload(category) }
+        .background(Theme.pageBackground.ignoresSafeArea())
         .designScreen("drama")
         .task(id: category) { await feed.loadFirstIfNeeded(category) }
     }
@@ -155,46 +145,41 @@ struct DramaTab: View {
                     EmptyStateView(icon: AppIcon.video.name, title: "暂时没有内容", message: "这个分类下还没有短剧，稍后再来看看。")
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(maxWidth: .infinity, minHeight: 360)
         } else {
-            ScrollView {
-                LazyVGrid(columns: columns, spacing: 18) {
-                    ForEach(Array(shelf.items.enumerated()), id: \.element.id) { index, item in
-                        NavigationLink(value: DramaRoute(id: item.id, title: item.title, cover: item.cover)) {
-                            DramaPosterCard(item: item)
-                        }
-                        .buttonStyle(PosterButtonStyle())
-                        .accessibilityIdentifier("drama.poster.\(item.id)")
-                        .gridCardEntrance()
-                        .onAppear {
-                            if item.id == shelf.items.last?.id { Task { await feed.loadMore(category) } }
-                            // 提前取后面三行的封面
-                            let next = shelf.items.dropFirst(index + 1).prefix(9).map(\.cover)
-                            if !InterfacePreview.active { DramaCoverStore.shared.prefetch(Array(next)) }
-                        }
+            LazyVGrid(columns: columns, spacing: 18) {
+                ForEach(Array(shelf.items.enumerated()), id: \.element.id) { index, item in
+                    NavigationLink(value: DramaRoute(id: item.id, title: item.title, cover: item.cover)) {
+                        DramaPosterCard(item: item)
+                    }
+                    .buttonStyle(PosterButtonStyle())
+                    .accessibilityIdentifier("drama.poster.\(item.id)")
+                    .gridCardEntrance()
+                    .onAppear {
+                        if item.id == shelf.items.last?.id { Task { await feed.loadMore(category) } }
+                        // 提前取后面三行的封面
+                        let next = shelf.items.dropFirst(index + 1).prefix(9).map(\.cover)
+                        if !InterfacePreview.active { DramaCoverStore.shared.prefetch(Array(next)) }
                     }
                 }
-                .padding(.horizontal, Theme.contentInset)
-                .padding(.top, 4)
-
-                Group {
-                    if shelf.loading {
-                        ProgressView().tint(Theme.textSecondary)
-                    } else if !shelf.error.isEmpty {
-                        Button("加载失败，点这里重试") { Task { await feed.loadMore(category) } }
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(Theme.accent)
-                    } else if !shelf.hasMore {
-                        Text("已经到底了")
-                            .font(.caption)
-                            .foregroundStyle(Theme.textTertiary)
-                    }
-                }
-                .frame(maxWidth: .infinity, minHeight: 56)
-                .padding(.bottom, 24)
             }
-            .scrollIndicators(.hidden)
-            .refreshable { await feed.reload(category) }
+            .padding(.horizontal, Theme.contentInset)
+
+            Group {
+                if shelf.loading {
+                    ProgressView().tint(Theme.textSecondary)
+                } else if !shelf.error.isEmpty {
+                    Button("加载失败，点这里重试") { Task { await feed.loadMore(category) } }
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(Theme.accent)
+                } else if !shelf.hasMore {
+                    Text("已经到底了")
+                        .font(.caption)
+                        .foregroundStyle(Theme.textTertiary)
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 56)
+            .padding(.bottom, 24)
         }
     }
 }

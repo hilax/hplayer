@@ -8,6 +8,10 @@ struct HomeTab: View {
     var onOpenCatalog: (CatalogKind, CatalogSort) -> Void = { _, _ in }
     /// 首页频道（推荐 / 片库 / 动漫）；这一页本身是「推荐」。
     var channel: Binding<HomeChannel> = .constant(.recommend)
+    /// 顶部头部的「添加」按钮在频道容器里；按一次这个数就加一，这里打开添加面板
+    var addRequest = 0
+    /// 内容从哪里开始（顶部头部盖在上面）
+    @Environment(\.channelPageInsets) private var insets
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// 系统（或「外观」设置）的深浅色。首页内容强制按深色显示，从首页推出去的页面要恢复成这个。
     @Environment(\.colorScheme) private var colorScheme
@@ -61,7 +65,7 @@ struct HomeTab: View {
         let library = snapshot
         let continueItems = continueEntries(library)
 
-        NavigationStack {
+        Group {
             GeometryReader { viewport in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
@@ -71,10 +75,11 @@ struct HomeTab: View {
                         } else {
                             let slides = HomeSlide.interleave(featured: library.featured, banners: online.banners)
                             header(library, slides: slides, continueItems: continueItems,
-                                   width: viewport.size.width, safeTop: viewport.safeAreaInsets.top)
+                                   width: viewport.size.width, safeTop: insets.top)
                             sections(library, continueItems: continueItems, width: viewport.size.width)
                         }
                     }
+                    .tracksPageScroll()
                 }
                 .scrollIndicators(.hidden)
                 .ignoresSafeArea(edges: .top)
@@ -86,35 +91,6 @@ struct HomeTab: View {
                 }
             }
             .background(Theme.pageBackground.ignoresSafeArea())
-            .navigationDestination(for: AnimeDetailRoute.self) { route in
-                AnimeDetailView(animeId: route.animeId)
-                    .id(route.animeId)
-                    .restoringAppearance(colorScheme)
-            }
-            .navigationDestination(for: AnimeBrowseRoute.self) { route in
-                AnimeBrowseView(route: route)
-                    .restoringAppearance(colorScheme)
-            }
-            .navigationDestination(for: PerformerListRoute.self) { _ in
-                PerformerGridView(groups: library.performers)
-                    .restoringAppearance(colorScheme)
-            }
-            .navigationDestination(for: PerformerRoute.self) { route in
-                Group {
-                    if let group = library.performers.first(where: { $0.id == route.id }) {
-                        PerformerCollectionView(group: group)
-                            .id(route.id)
-                    } else {
-                        VStack(spacing: 10) {
-                            Image(systemName: AppIcon.people.name)
-                            Text("演员合集已更新").font(.headline)
-                            Text("返回首页后重新进入演员合集。").foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                .restoringAppearance(colorScheme)
-            }
-            .toolbar(.hidden, for: .navigationBar)
             .fileImporter(
                 isPresented: $showImporter,
                 allowedContentTypes: [.movie, .video, .mpeg4Movie, .quickTimeMovie, .data],
@@ -148,6 +124,7 @@ struct HomeTab: View {
             .onChange(of: librarySnapshots.revision) { _ in prefetchArtwork(snapshot) }
             .onChange(of: online.banners.count) { _ in prefetchArtwork(snapshot) }
             .onAppear { if snapshotReady { prefetchArtwork(snapshot) } }
+            .onChange(of: addRequest) { _ in showAdd = true }
         }
         .designScreen(library.featured.isEmpty ? "home-empty" : "home")
         .sheet(isPresented: $showAdd, onDismiss: performAddAction) {
@@ -206,28 +183,12 @@ struct HomeTab: View {
 
     // MARK: 顶栏、搜索、轮播
 
-    /// 页面顶部：频道条（右边是「添加」），搜索框（「筛选」去片库频道），轮播（片库精选和热播动漫交替）。
-    /// 和动漫、片库频道共用 ChannelHeroSection。观看历史从「继续观看」的「全部」进，顶栏不再重复放。
+    /// 页面顶部：轮播（片库精选和热播动漫交替）。频道条、搜索框在频道容器的固定头部里，这里只留出它们的位置。
     private func header(_ library: HomeSnapshot, slides: [HomeSlide], continueItems: [ContinueEntry],
                         width: CGFloat, safeTop: CGFloat) -> some View {
-        ChannelHeroSection(channel: channel, searchPlaceholder: "搜索片库、动漫、网盘", searchIdentifier: "home.search",
-                           onSearch: onSearch, onFilter: { channel.wrappedValue = .library }, filterIdentifier: "home.filter",
-                           slides: slides, carouselLabel: "精选推荐", carouselIdentifier: "home.carouselPosition",
+        AmbientHeroSection(slides: slides, carouselLabel: "精选推荐", carouselIdentifier: "home.carouselPosition",
                            safeTop: safeTop, width: width) {
-            HStack(spacing: 0) {
-                Button { showAdd = true } label: {
-                    Image(systemName: AppIcon.addCircle.name)
-                        .font(.system(size: 20, weight: Theme.iconWeight))
-                        .foregroundStyle(Theme.textPrimary)
-                        .frame(width: 44, height: 44)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.pressable(scale: 0.88))
-                .accessibilityLabel("添加")
-                .accessibilityIdentifier("home.sources")
-            }
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("home.heroBar")
+            EmptyView()
         } hitArea: { slide in
             slideHitArea(slide, library: library)
         }

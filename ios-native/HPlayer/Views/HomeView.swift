@@ -287,20 +287,9 @@ struct HomeView: View {
     private func page(for section: HomeSection) -> some View {
         switch section {
         case .home:
-            // 推荐是沉浸式首页；片库、动漫共用 CatalogTab（四行筛选海报墙 / 在线番剧）。
-            if channel == .recommend {
-                HomeTab(onBrowseLibrary: { selection = .cloud },
-                        onSearch: { openSearch() },
-                        onOpenCatalog: { kind, sort in
-                            catalogPreset = CatalogPreset(kind: kind, sort: sort)
-                            channel = .library
-                        },
-                        channel: $channel)
-            } else if channel == .drama {
-                DramaTab(channel: $channel)
-            } else {
-                CatalogTab(onSearch: { openSearch() }, preset: $catalogPreset, channel: $channel)
-            }
+            // 推荐 / 动漫 / 片库 / 短剧：左右滑动切换，频道条和搜索框是固定头部（见 HomeChannelsView）
+            HomeChannelsView(channel: $channel, catalogPreset: $catalogPreset,
+                             onSearch: { openSearch() }, onBrowseLibrary: { selection = .cloud })
         case .magnet:
             MagnetTab()
         case .cloud:

@@ -85,12 +85,12 @@ struct AnimeBrowseRoute: Hashable {
     var sort = "addtime"
 }
 
-/// 动漫频道：和首页同一套顶部（频道条、搜索框、热播轮播；轮播位置一直留着，数据到了再填），
+/// 动漫频道：顶部是热播轮播（频道条、搜索框在频道容器的固定头部里；轮播位置一直留着，数据到了再填），
 /// 下面一排快捷入口（最新上架 / 最多播放 / 我的追番 / 剧场版），再下面是热门新番（三列竖海报）和各频道货架。
 /// 「全部」「更多」、快捷入口、「筛选」都推进新的列表页（AnimeBrowseView），不在本页切换内容。
 struct AnimeCatalogView: View {
-    var channel: Binding<HomeChannel>
-    var onSearch: () -> Void
+    /// 内容从哪里开始（频道容器的固定头部盖在上面）
+    @Environment(\.channelPageInsets) private var insets
 
     @ObservedObject private var store = AnimeHomeStore.shared
     @ObservedObject private var online = HomeOnlineFeed.shared
@@ -100,11 +100,11 @@ struct AnimeCatalogView: View {
         GeometryReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    ChannelHeroSection(channel: channel, searchPlaceholder: "搜索动漫", searchIdentifier: "anime.search",
-                                       onSearch: onSearch, onFilter: nil,
-                                       slides: HomeSlide.anime(online.banners), reservesCarousel: true,
+                    AmbientHeroSection(slides: HomeSlide.anime(online.banners), reservesCarousel: true,
                                        carouselLabel: "热播轮播", carouselIdentifier: "anime.bannerPosition",
-                                       safeTop: proxy.safeAreaInsets.top, width: proxy.size.width) { slide in
+                                       safeTop: insets.top, width: proxy.size.width) {
+                        EmptyView()
+                    } hitArea: { slide in
                         bannerHitArea(slide)
                     }
 
@@ -113,6 +113,7 @@ struct AnimeCatalogView: View {
 
                     recommendContent(width: proxy.size.width)
                 }
+                .tracksPageScroll()
             }
             .scrollIndicators(.hidden)
             .ignoresSafeArea(edges: .top)
@@ -123,13 +124,6 @@ struct AnimeCatalogView: View {
             }
         }
         .background(Theme.pageBackground.ignoresSafeArea())
-        .navigationDestination(for: AnimeDetailRoute.self) { route in
-            AnimeDetailView(animeId: route.animeId)
-                .id(route.animeId)
-        }
-        .navigationDestination(for: AnimeBrowseRoute.self) { route in
-            AnimeBrowseView(route: route)
-        }
         .task { await online.loadIfNeeded() }
         .task { await store.loadIfNeeded() }
     }
