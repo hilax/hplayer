@@ -251,6 +251,81 @@ final class LocalStreamProxyTests: XCTestCase {
         XCTAssertTrue(fetched.body == Data(full.prefix(cut)), "收到的内容必须是断开之前的原样数据；\(detail)")
         XCTAssertTrue(history.contains("续传失败"), detail)
     }
+
+    /// 115 的地址过期了（上游回 403）：中转用登记的办法换新地址重发，mpv 拿到的是正常的视频
+    func testRenewsAnExpiredAddressBeforeAnswering() async throws {
+        let fresh = try XCTUnwrap(URL(string: "https://example.com/b/fresh.mp4"))
+        ScriptedUpstream.install([
+            .reply(status: 403, headers: [:], body: Data("expired".utf8)),
+            .reply(status: 200, headers: ["Content-Length": "5"], body: Data("hello".utf8)),
+        ])
+        let proxy = LocalStreamProxy(protocolClasses: [ScriptedUpstream.self])
+        let calls = RenewCounter()
+        let upstream = try XCTUnwrap(URL(string: "https://example.com/a/video.mp4"))
+        let relayed = await proxy.localURL(for: upstream, headers: [:], renew: { calls.increment(); return fresh })
+        let local = try XCTUnwrap(relayed)
+
+        let fetched = try fetch(local, range: nil)
+        let history = proxy.problemHistoryLines.joined(separator: "\n")
+        XCTAssertEqual(fetched.status, 200, history)
+        XCTAssertEqual(fetched.body, Data("hello".utf8))
+        XCTAssertEqual(ScriptedUpstream.receivedURLs(), [upstream, fresh])
+        XCTAssertEqual(calls.value, 1)
+        XCTAssertTrue(history.contains("已换新地址"), history)
+    }
+
+    /// 换来的新地址马上也被拒：不是过期的问题，不反复换，照实告诉 mpv
+    func testDoesNotLoopWhenTheFreshAddressIsAlsoRefused() async throws {
+        let fresh = try XCTUnwrap(URL(string: "https://example.com/b/fresh.mp4"))
+        ScriptedUpstream.install([
+            .reply(status: 403, headers: [:], body: Data()),
+            .reply(status: 403, headers: [:], body: Data()),
+            .reply(status: 200, headers: ["Content-Length": "5"], body: Data("hello".utf8)),
+        ])
+        let proxy = LocalStreamProxy(protocolClasses: [ScriptedUpstream.self])
+        let calls = RenewCounter()
+        let upstream = try XCTUnwrap(URL(string: "https://example.com/a/video.mp4"))
+        let relayed = await proxy.localURL(for: upstream, headers: [:], renew: { calls.increment(); return fresh })
+        let local = try XCTUnwrap(relayed)
+
+        let fetched = try fetch(local, range: nil)
+        XCTAssertEqual(fetched.status, 403)
+        XCTAssertEqual(ScriptedUpstream.receivedURLs().count, 2)
+        XCTAssertEqual(calls.value, 1)
+    }
+
+    /// 看到一半地址过期：断开后续传被 403 拒绝，换新地址后从断开的字节接着下，内容拼起来和原文件一样
+    func testResumesWithAFreshAddressWhenTheOldOneExpiresMidDownload() async throws {
+        let total = 200_000
+        let cut = 80_000
+        let full = pattern(total)
+        let server = try ScriptedHTTPServer([
+            .send(status: 206, headers: ["Content-Type": "video/mp4", "Content-Range": "bytes 0-\(total - 1)/\(total)", "Content-Length": "\(total)"], body: Data(full.prefix(cut))),
+            .send(status: 403, headers: ["Content-Length": "0"], body: Data()),
+            .send(status: 206, headers: ["Content-Type": "video/mp4", "Content-Range": "bytes \(cut)-\(total - 1)/\(total)", "Content-Length": "\(total - cut)"], body: Data(full.suffix(total - cut))),
+        ])
+        defer { server.stop() }
+        let proxy = LocalStreamProxy()
+        proxy.setRetryDelaysForTesting([0.05, 0.05])
+        let fresh = try XCTUnwrap(URL(string: server.url.absoluteString + "?fresh=1"))
+        let relayed = await proxy.localURL(for: server.url, headers: [:], renew: { fresh })
+        let local = try XCTUnwrap(relayed)
+
+        let fetched = try fetch(local, range: "bytes=0-\(total - 1)")
+        let history = proxy.problemHistoryLines.joined(separator: "\n")
+        let detail = "head=\(fetched.head)\nRange：\(server.receivedRanges())\n路径：\(server.receivedTargets())\n\(history)"
+        XCTAssertEqual(fetched.status, 206, detail)
+        XCTAssertTrue(fetched.body == full, "换地址前后的内容要接得上；\(detail)")
+        XCTAssertEqual(server.receivedRanges(), ["bytes=0-\(total - 1)", "bytes=\(cut)-\(total - 1)", "bytes=\(cut)-\(total - 1)"], detail)
+        XCTAssertEqual(server.receivedTargets().last, "/a/video.mp4?fresh=1", detail)
+    }
+}
+
+private final class RenewCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    var value: Int { lock.lock(); defer { lock.unlock() }; return count }
+    func increment() { lock.lock(); count += 1; lock.unlock() }
 }
 
 /// 假的 115 服务器（不经过网络）：按顺序给每个请求一个剧本（连不上、返回状态码），并记下每次请求带的 Range。
@@ -263,11 +338,18 @@ private final class ScriptedUpstream: URLProtocol {
     private static let lock = NSLock()
     private static var steps: [Step] = []
     private static var ranges: [String?] = []
+    private static var urls: [URL] = []
 
     static func install(_ steps: [Step]) {
         lock.lock(); defer { lock.unlock() }
         self.steps = steps
         ranges = []
+        urls = []
+    }
+
+    static func receivedURLs() -> [URL] {
+        lock.lock(); defer { lock.unlock() }
+        return urls
     }
 
     static func receivedRanges() -> [String?] {
@@ -281,6 +363,7 @@ private final class ScriptedUpstream: URLProtocol {
     override func startLoading() {
         Self.lock.lock()
         Self.ranges.append(request.value(forHTTPHeaderField: "Range"))
+        if let url = request.url { Self.urls.append(url) }
         let step: Step? = Self.steps.isEmpty ? nil : Self.steps.removeFirst()
         Self.lock.unlock()
         guard let step else {
@@ -313,6 +396,7 @@ private final class ScriptedHTTPServer: @unchecked Sendable {
     private let lock = NSLock()
     private var replies: [Reply]
     private var ranges: [String?] = []
+    private var targets: [String] = []
     private var stopped = false
 
     var url: URL { URL(string: "http://127.0.0.1:\(port)/a/video.mp4")! }
@@ -345,6 +429,12 @@ private final class ScriptedHTTPServer: @unchecked Sendable {
     func receivedRanges() -> [String?] {
         lock.lock(); defer { lock.unlock() }
         return ranges
+    }
+
+    /// 每次请求的路径（含查询串）
+    func receivedTargets() -> [String] {
+        lock.lock(); defer { lock.unlock() }
+        return targets
     }
 
     func stop() {
@@ -382,14 +472,17 @@ private final class ScriptedHTTPServer: @unchecked Sendable {
         let range = String(decoding: request, as: UTF8.self).components(separatedBy: "\r\n")
             .first { $0.lowercased().hasPrefix("range:") }
             .map { String($0.dropFirst(6)).trimmingCharacters(in: .whitespaces) }
+        let target = String(decoding: request, as: UTF8.self).components(separatedBy: "\r\n").first?
+            .split(separator: " ").dropFirst().first.map(String.init) ?? ""
         lock.lock()
         ranges.append(range)
+        targets.append(target)
         let reply = replies.isEmpty ? nil : replies.removeFirst()
         lock.unlock()
         guard let reply else { return }
         switch reply {
         case .send(let status, let headers, let body):
-            var head = "HTTP/1.1 \(status) \(status == 206 ? "Partial Content" : "OK")\r\n"
+            var head = "HTTP/1.1 \(status) \(status == 206 ? "Partial Content" : status == 403 ? "Forbidden" : "OK")\r\n"
             for (name, value) in headers { head += "\(name): \(value)\r\n" }
             head += "Connection: close\r\n\r\n"
             let bytes = [UInt8](Data(head.utf8) + body)

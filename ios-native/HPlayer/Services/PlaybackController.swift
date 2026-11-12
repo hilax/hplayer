@@ -510,8 +510,10 @@ final class PlaybackController: ObservableObject {
         applyAspect(engine)
         let currentSession = session
         let generation = addressGeneration
+        let renew = urlRefresher
         addressTask = Task { @MainActor [weak self, weak engine] in
-            let address = await Self.engineAddress(for: url, direct115: direct115, cookieHeader: cookieHeader, customHeaders: customHeaders)
+            let address = await Self.engineAddress(for: url, direct115: direct115, cookieHeader: cookieHeader,
+                                                   customHeaders: customHeaders, renew: renew)
             guard let self, let engine, !Task.isCancelled, !self.closingPlayback,
                   self.session == currentSession, self.addressGeneration == generation,
                   self.engine === engine else { return }
@@ -1101,7 +1103,8 @@ final class PlaybackController: ObservableObject {
         loaded = false
         if reason == failed {
             if watchdogEnabled, currentURL != nil {
-                recover(reason: hasPlayed ? "网络连接断了" : "视频打开失败")
+                // 这次会话里播出来过（重连后的重新打开也算）就是连接断了，不是「打开失败」
+                recover(reason: hasPlayed || playedThisSession ? "网络连接断了" : "视频打开失败")
             } else {
                 giveUp(message.map { "播放失败：\($0)" } ?? "播放失败，请尝试其他画质或检查网络")
             }
@@ -1386,7 +1389,9 @@ final class PlaybackController: ObservableObject {
     }
 
     /// 网络视频交给本机中转，由系统网络栈去连 115（mpv 自带的 TLS 连 115 会被断开）；本机地址（磁力边下边播）直接给内核
-    private static func engineAddress(for url: URL, direct115: Bool, cookieHeader: String, customHeaders: [String: String] = [:]) async -> String {
+    /// `renew`：115 地址过期（上游 403）时中转自己换新地址接着下，不打断播放
+    private static func engineAddress(for url: URL, direct115: Bool, cookieHeader: String, customHeaders: [String: String] = [:],
+                                      renew: (() async throws -> URL)? = nil) async -> String {
         if url.isFileURL { return url.path }
         guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return url.absoluteString }
         let host = url.host?.lowercased() ?? ""
@@ -1404,7 +1409,7 @@ final class PlaybackController: ObservableObject {
         for (k, v) in customHeaders {
             headers[k] = v
         }
-        return await LocalStreamProxy.shared.localURL(for: url, headers: headers)?.absoluteString ?? url.absoluteString
+        return await LocalStreamProxy.shared.localURL(for: url, headers: headers, renew: renew)?.absoluteString ?? url.absoluteString
     }
 
     static func clock(_ seconds: Double) -> String {

@@ -35,6 +35,11 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
     /// 上游连不上、或下载到一半断了时，每次重试前等多久；用完了才把错误交给 mpv。
     /// 115 的服务器偶尔会掐掉连接再拒绝紧接着的新连接，隔一小会儿就恢复了。
     fileprivate var retryDelays: [TimeInterval] = [0.3, 0.8, 1.6, 3.0]
+    /// 115 的下载地址有时效，过期（或被 115 收回）后上游回 403。登记了换地址办法的视频，
+    /// 中转自己去换新地址、从原来的字节位置接着下，mpv 那边不会断，也不用整个重开。
+    /// 键是播放器拿到的原始地址（本机地址里编码的就是它）。
+    private var renewals: [String: UpstreamRenewal] = [:]
+    private var renewalOrder: [String] = []
     private static let historyClock: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm:ss"
@@ -95,7 +100,7 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
     // MARK: 对外
 
     /// 把网络地址换成本机中转地址；中转服务起不来时返回 nil，调用方就直接用原地址
-    func localURL(for upstream: URL, headers: [String: String]) async -> URL? {
+    func localURL(for upstream: URL, headers: [String: String], renew: (() async throws -> URL)? = nil) async -> URL? {
         let id = UUID()
         let cancellation = ListenerCancellation()
         return await withTaskCancellationHandler {
@@ -113,6 +118,7 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
                         }
                         self.lastProblem = ""
                         let profile = self.register(headers)
+                        if let renew { self.registerRenewal(for: upstream, renew) }
                         continuation.resume(returning: Self.localURL(for: upstream, port: port, profile: profile))
                     }
                     // A previously ready listener can later enter .waiting without a new startup timer.
@@ -313,6 +319,65 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
         return id
     }
 
+    private func registerRenewal(for upstream: URL, _ renew: @escaping () async throws -> URL) {
+        let key = upstream.absoluteString
+        renewals[key] = UpstreamRenewal(renew)
+        renewalOrder.removeAll { $0 == key }
+        renewalOrder.append(key)
+        if renewalOrder.count > 16 {
+            renewals.removeValue(forKey: renewalOrder.removeFirst())
+        }
+    }
+
+    /// 原始地址现在该用哪个地址去连（换过新地址就用新的）
+    fileprivate func currentUpstream(for original: URL) -> URL {
+        renewals[original.absoluteString]?.current ?? original
+    }
+
+    fileprivate func canRenew(_ original: URL) -> Bool {
+        renewals[original.absoluteString] != nil
+    }
+
+    /// 地址 `failed` 被上游拒绝了：换一个新地址。好几条连接同时被拒时只换一次，大家共用结果；
+    /// 别的连接已经换好了就直接用。刚换来的新地址也马上被拒，说明不是过期的问题，不再换（回调 nil）。
+    fileprivate func renew(_ original: URL, failed: URL, completion: @escaping (URL?) -> Void) {
+        guard let renewal = renewals[original.absoluteString] else {
+            completion(nil)
+            return
+        }
+        if let current = renewal.current, current != failed {
+            completion(current)
+            return
+        }
+        if !renewal.refreshing, let last = renewal.renewedAt, renewal.current == failed, Date().timeIntervalSince(last) < 8 {
+            note("新换的地址也被拒绝，不再换")
+            completion(nil)
+            return
+        }
+        renewal.waiters.append(completion)
+        guard !renewal.refreshing else { return }
+        renewal.refreshing = true
+        let fetch = renewal.fetch
+        Task {
+            var fresh: URL?
+            var failure = ""
+            do { fresh = try await fetch() } catch { failure = LocalStreamProxy.summary(of: error) }
+            self.queue.async {
+                renewal.refreshing = false
+                if let fresh {
+                    renewal.current = fresh
+                    renewal.renewedAt = Date()
+                    self.note("已换新地址（\(fresh.host ?? "")）")
+                } else {
+                    self.note("换新地址失败：\(failure)")
+                }
+                let waiters = renewal.waiters
+                renewal.waiters = []
+                waiters.forEach { $0(fresh) }
+            }
+        }
+    }
+
     fileprivate func resolve(path: String) -> (url: URL, headers: [String: String], profile: String)? {
         let pathOnly = path.split(separator: "?", maxSplits: 1).first.map(String.init) ?? path
         let parts = pathOnly.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
@@ -376,6 +441,19 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
     }
 }
 
+/// 一个视频的换地址办法和换来的最新地址（只在中转队列上读写）
+private final class UpstreamRenewal {
+    let fetch: () async throws -> URL
+    var current: URL?
+    var renewedAt: Date?
+    var refreshing = false
+    var waiters: [(URL?) -> Void] = []
+
+    init(_ fetch: @escaping () async throws -> URL) {
+        self.fetch = fetch
+    }
+}
+
 /// Cancellation can race with registering a continuation on the proxy queue.
 private final class ListenerCancellation: @unchecked Sendable {
     private let lock = NSLock()
@@ -428,7 +506,12 @@ private final class ProxyConnection {
     private var playlistData = Data()
     private var responseURL: URL?
     private var upstreamURL: URL?
-    private var profile = ""
+    /// 播放器请求的原始地址（换地址时按它找）
+    private var originalURL: URL?
+    /// 这条连接已经因为地址被拒换过几次地址
+    private var renewCount = 0
+    /// 文件总长度（Content-Range 里的 /总长），换地址续传时用它确认还是同一个文件
+    private var bodyTotal: Int64?
     private var pending = 0
     private var suspended = false
     private var closed = false
@@ -501,9 +584,11 @@ private final class ProxyConnection {
             return
         }
         isHead = parts[0] == "HEAD"
-        upstreamURL = target.url
+        originalURL = target.url
+        let upstream = proxy.currentUpstream(for: target.url)
+        upstreamURL = upstream
         profile = target.profile
-        var request = URLRequest(url: target.url)
+        var request = URLRequest(url: upstream)
         request.httpMethod = isHead ? "HEAD" : "GET"
         for (name, value) in target.headers {
             request.setValue(value, forHTTPHeaderField: name)
@@ -531,8 +616,14 @@ private final class ProxyConnection {
         if let start = resumeFrom {
             // 续传：响应头早就发给 mpv 了，这里只确认上游真的从断开的位置接上，而且还是同一个文件
             resumeFrom = nil
+            if Self.isRefused(status: http.statusCode),
+               renewUpstream("续传时上游返回 HTTP \(http.statusCode)", cancelling: dataTask, resumeAt: start) {
+                return false
+            }
             let newValidator = http.value(forHTTPHeaderField: "ETag")
-            let sameFile = validator == nil || newValidator == nil || validator == newValidator
+            let newTotal = Self.totalLength(of: http)
+            let sameSize = bodyTotal != nil && newTotal == bodyTotal
+            let sameFile = validator == nil || newValidator == nil || validator == newValidator || sameSize
             guard http.statusCode == 206, Self.contentRange(of: http)?.start == start, sameFile else {
                 proxy.note("续传失败：上游返回 HTTP \(http.statusCode)，没能从 \(start) 字节接上")
                 close()
@@ -541,6 +632,10 @@ private final class ProxyConnection {
             return true
         }
         responseURL = http.url
+        if Self.isRefused(status: http.statusCode),
+           renewUpstream("上游返回 HTTP \(http.statusCode)（\(http.url?.host ?? "")）", cancelling: dataTask, resumeAt: nil) {
+            return false
+        }
         if Self.isTransient(status: http.statusCode),
            scheduleRetry("上游返回 HTTP \(http.statusCode)（\(http.url?.host ?? "")）", cancelling: dataTask) {
             return false
@@ -556,6 +651,7 @@ private final class ProxyConnection {
             bodyEnd = length - 1
         }
         validator = http.value(forHTTPHeaderField: "ETag")
+        bodyTotal = Self.totalLength(of: http) ?? bodyEnd.map { $0 + 1 }
         let type = (http.value(forHTTPHeaderField: "Content-Type") ?? "").lowercased()
         let path = (http.url?.path ?? upstreamURL?.path ?? "").lowercased()
         if (200..<300).contains(http.statusCode), type.contains("mpegurl") || path.hasSuffix(".m3u8") || path.hasSuffix(".m3u") {
@@ -657,6 +753,32 @@ private final class ProxyConnection {
         return true
     }
 
+    /// 上游拒绝了这个地址（115 的下载地址过期）：换新地址重发；响应头已经发给 mpv 的，从断开的位置接着下。
+    /// 返回 false：这个视频没有登记换地址的办法，或者这条连接已经换过两次了，由调用方照常处理。
+    private func renewUpstream(_ detail: String, cancelling running: URLSessionDataTask?, resumeAt: Int64?) -> Bool {
+        guard let original = originalURL, let failed = upstreamURL, renewCount < 2, proxy.canRenew(original) else { return false }
+        if headersSent && resumeAt == nil { return false }
+        renewCount += 1
+        proxy.note("\(detail)，地址可能过期了，换新地址" + (resumeAt.map { "后从 \($0) 字节接着下" } ?? "后重发"))
+        if let running { proxy.detach(running) }
+        task = nil
+        if !headersSent {
+            playlistData = Data()
+            isPlaylist = false
+        }
+        proxy.renew(original, failed: failed) { [weak self] fresh in
+            guard let self, !self.closed else { return }
+            guard let fresh else {
+                if self.headersSent { self.close() } else { self.respond(status: 403, text: "Forbidden") }
+                return
+            }
+            self.upstreamURL = fresh
+            self.baseRequest?.url = fresh
+            self.relaunch(resumingAt: resumeAt)
+        }
+        return true
+    }
+
     private func relaunch(resumingAt start: Int64?) {
         retryWork = nil
         guard !closed, var request = baseRequest else { return }
@@ -679,6 +801,18 @@ private final class ProxyConnection {
         default:
             return false
         }
+    }
+
+    /// 上游拒绝这个地址：115 的下载地址过期、或被收回时是 403
+    private static func isRefused(status: Int) -> Bool {
+        status == 401 || status == 403 || status == 410
+    }
+
+    /// `Content-Range: bytes 100-199/1000` 里的 1000
+    private static func totalLength(of response: HTTPURLResponse) -> Int64? {
+        guard let value = response.value(forHTTPHeaderField: "Content-Range"),
+              let total = value.split(separator: "/").last else { return nil }
+        return Int64(total.trimmingCharacters(in: .whitespaces))
     }
 
     private static func isTransient(status: Int) -> Bool {
