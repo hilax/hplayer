@@ -209,10 +209,16 @@ struct AnimeVideoDetail: Identifiable, Codable, Hashable {
     let stars: String?
     let autoPlay: Int?
     let pic: String?
+    /// 播放量、评论数、弹幕数（详情接口有，列表没有；旧缓存里可能缺）
+    var hits: Int? = nil
+    var commentTotal: Int? = nil
+    var danmuCount: Int? = nil
 
     enum CodingKeys: String, CodingKey {
-        case id, name, source, parts, continu, year, area, type, actor, director, content, stars, pic
+        case id, name, source, parts, continu, year, area, type, actor, director, content, stars, pic, hits
         case autoPlay = "auto_play"
+        case commentTotal = "comment_total"
+        case danmuCount = "danmu_count"
     }
 
     init(id: Int, name: String, source: String? = nil, parts: [AnimePlayRoute] = [],
@@ -248,8 +254,11 @@ struct AnimeVideoDetail: Identifiable, Codable, Hashable {
         actor = try c.decodeIfPresent(String.self, forKey: .actor)
         director = try c.decodeIfPresent(String.self, forKey: .director)
         content = try c.decodeIfPresent(String.self, forKey: .content)
-        autoPlay = try c.decodeIfPresent(Int.self, forKey: .autoPlay)
+        autoPlay = try? c.decodeIfPresent(Int.self, forKey: .autoPlay)
         pic = try c.decodeIfPresent(String.self, forKey: .pic)
+        hits = Self.lenientInt(c, .hits)
+        commentTotal = Self.lenientInt(c, .commentTotal)
+        danmuCount = Self.lenientInt(c, .danmuCount)
 
         if let str = try? c.decodeIfPresent(String.self, forKey: .stars) {
             stars = str
@@ -260,6 +269,13 @@ struct AnimeVideoDetail: Identifiable, Codable, Hashable {
         } else {
             stars = nil
         }
+    }
+
+    private static func lenientInt(_ c: KeyedDecodingContainer<CodingKeys>, _ key: CodingKeys) -> Int? {
+        if let value = try? c.decodeIfPresent(Int.self, forKey: key) { return value }
+        if let value = try? c.decodeIfPresent(Double.self, forKey: key) { return Int(value) }
+        if let text = try? c.decodeIfPresent(String.self, forKey: key) { return Int(text) }
+        return nil
     }
 
     var cleanDesc: String {

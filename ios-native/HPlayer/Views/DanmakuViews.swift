@@ -454,7 +454,7 @@ struct AnimeCommentsView: View {
     }
 }
 
-private struct AnimeCommentRow: View {
+struct AnimeCommentRow: View {
     let comment: AnimeComment
 
     var body: some View {

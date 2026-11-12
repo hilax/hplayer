@@ -12,8 +12,11 @@ struct AnimeDetailView: View {
     @State private var activeEpisode: String?
     @State private var lastPosition: Double? = nil
     @State private var hasWatchedBefore: Bool = false
-    @State private var isDescending = false
     @State private var isOverviewExpanded = false
+    @State private var showEpisodeSheet = false
+    /// 评论预览（前三条）；nil = 还没拉到 / 拉失败
+    @State private var commentPreview: [AnimeComment]?
+    @State private var commentsLoading = false
     @State private var isLoading = true
     @State private var errorMessage: String? = nil
 
@@ -32,12 +35,14 @@ struct AnimeDetailView: View {
                     VStack(alignment: .leading, spacing: 0) {
                         backdropView(detail)
 
-                        // 顺序与剧集详情页一致：抬头 → 简介 → 主按钮 → 选集
+                        // 抬头 → 数据（播放 / 评论 / 弹幕）→ 简介 → 主按钮 → 选集（横排）→ 评论预览
                         VStack(alignment: .leading, spacing: 22) {
                             headerView(detail)
+                            statsLine(detail)
                             synopsisSection(detail)
                             primaryPlayButton(detail)
                             routesAndEpisodesSection(detail)
+                            commentsSection(detail)
                         }
                         .padding(.horizontal, Theme.contentInset)
                         .padding(.top, -50)
@@ -96,6 +101,21 @@ struct AnimeDetailView: View {
         .onChange(of: playingQueue == nil) { isClosed in
             if isClosed, let detail {
                 restoreLastWatched(detail: detail)
+            }
+        }
+        .task(id: animeId) { await loadComments() }
+        .onChange(of: selectedRouteIndex) { index in
+            UserDefaults.standard.set(index, forKey: "anime.last_route.\(animeId)")
+        }
+        .sheet(isPresented: $showEpisodeSheet) {
+            if let detail {
+                AnimeEpisodeSheet(detail: detail, routeIndex: $selectedRouteIndex, activeEpisode: activeEpisode,
+                                  progress: { episodeProgress($0, detail: detail) }) { episode in
+                    activeEpisode = episode
+                    startPlay(episode: episode, detail: detail)
+                }
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
             }
         }
         .playerWindow(item: $playingQueue) { queue in
@@ -225,34 +245,50 @@ struct AnimeDetailView: View {
         return String(format: "%02d:%02d", m, s)
     }
 
-    // MARK: - 线路切换与选集矩阵
+    // MARK: - 数据行
+
+    /// 「14.1万次播放 · 173 条评论 · 1000 条弹幕」：详情接口有才显示
+    @ViewBuilder
+    private func statsLine(_ detail: AnimeVideoDetail) -> some View {
+        let parts = [
+            detail.hits.flatMap { $0 > 0 ? "\(compactCount($0)) 次播放" : nil },
+            detail.commentTotal.flatMap { $0 > 0 ? "\(compactCount($0)) 条评论" : nil },
+            detail.danmuCount.flatMap { $0 > 0 ? "\(compactCount($0)) 条弹幕" : nil },
+        ].compactMap { $0 }
+        if !parts.isEmpty {
+            Text(parts.joined(separator: " · "))
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.textTertiary)
+                .padding(.top, -10)
+        }
+    }
+
+    // MARK: - 选集：线路 + 一行横排（自动滚到在看的那集），「全部」打开分段面板
 
     private func routesAndEpisodesSection(_ detail: AnimeVideoDetail) -> some View {
         let route = detail.parts.indices.contains(selectedRouteIndex) ? detail.parts[selectedRouteIndex] : detail.parts.first
         let episodes = route?.part ?? []
 
         return VStack(alignment: .leading, spacing: 12) {
-            // 选集标题行：与剧集页同一套（ShelfHeader + 共 N 集）
             ShelfHeader(title: "选集", inset: 0) {
                 HStack(spacing: 10) {
-                    Text("共 \(episodes.count) 集")
+                    Text(episodeSummary(detail, route: route))
                         .font(.system(size: 12))
                         .tertiaryTextStyle()
-                    HStack(spacing: 0) {
-                        orderPill(title: "正序", icon: .sortAscending, selected: !isDescending) {
-                            withAnimation(Motion.snappy) { isDescending = false }
+                        .lineLimit(1)
+                    if episodes.count > 1 {
+                        Button { showEpisodeSheet = true } label: {
+                            ShelfLinkLabel(text: "全部")
+                                .frame(minWidth: 44, minHeight: 44, alignment: .trailing)
                         }
-                        orderPill(title: "倒序", icon: .sortDescending, selected: isDescending) {
-                            withAnimation(Motion.snappy) { isDescending = true }
-                        }
+                        .buttonStyle(.pressable(scale: 0.92))
+                        .accessibilityIdentifier("anime.episodes.all")
                     }
-                    .padding(2)
-                    .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
             }
 
-            // 线路胶囊：对应剧集页的「季」，用同一个 SelectionPill
-            if !detail.parts.isEmpty {
+            // 线路胶囊：只有一条线路时不占一行（线路名已经写在标题右边）
+            if detail.parts.count > 1 {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
                         ForEach(Array(detail.parts.enumerated()), id: \.element.id) { index, item in
@@ -262,7 +298,6 @@ struct AnimeDetailView: View {
                                 namespace: routeNamespace
                             ) {
                                 withAnimation(Motion.snappy) { selectedRouteIndex = index }
-                                UserDefaults.standard.set(index, forKey: "anime.last_route.\(animeId)")
                                 restoreLastWatched(detail: detail)
                             }
                         }
@@ -271,25 +306,111 @@ struct AnimeDetailView: View {
             }
 
             if !episodes.isEmpty {
-                AnimeEpisodeMatrix(
-                    episodes: episodes,
-                    activeEpisode: activeEpisode,
-                    isDescending: isDescending,
-                    progress: { episodeProgress($0, detail: detail) }
-                ) { ep in
-                    activeEpisode = ep
-                    startPlay(episode: ep, detail: detail)
-                }
+                episodeStrip(episodes, detail: detail)
 
                 if let ep = activeEpisode, let line = episodeDetailLine(ep, detail: detail) {
                     Text(line)
                         .font(.system(size: 12))
                         .tertiaryTextStyle()
                         .lineLimit(2)
-                        .padding(.top, 2)
                 }
             }
         }
+    }
+
+    /// 「国语 · 更新至 166 集」「共 12 集」
+    private func episodeSummary(_ detail: AnimeVideoDetail, route: AnimePlayRoute?) -> String {
+        let count = route?.part.count ?? 0
+        let finished = (detail.continu ?? "").contains("全") || (detail.continu ?? "").contains("完结")
+        let countText = finished ? "共 \(count) 集" : "更新至 \(count) 集"
+        if detail.parts.count == 1, let name = route?.playZh, !name.isEmpty { return "\(name) · \(countText)" }
+        return countText
+    }
+
+    /// 一行横排的选集格子，打开时滚到在看的那一集；集数再多也只占一行。
+    private func episodeStrip(_ episodes: [String], detail: AnimeVideoDetail) -> some View {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal) {
+                LazyHStack(spacing: 8) {
+                    ForEach(episodes, id: \.self) { episode in
+                        AnimeEpisodeCell(title: episode, isCurrent: episode == activeEpisode,
+                                         progress: episodeProgress(episode, detail: detail) ?? 0) {
+                            activeEpisode = episode
+                            startPlay(episode: episode, detail: detail)
+                        }
+                        .frame(width: 64)
+                        .id(episode)
+                    }
+                }
+                .padding(.horizontal, Theme.contentInset)
+                .padding(.vertical, 2)
+            }
+            .scrollIndicators(.hidden)
+            .padding(.horizontal, -Theme.contentInset)
+            .onAppear { scrollStrip(proxy, animated: false) }
+            .onChange(of: activeEpisode) { _ in scrollStrip(proxy, animated: true) }
+            .onChange(of: selectedRouteIndex) { _ in scrollStrip(proxy, animated: false) }
+        }
+    }
+
+    private func scrollStrip(_ proxy: ScrollViewProxy, animated: Bool) {
+        guard let activeEpisode else { return }
+        DispatchQueue.main.async {
+            withAnimation(animated ? Motion.smooth : nil) { proxy.scrollTo(activeEpisode, anchor: .center) }
+        }
+    }
+
+    // MARK: - 评论预览
+
+    private func commentsSection(_ detail: AnimeVideoDetail) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ShelfHeader(title: "评论", inset: 0) {
+                HStack(spacing: 10) {
+                    if let total = detail.commentTotal, total > 0 {
+                        Text("\(compactCount(total)) 条")
+                            .font(.system(size: 12))
+                            .tertiaryTextStyle()
+                    }
+                    NavigationLink {
+                        AnimeCommentsPage(vid: detail.id, title: "\(detail.name) · 评论")
+                    } label: {
+                        ShelfLinkLabel(text: "全部")
+                            .frame(minWidth: 44, minHeight: 44, alignment: .trailing)
+                    }
+                    .buttonStyle(.pressable(scale: 0.92))
+                    .accessibilityIdentifier("anime.comments.all")
+                }
+            }
+
+            if let comments = commentPreview, !comments.isEmpty {
+                ForEach(comments) { comment in
+                    AnimeCommentRow(comment: comment)
+                }
+            } else if commentsLoading {
+                HStack {
+                    Spacer()
+                    ProgressView().tint(Theme.textSecondary)
+                    Spacer()
+                }
+                .frame(height: 80)
+            } else {
+                HStack(spacing: 8) {
+                    Image(icon: .comment).iconStyle(size: 14, color: Theme.textTertiary)
+                    Text(commentPreview == nil ? "评论没有加载出来，点「全部」再试一次" : "还没有评论")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Theme.textTertiary)
+                }
+                .frame(maxWidth: .infinity, minHeight: 64)
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous))
+            }
+        }
+    }
+
+    private func loadComments() async {
+        guard commentPreview == nil else { return }
+        commentsLoading = true
+        commentPreview = await AnimeCommentPreview.load(vid: animeId)
+        commentsLoading = false
     }
 
     /// 单集进度：流地址带时效签名不能用 URL 查，按稳定标题「番剧名 第XX集」找最近一条记录。
@@ -304,28 +425,6 @@ struct AnimeDetailView: View {
         if item.finished == true { return "\(episode) · 已看完" }
         guard let position = item.position, position > 5 else { return nil }
         return "\(episode) · 看到 \(formatTime(position))"
-    }
-
-    private func orderPill(title: String, icon: AppIcon, selected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: {
-            Haptics.select()
-            action()
-        }) {
-            HStack(spacing: 3) {
-                Image(icon: icon)
-                    .iconStyle(size: 11, color: selected ? Theme.onPrimary : Theme.textSecondary)
-                Text(title)
-                    .font(.system(size: 11, weight: selected ? .bold : .medium))
-                    .foregroundStyle(selected ? Theme.onPrimary : Theme.textSecondary)
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(
-                selected ? Theme.primaryAction : Color.clear,
-                in: RoundedRectangle(cornerRadius: 6, style: .continuous)
-            )
-        }
-        .buttonStyle(.pressable)
     }
 
     // MARK: - 剧情简介手风琴

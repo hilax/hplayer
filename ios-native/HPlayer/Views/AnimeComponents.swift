@@ -85,19 +85,40 @@ struct AnimeEpisodeMatrix: View {
     }
 
     private func cell(_ ep: String) -> some View {
-        let isCurrent = (ep == activeEpisode)
-        let value = progress(ep) ?? 0
-        let finished = value >= 0.92
-        return Button {
-            Haptics.tap()
+        AnimeEpisodeCell(title: ep, isCurrent: ep == activeEpisode, progress: progress(ep) ?? 0) {
             onSelect(ep)
+        }
+    }
+
+}
+
+// MARK: - 选集格子 (AnimeEpisodeCell)
+
+/// 一集的格子：48pt 高、当前集整块填主色、看完置灰打勾、看到一半画底部进度线。
+/// 详情页的横排选集、全部选集面板里的网格都用它。
+struct AnimeEpisodeCell: View {
+    let title: String
+    let isCurrent: Bool
+    /// 0…1；≥ 0.92 算看完
+    var progress: Double = 0
+    let onTap: () -> Void
+
+    private var finished: Bool { progress >= 0.92 }
+
+    var body: some View {
+        Button {
+            Haptics.tap()
+            onTap()
         } label: {
             ZStack {
                 RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous)
                     .fill(isCurrent ? Theme.gold : Theme.surface)
-                Text(formatEpisodeTitle(ep))
+                Text(Self.shortTitle(title))
                     .font(.system(size: 16, weight: .semibold).monospacedDigit())
                     .foregroundStyle(isCurrent ? Theme.onPrimary : (finished ? Theme.textTertiary : Theme.textPrimary))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                    .padding(.horizontal, 4)
                 if finished && !isCurrent {
                     Image(icon: .check)
                         .font(.system(size: 8, weight: .bold))
@@ -108,11 +129,11 @@ struct AnimeEpisodeMatrix: View {
             }
             .frame(height: 48)
             .overlay(alignment: .bottom) {
-                if value > 0.02 && !finished {
+                if progress > 0.02 && !finished {
                     GeometryReader { proxy in
                         Capsule()
                             .fill(isCurrent ? Theme.onPrimary.opacity(0.55) : Theme.gold)
-                            .frame(width: max(4, (proxy.size.width - 16) * value), height: 2)
+                            .frame(width: max(4, (proxy.size.width - 16) * progress), height: 2)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.leading, 8)
                     }
@@ -129,14 +150,16 @@ struct AnimeEpisodeMatrix: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.pressable)
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(isCurrent ? .isSelected : [])
     }
 
-    private func formatEpisodeTitle(_ raw: String) -> String {
-        // "第01集" -> "01", "第108集" -> "108"
+    /// "第01集" -> "01"，"第108集" -> "108"；不是这种格式的原样显示（「特别篇」「OVA」）
+    static func shortTitle(_ raw: String) -> String {
         var clean = raw.replacingOccurrences(of: "第", with: "")
-                       .replacingOccurrences(of: "集", with: "")
-                       .replacingOccurrences(of: "话", with: "")
-                       .trimmingCharacters(in: .whitespaces)
+            .replacingOccurrences(of: "集", with: "")
+            .replacingOccurrences(of: "话", with: "")
+            .trimmingCharacters(in: .whitespaces)
         if clean.count == 1 && clean.allSatisfy({ $0.isNumber }) {
             clean = "0" + clean
         }
