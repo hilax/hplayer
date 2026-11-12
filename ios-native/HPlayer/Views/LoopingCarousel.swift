@@ -158,10 +158,8 @@ struct LoopingCarousel<Item: Identifiable, Background: View, Foreground: View, H
                 ScrollView(.horizontal) {
                     LazyHStack(spacing: 0) {
                         ForEach(Array(pages.enumerated()), id: \.offset) { index, item in
-                            hitArea(item)
+                            hitPage(item, index: index)
                                 .containerRelativeFrame([.horizontal, .vertical])
-                                .contentShape(Rectangle())
-                                .accessibilityHidden(index != (page ?? -1))
                                 .id(index)
                         }
                     }
@@ -189,13 +187,25 @@ struct LoopingCarousel<Item: Identifiable, Background: View, Foreground: View, H
                 legacyPageChanged(from: oldReal, toPage: newValue)
             })) {
                 ForEach(Array(pages.enumerated()), id: \.offset) { index, item in
-                    hitArea(item)
-                        .contentShape(Rectangle())
-                        .accessibilityHidden(index != (page ?? -1))
+                    hitPage(item, index: index)
                         .tag(index)
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
+        }
+    }
+
+    /// 手势层的一页。只有当前这一张（它的正式页码，不是首尾复制页）放真正能点的内容；
+    /// 其余页是透明的空白，照样能拖，但不会出现第二个同名按钮（隐藏辅助功能挡不住 UI 测试找到屏幕外的那个）。
+    @ViewBuilder
+    private func hitPage(_ item: Item, index: Int) -> some View {
+        if index == HeroLoop.page(forReal: current, count: count) {
+            hitArea(item)
+                .contentShape(Rectangle())
+        } else {
+            Color.clear
+                .contentShape(Rectangle())
+                .accessibilityHidden(true)
         }
     }
 
