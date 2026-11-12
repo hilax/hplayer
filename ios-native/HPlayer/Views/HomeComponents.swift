@@ -444,10 +444,7 @@ struct ContinueCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ArtworkView(urlString: entry.artworkURL, title: entry.title)
-                .scaledToFill()
-                .frame(width: width, height: height)
-                .clipped()
+            ContinueArtworkView(entry: entry, width: width, height: height)
                 .allowsHitTesting(false)
                 .overlay(alignment: .bottomLeading) {
                     Image(systemName: AppIcon.play.name)
@@ -547,8 +544,7 @@ struct ContinueHistoryView: View {
         HStack(spacing: 0) {
             Button { onOpen(entry) } label: {
                 HStack(spacing: 11) {
-                    ArtworkView(urlString: entry.artworkURL, title: entry.title)
-                        .scaledToFill().frame(width: 106, height: 68).clipped()
+                    ContinueArtworkView(entry: entry, width: 106, height: 68)
                         .overlay(alignment: .bottomLeading) {
                             if let progress = validProgress(entry.progress) {
                                 GeometryReader { proxy in
