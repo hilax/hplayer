@@ -105,6 +105,38 @@ enum CatalogSort: String, CaseIterable, Identifiable {
     }
 }
 
+extension CatalogKind {
+    var shortcutTitle: String {
+        switch self {
+        case .all: return "全部"
+        case .movie: return "电影"
+        case .series: return "剧集"
+        case .anime: return "动画"
+        case .performer: return "演员"
+        }
+    }
+
+    var icon: AppIcon {
+        switch self {
+        case .all: return .library
+        case .movie: return .video
+        case .series: return .series
+        case .anime: return .sparkles
+        case .performer: return .people
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .all: return ShortcutTint.pink
+        case .movie: return ShortcutTint.orange
+        case .series: return ShortcutTint.purple
+        case .anime: return ShortcutTint.blue
+        case .performer: return ShortcutTint.green
+        }
+    }
+}
+
 // MARK: - 条目
 
 /// 网格里的一张卡片：电影、一部剧，或一位演员的合集。
@@ -147,10 +179,6 @@ struct CatalogTab: View {
     @Binding var preset: CatalogPreset?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Namespace private var pillKind
-    @Namespace private var pillRegion
-    @Namespace private var pillYear
-    @Namespace private var pillSort
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var mediaLibrary: MediaLibraryStore
     @EnvironmentObject private var localStore: LocalMediaStore
@@ -180,41 +208,11 @@ struct CatalogTab: View {
 
     var body: some View {
         NavigationStack {
-            GeometryReader { proxy in
-                VStack(spacing: 0) {
-                    HStack(spacing: 8) {
-                        HomeChannelBar(selection: channel)
-                        Spacer(minLength: 8)
-                        BarIconButton(icon: .search, label: source == .library ? "搜索片库" : "搜索动漫",
-                                      identifier: "catalog.search", action: onSearch)
-                    }
-                    .padding(.leading, Theme.contentInset)
-                    .padding(.trailing, 6)
-                    .padding(.bottom, 4)
-
-                    if source == .library {
-                        Text(subtitle)
-                            .font(.caption)
-                            .foregroundStyle(Theme.textTertiary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, Theme.contentInset)
-                            .padding(.bottom, 6)
-                    }
-
-                    if source == .library {
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: 12) {
-                                filterRows
-                                if !snapshot.unmatched.isEmpty { unmatchedBanner }
-                                grid(width: proxy.size.width)
-                            }
-                            .padding(.top, 4)
-                            .padding(.bottom, 32)
-                        }
-                        .scrollIndicators(.hidden)
-                    } else {
-                        AnimeCatalogView(onSearch: onSearch)
-                    }
+            Group {
+                if source == .library {
+                    libraryPage
+                } else {
+                    AnimeCatalogView(channel: channel, onSearch: onSearch)
                 }
             }
             .background(Theme.pageBackground.ignoresSafeArea())
@@ -247,6 +245,69 @@ struct CatalogTab: View {
             }, onClear: request.current == nil ? nil : { () async -> Void in
                 for target in request.targets { await metadataStore.unmatch(target) }
             })
+        }
+    }
+
+    // MARK: 片库页
+
+    /// 片库页：和首页同一套顶部（频道条、搜索框、轮播「最近加入」），下面一排类型快捷入口、
+    /// 地区 / 年份 / 排序三个下拉筛选，再下面是海报墙。搜索框右侧「筛选」滚到筛选区。
+    private var libraryPage: some View {
+        GeometryReader { proxy in
+            ScrollViewReader { reader in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ChannelHeroSection(channel: channel, searchPlaceholder: "搜索片库", searchIdentifier: "catalog.search",
+                                           onSearch: onSearch, onFilter: {
+                                               withAnimation(reduceMotion ? nil : Motion.smooth) {
+                                                   reader.scrollTo("catalog.filters", anchor: UnitPoint(x: 0.5, y: 0.1))
+                                               }
+                                           }, filterIdentifier: "catalog.filter",
+                                           slides: HomeSlide.recentLibrary(snapshot), carouselLabel: "最近加入",
+                                           carouselIdentifier: "catalog.carouselPosition",
+                                           safeTop: proxy.safeAreaInsets.top, width: proxy.size.width) { slide in
+                            librarySlideHitArea(slide)
+                        }
+
+                        VStack(alignment: .leading, spacing: 14) {
+                            kindShortcuts
+                                .id("catalog.filters")
+                            filterChips
+                            if !snapshot.unmatched.isEmpty { unmatchedBanner }
+                            grid(width: proxy.size.width)
+                        }
+                        .padding(.top, 16)
+                    }
+                    .padding(.bottom, 32)
+                }
+                .scrollIndicators(.hidden)
+                .ignoresSafeArea(edges: .top)
+            }
+        }
+    }
+
+    /// 点轮播：直接播放；长按：播放、匹配封面。
+    @ViewBuilder
+    private func librarySlideHitArea(_ slide: HomeSlide) -> some View {
+        if case .library(let item) = slide.content {
+            Button {
+                playing = HomeLibrary.queue(for: item, in: snapshot.items)
+            } label: {
+                Color.clear.contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("播放 \(item.title)")
+            .accessibilityIdentifier("catalog.slide.\(item.id)")
+            .contextMenu {
+                Button("播放", systemImage: AppIcon.play.name) {
+                    playing = HomeLibrary.queue(for: item, in: snapshot.items)
+                }
+                Button("匹配封面", systemImage: AppIcon.poster.name) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { matching = MatchRequest(item: item) }
+                }
+            } preview: {
+                HomeSlidePreview(slide: slide)
+            }
         }
     }
 
@@ -356,37 +417,45 @@ struct CatalogTab: View {
         return text
     }
 
-    // MARK: 筛选条
+    // MARK: 筛选
 
-    private var filterRows: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            pillRow(CatalogKind.allCases, selected: kind, namespace: pillKind, identifier: "catalog.kind") { $0.title } set: { kind = $0 }
-            if kind != .performer {
-                pillRow(CatalogRegion.allCases, selected: region, namespace: pillRegion, identifier: "catalog.region") { $0.title } set: { region = $0 }
-                pillRow(CatalogYear.allCases, selected: year, namespace: pillYear, identifier: "catalog.year") { $0.title } set: { year = $0 }
+    /// 类型快捷入口：全部 / 电影 / 剧集 / 动画 / 演员，选中的实心。
+    private var kindShortcuts: some View {
+        HStack(spacing: 4) {
+            ForEach(CatalogKind.allCases) { option in
+                ChannelShortcut(title: option.shortcutTitle, icon: option.icon, tint: option.tint, selected: kind == option) {
+                    withAnimation(reduceMotion ? nil : Motion.snappy) { kind = option }
+                }
+                .accessibilityIdentifier("catalog.kind.\(option.id)")
             }
-            pillRow(CatalogSort.allCases, selected: sort, namespace: pillSort, identifier: "catalog.sort") { $0.titleText } set: { sort = $0 }
         }
-        .animation(reduceMotion ? nil : Motion.smooth, value: kind == .performer)
+        .padding(.horizontal, 10)
     }
 
-    private func pillRow<Option: Identifiable & Equatable>(
-        _ options: [Option], selected: Option, namespace: Namespace.ID, identifier: String,
-        title: @escaping (Option) -> String, set: @escaping (Option) -> Void
-    ) -> some View where Option.ID == String {
-        ScrollView(.horizontal) {
-            HStack(spacing: 2) {
-                ForEach(options) { option in
-                    SelectionPill(title: title(option), selected: option == selected, namespace: namespace) {
-                        withAnimation(reduceMotion ? nil : Motion.snappy) { set(option) }
-                    }
-                    .accessibilityIdentifier("\(identifier).\(option.id)")
-                }
+    /// 地区、年份（演员合集不适用，不显示）和排序三个下拉胶囊；右边是数量。
+    private var filterChips: some View {
+        HStack(spacing: 6) {
+            if kind != .performer {
+                FilterMenuChip(options: CatalogRegion.allCases, selection: animated($region), defaultValue: .all,
+                               title: { $0.title }, identifier: "catalog.region")
+                FilterMenuChip(options: CatalogYear.allCases, selection: animated($year), defaultValue: .all,
+                               title: { $0.title }, identifier: "catalog.year")
             }
-            .padding(.horizontal, Theme.contentInset - 4)
+            FilterMenuChip(options: CatalogSort.allCases, selection: animated($sort), defaultValue: .recentlyAdded,
+                           title: { $0.titleText }, identifier: "catalog.sort")
+            Spacer(minLength: 8)
+            Text(subtitle)
+                .font(.caption)
+                .foregroundStyle(Theme.textTertiary)
+                .lineLimit(1)
         }
-        .scrollIndicators(.hidden)
-        .transition(.opacity.combined(with: .move(edge: .top)))
+        .padding(.horizontal, Theme.contentInset)
+    }
+
+    private func animated<Value>(_ binding: Binding<Value>) -> Binding<Value> {
+        Binding(get: { binding.wrappedValue }, set: { value in
+            withAnimation(reduceMotion ? nil : Motion.snappy) { binding.wrappedValue = value }
+        })
     }
 
     private var unmatchedBanner: some View {

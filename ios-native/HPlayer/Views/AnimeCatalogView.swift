@@ -1,7 +1,13 @@
 import SwiftUI
 
+/// 动漫频道：和首页同一套顶部（频道条、搜索框、热播轮播），下面一排快捷入口（最新上架 / 最多播放 / 我的追番 / 剧场版），
+/// 一行频道胶囊（推荐 / 全部 / 各频道），再下面是推荐页（热门新番三列 + 各频道货架）或频道网格。
 struct AnimeCatalogView: View {
+    var channel: Binding<HomeChannel>
     var onSearch: () -> Void
+
+    /// 「全部」：不按频道筛，接口不带 channel 参数
+    static let allChannels = -1
 
     // MARK: 内容
 
@@ -48,20 +54,35 @@ struct AnimeCatalogView: View {
         GeometryReader { proxy in
             let metrics = gridMetrics(width: proxy.size.width)
 
-            VStack(spacing: 0) {
-                // 二级筛选和片库、短剧一样用 SelectionPill，不再单独做一套下划线标签
-                channelPills
-
-                // 频道切换时重建滚动容器：回到顶部，不把旧频道滚到底的偏移带到新列表
+            ScrollViewReader { reader in
                 ScrollView {
-                    if selectedChannelId == nil {
-                        recommendContent
-                    } else {
-                        channelContent(metrics: metrics)
+                    VStack(alignment: .leading, spacing: 0) {
+                        ChannelHeroSection(channel: channel, searchPlaceholder: "搜索动漫", searchIdentifier: "anime.search",
+                                           onSearch: onSearch, onFilter: {
+                                               select(Self.allChannels, sort: nil, reader: reader)
+                                           }, filterIdentifier: "anime.filter",
+                                           slides: HomeSlide.anime(banners), carouselLabel: "热播轮播",
+                                           carouselIdentifier: "anime.bannerPosition",
+                                           safeTop: proxy.safeAreaInsets.top, width: proxy.size.width) { slide in
+                            bannerHitArea(slide)
+                        }
+
+                        shortcuts(reader: reader)
+                            .padding(.top, 16)
+
+                        channelPills
+                            .id("anime.channels")
+                            .padding(.top, 14)
+
+                        if selectedChannelId == nil {
+                            recommendContent(width: proxy.size.width)
+                        } else {
+                            channelContent(metrics: metrics)
+                        }
                     }
                 }
-                .id("anime-scroll-\(selectedChannelId ?? 0)")
                 .scrollIndicators(.hidden)
+                .ignoresSafeArea(edges: .top)
                 .refreshable {
                     await reload(channel: selectedChannelId)
                 }
@@ -79,12 +100,83 @@ struct AnimeCatalogView: View {
         }
     }
 
+    // MARK: - 轮播与快捷入口
+
+    /// 点轮播进动漫详情
+    @ViewBuilder
+    private func bannerHitArea(_ slide: HomeSlide) -> some View {
+        if case .anime(let banner) = slide.content {
+            NavigationLink(value: AnimeDetailRoute(animeId: banner.vid ?? banner.id)) {
+                Color.clear.contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(banner.displayTitle)
+            .accessibilityIdentifier("anime.banner.\(banner.id)")
+        }
+    }
+
+    /// 剧场版 / 动漫电影频道（接口里有就放一个快捷入口）
+    private var movieChannel: AnimeChannel? {
+        channels.first { $0.name.contains("剧场") || $0.name.contains("电影") }
+    }
+
+    private func shortcuts(reader: ScrollViewProxy) -> some View {
+        HStack(spacing: 4) {
+            ChannelShortcut(title: "最新上架", icon: .sparkles, tint: ShortcutTint.blue,
+                            selected: selectedChannelId == Self.allChannels && sort == "addtime") {
+                select(Self.allChannels, sort: "addtime", reader: reader)
+            }
+            .accessibilityIdentifier("anime.shortcut.latest")
+            ChannelShortcut(title: "最多播放", icon: .hot, tint: ShortcutTint.orange,
+                            selected: selectedChannelId == Self.allChannels && sort == "hits") {
+                select(Self.allChannels, sort: "hits", reader: reader)
+            }
+            .accessibilityIdentifier("anime.shortcut.hot")
+            NavigationLink {
+                AnimeWatchlistView()
+            } label: {
+                ChannelShortcutLabel(title: "我的追番", icon: .heart, tint: ShortcutTint.purple)
+            }
+            .buttonStyle(.pressable(scale: 0.92))
+            .accessibilityIdentifier("anime.shortcut.watchlist")
+            if let movieChannel {
+                ChannelShortcut(title: movieChannel.name, icon: .video, tint: ShortcutTint.green,
+                                selected: selectedChannelId == movieChannel.id) {
+                    select(movieChannel.id, sort: nil, reader: reader)
+                }
+                .accessibilityIdentifier("anime.shortcut.movie")
+            }
+            ChannelShortcut(title: "推荐", icon: .home, tint: ShortcutTint.pink, selected: selectedChannelId == nil) {
+                select(nil, sort: nil, reader: reader)
+            }
+            .accessibilityIdentifier("anime.shortcut.recommend")
+        }
+        .padding(.horizontal, 10)
+    }
+
+    /// 选频道（nil = 推荐、allChannels = 全部），可同时换排序；选中后把频道胶囊滚到顶部附近。
+    @MainActor private func select(_ channelId: Int?, sort newSort: String?, reader: ScrollViewProxy) {
+        let sortChanged = newSort != nil && newSort != sort
+        withAnimation(reduceMotion ? nil : Motion.snappy) {
+            if let newSort { sort = newSort }
+            if channelId != selectedChannelId {
+                selectChannel(channelId)
+            } else if sortChanged {
+                beginLoad(channel: channelId)
+            }
+        }
+        withAnimation(reduceMotion ? nil : Motion.smooth) {
+            reader.scrollTo("anime.channels", anchor: UnitPoint(x: 0.5, y: 0.08))
+        }
+    }
+
     // MARK: - 频道胶囊
 
     private var channelPills: some View {
         ScrollView(.horizontal) {
             HStack(spacing: 2) {
                 channelPill("推荐", id: nil)
+                channelPill("全部", id: Self.allChannels)
                 ForEach(channels) { channel in
                     channelPill(channel.name, id: channel.id)
                 }
@@ -102,24 +194,38 @@ struct AnimeCatalogView: View {
         .accessibilityIdentifier("anime.channel.\(id.map(String.init) ?? "recommend")")
     }
 
-    // MARK: - 推荐页：轮播 + 热门新番 + 各频道货架（版式与首页推荐的货架一致）
+    // MARK: - 推荐页：热门新番（三列竖海报，和首页同款）+ 各频道货架
 
-    private var recommendContent: some View {
-        VStack(alignment: .leading, spacing: 28) {
-            if !banners.isEmpty {
-                AnimeHeroBanner(banners: banners)
-            }
-
+    private func recommendContent(width: CGFloat) -> some View {
+        let spacing: CGFloat = 10
+        let cardWidth = ((width - Theme.contentInset * 2 - spacing * 2) / 3).rounded(.down)
+        return VStack(alignment: .leading, spacing: 28) {
             if !trendingItems.isEmpty {
-                shelf(title: "热门新番", identifier: "anime.shelf.trending", items: trendingItems,
-                      detail: "\(trendingItems.count) 部", destination: nil)
+                VStack(alignment: .leading, spacing: 10) {
+                    ShelfHeader(title: "热门新番", identifier: "anime.shelf.trending", inset: 0) {
+                        Button {
+                            withAnimation(reduceMotion ? nil : Motion.snappy) {
+                                sort = "hits"
+                                selectChannel(Self.allChannels)
+                            }
+                        } label: {
+                            ShelfLinkLabel(text: "更多")
+                                .frame(minWidth: 44, minHeight: 44, alignment: .trailing)
+                        }
+                        .buttonStyle(.pressable(scale: 0.92))
+                    }
+                    FixedGrid(items: Array(trendingItems.prefix(6)), columns: 3, spacing: spacing) { index, item in
+                        HomeAnimeGridCard(item: item, rank: index + 1, width: cardWidth)
+                            .reveal(index)
+                    }
+                }
             }
 
             ForEach(channels) { channel in
                 channelShelf(channel)
             }
 
-            if isReloading && banners.isEmpty && trendingItems.isEmpty && shelves.isEmpty {
+            if isReloading && trendingItems.isEmpty && shelves.isEmpty {
                 recommendSkeleton
             } else if !isReloading && banners.isEmpty && trendingItems.isEmpty && channels.isEmpty {
                 // 全部板块都没拉到时必须给出说明和重试入口，否则整页一片空白。
@@ -132,7 +238,7 @@ struct AnimeCatalogView: View {
             }
         }
         .padding(.horizontal, Theme.contentInset)
-        .padding(.top, 4)
+        .padding(.top, 14)
         .padding(.bottom, 40)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -236,12 +342,9 @@ struct AnimeCatalogView: View {
         }
     }
 
-    /// 首次进入：用轮播和两排货架的骨架占位，和最终版式一致，加载完不会整页跳动。
+    /// 首次进入：用两排货架的骨架占位，加载完不会整页跳动。
     private var recommendSkeleton: some View {
         VStack(alignment: .leading, spacing: 28) {
-            RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
-                .fill(Theme.surfaceRaised)
-                .frame(height: AnimeHeroBanner.height)
             shelfSkeleton(title: "热门新番")
             shelfSkeleton(title: " ")
         }
@@ -440,7 +543,7 @@ struct AnimeCatalogView: View {
             channels = c
         }
         async let bannerTask = try? AnimeClient.shared.fetchBanners()
-        async let trendingTask = try? AnimeClient.shared.fetchVideoList(sort: "weight", limit: 12, page: 1)
+        async let trendingTask = try? AnimeClient.shared.fetchVideoList(sort: "hits", limit: 12, page: 1)
         let (b, t) = await (bannerTask, trendingTask)
         guard isCurrent(generation) else { return }
         if let b { banners = b }
@@ -476,7 +579,7 @@ struct AnimeCatalogView: View {
     @MainActor private func loadGrid(generation: Int, channel: Int?) async {
         do {
             let res = try await AnimeClient.shared.fetchVideoList(
-                channel: channel, sort: sort, limit: pageSize, page: 1
+                channel: Self.apiChannel(channel), sort: sort, limit: pageSize, page: 1
             )
             guard isCurrent(generation) else { return }
             let items = unique(res.items)
@@ -503,7 +606,7 @@ struct AnimeCatalogView: View {
 
         do {
             let res = try await AnimeClient.shared.fetchVideoList(
-                channel: selectedChannelId, sort: sort, limit: pageSize, page: nextPage
+                channel: Self.apiChannel(selectedChannelId), sort: sort, limit: pageSize, page: nextPage
             )
             guard generation == loadGeneration, !Task.isCancelled else { return }
 
@@ -526,6 +629,11 @@ struct AnimeCatalogView: View {
             guard generation == loadGeneration else { return }
             hasMore = false
         }
+    }
+
+    /// 「全部」不带频道参数
+    private static func apiChannel(_ id: Int?) -> Int? {
+        id == allChannels ? nil : id
     }
 
     @MainActor private func isCurrent(_ generation: Int) -> Bool {

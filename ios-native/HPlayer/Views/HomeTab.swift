@@ -31,9 +31,6 @@ struct HomeTab: View {
     @State private var playing: PlaybackQueue?
     @State private var importError = ""
     @State private var playError = ""
-    /// 轮播每一张的取色、当前是哪一张：都放在不被首页订阅的对象里，翻页时只有顶部氛围色重画。
-    @State private var palette = HeroPalette()
-    @State private var carouselTint = CarouselTintState()
     @State private var showCloudBrowser = false
     @State private var matching: MatchRequest?
     @State private var magnetLaunch: MagnetLaunch?
@@ -44,9 +41,8 @@ struct HomeTab: View {
     /// 第一份首页分组算好之前不显示内容（也不先闪空状态），算好后淡入。
     private var snapshotReady: Bool { librarySnapshots.ready }
 
-    /// 轮播每一张的大图和货架开头的海报提前下载好，滑到时直接有图；顺便把每一张的取色算好。
+    /// 轮播每一张的大图和货架开头的海报提前下载好，滑到时直接有图（取色由 ChannelHeroSection 自己算）。
     private func prefetchArtwork(_ library: HomeSnapshot) {
-        let slides = HomeSlide.interleave(featured: library.featured, banners: online.banners)
         var requests = HomeArtwork.prefetchRequests(library)
         for banner in online.banners {
             if let url = URL(string: banner.safePicURLString) {
@@ -54,7 +50,6 @@ struct HomeTab: View {
             }
         }
         ImagePipeline.shared.prefetch(requests)
-        palette.prepare(slides.map(\.palette))
     }
 
 
@@ -207,142 +202,64 @@ struct HomeTab: View {
 
     // MARK: 顶栏、搜索、轮播
 
-    /// 页面顶部：频道条（右边是观看历史、添加），搜索框，再下面是轮播。
-    /// 整块铺着当前这张轮播图的氛围色，从屏幕顶端往下淡进页面底色，跟着页面一起滚走。
+    /// 页面顶部：频道条（右边是「添加」），搜索框（「筛选」去片库频道），轮播（片库精选和热播动漫交替）。
+    /// 和动漫、片库频道共用 ChannelHeroSection。观看历史从「继续观看」的「全部」进，顶栏不再重复放。
     private func header(_ library: HomeSnapshot, slides: [HomeSlide], continueItems: [ContinueEntry],
                         width: CGFloat, safeTop: CGFloat) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 4) {
-                HomeChannelBar(selection: channel)
-                Spacer(minLength: 8)
-                topButtons(continueItems)
-            }
-            .padding(.leading, Theme.contentInset)
-            .padding(.trailing, 6)
-            .padding(.top, safeTop)
-
-            searchField
-                .padding(.horizontal, Theme.contentInset)
-
-            if !slides.isEmpty {
-                carousel(slides, library: library, width: width)
-                    .padding(.top, 6)
-            }
-        }
-        .padding(.bottom, 4)
-        .background(alignment: .top) {
-            HomeAmbientBackdrop(state: carouselTint, palette: palette)
-                .frame(height: safeTop + 440)
-        }
-    }
-
-    private func topButtons(_ continueItems: [ContinueEntry]) -> some View {
-        HStack(spacing: 0) {
-            NavigationLink {
-                ContinueHistoryView(entries: continueItems, onOpen: openEntry, onRemove: remove)
-                    .restoringAppearance(colorScheme)
-            } label: {
-                topIcon(.history)
-            }
-            .buttonStyle(.pressable(scale: 0.88))
-            .accessibilityLabel("观看历史")
-            .accessibilityIdentifier("home.history")
-
-            Button { showAdd = true } label: { topIcon(.addCircle) }
+        ChannelHeroSection(channel: channel, searchPlaceholder: "搜索片库、动漫、网盘", searchIdentifier: "home.search",
+                           onSearch: onSearch, onFilter: { channel.wrappedValue = .library }, filterIdentifier: "home.filter",
+                           slides: slides, carouselLabel: "精选推荐", carouselIdentifier: "home.carouselPosition",
+                           safeTop: safeTop, width: width) {
+            HStack(spacing: 0) {
+                Button { showAdd = true } label: {
+                    Image(systemName: AppIcon.addCircle.name)
+                        .font(.system(size: 20, weight: Theme.iconWeight))
+                        .foregroundStyle(Theme.textPrimary)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
                 .buttonStyle(.pressable(scale: 0.88))
                 .accessibilityLabel("添加")
                 .accessibilityIdentifier("home.sources")
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("home.heroBar")
-    }
-
-    private func topIcon(_ icon: AppIcon) -> some View {
-        Image(systemName: icon.name)
-            .font(.system(size: 20, weight: Theme.iconWeight))
-            .foregroundStyle(Theme.textPrimary)
-            .frame(width: 44, height: 44)
-            .contentShape(Rectangle())
-    }
-
-    /// 搜索框：点进全局搜索（片库、在线动漫、网盘）；右边「筛选」直接去片库频道的分类筛选。
-    private var searchField: some View {
-        HStack(spacing: 0) {
-            Button(action: onSearch) {
-                HStack(spacing: 8) {
-                    Image(systemName: AppIcon.search.name)
-                        .font(.system(size: 15, weight: Theme.iconWeight))
-                    Text("搜索片库、动漫、网盘")
-                        .font(.system(size: 14))
-                        .lineLimit(1)
-                    Spacer(minLength: 0)
-                }
-                .foregroundStyle(Theme.textSecondary)
-                .padding(.leading, 14)
-                .frame(maxWidth: .infinity, minHeight: 38)
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.pressable(scale: 0.98))
-            .accessibilityLabel("搜索")
-            .accessibilityIdentifier("home.search")
-
-            Rectangle()
-                .fill(Theme.textTertiary.opacity(0.4))
-                .frame(width: 1, height: 14)
-                .accessibilityHidden(true)
-
-            Button {
-                Haptics.select()
-                channel.wrappedValue = .library
-            } label: {
-                Text("筛选")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Theme.textPrimary)
-                    .padding(.horizontal, 14)
-                    .frame(minHeight: 38)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.pressable(scale: 0.94))
-            .accessibilityLabel("分类筛选")
-            .accessibilityIdentifier("home.filter")
-        }
-        .background(Theme.track, in: Capsule())
-    }
-
-    /// 顶部轮播：圆角 16:9 卡片，片库精选和热播动漫交替。卡片和图都不动，下一张图从右下以弧形揭出来，
-    /// 只有文字左右滑；自动翻页 + 手动拖，首尾相接（见 LoopingCarousel）。
-    private func carousel(_ slides: [HomeSlide], library: HomeSnapshot, width: CGFloat) -> some View {
-        let cardWidth = max(width - Theme.contentInset * 2, 1)
-        let tint = carouselTint
-        return LoopingCarousel(items: slides, label: "精选推荐", positionIdentifier: "home.carouselPosition",
-                               onSelect: { index in
-                                   if slides.indices.contains(index) { tint.key = slides[index].palette.key }
-                               }) { slide in
-            HomeSlideArtwork(slide: slide)
-        } foreground: { slide in
-            HomeSlideCaption(slide: slide, playTitle: slidePlayTitle(slide), onPlay: {
-                playSlide(slide, library: library)
-            }, onOptions: {
-                if case .library(let item) = slide.content { actionItem = item }
-            })
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("home.heroBar")
         } hitArea: { slide in
             slideHitArea(slide, library: library)
         }
-        .frame(height: (cardWidth * 9 / 16).rounded())
-        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
-        .padding(.horizontal, Theme.contentInset)
     }
 
-    /// 点卡片空白处：片库精选直接播放，热播动漫进详情。
+    /// 点卡片：片库精选直接播放，热播动漫进详情。长按片库精选弹出菜单：播放、匹配封面、不在精选中显示、更多选项。
     @ViewBuilder
     private func slideHitArea(_ slide: HomeSlide, library: HomeSnapshot) -> some View {
         switch slide.content {
         case .library(let item):
-            Button { playSlide(slide, library: library) } label: {
+            Button {
+                playing = HomeLibrary.queue(for: item, in: library.items)
+            } label: {
                 Color.clear.contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("播放 \(item.title)")
+            .accessibilityLabel("\(recents.position(for: item.media.source) == nil ? "播放" : "继续播放") \(item.title)")
+            .accessibilityIdentifier("home.heroPlay")
+            .contextMenu {
+                Button("播放", systemImage: AppIcon.play.name) {
+                    playing = HomeLibrary.queue(for: item, in: library.items)
+                }
+                Button("匹配封面", systemImage: AppIcon.poster.name) {
+                    afterMenu { matching = MatchRequest(item: item) }
+                }
+                if canHideFromFeatured(item) {
+                    Button("不在精选中显示", systemImage: AppIcon.hidden.name) {
+                        if let id = item.metadata?.imdbID { FeaturedStore.shared.hide(id) }
+                    }
+                }
+                Button("更多选项", systemImage: AppIcon.more.name) {
+                    afterMenu { actionItem = item }
+                }
+            } preview: {
+                HomeSlidePreview(slide: slide)
+            }
         case .anime(let banner):
             NavigationLink(value: AnimeDetailRoute(animeId: banner.vid ?? banner.id)) {
                 Color.clear.contentShape(Rectangle())
@@ -353,15 +270,9 @@ struct HomeTab: View {
         }
     }
 
-    private func playSlide(_ slide: HomeSlide, library: HomeSnapshot) {
-        if case .library(let item) = slide.content {
-            playing = HomeLibrary.queue(for: item, in: library.items)
-        }
-    }
-
-    private func slidePlayTitle(_ slide: HomeSlide) -> String {
-        guard case .library(let item) = slide.content else { return "播放" }
-        return recents.position(for: item.media.source) == nil ? "播放" : "继续播放"
+    /// 长按菜单收起的动画走完再弹页面，免得两个转场撞在一起弹不出来。
+    private func afterMenu(_ action: @escaping () -> Void) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: action)
     }
 
     /// 这部正在精选里、而且不是精选里的最后一部，才给「不在精选中显示」（精选至少留一部）

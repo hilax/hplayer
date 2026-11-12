@@ -52,7 +52,8 @@ extension View {
 
 /// 首页顶部的频道：推荐（混合精选与货架）、片库（115 + 本地，四行筛选海报墙）、动漫（在线番剧）。
 enum HomeChannel: String, Hashable, CaseIterable, Identifiable {
-    case recommend, library, anime, drama
+    /// 顺序就是频道条从左到右：推荐、动漫、片库、短剧
+    case recommend, anime, library, drama
 
     var id: String { rawValue }
 

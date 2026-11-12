@@ -59,10 +59,10 @@ final class RedesignFlowUITests: XCTestCase {
         XCTAssertTrue(play.waitForExistence(timeout: 5))
         Thread.sleep(forTimeInterval: 1)
         XCTAssertTrue(play.isHittable)
-        // The page snapped to a whole card: the button sits at the card's leading inset, not half a page away.
-        XCTAssertEqual(play.frame.minX, 16 + 14, accuracy: 3, "The carousel must settle on a whole page")
-        // Nothing is pushed out of the card: the button ends above the page dots at the card's bottom edge.
-        XCTAssertLessThanOrEqual(play.frame.maxY, position.frame.maxY + 1, "Buttons must stay inside the card")
+        // The whole card is the play target and it settled on a whole page, not half a page away.
+        XCTAssertEqual(play.frame.minX, 16, accuracy: 3, "The carousel must settle on a whole page")
+        XCTAssertLessThanOrEqual(play.frame.maxY, position.frame.maxY + 8, "The tap target stays inside the card")
+        XCTAssertFalse(app.buttons["影片选项"].exists, "The carousel has no buttons of its own; options live in the long-press menu")
         let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         screenshot.name = "Home carousel after swipe"
         screenshot.lifetime = .keepAlways
@@ -120,7 +120,12 @@ final class RedesignFlowUITests: XCTestCase {
         for title in ["导入本机视频", "添加 115 文件夹", "打开磁力链接"] { XCTAssertTrue(app.staticTexts[title].exists) }
         XCTAssertFalse(app.staticTexts["开始全盘扫描"].exists, "Home's add panel only concerns playable content")
         app.buttons["关闭"].tap()
-        app.buttons["影片选项"].tap()
+        // 轮播卡片上没有按钮：长按卡片弹出菜单，「更多选项」打开影片选项面板。
+        app.buttons["home.heroPlay"].firstMatch.press(forDuration: 1.2)
+        let more = app.buttons["更多选项"].firstMatch
+        XCTAssertTrue(more.waitForExistence(timeout: 5), "Long-pressing a featured slide shows its menu")
+        XCTAssertTrue(app.buttons["匹配封面"].firstMatch.exists)
+        more.tap()
         XCTAssertTrue(app.staticTexts["影片选项"].waitForExistence(timeout: 5))
         app.staticTexts["匹配封面"].tap()
         XCTAssertTrue(app.textFields["metadata.query"].waitForExistence(timeout: 5))

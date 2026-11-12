@@ -101,7 +101,13 @@ final class ScreenCatalogUITests: XCTestCase {
             XCTAssertTrue(app.staticTexts["home.shelf.movies"].firstMatch.waitForExistence(timeout: 5))
         }
         if screen == "add" { app.buttons["home.sources"].tap() }
-        if screen == "film-menu" { app.buttons["影片选项"].tap() }
+        if screen == "film-menu" {
+            // 轮播卡片长按 →「更多选项」打开影片选项面板
+            app.buttons["home.heroPlay"].firstMatch.press(forDuration: 1.2)
+            let more = app.buttons["更多选项"].firstMatch
+            XCTAssertTrue(more.waitForExistence(timeout: 5))
+            more.tap()
+        }
         if screen == "files-menu" {
             // 目录页右上角的「更多」菜单：点开后截图
             let menu = app.buttons["library.menu"]

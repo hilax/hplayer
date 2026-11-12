@@ -32,6 +32,18 @@ struct HomeSlide: Identifiable {
         }
     }
 
+    /// 片库频道的轮播：最近加入的电影，有横版背景图的排前面，最多 limit 张。
+    static func recentLibrary(_ snapshot: HomeSnapshot, limit: Int = 6) -> [HomeSlide] {
+        let recent = Array(snapshot.movies.reversed())
+        let ordered = recent.filter(hasWideArtwork) + recent.filter { !hasWideArtwork($0) }
+        return ordered.prefix(limit).map { HomeSlide(id: "library|\($0.id)", content: .library($0)) }
+    }
+
+    /// 动漫频道的轮播：动漫接口的热播横图。
+    static func anime(_ banners: [AnimeBanner]) -> [HomeSlide] {
+        banners.filter { !$0.img.isEmpty }.map { HomeSlide(id: "anime|\($0.id)", content: .anime($0)) }
+    }
+
     /// 片库精选和热播横图交替排：精选、热播、精选、热播……一边没了就接着放另一边，最多 limit 张。
     static func interleave(featured: [HomeMediaItem], banners: [AnimeBanner], limit: Int = 8) -> [HomeSlide] {
         let library = featured.map { HomeSlide(id: "library|\($0.id)", content: .library($0)) }
@@ -134,13 +146,10 @@ struct HomeSlideImage: View {
     }
 }
 
-/// 轮播一张的文字层：左下角白字片名和信息；片库精选再加「播放」和「影片选项」。
-/// 翻页时只有这一层左右滑动。
+/// 轮播一张的文字层：左下角白字片名和信息。翻页时揭到一半原地换成下一张。
+/// 卡片上不放按钮：点卡片就是播放 / 进详情，更多操作长按卡片。
 struct HomeSlideCaption: View {
     let slide: HomeSlide
-    var playTitle = "播放"
-    var onPlay: () -> Void = {}
-    var onOptions: () -> Void = {}
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -149,8 +158,6 @@ struct HomeSlideCaption: View {
             case .library(let item):
                 titleBlock(title: item.title, subtitle: librarySubtitle(item))
                     .accessibilityIdentifier("home.heroTitle")
-                actions
-                    .padding(.top, 8)
             case .anime(let banner):
                 titleBlock(title: banner.displayTitle,
                            subtitle: ["在线动漫", banner.displayRemarks].filter { !$0.isEmpty }.joined(separator: " · "))
@@ -160,43 +167,13 @@ struct HomeSlideCaption: View {
         .padding(.bottom, 12)
         .padding(.trailing, trailingInset)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+        .allowsHitTesting(false)
     }
 
     /// 右边留给页码点；只有竖海报的片库影片，海报立在右边，文字再让开一些
     private var trailingInset: CGFloat {
         if case .library(let item) = slide.content, !HomeSlide.hasWideArtwork(item) { return 124 }
         return 64
-    }
-
-    private var actions: some View {
-        HStack(spacing: 8) {
-            Button(action: onPlay) {
-                HStack(spacing: 5) {
-                    Image(systemName: AppIcon.play.name)
-                        .font(.system(size: 11, weight: .bold))
-                    Text(playTitle)
-                        .font(.system(size: 13, weight: .bold))
-                }
-                .foregroundStyle(Color.black)
-                .padding(.horizontal, 14)
-                .frame(height: 32)
-                .background(Color.white, in: Capsule())
-                .contentShape(Capsule())
-            }
-            .buttonStyle(.pressable)
-            .accessibilityIdentifier("home.heroPlay")
-
-            Button(action: onOptions) {
-                Image(systemName: AppIcon.more.name)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 32, height: 32)
-                    .background(Color.white.opacity(0.22), in: Circle())
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.pressable)
-            .accessibilityLabel("影片选项")
-        }
     }
 
     private func librarySubtitle(_ item: HomeMediaItem) -> String {
@@ -225,7 +202,6 @@ struct HomeSlideCaption: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .allowsHitTesting(false)
     }
 }
 
