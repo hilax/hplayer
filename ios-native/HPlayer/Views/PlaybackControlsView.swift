@@ -95,11 +95,11 @@ private extension View {
             self.background {
                 ZStack {
                     shape.fill(.thinMaterial)
-                    shape.fill(Color.black.opacity(0.22))
+                    shape.fill(Color.black.opacity(Theme.Opacity.soft))
                 }
             }
-            .overlay { shape.strokeBorder(Color.white.opacity(0.16), lineWidth: 0.5) }
-            .shadow(color: .black.opacity(0.3), radius: 18, y: 8)
+            .overlay { shape.strokeBorder(Color.white.opacity(Theme.Opacity.faint), lineWidth: 0.5) }
+            .shadow(color: .black.opacity(Theme.Opacity.soft), radius: 18, y: 8)
         }
     }
 }
@@ -143,12 +143,12 @@ private struct AspectGlyph: View {
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            RoundedRectangle(cornerRadius: 4, style: .continuous)
+            RoundedRectangle(cornerRadius: Theme.Radius.badge, style: .continuous)
                 .strokeBorder(lineWidth: 1.5)
                 .opacity(0.6)
                 .frame(width: 31, height: 20)
                 .offset(x: 1.5, y: 3)
-            RoundedRectangle(cornerRadius: 2, style: .continuous)
+            RoundedRectangle(cornerRadius: Theme.Radius.badge, style: .continuous)
                 .opacity(0.85)
                 .frame(width: inner.width, height: inner.height)
                 .offset(x: inner.minX, y: inner.minY)
@@ -167,25 +167,25 @@ private struct SubtitleStyleLabel: View {
         let text = Text(style.title).foregroundColor(.white)
         switch style {
         case .classic:
-            text.font(.system(size: 13, weight: .medium))
+            text.font(.scaled(13, weight: .medium))
                 .padding(.horizontal, 7)
                 .padding(.vertical, 2)
-                .background(Color.black.opacity(0.62), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+                .background(Color.black.opacity(Theme.Opacity.strong), in: RoundedRectangle(cornerRadius: Theme.Radius.badge, style: .continuous))
         case .large:
-            text.font(.system(size: 16, weight: .semibold))
+            text.font(.scaled(16, weight: .semibold))
                 .padding(.horizontal, 7)
                 .padding(.vertical, 1)
-                .background(Color.black.opacity(0.62), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+                .background(Color.black.opacity(Theme.Opacity.strong), in: RoundedRectangle(cornerRadius: Theme.Radius.badge, style: .continuous))
         case .outline:
-            text.font(.system(size: 14, weight: .bold))
+            text.font(.scaled(14, weight: .bold))
                 .shadow(color: .black, radius: 0, x: 1, y: 1)
                 .shadow(color: .black, radius: 0, x: -1, y: -1)
                 .shadow(color: .black, radius: 0, x: 1, y: -1)
                 .shadow(color: .black, radius: 0, x: -1, y: 1)
         case .soft:
-            text.font(.system(size: 14, weight: .semibold))
-                .shadow(color: .black.opacity(0.9), radius: 1.5, y: 1)
-                .shadow(color: .black.opacity(0.6), radius: 5)
+            text.font(.scaled(14, weight: .semibold))
+                .shadow(color: .black.opacity(Theme.Opacity.solid), radius: 1.5, y: 1)
+                .shadow(color: .black.opacity(Theme.Opacity.strong), radius: 5)
         }
     }
 }
@@ -509,12 +509,12 @@ struct PlaybackControlsView: View {
                     .font(.caption2.weight(.bold))
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
-                    .background(.white.opacity(0.16), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                    .background(.white.opacity(Theme.Opacity.faint), in: RoundedRectangle(cornerRadius: Theme.Radius.badge, style: .continuous))
             }
             if !statusLine.isEmpty {
                 Text(statusLine)
                     .font(.caption.weight(.medium))
-                    .foregroundStyle(.white.opacity(0.7))
+                    .foregroundStyle(.white.opacity(Theme.Opacity.heavy))
                     .lineLimit(1)
             }
         }
@@ -559,7 +559,7 @@ struct PlaybackControlsView: View {
                     .frame(height: 32)
                 timeSlot(long: long, alignment: .trailing) {
                     Text(playback.duration > 0 ? timeText(playback.duration) : "00:00")
-                        .font(.caption.weight(.medium).monospacedDigit()).foregroundStyle(.white.opacity(0.6))
+                        .font(.caption.weight(.medium).monospacedDigit()).foregroundStyle(.white.opacity(Theme.Opacity.strong))
                         .accessibilityLabel("总时长")
                 }
             }
@@ -645,10 +645,10 @@ struct PlaybackControlsView: View {
     /// 画质图标：圆角框里写 HD
     private var qualityIcon: some View {
         Text("HD")
-            .font(.system(size: 11, weight: .heavy))
+            .font(.scaled(11, weight: .bold))
             .padding(.horizontal, 4)
             .padding(.vertical, 1.5)
-            .overlay { RoundedRectangle(cornerRadius: 4, style: .continuous).strokeBorder(lineWidth: 1.6) }
+            .overlay { RoundedRectangle(cornerRadius: Theme.Radius.badge, style: .continuous).strokeBorder(lineWidth: 1.6) }
             .frame(width: 44, height: 44)
             .contentShape(Rectangle())
     }
@@ -658,8 +658,8 @@ struct PlaybackControlsView: View {
     private func popoverLens(_ kind: PlayerPopover) -> some View {
         if popover == kind {
             Circle()
-                .fill(Color.white.opacity(0.18))
-                .overlay { Circle().strokeBorder(Color.white.opacity(0.3), lineWidth: 0.5) }
+                .fill(Color.white.opacity(Theme.Opacity.faint))
+                .overlay { Circle().strokeBorder(Color.white.opacity(Theme.Opacity.soft), lineWidth: 0.5) }
                 .padding(2)
                 .transition(.scale(scale: 0.6).combined(with: .opacity))
                 .allowsHitTesting(false)
@@ -671,7 +671,7 @@ struct PlaybackControlsView: View {
     private func popoverRing(_ kind: PlayerPopover) -> some View {
         if popover == kind {
             Circle()
-                .strokeBorder(Color.white.opacity(0.6), lineWidth: 1.2)
+                .strokeBorder(Color.white.opacity(Theme.Opacity.strong), lineWidth: 1.2)
                 .transition(.opacity)
                 .allowsHitTesting(false)
         }
@@ -772,7 +772,7 @@ struct PlaybackControlsView: View {
         case .episodes:
             episodesPopover
                 .frame(width: 340, height: max(160, size.height - topEdge - bottomEdge))
-                .playerGlass(cornerRadius: 30)
+                .playerGlass(cornerRadius: Theme.Radius.sheet)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
                 .padding(.trailing, trailingEdge - 10)
                 .transition(reduceMotion ? .opacity : .move(edge: .trailing).combined(with: .opacity))
@@ -783,15 +783,15 @@ struct PlaybackControlsView: View {
     private func popoverContent(_ kind: PlayerPopover, maxHeight: CGFloat) -> some View {
         switch kind {
         case .quality:
-            qualityPopover(maxHeight: maxHeight).fixedSize().playerGlass(cornerRadius: 24)
+            qualityPopover(maxHeight: maxHeight).fixedSize().playerGlass(cornerRadius: Theme.Radius.sheet)
         case .speed:
-            speedPopover.fixedSize().playerGlass(cornerRadius: 30)
+            speedPopover.fixedSize().playerGlass(cornerRadius: Theme.Radius.sheet)
         case .tracks:
-            tracksPopover(maxHeight: maxHeight).fixedSize().playerGlass(cornerRadius: 24)
+            tracksPopover(maxHeight: maxHeight).fixedSize().playerGlass(cornerRadius: Theme.Radius.sheet)
         case .aspect:
-            aspectPopover.fixedSize().playerGlass(cornerRadius: 24)
+            aspectPopover.fixedSize().playerGlass(cornerRadius: Theme.Radius.sheet)
         case .more:
-            morePopover.fixedSize().playerGlass(cornerRadius: 24)
+            morePopover.fixedSize().playerGlass(cornerRadius: Theme.Radius.sheet)
         case .episodes:
             EmptyView()
         }
@@ -847,12 +847,12 @@ struct PlaybackControlsView: View {
         return VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 24) {
                 Text("播放速度")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.6))
+                    .font(.scaled(13, weight: .semibold))
+                    .foregroundStyle(.white.opacity(Theme.Opacity.strong))
                 Spacer(minLength: 0)
                 Text("长按画面临时加速，优先保持音画同步")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.white.opacity(0.5))
+                    .font(.scaled(12))
+                    .foregroundStyle(.white.opacity(Theme.Opacity.strong))
             }
             .padding(.horizontal, 10)
             .padding(.top, 2)
@@ -865,8 +865,8 @@ struct PlaybackControlsView: View {
                         closePopover(after: 0.35)
                     } label: {
                         Text(Self.speedLabel(rate))
-                            .font(.system(size: 15, weight: .semibold).monospacedDigit())
-                            .foregroundStyle(offset == index ? Theme.accent : Color.white.opacity(0.88))
+                            .font(.scaled(15, weight: .semibold).monospacedDigit())
+                            .foregroundStyle(offset == index ? Theme.accent : Color.white.opacity(Theme.Opacity.solid))
                             .frame(width: 58, height: 44)
                             .contentShape(Rectangle())
                     }
@@ -877,14 +877,14 @@ struct PlaybackControlsView: View {
             .padding(4)
             .background(alignment: .leading) {
                 Capsule()
-                    .fill(Color.white.opacity(0.2))
-                    .overlay { Capsule().strokeBorder(Color.white.opacity(0.32), lineWidth: 0.5) }
-                    .shadow(color: .black.opacity(0.25), radius: 5, y: 2)
+                    .fill(Color.white.opacity(Theme.Opacity.soft))
+                    .overlay { Capsule().strokeBorder(Color.white.opacity(Theme.Opacity.soft), lineWidth: 0.5) }
+                    .shadow(color: .black.opacity(Theme.Opacity.soft), radius: 5, y: 2)
                     .frame(width: 58, height: 44)
                     .offset(x: 4 + CGFloat(index) * 58)
                     .animation(reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.68), value: index)
             }
-            .background(Color.black.opacity(0.26), in: Capsule())
+            .background(Color.black.opacity(Theme.Opacity.soft), in: Capsule())
         }
         .padding(10)
     }
@@ -960,7 +960,7 @@ struct PlaybackControlsView: View {
         .overlay(alignment: .leading) {
             if divided {
                 Rectangle()
-                    .fill(Color.white.opacity(0.14))
+                    .fill(Color.white.opacity(Theme.Opacity.faint))
                     .frame(width: 0.5)
                     .padding(.vertical, 12)
             }
@@ -975,7 +975,7 @@ struct PlaybackControlsView: View {
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: AppIcon.check.name)
-                    .font(.system(size: 13, weight: .bold))
+                    .font(.scaled(13, weight: .bold))
                     .foregroundStyle(Theme.accent)
                     .opacity(selected ? 1 : 0)
                     .frame(width: 16)
@@ -985,8 +985,8 @@ struct PlaybackControlsView: View {
             .padding(.leading, 12)
             .padding(.trailing, 16)
             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-            .background(selected ? Color.white.opacity(0.13) : Color.clear,
-                        in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .background(selected ? Color.white.opacity(Theme.Opacity.faint) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -1010,14 +1010,14 @@ struct PlaybackControlsView: View {
         return VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
                 Text("选集")
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.scaled(17, weight: .semibold))
                 Text("共 \(items.count) 集")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.white.opacity(0.6))
+                    .font(.scaled(13))
+                    .foregroundStyle(.white.opacity(Theme.Opacity.strong))
                 Spacer(minLength: 8)
                 Text("自动连播")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.white.opacity(0.75))
+                    .font(.scaled(13))
+                    .foregroundStyle(.white.opacity(Theme.Opacity.heavy))
                 Toggle("自动连播", isOn: $autoPlayNext)
                     .labelsHidden()
                     .tint(Theme.accentFill)
@@ -1054,34 +1054,34 @@ struct PlaybackControlsView: View {
                 episodeTile(index: index, current: current, progress: item.progress)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(item.title)
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.scaled(14, weight: .semibold))
                         .foregroundStyle(current ? Theme.accent : Color.white)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
                     if current {
                         HStack(spacing: 5) {
                             Image(systemName: AppIcon.nowPlaying.name)
-                                .font(.system(size: 10, weight: .semibold))
+                                .font(.scaled(10, weight: .semibold))
                             Text("正在播放")
                         }
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.scaled(12, weight: .medium))
                         .foregroundStyle(Theme.accent)
                     } else if let progress = item.progress, progress > 0 {
                         Text("看到 \(Int((progress * 100).rounded()))%")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.white.opacity(0.6))
+                            .font(.scaled(12))
+                            .foregroundStyle(.white.opacity(Theme.Opacity.strong))
                     } else if !item.subtitle.isEmpty {
                         Text(item.subtitle)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.white.opacity(0.6))
+                            .font(.scaled(12))
+                            .foregroundStyle(.white.opacity(Theme.Opacity.strong))
                             .lineLimit(1)
                     }
                 }
                 Spacer(minLength: 0)
             }
             .padding(6)
-            .background(current ? Color.white.opacity(0.13) : Color.clear,
-                        in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .background(current ? Color.white.opacity(Theme.Opacity.faint) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: Theme.Radius.sheet, style: .continuous))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -1093,15 +1093,15 @@ struct PlaybackControlsView: View {
     /// 集数小块；有播放记录时底下画一条看到的进度
     private func episodeTile(index: Int, current: Bool, progress: Double?) -> some View {
         ZStack(alignment: .bottomLeading) {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(current ? Theme.accent.opacity(0.22) : Color.white.opacity(0.08))
+            RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
+                .fill(current ? Theme.accent.opacity(0.22) : Color.white.opacity(Theme.Opacity.hint))
             Text(String(format: "%02d", index + 1))
-                .font(.system(size: 19, weight: .semibold, design: .rounded).monospacedDigit())
-                .foregroundStyle(current ? Theme.accent : Color.white.opacity(0.85))
+                .font(.scaled(19, weight: .semibold, design: .rounded).monospacedDigit())
+                .foregroundStyle(current ? Theme.accent : Color.white.opacity(Theme.Opacity.solid))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             if let progress, progress > 0 {
                 ZStack(alignment: .leading) {
-                    Capsule().fill(Color.white.opacity(0.22))
+                    Capsule().fill(Color.white.opacity(Theme.Opacity.soft))
                     Capsule().fill(Theme.accent).frame(width: max(4, 60 * min(progress, 1)))
                 }
                 .frame(width: 60, height: 3)
@@ -1126,23 +1126,23 @@ struct PlaybackControlsView: View {
             }
             HStack(spacing: 8) {
                 Text("缩放")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.6))
+                    .font(.scaled(12, weight: .medium))
+                    .foregroundStyle(.white.opacity(Theme.Opacity.strong))
                 Slider(value: Binding(get: { playback.zoom }, set: { playback.setZoom($0) }), in: 1...2)
                     .frame(width: 90)
                     .accessibilityLabel("画面缩放")
                 Text("\(Int((playback.zoom * 100).rounded()))%")
-                    .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                    .font(.scaled(12, weight: .semibold).monospacedDigit())
                     .frame(width: 38, alignment: .trailing)
                 Button {
                     playback.setAspect(.fit)
                     playback.setZoom(1)
                 } label: {
                     Text("还原")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.scaled(12, weight: .semibold))
                         .padding(.horizontal, 12)
                         .frame(height: 30)
-                        .background(Color.white.opacity(0.12), in: Capsule())
+                        .background(Color.white.opacity(Theme.Opacity.faint), in: Capsule())
                         .frame(height: 44)
                         .contentShape(Rectangle())
                 }
@@ -1163,13 +1163,13 @@ struct PlaybackControlsView: View {
             VStack(spacing: 6) {
                 AspectGlyph(option: option)
                 Text(option.title)
-                    .font(.system(size: 12, weight: selected ? .semibold : .medium))
+                    .font(.scaled(12, weight: selected ? .semibold : .medium))
                     .lineLimit(1)
             }
-            .foregroundStyle(selected ? Theme.accent : Color.white.opacity(0.9))
+            .foregroundStyle(selected ? Theme.accent : Color.white.opacity(Theme.Opacity.solid))
             .frame(width: 82, height: 68)
-            .background(selected ? Color.white.opacity(0.13) : Color.clear,
-                        in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .background(selected ? Color.white.opacity(Theme.Opacity.faint) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -1188,11 +1188,11 @@ struct PlaybackControlsView: View {
                 } label: {
                     HStack(spacing: 8) {
                         Image(systemName: AppIcon.back.name)
-                            .font(.system(size: 13, weight: .bold))
-                            .foregroundStyle(.white.opacity(0.75))
+                            .font(.scaled(13, weight: .bold))
+                            .foregroundStyle(.white.opacity(Theme.Opacity.heavy))
                             .frame(width: 22)
                         Text(section.title)
-                            .font(.system(size: 15, weight: .semibold))
+                            .font(.scaled(15, weight: .semibold))
                         Spacer(minLength: 0)
                     }
                     .padding(.horizontal, 12)
@@ -1210,11 +1210,11 @@ struct PlaybackControlsView: View {
                 if playback.pictureInPictureSupported {
                     HStack(spacing: 10) {
                         Image(systemName: "pip")
-                            .font(.system(size: 16))
-                            .foregroundStyle(.white.opacity(0.75))
+                            .font(.scaled(16))
+                            .foregroundStyle(.white.opacity(Theme.Opacity.heavy))
                             .frame(width: 22)
                         Text("自动小窗")
-                            .font(.system(size: 15, weight: .medium))
+                            .font(.scaled(15, weight: .medium))
                             .lineLimit(1)
                         Spacer(minLength: 12)
                         Toggle("回桌面自动小窗", isOn: Binding(
@@ -1235,11 +1235,11 @@ struct PlaybackControlsView: View {
                 } label: {
                     HStack(spacing: 10) {
                         Image(systemName: AppIcon.copy.name)
-                            .font(.system(size: 16))
-                            .foregroundStyle(copiedDiagnostics ? Theme.accent : Color.white.opacity(0.75))
+                            .font(.scaled(16))
+                            .foregroundStyle(copiedDiagnostics ? Theme.accent : Color.white.opacity(Theme.Opacity.heavy))
                             .frame(width: 22)
                         Text(copiedDiagnostics ? "已复制诊断信息" : "复制播放诊断信息")
-                            .font(.system(size: 15, weight: .medium))
+                            .font(.scaled(15, weight: .medium))
                             .foregroundStyle(copiedDiagnostics ? Theme.accent : Color.white)
                         Spacer(minLength: 0)
                     }
@@ -1264,18 +1264,18 @@ struct PlaybackControlsView: View {
         Button(action: action) {
             HStack(spacing: 10) {
                 Image(systemName: icon.name)
-                    .font(.system(size: 16))
-                    .foregroundStyle(.white.opacity(0.75))
+                    .font(.scaled(16))
+                    .foregroundStyle(.white.opacity(Theme.Opacity.heavy))
                     .frame(width: 22)
                 Text(title)
-                    .font(.system(size: 15, weight: .medium))
+                    .font(.scaled(15, weight: .medium))
                 Spacer(minLength: 12)
                 Text(value)
-                    .font(.system(size: 13))
-                    .foregroundStyle(.white.opacity(0.6))
+                    .font(.scaled(13))
+                    .foregroundStyle(.white.opacity(Theme.Opacity.strong))
                 Image(systemName: AppIcon.forward.name)
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.45))
+                    .font(.scaled(11, weight: .bold))
+                    .foregroundStyle(.white.opacity(Theme.Opacity.medium))
             }
             .padding(.horizontal, 12)
             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
@@ -1319,8 +1319,8 @@ struct PlaybackControlsView: View {
 
     private func popoverHeader(_ title: String, leading: CGFloat = 38) -> some View {
         Text(title)
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(.white.opacity(0.6))
+            .font(.scaled(13, weight: .semibold))
+            .foregroundStyle(.white.opacity(Theme.Opacity.strong))
             .padding(.leading, leading)
             .padding(.trailing, 12)
             .padding(.top, 8)
@@ -1332,28 +1332,28 @@ struct PlaybackControlsView: View {
         Button(action: action) {
             HStack(spacing: 10) {
                 Image(systemName: AppIcon.check.name)
-                    .font(.system(size: 13, weight: .bold))
+                    .font(.scaled(13, weight: .bold))
                     .foregroundStyle(Theme.accent)
                     .opacity(selected ? 1 : 0)
                     .frame(width: 16)
                     .accessibilityHidden(true)
                 Text(Self.clipped(title, 18))
-                    .font(.system(size: 15, weight: selected ? .semibold : .medium))
+                    .font(.scaled(15, weight: selected ? .semibold : .medium))
                     .foregroundStyle(selected ? Theme.accent : Color.white)
                     .lineLimit(1)
                 Spacer(minLength: detail.isEmpty ? 0 : 20)
                 if !detail.isEmpty {
                     Text(Self.clipped(detail, 16))
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.58))
+                        .font(.scaled(12, weight: .medium))
+                        .foregroundStyle(.white.opacity(Theme.Opacity.strong))
                         .lineLimit(1)
                 }
             }
             .padding(.leading, 12)
             .padding(.trailing, 14)
             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-            .background(selected ? Color.white.opacity(0.13) : Color.clear,
-                        in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .background(selected ? Color.white.opacity(Theme.Opacity.faint) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -1363,7 +1363,7 @@ struct PlaybackControlsView: View {
     private func popoverNote(_ text: String, width: CGFloat = 190) -> some View {
         Text(text)
             .font(.caption)
-            .foregroundStyle(.white.opacity(0.55))
+            .foregroundStyle(.white.opacity(Theme.Opacity.strong))
             .fixedSize(horizontal: false, vertical: true)
             .frame(width: width, alignment: .leading)
             .padding(.horizontal, 12)
@@ -1372,7 +1372,7 @@ struct PlaybackControlsView: View {
 
     private var popoverDivider: some View {
         Rectangle()
-            .fill(Color.white.opacity(0.14))
+            .fill(Color.white.opacity(Theme.Opacity.faint))
             .frame(height: 0.5)
             .padding(.horizontal, 12)
             .padding(.vertical, 4)
@@ -1386,19 +1386,19 @@ struct PlaybackControlsView: View {
     private func transportControls(spacing: CGFloat, compact: Bool = false) -> some View {
         HStack(spacing: spacing) {
             Button { move(-1) } label: {
-                controlIcon(AppIcon.previous.name, label: "上一个", size: 18).background(.black.opacity(0.3), in: Circle()).glassCircle()
+                controlIcon(AppIcon.previous.name, label: "上一个", size: 18).background(.black.opacity(Theme.Opacity.soft), in: Circle()).glassCircle()
             }
                 .accessibilityIdentifier("playback.previous")
                 .disabled(previousID == nil)
                 .opacity(previousID == nil ? 0.35 : 1)
             Button { playback.toggle(); revealControls() } label: {
                 playPauseIcon(compact: compact)
-                    .frame(height: compact ? 56 : 64).background(.black.opacity(0.3), in: Circle()).glassCircle()
+                    .frame(height: compact ? 56 : 64).background(.black.opacity(Theme.Opacity.soft), in: Circle()).glassCircle()
             }
             .accessibilityIdentifier("playback.playPause")
             .accessibilityValue(playback.playing ? "playing" : "paused")
             Button { move(1) } label: {
-                controlIcon(AppIcon.next.name, label: "下一个", size: 18).background(.black.opacity(0.3), in: Circle()).glassCircle()
+                controlIcon(AppIcon.next.name, label: "下一个", size: 18).background(.black.opacity(Theme.Opacity.soft), in: Circle()).glassCircle()
             }
                 .accessibilityIdentifier("playback.next")
                 .disabled(nextID == nil)
@@ -1468,11 +1468,11 @@ struct PlaybackControlsView: View {
             if playback.pictureInPictureActive {
                 VStack(spacing: 10) {
                     Image(systemName: "pip")
-                        .font(.system(size: 34, weight: .light))
+                        .font(.scaled(34, weight: .light))
                     Text("正在小窗播放")
-                        .font(.system(size: 14, weight: .medium))
+                        .font(.scaled(14, weight: .medium))
                 }
-                .foregroundStyle(.white.opacity(0.6))
+                .foregroundStyle(.white.opacity(Theme.Opacity.strong))
                 .allowsHitTesting(false)
                 .accessibilityIdentifier("playback.pipPlaceholder")
             }
@@ -1541,12 +1541,12 @@ struct PlaybackControlsView: View {
         .padding(.top, max(insets.top, 12))
         .padding(.bottom, max(insets.bottom, 8))
         .background(alignment: .top) {
-            LinearGradient(colors: [.black.opacity(0.6), .clear], startPoint: .top, endPoint: .bottom)
+            LinearGradient(colors: [.black.opacity(Theme.Opacity.strong), .clear], startPoint: .top, endPoint: .bottom)
                 .frame(height: insets.top + 120)
                 .allowsHitTesting(false)
         }
         .background(alignment: .bottom) {
-            LinearGradient(colors: [.clear, .black.opacity(0.7)], startPoint: .top, endPoint: .bottom)
+            LinearGradient(colors: [.clear, .black.opacity(Theme.Opacity.heavy)], startPoint: .top, endPoint: .bottom)
                 .frame(height: insets.bottom + 150)
                 .allowsHitTesting(false)
         }
@@ -1594,7 +1594,7 @@ struct PlaybackControlsView: View {
                             .overlay {
                                 if showSleepMenu {
                                     Circle()
-                                        .strokeBorder(Color.white.opacity(0.6), lineWidth: 1.2)
+                                        .strokeBorder(Color.white.opacity(Theme.Opacity.strong), lineWidth: 1.2)
                                         .transition(.opacity)
                                         .allowsHitTesting(false)
                                 }
@@ -1604,7 +1604,7 @@ struct PlaybackControlsView: View {
                                     Circle()
                                         .fill(Theme.gold)
                                         .frame(width: 8, height: 8)
-                                        .overlay { Circle().strokeBorder(Color.black.opacity(0.5), lineWidth: 1.5) }
+                                        .overlay { Circle().strokeBorder(Color.black.opacity(Theme.Opacity.strong), lineWidth: 1.5) }
                                         .padding(.top, 6)
                                         .padding(.trailing, 6)
                                         .allowsHitTesting(false)
@@ -1634,7 +1634,7 @@ struct PlaybackControlsView: View {
                     timeSlot(long: long, alignment: .trailing) {
                         Text(playback.duration > 0 ? timeText(playback.duration) : "00:00")
                             .font(.caption.weight(.medium).monospacedDigit())
-                            .foregroundStyle(.white.opacity(0.6))
+                            .foregroundStyle(.white.opacity(Theme.Opacity.strong))
                             .accessibilityLabel("总时长")
                     }
                     Button { toggleOrientation(landscape: false) } label: {
@@ -1651,12 +1651,12 @@ struct PlaybackControlsView: View {
             transportControls(spacing: 16, compact: true)
         }
         .background(alignment: .top) {
-            LinearGradient(colors: [.black.opacity(0.6), .clear], startPoint: .top, endPoint: .bottom)
+            LinearGradient(colors: [.black.opacity(Theme.Opacity.strong), .clear], startPoint: .top, endPoint: .bottom)
                 .frame(height: 100)
                 .allowsHitTesting(false)
         }
         .background(alignment: .bottom) {
-            LinearGradient(colors: [.clear, .black.opacity(0.7)], startPoint: .top, endPoint: .bottom)
+            LinearGradient(colors: [.clear, .black.opacity(Theme.Opacity.heavy)], startPoint: .top, endPoint: .bottom)
                 .frame(height: 110)
                 .allowsHitTesting(false)
         }
@@ -1714,11 +1714,11 @@ struct PlaybackControlsView: View {
                         .foregroundStyle(Theme.textPrimary)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
-                        .background(Theme.track, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                        .background(Theme.track, in: RoundedRectangle(cornerRadius: Theme.Radius.badge, style: .continuous))
                 }
                 if !statusLine.isEmpty {
                     Text(statusLine)
-                        .font(.system(size: 12))
+                        .font(.scaled(12))
                         .foregroundStyle(Theme.textSecondary)
                         .lineLimit(1)
                 }
@@ -1754,7 +1754,7 @@ struct PlaybackControlsView: View {
             VStack(alignment: .leading, spacing: 0) {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(title)
-                        .font(.system(size: 22, weight: .bold))
+                        .font(.scaled(22, weight: .bold))
                         .foregroundStyle(Theme.textPrimary)
                         .lineLimit(2)
                     infoMeta
@@ -1779,24 +1779,24 @@ struct PlaybackControlsView: View {
         HStack(spacing: 0) {
             quickCell(.quality, selectedQuality.isEmpty ? "原画" : selectedQuality, "清晰度", id: "playback.quality") {
                 Text("HD")
-                    .font(.system(size: 10.5, weight: .heavy))
+                    .font(.scaled(10.5, weight: .bold))
                     .padding(.horizontal, 4)
                     .padding(.vertical, 1.5)
-                    .overlay { RoundedRectangle(cornerRadius: 5, style: .continuous).strokeBorder(lineWidth: 1.7) }
+                    .overlay { RoundedRectangle(cornerRadius: Theme.Radius.badge, style: .continuous).strokeBorder(lineWidth: 1.7) }
             }
             quickCell(.speed, "\(String(format: "%g", playback.rate))×", "倍速", id: "playback.speed",
                       on: abs(playback.rate - 1) > 0.01) {
-                Image(systemName: AppIcon.speed.name).font(.system(size: 18, weight: .medium))
+                Image(systemName: AppIcon.speed.name).font(.scaled(18, weight: .medium))
             }
             quickCell(.tracks, playback.selectedSubtitle == nil ? "关闭" : "已开启", "字幕", id: "playback.tracks",
                       on: playback.selectedSubtitle != nil) {
-                Image(systemName: AppIcon.subtitle.name).font(.system(size: 18, weight: .medium))
+                Image(systemName: AppIcon.subtitle.name).font(.scaled(18, weight: .medium))
             }
             quickCell(.aspect, playback.aspect.title, "画面比例", id: "playback.aspect") {
-                Image(systemName: AppIcon.aspect.name).font(.system(size: 18, weight: .medium))
+                Image(systemName: AppIcon.aspect.name).font(.scaled(18, weight: .medium))
             }
             quickCell(.decoding, playback.decoding.title, "解码", id: "playback.decoding") {
-                Image(systemName: AppIcon.decoder.name).font(.system(size: 18, weight: .medium))
+                Image(systemName: AppIcon.decoder.name).font(.scaled(18, weight: .medium))
             }
         }
         .padding(4)
@@ -1816,7 +1816,7 @@ struct PlaybackControlsView: View {
                     .foregroundStyle(on || open ? Theme.accent : Theme.textPrimary)
                     .frame(height: 22)
                 Text(value)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.scaled(12, weight: .semibold))
                     .foregroundStyle(on || open ? Theme.accentAlt : Theme.textPrimary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
@@ -2004,7 +2004,7 @@ struct PlaybackControlsView: View {
                     SubtitleStyleLabel(style: style)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
-                        .background(Color.black.opacity(0.72), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        .background(Color.black.opacity(Theme.Opacity.heavy), in: RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
                 }
             }
             if selectedSubtitleKeepsOwnStyle {
@@ -2024,12 +2024,12 @@ struct PlaybackControlsView: View {
             }
             HStack(spacing: 8) {
                 Text("缩放")
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.scaled(12, weight: .medium))
                     .foregroundStyle(Theme.textSecondary)
                 Slider(value: Binding(get: { playback.zoom }, set: { playback.setZoom($0) }), in: 1...2)
                     .accessibilityLabel("画面缩放")
                 Text("\(Int((playback.zoom * 100).rounded()))%")
-                    .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                    .font(.scaled(12, weight: .semibold).monospacedDigit())
                     .frame(width: 38, alignment: .trailing)
                 Button {
                     playback.setAspect(.fit)
@@ -2037,7 +2037,7 @@ struct PlaybackControlsView: View {
                     revealControls()
                 } label: {
                     Text("还原")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.scaled(12, weight: .semibold))
                         .padding(.horizontal, 12)
                         .frame(height: 30)
                         .background(Color.primary.opacity(0.07), in: Capsule())
@@ -2063,13 +2063,13 @@ struct PlaybackControlsView: View {
             VStack(spacing: 6) {
                 AspectGlyph(option: option)
                 Text(option.title)
-                    .font(.system(size: 12, weight: selected ? .semibold : .medium))
+                    .font(.scaled(12, weight: selected ? .semibold : .medium))
                     .lineLimit(1)
             }
             .foregroundStyle(selected ? Theme.accentAlt : Color.primary)
             .frame(width: 82, height: 68)
             .background(selected ? Theme.accent.opacity(0.14) : Color.clear,
-                        in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -2096,7 +2096,7 @@ struct PlaybackControlsView: View {
 
     private func menuHeader(_ title: String) -> some View {
         Text(title)
-            .font(.system(size: 12, weight: .semibold))
+            .font(.scaled(12, weight: .semibold))
             .foregroundStyle(Theme.textSecondary)
             .padding(.horizontal, 12)
             .padding(.top, 8)
@@ -2113,7 +2113,7 @@ struct PlaybackControlsView: View {
                 Spacer(minLength: 0)
                 if selected {
                     Image(systemName: AppIcon.check.name)
-                        .font(.system(size: 13, weight: .bold))
+                        .font(.scaled(13, weight: .bold))
                         .foregroundStyle(Theme.accentAlt)
                         .accessibilityHidden(true)
                 }
@@ -2121,7 +2121,7 @@ struct PlaybackControlsView: View {
             .padding(.horizontal, 12)
             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
             .background(selected ? Theme.accent.opacity(0.14) : Color.clear,
-                        in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -2134,10 +2134,10 @@ struct PlaybackControlsView: View {
     @ViewBuilder
     private func menuTitle(_ title: String, detail: String = "", selected: Bool, stacked: Bool = false) -> some View {
         let titleText = Text(Self.clipped(title, stacked ? 22 : 18))
-            .font(.system(size: 15, weight: selected ? .semibold : .regular))
+            .font(.scaled(15, weight: selected ? .semibold : .regular))
             .foregroundStyle(selected ? Theme.accentAlt : Color.primary)
         let detailText = Text(Self.clipped(detail, 24))
-            .font(.system(size: 12))
+            .font(.scaled(12))
             .foregroundStyle(Theme.textSecondary)
         if stacked && !detail.isEmpty {
             VStack(alignment: .leading, spacing: 1) {
@@ -2154,7 +2154,7 @@ struct PlaybackControlsView: View {
 
     private func menuNote(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 12))
+            .font(.scaled(12))
             .foregroundStyle(Theme.textSecondary)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -2176,14 +2176,14 @@ struct PlaybackControlsView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
                 Text("选集")
-                    .font(.system(size: 17, weight: .bold))
+                    .font(.scaled(17, weight: .bold))
                     .foregroundStyle(Theme.textPrimary)
                 Spacer(minLength: 8)
                 if episodesExpanded {
                     episodeOrderToggle
                 } else {
                     Text("\(autoPlayNext ? "自动连播 · " : "")共 \(max(items.count, 1)) 集")
-                        .font(.system(size: 12))
+                        .font(.scaled(12))
                         .foregroundStyle(Theme.textSecondary)
                         .lineLimit(1)
                 }
@@ -2200,7 +2200,7 @@ struct PlaybackControlsView: View {
                     } label: {
                         HStack(spacing: 3) {
                             Text(episodesExpanded ? "收起" : "全部")
-                                .font(.system(size: 13))
+                                .font(.scaled(13))
                             Image(icon: episodesExpanded ? .collapse : .expand)
                                 .iconStyle(size: 10, color: Theme.textSecondary)
                         }
@@ -2294,7 +2294,7 @@ struct PlaybackControlsView: View {
             .id("episode-grid-\(episodeRange)-\(episodesDescending)-\(items.count)")
             HStack {
                 Text("自动连播")
-                    .font(.system(size: 14))
+                    .font(.scaled(14))
                     .foregroundStyle(Theme.textSecondary)
                 Spacer(minLength: 8)
                 Toggle("自动连播", isOn: $autoPlayNext)
@@ -2313,7 +2313,7 @@ struct PlaybackControlsView: View {
             episodeOrderPill("倒序", icon: .sortDescending, selected: episodesDescending) { episodesDescending = true }
         }
         .padding(2)
-        .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
     }
 
     private func episodeOrderPill(_ title: String, icon: AppIcon, selected: Bool, action: @escaping () -> Void) -> some View {
@@ -2325,12 +2325,12 @@ struct PlaybackControlsView: View {
                 Image(icon: icon)
                     .iconStyle(size: 11, color: selected ? Theme.onPrimary : Theme.textSecondary)
                 Text(title)
-                    .font(.system(size: 11, weight: selected ? .bold : .medium))
+                    .font(.scaled(11, weight: selected ? .bold : .medium))
                     .foregroundStyle(selected ? Theme.onPrimary : Theme.textSecondary)
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
-            .background(selected ? Theme.primaryAction : Color.clear, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .background(selected ? Theme.primaryAction : Color.clear, in: RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
         }
         .buttonStyle(.pressable)
         .accessibilityAddTraits(selected ? .isSelected : [])
@@ -2346,7 +2346,7 @@ struct PlaybackControlsView: View {
             revealControls()
         } label: {
             Text("\(index + 1)")
-                .font(.system(size: 16, weight: current ? .bold : .medium).monospacedDigit())
+                .font(.scaled(16, weight: current ? .bold : .medium).monospacedDigit())
                 .foregroundStyle(current ? Theme.accentAlt : (index < currentIndex ? Theme.textSecondary : Theme.textPrimary))
                 .frame(width: fill ? nil : 48, height: 48)
                 .frame(maxWidth: fill ? .infinity : nil)
@@ -2376,22 +2376,22 @@ struct PlaybackControlsView: View {
             } label: {
                 HStack(spacing: 12) {
                     Image(systemName: AppIcon.play.name)
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(.scaled(16, weight: .semibold))
                         .foregroundStyle(Theme.accent)
                         .frame(width: 104, height: 58)
                         .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
                     VStack(alignment: .leading, spacing: 4) {
                         Text("接下来")
-                            .font(.system(size: 11, weight: .semibold))
+                            .font(.scaled(11, weight: .semibold))
                             .foregroundStyle(Theme.accentAlt)
                         Text(next.title)
-                            .font(.system(size: 14, weight: .medium))
+                            .font(.scaled(14, weight: .medium))
                             .foregroundStyle(Theme.textPrimary)
                             .lineLimit(2)
                             .multilineTextAlignment(.leading)
                         if autoPlayNext {
                             Text("本集结束后自动播放")
-                                .font(.system(size: 11))
+                                .font(.scaled(11))
                                 .foregroundStyle(Theme.textSecondary)
                         }
                     }
@@ -2417,7 +2417,7 @@ struct PlaybackControlsView: View {
     private var fileInfoSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("文件信息")
-                .font(.system(size: 17, weight: .bold))
+                .font(.scaled(17, weight: .bold))
                 .foregroundStyle(Theme.textPrimary)
             VStack(spacing: 0) {
                 ForEach(Array(fileRows.enumerated()), id: \.offset) { index, row in
@@ -2430,7 +2430,7 @@ struct PlaybackControlsView: View {
                             .lineLimit(1)
                             .truncationMode(.middle)
                     }
-                    .font(.system(size: 13))
+                    .font(.scaled(13))
                     .frame(minHeight: 40)
                     .overlay(alignment: .bottom) {
                         if index < fileRows.count - 1 { Rectangle().fill(Theme.hairline).frame(height: 0.5) }
@@ -2451,7 +2451,7 @@ struct PlaybackControlsView: View {
         if lightChrome {
             Button(action: action) {
                 Image(systemName: AppIcon.close.name)
-                    .font(.system(size: 12, weight: .bold))
+                    .font(.scaled(12, weight: .bold))
                     .foregroundStyle(Theme.textPrimary)
                     .frame(width: 32, height: 32)
                     .background(Color.primary.opacity(0.06), in: Circle())
@@ -2470,7 +2470,7 @@ struct PlaybackControlsView: View {
 
     private func playlistPanel(landscape: Bool, insets: EdgeInsets) -> some View {
         ZStack(alignment: landscape ? .trailing : .bottom) {
-            Color.black.opacity(0.3)
+            Color.black.opacity(Theme.Opacity.soft)
                 .contentShape(Rectangle())
                 .onTapGesture { closeList() }
 
@@ -2523,7 +2523,7 @@ struct PlaybackControlsView: View {
                 Group {
                     if current {
                         Image(systemName: AppIcon.audio.name)
-                            .font(.system(size: 13, weight: .bold))
+                            .font(.scaled(13, weight: .bold))
                             .foregroundStyle(Theme.accent)
                     } else {
                         Text("\(index + 1)")
@@ -2549,7 +2549,7 @@ struct PlaybackControlsView: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 11)
-            .background(current ? Color.primary.opacity(0.08) : Color.clear, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background(current ? Color.primary.opacity(0.08) : Color.clear, in: RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -2574,7 +2574,7 @@ struct PlaybackControlsView: View {
     private func errorCard(_ text: String) -> some View {
         VStack(spacing: 12) {
             Image(systemName: AppIcon.alert.name)
-                .font(.system(size: 20, weight: .semibold))
+                .font(.scaled(20, weight: .semibold))
                 .foregroundStyle(Color(uiColor: .systemYellow))
             Text(text)
                 .font(.subheadline)
@@ -2583,7 +2583,7 @@ struct PlaybackControlsView: View {
                 // 内核给出的具体原因，截图发过来就能看出是哪一步出的错
                 Text(playback.errorDetail)
                     .font(.caption2.monospaced())
-                    .foregroundStyle(.white.opacity(0.55))
+                    .foregroundStyle(.white.opacity(Theme.Opacity.strong))
                     .multilineTextAlignment(.center)
                     .lineLimit(3)
             }
@@ -2612,7 +2612,7 @@ struct PlaybackControlsView: View {
                 } label: {
                     Text(copiedDiagnostics ? "已复制" : "复制诊断信息")
                         .font(.footnote)
-                        .foregroundStyle(.white.opacity(0.7))
+                        .foregroundStyle(.white.opacity(Theme.Opacity.heavy))
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("playback.copyDiagnostics")
@@ -2621,7 +2621,7 @@ struct PlaybackControlsView: View {
         .padding(.horizontal, 22)
         .padding(.vertical, 18)
         .frame(maxWidth: 320)
-        .playerPanelBackground(cornerRadius: 20)
+        .playerPanelBackground(cornerRadius: Theme.Radius.sheet)
     }
 
     /// 开播前 1.5 秒、播放中 0.8 秒内缓冲好了就什么都不显示；超过了才出转圈
@@ -2652,7 +2652,7 @@ struct PlaybackControlsView: View {
                 .lineLimit(2)
         }
         .frame(maxWidth: 280)
-        .shadow(color: .black.opacity(0.55), radius: 6, y: 1)
+        .shadow(color: .black.opacity(Theme.Opacity.strong), radius: 6, y: 1)
         .allowsHitTesting(false)
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("playback.cacheStatus")
@@ -2662,10 +2662,10 @@ struct PlaybackControlsView: View {
     private var boostPill: some View {
         HStack(spacing: 8) {
             Image(systemName: AppIcon.skip.name)
-                .font(.system(size: 13, weight: .bold))
+                .font(.scaled(13, weight: .bold))
                 .foregroundStyle(Theme.gold)
             Text("\(String(format: "%g", playback.effectiveRate))× 快进中")
-                .font(.system(size: 13, weight: .bold))
+                .font(.scaled(13, weight: .bold))
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
         }
@@ -2754,7 +2754,7 @@ struct PlaybackControlsView: View {
 
     private func controlIcon(_ name: String, label: String, size: CGFloat = 20, frame: CGFloat = 44) -> some View {
         Image(systemName: name)
-            .font(.system(size: size, weight: .semibold))
+            .font(.scaled(size, weight: .semibold))
             .frame(width: frame, height: 44)
             .contentShape(Rectangle())
             .accessibilityLabel(label)
@@ -3159,7 +3159,7 @@ private struct GlassIconButton: View {
         if #available(iOS 26.0, *) {
             Button(action: action) {
                 Image(systemName: systemImage)
-                    .font(.system(size: diameter * 0.36, weight: .semibold))
+                    .font(.scaled(diameter * 0.36, weight: .semibold))
                     .frame(width: diameter - 14, height: diameter - 14)
             }
             .buttonStyle(.glass)
@@ -3168,10 +3168,10 @@ private struct GlassIconButton: View {
         } else {
             Button(action: action) {
                 Image(systemName: systemImage)
-                    .font(.system(size: diameter * 0.36, weight: .semibold))
+                    .font(.scaled(diameter * 0.36, weight: .semibold))
                     .frame(width: diameter, height: diameter)
                     .background(.ultraThinMaterial, in: Circle())
-                    .overlay { Circle().strokeBorder(.white.opacity(0.18), lineWidth: 0.5) }
+                    .overlay { Circle().strokeBorder(.white.opacity(Theme.Opacity.faint), lineWidth: 0.5) }
                     .frame(width: max(diameter, 44), height: max(diameter, 44))
                     .contentShape(Circle())
             }
@@ -3287,12 +3287,12 @@ private struct LevelHUD: View {
     var body: some View {
         HStack(spacing: width < 180 ? 8 : 12) {
             Image(systemName: icon)
-                .font(.system(size: 16, weight: .semibold))
+                .font(.scaled(16, weight: .semibold))
                 .frame(width: 22)
             LevelBar(value: value)
                 .frame(height: 6)
             Text("\(Int((value * 100).rounded()))%")
-                .font(.system(size: 13, weight: .bold).monospacedDigit())
+                .font(.scaled(13, weight: .bold).monospacedDigit())
                 .frame(width: 40, alignment: .trailing)
         }
         .foregroundStyle(.white)
@@ -3329,7 +3329,7 @@ private struct NoticeHUD: View {
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: AppIcon.alert.name)
-                .font(.system(size: 13, weight: .semibold))
+                .font(.scaled(13, weight: .semibold))
             Text(text)
                 .font(.footnote.weight(.medium))
                 .lineLimit(1)
@@ -3349,14 +3349,14 @@ private struct SeekHUD: View {
     var body: some View {
         VStack(spacing: 2) {
             Text(time)
-                .font(.system(size: 34, weight: .bold).monospacedDigit())
+                .font(.scaled(34, weight: .bold).monospacedDigit())
             Text(delta)
-                .font(.system(size: 15, weight: .bold).monospacedDigit())
+                .font(.scaled(15, weight: .bold).monospacedDigit())
                 .foregroundStyle(Theme.gold)
         }
         .foregroundStyle(.white)
-        .shadow(color: .black.opacity(0.75), radius: 8, y: 1)
-        .shadow(color: .black.opacity(0.5), radius: 1)
+        .shadow(color: .black.opacity(Theme.Opacity.heavy), radius: 8, y: 1)
+        .shadow(color: .black.opacity(Theme.Opacity.strong), radius: 1)
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("playback.seekHUD")
     }
@@ -3368,7 +3368,7 @@ private struct LevelBar: View {
     var body: some View {
         GeometryReader { proxy in
             ZStack(alignment: .leading) {
-                Capsule().fill(.white.opacity(0.3))
+                Capsule().fill(.white.opacity(Theme.Opacity.soft))
                 Capsule()
                     .fill(.white)
                     .frame(width: proxy.size.width * min(max(value, 0), 1))

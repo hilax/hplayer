@@ -158,7 +158,7 @@ struct RecycleBinView: View {
     private var summaryBar: some View {
         HStack {
             Text(summaryText)
-                .font(.system(size: 12))
+                .font(.scaled(12))
                 .foregroundStyle(Theme.textSecondary)
                 .accessibilityIdentifier("library.recycle.summary")
             Spacer(minLength: 8)
@@ -166,7 +166,7 @@ struct RecycleBinView: View {
                 Haptics.select()
                 selection = allSelected ? [] : Set(items.map { $0.id })
             }
-            .font(.system(size: 13, weight: .medium))
+            .font(.scaled(13, weight: .medium))
             .foregroundStyle(Theme.accent)
             .frame(minHeight: 32)
             .accessibilityIdentifier("library.recycle.selectAll")
@@ -206,17 +206,17 @@ struct RecycleBinView: View {
                 tile(for: item)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(item.name)
-                        .font(.system(size: 14, weight: .medium))
+                        .font(.scaled(14, weight: .medium))
                         .foregroundStyle(Theme.textPrimary)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
                     Text(subtitle(for: item))
-                        .font(.system(size: 12))
+                        .font(.scaled(12))
                         .foregroundStyle(Theme.textSecondary)
                         .lineLimit(1)
                     if !item.parentName.isEmpty {
                         Text("原位置：" + item.parentName)
-                            .font(.system(size: 11))
+                            .font(.scaled(11))
                             .foregroundStyle(Theme.textTertiary)
                             .lineLimit(1)
                     }
@@ -246,7 +246,7 @@ struct RecycleBinView: View {
         case .file: symbol = AppIcon.file.name
         }
         return Image(systemName: symbol)
-            .font(.system(size: kind == .folder ? 22 : 18, weight: Theme.iconWeight))
+            .font(.scaled(kind == .folder ? 22 : 18, weight: Theme.iconWeight))
             .foregroundStyle(kind == .folder ? Theme.accent : Theme.textSecondary)
             .frame(width: 84, height: 48)
             .background(kind == .folder ? Theme.tileTint : Theme.surfaceRaised,
@@ -292,7 +292,7 @@ struct RecycleBinView: View {
         if !selection.isEmpty {
             VStack(spacing: 10) {
                 Text("已选 \(selection.count) 项")
-                    .font(.system(size: 12))
+                    .font(.scaled(12))
                     .foregroundStyle(Theme.textSecondary)
                     .accessibilityIdentifier("library.recycle.dock.summary")
                 HStack(spacing: 10) {
@@ -300,7 +300,7 @@ struct RecycleBinView: View {
                         confirmation = .delete(selectedItems)
                     } label: {
                         Label("彻底删除", systemImage: AppIcon.trash.name)
-                            .font(.system(size: 15, weight: .semibold))
+                            .font(.scaled(15, weight: .semibold))
                             .foregroundStyle(Theme.danger)
                             .frame(maxWidth: .infinity, minHeight: 46)
                             .background(Theme.danger.opacity(0.14), in: Capsule())
@@ -312,7 +312,7 @@ struct RecycleBinView: View {
                         restore(selectedItems)
                     } label: {
                         Label("还原", systemImage: AppIcon.restore.name)
-                            .font(.system(size: 15, weight: .semibold))
+                            .font(.scaled(15, weight: .semibold))
                             .foregroundStyle(Theme.onPrimary)
                             .frame(maxWidth: .infinity, minHeight: 46)
                             .background(Theme.primaryAction, in: Capsule())
@@ -322,9 +322,9 @@ struct RecycleBinView: View {
                 }
             }
             .padding(12)
-            .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-            .overlay { RoundedRectangle(cornerRadius: 24, style: .continuous).strokeBorder(Theme.hairline, lineWidth: 0.5) }
-            .shadow(color: Color.black.opacity(0.28), radius: 18, x: 0, y: 8)
+            .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: Theme.Radius.sheet, style: .continuous))
+            .overlay { RoundedRectangle(cornerRadius: Theme.Radius.sheet, style: .continuous).strokeBorder(Theme.hairline, lineWidth: 0.5) }
+            .shadow(color: Color.black.opacity(Theme.Opacity.soft), radius: 18, x: 0, y: 8)
             .padding(.horizontal, 12)
             .padding(.bottom, 8)
             .accessibilityElement(children: .contain)
@@ -541,18 +541,18 @@ struct SecurityKeySheet: View {
         VStack(spacing: 16) {
             HStack {
                 Button("取消") { dismiss() }
-                    .font(.system(size: 16))
+                    .font(.scaled(16))
                     .foregroundStyle(Theme.textSecondary)
                     .accessibilityIdentifier("library.recycle.key.cancel")
                 Spacer()
                 Text("输入安全密钥")
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.scaled(17, weight: .semibold))
                     .accessibilityAddTraits(.isHeader)
                 Spacer()
                 Color.clear.frame(width: 32, height: 1)
             }
             Text(message.isEmpty ? "彻底删除需要 115 的 6 位数字安全密钥。" : message)
-                .font(.system(size: 13))
+                .font(.scaled(13))
                 .foregroundStyle(Theme.textSecondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
@@ -560,7 +560,7 @@ struct SecurityKeySheet: View {
                 .keyboardType(.numberPad)
                 .focused($focused)
                 .multilineTextAlignment(.center)
-                .font(.system(size: 20, weight: .semibold, design: .monospaced))
+                .font(.scaled(20, weight: .semibold, design: .monospaced))
                 .padding(.vertical, 14)
                 .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous))
                 .onChange(of: key) { value in

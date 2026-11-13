@@ -225,10 +225,10 @@ struct SearchView: View {
             }
             HStack(spacing: 8) {
                 Image(systemName: AppIcon.search.name)
-                    .font(.system(size: 15, weight: Theme.iconWeight))
+                    .font(.scaled(15, weight: Theme.iconWeight))
                     .foregroundStyle(Theme.textTertiary)
                 TextField("片名、文件名或演员", text: $keyword)
-                    .font(.system(size: 15))
+                    .font(.scaled(15))
                     .textInputAutocapitalization(.never).autocorrectionDisabled().submitLabel(.search)
                     .onSubmit { startSearch() }
                     .focused($searchFocused)
@@ -236,7 +236,7 @@ struct SearchView: View {
                 if !keyword.isEmpty {
                     Button { keyword = "" } label: {
                         Image(systemName: AppIcon.clear.name)
-                            .font(.system(size: 15))
+                            .font(.scaled(15))
                             .foregroundStyle(Theme.textTertiary)
                             .frame(width: 28, height: 28)
                             .contentShape(Rectangle())
@@ -253,7 +253,7 @@ struct SearchView: View {
 
             Button { startSearch(); searchFocused = false } label: {
                 Text("搜索")
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.scaled(15, weight: .semibold))
                     .foregroundStyle(query.isEmpty ? Theme.textTertiary : Theme.accent)
                     .frame(minWidth: 48, minHeight: 44)
                     .contentShape(Rectangle())
@@ -321,11 +321,11 @@ struct SearchView: View {
                     HStack(spacing: 14) {
                         IconTile(icon: .people, size: 56)
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(group.name).font(.system(size: 15, weight: .semibold)).foregroundStyle(.primary).lineLimit(1)
-                            Text("演员合集 · \(group.collectionItems.count) 部").font(.system(size: 12)).foregroundStyle(Theme.textSecondary)
+                            Text(group.name).font(.scaled(15, weight: .semibold)).foregroundStyle(.primary).lineLimit(1)
+                            Text("演员合集 · \(group.collectionItems.count) 部").font(.scaled(12)).foregroundStyle(Theme.textSecondary)
                         }
                         Spacer(minLength: 8)
-                        Image(systemName: AppIcon.forward.name).font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.textTertiary)
+                        Image(systemName: AppIcon.forward.name).font(.scaled(12, weight: .semibold)).foregroundStyle(Theme.textTertiary)
                     }
                     .padding(12)
                     .surfaceCard()
@@ -469,7 +469,7 @@ struct SearchView: View {
 
     private func sectionTitle(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 13, weight: .semibold))
+            .font(.scaled(13, weight: .semibold))
             .foregroundStyle(Theme.textSecondary)
             .searchRow(top: 14, bottom: 4)
     }
@@ -522,27 +522,27 @@ private struct LibraryResultRow: View {
             ArtworkView(urlString: posterURL, title: title, letterSize: 24)
                 .scaledToFill()
                 .frame(width: 56, height: 84)
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous))
                 // 横版封面铺满后会伸出框外，clipShape 只裁画面不裁点击区域；整行的点击区域由最外层的 contentShape 决定
                 .allowsHitTesting(false)
                 .overlay {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
                         .strokeBorder(Theme.hairline, lineWidth: 0.5)
                 }
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(title)
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.scaled(15, weight: .semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(2)
                 if !meta.isEmpty {
                     Text(meta)
-                        .font(.system(size: 12))
+                        .font(.scaled(12))
                         .foregroundStyle(Theme.textSecondary)
                         .lineLimit(1)
                 }
                 Text(detail)
-                    .font(.system(size: 12))
+                    .font(.scaled(12))
                     .foregroundStyle(Theme.textTertiary)
                     .lineLimit(1)
             }
@@ -551,7 +551,7 @@ private struct LibraryResultRow: View {
 
             if showsPlay {
                 Image(systemName: AppIcon.play.name)
-                    .font(.system(size: 13, weight: .bold))
+                    .font(.scaled(13, weight: .bold))
                     .foregroundStyle(Theme.onPrimary)
                     .frame(width: 36, height: 36)
                     .background(Theme.gold, in: Circle())

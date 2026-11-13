@@ -95,8 +95,8 @@ struct HomeSlideArtwork: View {
             }
             LinearGradient(stops: [
                 .init(color: .clear, location: 0.38),
-                .init(color: .black.opacity(0.42), location: 0.66),
-                .init(color: .black.opacity(0.74), location: 1),
+                .init(color: .black.opacity(Theme.Opacity.medium), location: 0.66),
+                .init(color: .black.opacity(Theme.Opacity.heavy), location: 1),
             ], startPoint: .top, endPoint: .bottom)
         }
         .overlay(alignment: .topTrailing) { badge }
@@ -110,13 +110,9 @@ struct HomeSlideArtwork: View {
         case .anime: text = "热播"
         case .magnet: text = "最新"
         }
-        return Text(text)
-            .font(.system(size: 11, weight: .bold))
-            .foregroundStyle(Theme.onAccentFill)
-            .padding(.horizontal, 7)
-            .frame(height: 20)
-            .background(Theme.accentFill, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
-            .padding(10)
+        // 轮播卡片上的角标：画面本身已经够醒目，用暗底白字，不再压一块琥珀
+        return TagBadge(text: text, style: .onArtwork)
+            .padding(Theme.Space.md)
     }
 
     /// 只有竖海报：铺一层这张海报的虚化，海报本身立在右边，不硬裁成横图。
@@ -134,9 +130,9 @@ struct HomeSlideArtwork: View {
                     .scaleEffect(3.4)
                     .frame(width: proxy.size.width, height: height)
                     .clipped()
-                    .overlay(Color.black.opacity(0.18))
+                    .overlay(Color.black.opacity(Theme.Opacity.faint))
                 PosterArtwork(urlString: item.posterURL, title: item.title, width: posterHeight / 1.5)
-                    .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
+                    .shadow(color: .black.opacity(Theme.Opacity.medium), radius: 10, y: 4)
                     .padding(.trailing, 22)
                     .offset(y: -height * 0.04)
             }
@@ -211,15 +207,15 @@ struct HomeSlideCaption: View {
     private func titleBlock(title: String, subtitle: String) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(title)
-                .font(.system(size: 22, weight: .heavy))
+                .font(.scaled(22, weight: .bold))
                 .foregroundStyle(.white)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
-                .shadow(color: .black.opacity(0.35), radius: 6, y: 1)
+                .shadow(color: .black.opacity(Theme.Opacity.medium), radius: 6, y: 1)
             if !subtitle.isEmpty {
                 Text(subtitle)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(Color.white.opacity(0.82))
+                    .font(.scaled(12, weight: .medium))
+                    .foregroundStyle(Color.white.opacity(Theme.Opacity.heavy))
                     .lineLimit(1)
             }
         }
@@ -247,14 +243,14 @@ struct HomeAnimeGridCard: View {
                 PosterArtwork(urlString: item.safePicURLString, title: item.name, width: width)
                     .allowsHitTesting(false)
                     .overlay(alignment: .bottom) {
-                        LinearGradient(colors: [.clear, .black.opacity(0.6)], startPoint: .top, endPoint: .bottom)
+                        LinearGradient(colors: [.clear, .black.opacity(Theme.Opacity.strong)], startPoint: .top, endPoint: .bottom)
                             .frame(height: 40)
                             .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
                     }
                     .overlay(alignment: .bottomTrailing) {
                         if let episodes = AnimeEpisodeText.short(item) {
                             Text(episodes)
-                                .font(.system(size: 10, weight: .semibold))
+                                .font(.scaled(10, weight: .semibold))
                                 .foregroundStyle(.white)
                                 .lineLimit(1)
                                 .padding(.horizontal, 7)
@@ -263,25 +259,19 @@ struct HomeAnimeGridCard: View {
                     }
                     .overlay(alignment: .topTrailing) {
                         if let status = AnimeEpisodeText.status(item) {
-                            Text(status.title)
-                                .font(.system(size: 10, weight: .bold))
-                                .foregroundStyle(status.highlighted ? Theme.onAccentFill : Color.white)
-                                .padding(.horizontal, 6)
-                                .frame(height: 18)
-                                .background(status.highlighted ? Theme.accentFill : Color.black.opacity(0.62),
-                                            in: RoundedRectangle(cornerRadius: 5, style: .continuous))
-                                .padding(6)
+                            TagBadge(text: status.title, style: status.highlighted ? .accent : .onArtwork)
+                                .padding(Theme.Space.sm)
                         }
                     }
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(item.name)
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.scaled(13, weight: .semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                         .padding(.trailing, 22)
                     Text(subtitle)
-                        .font(.system(size: 11, weight: rank <= 3 ? .medium : .regular))
+                        .font(.scaled(11, weight: rank <= 3 ? .medium : .regular))
                         .foregroundStyle(rank <= 3 ? Theme.accent : Theme.textSecondary)
                         .lineLimit(1)
                 }
@@ -291,7 +281,7 @@ struct HomeAnimeGridCard: View {
         }
         .overlay(alignment: .topTrailing) {
             moreMenu
-                .offset(x: 6, y: posterHeight - 1)
+                .offset(x: 13, y: posterHeight - 8)
         }
     }
 
@@ -314,10 +304,11 @@ struct HomeAnimeGridCard: View {
             }
         } label: {
             Image(systemName: AppIcon.more.name)
-                .font(.system(size: 13, weight: .semibold))
+                .font(.scaled(13, weight: .semibold))
                 .rotationEffect(.degrees(90))
                 .foregroundStyle(Theme.textTertiary)
-                .frame(width: 30, height: 30)
+                // 看上去还是一个小「⋮」，点按区域 44pt
+                .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
         }
         .accessibilityLabel("更多操作：\(item.name)")
@@ -390,11 +381,11 @@ struct LibraryWideCard: View {
                     }
                 VStack(alignment: .leading, spacing: 2) {
                     Text(item.title)
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.scaled(14, weight: .semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                     Text(detail)
-                        .font(.system(size: 12))
+                        .font(.scaled(12))
                         .secondaryTextStyle()
                         .lineLimit(1)
                 }
@@ -441,12 +432,12 @@ struct LibraryWideCard: View {
                     .scaleEffect(3.4)
                     .frame(width: width, height: height)
                     .clipped()
-                    .overlay(Color.black.opacity(0.15))
+                    .overlay(Color.black.opacity(Theme.Opacity.faint))
                 ArtworkView(urlString: item.posterURL, title: item.title)
                     .scaledToFill()
                     .frame(width: height * 0.84 / 1.5, height: height * 0.84)
-                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                    .shadow(color: .black.opacity(0.3), radius: 6, y: 2)
+                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
+                    .shadow(color: .black.opacity(Theme.Opacity.soft), radius: 6, y: 2)
             }
             .frame(width: width, height: height)
             .background(Theme.surfaceRaised)

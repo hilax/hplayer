@@ -148,13 +148,13 @@ struct SeriesDetailView: View {
                     if !group.rating.isEmpty {
                         HStack(spacing: 3) {
                             Image(systemName: AppIcon.rating.name)
-                                .font(.system(size: 10, weight: .bold))
+                                .font(.scaled(10, weight: .bold))
                             Text(group.rating)
                         }
                         .foregroundStyle(Theme.rating)
                     }
                 }
-                .font(.system(size: 13, weight: .semibold))
+                .font(.scaled(13, weight: .semibold))
                 .foregroundStyle(Theme.textSecondary)
 
                 let genres = Array(group.metadata.genres.prefix(3))
@@ -172,7 +172,7 @@ struct SeriesDetailView: View {
 
     private func chip(_ text: String, tinted: Bool = true) -> some View {
         Text(text)
-            .font(.system(size: 11, weight: .medium))
+            .font(.scaled(11, weight: .medium))
             .foregroundStyle(tinted ? Theme.accent : Theme.textSecondary)
             .padding(.horizontal, 9)
             .frame(height: 22)
@@ -187,7 +187,7 @@ struct SeriesDetailView: View {
                     play(target.item, in: group)
                 } label: {
                     Label(target.title, systemImage: AppIcon.play.name)
-                        .font(.system(size: 15, weight: .bold))
+                        .font(.scaled(15, weight: .bold))
                         .foregroundStyle(Theme.onPrimary)
                         .lineLimit(1)
                         .frame(maxWidth: .infinity)
@@ -207,7 +207,7 @@ struct SeriesDetailView: View {
         if !text.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
                 Text(text)
-                    .font(.system(size: 14))
+                    .font(.scaled(14))
                     .foregroundStyle(Theme.textSecondary)
                     .lineSpacing(4)
                     .lineLimit(overviewExpanded ? nil : 3)
@@ -215,7 +215,7 @@ struct SeriesDetailView: View {
                     Button(overviewExpanded ? "收起" : "更多") {
                         withAnimation(Motion.snappy) { overviewExpanded.toggle() }
                     }
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.scaled(14, weight: .semibold))
                     .foregroundStyle(Theme.accent)
                     .buttonStyle(.pressable(scale: 0.94))
                 }
@@ -228,7 +228,7 @@ struct SeriesDetailView: View {
         return VStack(alignment: .leading, spacing: 12) {
             ShelfHeader(title: "选集", inset: 0) {
                 Text("共 \(episodes.count) 集")
-                    .font(.system(size: 12))
+                    .font(.scaled(12))
                     .foregroundStyle(Theme.textTertiary)
             }
             if seasons.count > 1 {
@@ -256,7 +256,7 @@ struct SeriesDetailView: View {
 
             if let target, let line = episodeDetail(target) {
                 Text(line)
-                    .font(.system(size: 12))
+                    .font(.scaled(12))
                     .foregroundStyle(Theme.textTertiary)
                     .lineLimit(2)
                     .padding(.top, 2)
@@ -278,11 +278,11 @@ struct SeriesDetailView: View {
                 RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous)
                     .fill(isCurrent ? Theme.gold : Theme.surface)
                 Text(number)
-                    .font(.system(size: 16, weight: .semibold).monospacedDigit())
+                    .font(.scaled(16, weight: .semibold).monospacedDigit())
                     .foregroundStyle(isCurrent ? Theme.onPrimary : (finished ? Theme.textTertiary : Color.primary))
                 if finished && !isCurrent {
                     Image(systemName: AppIcon.check.name)
-                        .font(.system(size: 8, weight: .bold))
+                        .font(.scaled(8, weight: .bold))
                         .foregroundStyle(Theme.textTertiary)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                         .padding(6)

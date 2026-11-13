@@ -186,7 +186,7 @@ struct MagnetSearchView: View {
 
     private func topIcon(_ icon: AppIcon) -> some View {
         Image(systemName: icon.name)
-            .font(.system(size: 19, weight: Theme.iconWeight))
+            .font(.scaled(19, weight: Theme.iconWeight))
             .foregroundStyle(Theme.textPrimary)
             .frame(width: 44, height: 44)
             .contentShape(Rectangle())
@@ -421,7 +421,7 @@ struct MagnetSearchView: View {
             // 口径：站点没有榜单页，这里是按女优人气排的近期主演新作。
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: AppIcon.info.name)
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.scaled(15, weight: .semibold))
                     .foregroundStyle(Theme.accent)
                     .padding(.top, 1)
                 Text("站点没有月榜。这里取人气靠前的女优，合并她们近 \(JavBusSource.hotWindowDays) 天已发行的主演新作（不含合集），按女优人气排序。")

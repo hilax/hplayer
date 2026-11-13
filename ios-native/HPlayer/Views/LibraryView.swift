@@ -107,6 +107,8 @@ struct DirectoryView: View {
     @State private var problem: String?
     /// 操作完成后的轻提示
     @State private var message: String?
+    /// 根页的大标题已经滚出屏幕：顶部换成紧凑标题栏
+    @State private var titleAway = false
     private let previewInfo: Direct115FileInfo?
 
     init(cid: String, trail: [Crumb] = [], onJump: ((Int) -> Void)? = nil,
@@ -151,6 +153,11 @@ struct DirectoryView: View {
             .onChange(of: ascending) { _ in applySort() }
             .onChange(of: foldersFirst) { _ in applySort() }
             .onChange(of: showAllFiles) { _ in applyVisibility() }
+            .overlay(alignment: .top) {
+                if isRoot && !selecting, let rootTitle {
+                    CompactTitleBar(title: rootTitle, visible: titleAway) { rootActions(compact: true) }
+                }
+            }
             .overlay { operationOverlay }
             .toast($message)
             .sheet(item: $sheet) { current in
@@ -173,14 +180,15 @@ struct DirectoryView: View {
     private var content: some View {
         if isRoot && !selecting && (loading || !error.isEmpty || items.isEmpty) {
             ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    rootTop
+                VStack(alignment: .leading, spacing: Theme.Space.lg) {
+                    rootTitleBar
+                    rootHeaderBlock
                     statusContent
                         .frame(maxWidth: .infinity)
                         .frame(minHeight: 320)
                 }
                 .padding(.horizontal, Theme.contentInset)
-                .padding(.top, 6)
+                .padding(.top, Theme.Space.xs)
             }
             .scrollIndicators(.hidden)
             .refreshable { await load(silent: true) }
@@ -251,10 +259,17 @@ struct DirectoryView: View {
         let libraryCodes: Set<String> = management ? mediaLibrary.pickCodes(for: appState) : []
         let rows = Array(visibleItems.enumerated())
         return List {
+            if isRoot && !selecting {
+                // 大标题单独一行：它滚出屏幕（或被列表回收）时，顶部换成紧凑标题栏
+                rootTitleBar
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: Theme.Space.xs, leading: Theme.contentInset, bottom: 0, trailing: Theme.contentInset))
+            }
             listHeader
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
-                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 6, trailing: 16))
+                .listRowInsets(EdgeInsets(top: Theme.Space.sm, leading: Theme.contentInset, bottom: Theme.Space.sm, trailing: Theme.contentInset))
 
             ForEach(rows, id: \.element.id) { index, file in
                 fileRow(file, index: index, inLibrary: libraryCodes.contains(file.pickCode))
@@ -286,9 +301,9 @@ struct DirectoryView: View {
             if management && !selecting { rowActions(file) }
         }
         .listRowBackground(selected ? Theme.tileTint : Color.clear)
-        .listRowSeparator(.visible)
-        .listRowSeparatorTint(Theme.hairline)
-        .listRowInsets(EdgeInsets(top: 8, leading: Theme.contentInset, bottom: 8, trailing: Theme.contentInset))
+        // 不画分隔线：缩略图本身就是节奏，行与行之间靠留白分开
+        .listRowSeparator(.hidden)
+        .listRowInsets(EdgeInsets(top: Theme.Space.sm - 2, leading: Theme.contentInset, bottom: Theme.Space.sm - 2, trailing: Theme.contentInset))
     }
 
     private func rowMenu(_ file: P115File) -> some View {
@@ -296,8 +311,8 @@ struct DirectoryView: View {
             rowActions(file)
         } label: {
             Image(systemName: AppIcon.more.name)
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(Theme.textSecondary)
+                .font(.scaled(16, weight: .semibold))
+                .foregroundStyle(Theme.textTertiary)
                 .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
         }
@@ -352,41 +367,53 @@ struct DirectoryView: View {
     // MARK: 面包屑与排序
 
     private var listHeader: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if isRoot && !selecting { rootTop }
+        VStack(alignment: .leading, spacing: Theme.Space.md) {
+            if isRoot && !selecting { rootHeaderBlock }
             if trail.count > 1 { breadcrumb }
             summaryLine
         }
     }
 
-    /// 根页顶部：页面标题（搜索、更多）、账号条和快捷入口、「全部文件」
+    /// 根页的大标题行：34pt 粗体标题，右边搜索和更多
     @ViewBuilder
-    private var rootTop: some View {
+    private var rootTitleBar: some View {
         if let rootTitle {
-            VStack(alignment: .leading, spacing: 14) {
-                ScreenTitleBar(title: rootTitle) {
-                    if let onSearch {
-                        BarIconButton(icon: .search, label: "搜索网盘", identifier: "cloud.search", action: onSearch)
-                    }
-                    Menu {
-                        menuContent
-                    } label: {
-                        Image(systemName: AppIcon.more.name)
-                            .font(.system(size: 20, weight: Theme.iconWeight))
-                            .frame(width: 44, height: 44)
-                            .contentShape(Rectangle())
-                    }
-                    .disabled(loading)
-                    .accessibilityLabel("更多")
-                    .accessibilityIdentifier("library.menu")
-                }
+            ScreenTitleBar(title: rootTitle) { rootActions(compact: false) }
                 .padding(.horizontal, -Theme.contentInset)
+                .scrolledAway($titleAway)
+        }
+    }
+
+    /// 标题行右侧的搜索和更多；紧凑标题栏里用另一组标识，避免和大标题里的重复
+    @ViewBuilder
+    private func rootActions(compact: Bool) -> some View {
+        if let onSearch {
+            BarIconButton(icon: .search, label: "搜索网盘",
+                          identifier: compact ? "cloud.search.compact" : "cloud.search", action: onSearch)
+        }
+        Menu {
+            menuContent
+        } label: {
+            Image(systemName: AppIcon.more.name)
+                .font(.scaled(20, weight: Theme.iconWeight))
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .disabled(loading)
+        .accessibilityLabel("更多")
+        .accessibilityIdentifier(compact ? "library.menu.compact" : "library.menu")
+    }
+
+    /// 根页标题下面：账号条和快捷入口，再下面是「全部文件」栏目标题
+    @ViewBuilder
+    private var rootHeaderBlock: some View {
+        if isRoot {
+            VStack(alignment: .leading, spacing: Theme.Space.xl) {
                 if let rootHeader { rootHeader }
                 Text("全部文件")
-                    .font(.system(size: 19, weight: .bold))
+                    .font(Theme.Typo.section)
                     .foregroundStyle(Theme.textPrimary)
                     .accessibilityAddTraits(.isHeader)
-                    .padding(.top, 4)
             }
         }
     }
@@ -404,8 +431,8 @@ struct DirectoryView: View {
     private var summaryLine: some View {
         HStack(spacing: 8) {
             Text(summaryText)
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.textSecondary)
+                .font(Theme.Typo.caption.monospacedDigit())
+                .foregroundStyle(Theme.textTertiary)
                 .lineLimit(1)
                 .accessibilityIdentifier("library.summary")
             Spacer(minLength: 8)
@@ -417,7 +444,7 @@ struct DirectoryView: View {
                     Image(systemName: ascending ? AppIcon.sortAscending.name : AppIcon.sortDescending.name)
                         .font(.caption2.weight(.bold))
                 }
-                .font(.system(size: 13, weight: .medium))
+                .font(.scaled(13, weight: .medium))
                 .foregroundStyle(Theme.accent)
                 .frame(minHeight: 32)
                 .contentShape(Rectangle())
@@ -980,7 +1007,7 @@ struct FileRow: View {
     private static let tileSize = CGSize(width: 96, height: 54)
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: Theme.Space.md) {
             if selecting {
                 CheckBadge(selected: selected, size: 24)
                     .transition(.scale.combined(with: .opacity))
@@ -988,29 +1015,24 @@ struct FileRow: View {
 
             thumbnail
                 .frame(width: Self.tileSize.width, height: Self.tileSize.height)
-                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
+                .coverEdge()
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: Theme.Space.xs) {
                 Text(file.name)
-                    .font(.system(size: 15, weight: .medium))
+                    .font(Theme.Typo.row.weight(.medium))
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(Theme.textPrimary)
                 if !subtitle.isEmpty || inLibrary {
-                    HStack(spacing: 6) {
+                    HStack(spacing: Theme.Space.sm) {
                         if !subtitle.isEmpty {
                             Text(subtitle)
-                                .font(.caption)
-                                .foregroundStyle(Theme.textSecondary)
+                                .font(Theme.Typo.caption.monospacedDigit())
+                                .foregroundStyle(Theme.textTertiary)
                                 .lineLimit(1)
                         }
                         if inLibrary {
-                            Text("已入库")
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundStyle(Theme.accent)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Theme.tileTint, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                            TagBadge(text: "已入库", style: .outline)
                                 .fixedSize()
                         }
                     }
@@ -1020,8 +1042,9 @@ struct FileRow: View {
             Spacer(minLength: 0)
             if file.isDir && !selecting {
                 Image(systemName: AppIcon.forward.name)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Theme.textTertiary)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(Theme.textMuted)
+                    .accessibilityHidden(true)
             }
         }
         .contentShape(Rectangle())
@@ -1045,11 +1068,12 @@ struct FileRow: View {
     @ViewBuilder
     private var thumbnail: some View {
         if file.isDir {
+            // 文件夹用中性灰：琥珀只留给进度和「更新」
             Image(systemName: AppIcon.folder.name)
-                .font(.system(size: 24, weight: Theme.iconWeight))
-                .foregroundStyle(Theme.accent)
+                .font(.scaled(22, weight: Theme.iconWeight))
+                .foregroundStyle(Theme.textSecondary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Theme.tileTint)
+                .background(Theme.surfaceRaised)
         } else if let url = URL(string: file.thumbUrl), !file.thumbUrl.isEmpty {
             AsyncImage(url: url) { phase in
                 if let image = phase.image {
@@ -1065,7 +1089,7 @@ struct FileRow: View {
 
     private var placeholder: some View {
         Image(systemName: file.isVideo ? AppIcon.video.name : AppIcon.file.name)
-            .font(.system(size: 18, weight: Theme.iconWeight))
+            .font(.scaled(18, weight: Theme.iconWeight))
             .foregroundStyle(Theme.textSecondary)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Theme.surfaceRaised)

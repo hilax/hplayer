@@ -138,7 +138,7 @@ struct MagnetPlayerView: View {
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .padding(14)
-                .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
                 .onChange(of: input) { _ in inputHint = "" }
 
             recognitionLine
@@ -198,14 +198,14 @@ struct MagnetPlayerView: View {
                 .accessibilityIdentifier("magnet.resolve")
         }
         .padding(18)
-        .surfaceCard(cornerRadius: 22)
+        .surfaceCard(cornerRadius: Theme.Radius.sheet)
     }
 
     /// 解析完成后输入框收成一行，点「更换」回到输入状态
     private var linkBar: some View {
         HStack(spacing: 10) {
             Image(systemName: AppIcon.link.name)
-                .font(.system(size: 14, weight: .semibold))
+                .font(.scaled(14, weight: .semibold))
                 .foregroundStyle(.secondary)
             Text(controller.link.map { "btih:\($0.shortHash)" } ?? input)
                 .font(.footnote.monospaced())
@@ -231,7 +231,7 @@ struct MagnetPlayerView: View {
         .padding(.leading, 16)
         .padding(.trailing, 8)
         .frame(height: 46)
-        .surfaceCard(cornerRadius: 23)
+        .surfaceCard(cornerRadius: Theme.Radius.sheet)
     }
 
     private var cloudAvailable: Bool {
@@ -293,7 +293,7 @@ struct MagnetPlayerView: View {
                 ZStack {
                     Circle().stroke(Theme.accent.opacity(0.12), lineWidth: 1).frame(width: 132, height: 132)
                     Circle().stroke(Theme.accent.opacity(0.25), lineWidth: 1).frame(width: 96, height: 96)
-                    Image(systemName: AppIcon.link.name).font(.system(size: 32, weight: .light)).foregroundStyle(Theme.accent)
+                    Image(systemName: AppIcon.link.name).font(.scaled(32, weight: .light)).foregroundStyle(Theme.accent)
                 }.frame(height: 132)
                 // 转圈放在圆环下面单独一行，不再压在圆环边上
                 ProgressView().scaleEffect(1.2)
@@ -342,7 +342,7 @@ struct MagnetPlayerView: View {
             .buttonStyle(.plain)
         }
         .padding(18)
-        .surfaceCard(cornerRadius: 22)
+        .surfaceCard(cornerRadius: Theme.Radius.sheet)
     }
 
     private func resolveMetric(_ label: String, value: String) -> some View {
@@ -370,7 +370,7 @@ struct MagnetPlayerView: View {
                     .frame(width: 22, height: 22)
                 if done {
                     Image(systemName: AppIcon.check.name)
-                        .font(.system(size: 10, weight: .bold))
+                        .font(.scaled(10, weight: .bold))
                         .foregroundStyle(.white)
                 } else if active {
                     Circle()
@@ -395,7 +395,7 @@ struct MagnetPlayerView: View {
     private var cloudRow: some View {
         HStack(spacing: 10) {
             Image(systemName: cloudIcon)
-                .font(.system(size: 13, weight: .semibold))
+                .font(.scaled(13, weight: .semibold))
                 .foregroundStyle(cloudTint)
                 .frame(width: 22, height: 22)
             VStack(alignment: .leading, spacing: 5) {
@@ -436,7 +436,7 @@ struct MagnetPlayerView: View {
     private var cloudSwitchBanner: some View {
         HStack(spacing: 12) {
             Image(systemName: AppIcon.cloudReady.name)
-                .font(.system(size: 18, weight: .semibold))
+                .font(.scaled(18, weight: .semibold))
                 .foregroundStyle(Theme.success)
             VStack(alignment: .leading, spacing: 2) {
                 Text("115 离线已完成")
@@ -459,7 +459,7 @@ struct MagnetPlayerView: View {
             .buttonStyle(.plain)
         }
         .padding(14)
-        .surfaceCard(cornerRadius: 18)
+        .surfaceCard(cornerRadius: Theme.Radius.card)
     }
 
     // MARK: 解析失败
@@ -468,7 +468,7 @@ struct MagnetPlayerView: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: AppIcon.alert.name)
-                    .font(.system(size: 20))
+                    .font(.scaled(20))
                     .foregroundStyle(Theme.warning)
                 VStack(alignment: .leading, spacing: 4) {
                     Text("解析没有完成")
@@ -499,7 +499,7 @@ struct MagnetPlayerView: View {
             }
         }
         .padding(18)
-        .surfaceCard(cornerRadius: 22)
+        .surfaceCard(cornerRadius: Theme.Radius.sheet)
     }
 
     // MARK: 文件列表
@@ -512,7 +512,7 @@ struct MagnetPlayerView: View {
         } else if catalog.source == .bt, controller.cloud != .off, controller.cloud != .ready {
             cloudRow
                 .padding(14)
-                .surfaceCard(cornerRadius: 18)
+                .surfaceCard(cornerRadius: Theme.Radius.card)
         }
 
         torrentHeader(catalog)
@@ -520,7 +520,7 @@ struct MagnetPlayerView: View {
         if catalog.main.isEmpty {
             VStack(spacing: 10) {
                 Image(systemName: AppIcon.series.name)
-                    .font(.system(size: 26, weight: .semibold))
+                    .font(.scaled(26, weight: .semibold))
                     .foregroundStyle(Theme.accent)
                 Text("没有可以播放的视频")
                     .font(.headline)
@@ -533,7 +533,7 @@ struct MagnetPlayerView: View {
             }
             .frame(maxWidth: .infinity)
             .padding(24)
-            .surfaceCard(cornerRadius: 22)
+            .surfaceCard(cornerRadius: Theme.Radius.sheet)
         } else {
             VStack(alignment: .leading, spacing: 10) {
                 GroupLabel(title: catalog.main.count > 1 ? "正片 · \(catalog.main.count) 个" : "正片")
@@ -546,7 +546,7 @@ struct MagnetPlayerView: View {
                     }
                 }
                 .padding(.vertical, 6)
-                .surfaceCard(cornerRadius: 20)
+                .surfaceCard(cornerRadius: Theme.Radius.sheet)
             }
         }
 
@@ -620,7 +620,7 @@ struct MagnetPlayerView: View {
             }
         }
         .padding(18)
-        .surfaceCard(cornerRadius: 22)
+        .surfaceCard(cornerRadius: Theme.Radius.sheet)
     }
 
     private func headerDetail(_ catalog: MagnetCatalog) -> String {
@@ -668,15 +668,15 @@ struct MagnetPlayerView: View {
         } label: {
             HStack(spacing: 12) {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
                         .fill(isLast ? AnyShapeStyle(Theme.accentGradient) : AnyShapeStyle(Theme.tileTint))
                     if let number {
                         Text("\(number)")
-                            .font(.system(size: 14, weight: .bold, design: .rounded).monospacedDigit())
+                            .font(.scaled(14, weight: .bold, design: .rounded).monospacedDigit())
                             .foregroundStyle(isLast ? Theme.onPrimary : Theme.accent)
                     } else {
                         Image(systemName: AppIcon.video.name)
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(.scaled(13, weight: .semibold))
                             .foregroundStyle(isLast ? Theme.onPrimary : Theme.accent)
                     }
                 }
@@ -693,7 +693,7 @@ struct MagnetPlayerView: View {
                             .font(.caption2.weight(.bold))
                             .padding(.horizontal, 5)
                             .padding(.vertical, 1.5)
-                            .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+                            .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: Theme.Radius.badge, style: .continuous))
                         Text(file.sizeText)
                         if showsEpisode, let episode = file.episodeLabel {
                             Text(episode)
@@ -714,7 +714,7 @@ struct MagnetPlayerView: View {
                 Spacer(minLength: 6)
 
                 Image(systemName: AppIcon.playCircle.name)
-                    .font(.system(size: 24))
+                    .font(.scaled(24))
                     .foregroundStyle(Theme.accent)
             }
             .padding(.horizontal, 14)
@@ -727,10 +727,10 @@ struct MagnetPlayerView: View {
     private func otherRow(_ file: MagnetFile) -> some View {
         HStack(spacing: 12) {
             Image(systemName: icon(for: file.kind))
-                .font(.system(size: 14, weight: .semibold))
+                .font(.scaled(14, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .frame(width: 34, height: 34)
-                .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous))
             VStack(alignment: .leading, spacing: 3) {
                 Text(file.name)
                     .font(.subheadline)
@@ -786,7 +786,7 @@ struct MagnetPlayerView: View {
             if expanded.wrappedValue {
                 VStack(spacing: 0) { rows }
                     .padding(.vertical, 6)
-                    .surfaceCard(cornerRadius: 20)
+                    .surfaceCard(cornerRadius: Theme.Radius.sheet)
             }
         }
     }
@@ -814,7 +814,7 @@ struct MagnetPlayerView: View {
                     }
                 }
                 .padding(.vertical, 6)
-                .surfaceCard(cornerRadius: 20)
+                .surfaceCard(cornerRadius: Theme.Radius.sheet)
 
                 Text("长按可以复制链接或删除记录。")
                     .font(.caption)
@@ -835,10 +835,10 @@ struct MagnetPlayerView: View {
         } label: {
             HStack(spacing: 12) {
                 Image(systemName: AppIcon.history.name)
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.scaled(14, weight: .semibold))
                     .foregroundStyle(Theme.accent)
                     .frame(width: 34, height: 34)
-                    .background(Theme.tileTint, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .background(Theme.tileTint, in: RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous))
                 VStack(alignment: .leading, spacing: 3) {
                     Text(item.name)
                         .font(.subheadline.weight(.medium))
@@ -893,7 +893,7 @@ struct MagnetPlayerView: View {
             } label: {
                 HStack(spacing: 10) {
                     Image(systemName: AppIcon.info.name)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.scaled(15, weight: .semibold))
                         .foregroundStyle(.secondary)
                     Text(cloudAvailable ? "使用说明：流量、缓存和 115 离线" : "使用说明：流量和缓存")
                         .font(.subheadline)
@@ -923,7 +923,7 @@ struct MagnetPlayerView: View {
             }
         }
         .padding(16)
-        .surfaceCard(cornerRadius: 18)
+        .surfaceCard(cornerRadius: Theme.Radius.card)
     }
 
     // MARK: 小部件

@@ -112,7 +112,7 @@ struct TransferCenterView: View {
     private func summaryTile(value: String, label: String, color: Color) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(value)
-                .font(.system(size: 24, weight: .bold).monospacedDigit())
+                .font(.scaled(24, weight: .bold).monospacedDigit())
                 .foregroundStyle(Theme.textPrimary)
             HStack(spacing: 5) {
                 Circle().fill(color).frame(width: 6, height: 6)

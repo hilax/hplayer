@@ -24,6 +24,8 @@ struct CloudTab: View {
     }
     @State private var playing: PlaybackQueue?
     @State private var showDirectLogin = false
+    /// 未登录页的大标题已经滚出屏幕
+    @State private var titleAway = false
 
     @ObservedObject private var downloads = DownloadManager.shared
 
@@ -77,65 +79,70 @@ struct CloudTab: View {
     // MARK: 已登录：账号条和快捷入口
 
     private var rootHeader: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: Theme.Space.md) {
             accountStrip
             quickEntries
         }
     }
 
+    /// 115 字样的小圆标：中性底，不再用 115 品牌蓝（全应用只有琥珀一种彩色）
+    private func monogram(size: CGFloat) -> some View {
+        Text("115")
+            .font(.scaled(size * 0.36, weight: .bold, design: .rounded))
+            .foregroundStyle(Theme.textPrimary)
+            .frame(width: size, height: size)
+            .background(Theme.surfaceHigh, in: Circle())
+            .accessibilityHidden(true)
+    }
+
     /// 账号、连接状态和容量缩成一条；点它去「我的」页看账号详情
     private var accountStrip: some View {
         Button(action: onOpenAccount) {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 10) {
-                    Text("115")
-                        .font(.system(size: 12, weight: .heavy, design: .rounded))
-                        .foregroundStyle(.white)
-                        .frame(width: 34, height: 34)
-                        .background(Color(uiColor: UIColor(hex: 0x2A6BFF)), in: Circle())
+            VStack(alignment: .leading, spacing: Theme.Space.md) {
+                HStack(spacing: Theme.Space.md) {
+                    monogram(size: 36)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("115 网盘")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(Theme.textPrimary)
                         Text(status?.userName ?? "正在读取账号")
-                            .font(.caption)
-                            .foregroundStyle(Theme.textSecondary)
+                            .font(Theme.Typo.row.weight(.semibold))
+                            .foregroundStyle(Theme.textPrimary)
                             .lineLimit(1)
+                        HStack(spacing: 6) {
+                            Circle().fill(statusColor).frame(width: 6, height: 6)
+                            Text("115 网盘 · \(syncText)")
+                        }
+                        .font(Theme.Typo.caption)
+                        .foregroundStyle(Theme.textSecondary)
                     }
-                    Spacer(minLength: 4)
-                    HStack(spacing: 4) {
-                        Circle().fill(statusColor).frame(width: 6, height: 6)
-                        Text(syncText)
-                    }
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(statusColor)
+                    Spacer(minLength: Theme.Space.xs)
                     Image(systemName: AppIcon.forward.name)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Theme.textTertiary)
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(Theme.textMuted)
                 }
                 if let quota {
-                    HStack(spacing: 10) {
+                    VStack(spacing: 6) {
                         QuotaBar(ratio: quotaRatio(quota))
-                        Text("已用 \(quota.usedText) / \(quota.totalText)")
-                            .font(.caption2)
-                            .foregroundStyle(Theme.textSecondary)
-                            .monospacedDigit()
-                            .fixedSize()
+                        HStack {
+                            Text("已用 \(quota.usedText)")
+                            Spacer(minLength: Theme.Space.sm)
+                            Text("共 \(quota.totalText)")
+                        }
+                        .font(Theme.Typo.caption.monospacedDigit())
+                        .foregroundStyle(Theme.textTertiary)
                     }
+                    .transition(.opacity)
                 }
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
-            .overlay { RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous).strokeBorder(Theme.hairline, lineWidth: 0.5) }
+            .padding(Theme.Space.lg)
+            .surfaceCard()
+            .animation(Motion.smooth, value: quota != nil)
         }
         .buttonStyle(.pressable(scale: 0.98))
         .accessibilityIdentifier("library.account")
     }
 
-    /// 传输中心、离线下载、本机视频、回收站：一排四个方块
+    /// 传输中心、离线下载、本机视频、回收站：一张卡片里的四格，不再各自描边
     private var quickEntries: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 0) {
             QuickEntryButton(icon: .transfers, title: "传输中心",
                              detail: activeDownloads == 0 ? "" : "\(activeDownloads) 个下载中",
                              highlighted: activeDownloads > 0, identifier: "cloud.transfers") {
@@ -153,21 +160,21 @@ struct CloudTab: View {
                 openPage(.recycleBin)
             }
         }
+        .padding(.vertical, Theme.Space.xs)
+        .surfaceCard()
     }
 
     // MARK: 未登录
 
     private var signedOutPage: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: Theme.Space.xl) {
                 ScreenTitleBar(title: "网盘") { EmptyView() }
                     .padding(.horizontal, -Theme.contentInset)
+                    .scrolledAway($titleAway)
                 loginCard.reveal(0)
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("不用登录也能用")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Theme.textSecondary)
-                        .padding(.leading, 4)
+                VStack(alignment: .leading, spacing: Theme.Space.sm) {
+                    GroupLabel(title: "不用登录也能用")
                     offlineRows
                 }
                 .reveal(1)
@@ -175,11 +182,12 @@ struct CloudTab: View {
             .frame(maxWidth: 620)
             .frame(maxWidth: .infinity)
             .padding(.horizontal, Theme.contentInset)
-            .padding(.top, 6)
-            .padding(.bottom, 36)
+            .padding(.top, Theme.Space.xs)
+            .padding(.bottom, Theme.Space.section + Theme.Space.sm)
         }
         .scrollIndicators(.hidden)
         .background(Theme.pageBackground.ignoresSafeArea())
+        .overlay(alignment: .top) { CompactTitleBar(title: "网盘", visible: titleAway) }
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .navigationBar)
@@ -187,44 +195,33 @@ struct CloudTab: View {
     }
 
     private var loginCard: some View {
-        VStack(spacing: 12) {
-            Text("115")
-                .font(.system(size: 18, weight: .heavy, design: .rounded))
-                .foregroundStyle(.white)
-                .frame(width: 60, height: 60)
-                .background(Color(uiColor: UIColor(hex: 0x2A6BFF)), in: Circle())
-            Text("登录 115，文件直接显示在这里")
-                .font(.system(size: 20, weight: .heavy))
-                .foregroundStyle(Theme.textPrimary)
-                .multilineTextAlignment(.center)
-                .padding(.top, 4)
-            Text("登录一次就行。「我的」页和这里用的是同一个账号，在哪边登录都可以。")
-                .font(.system(size: 14))
-                .foregroundStyle(Theme.textSecondary)
-                .multilineTextAlignment(.center)
-                .lineSpacing(3)
-            Button {
-                showDirectLogin = true
-            } label: {
-                Text("登录 115")
-                    .font(.system(size: 16, weight: .bold))
-                    .foregroundStyle(Theme.onPrimary)
-                    .frame(maxWidth: .infinity, minHeight: 50)
-                    .background(Theme.primaryAction, in: Capsule())
+        VStack(spacing: Theme.Space.md) {
+            monogram(size: 56)
+            VStack(spacing: Theme.Space.sm) {
+                Text("登录 115，文件直接显示在这里")
+                    .font(Theme.Typo.headline)
+                    .foregroundStyle(Theme.textPrimary)
+                Text("「我的」和这里用的是同一个账号，在哪边登录都可以。")
+                    .font(Theme.Typo.meta)
+                    .foregroundStyle(Theme.textSecondary)
+                    .lineSpacing(2)
             }
-            .buttonStyle(.pressable(scale: 0.97))
-            .padding(.top, 8)
-            .accessibilityIdentifier("cloud.login")
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.top, Theme.Space.xs)
+            Button("登录 115") { showDirectLogin = true }
+                .buttonStyle(PrimaryActionStyle())
+                .padding(.top, Theme.Space.sm)
+                .accessibilityIdentifier("cloud.login")
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 28)
-        .padding(.bottom, 20)
+        .padding(.horizontal, Theme.Space.page)
+        .padding(.top, Theme.Space.xl)
+        .padding(.bottom, Theme.Space.page)
         .frame(maxWidth: .infinity)
-        .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
-        .overlay { RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous).strokeBorder(Theme.hairline, lineWidth: 0.5) }
+        .surfaceCard()
     }
 
-    /// 传输中心、本机视频：不用 115 登录
+    /// 传输中心、本机视频：不用 115 登录。行之间不画分隔线，靠行高分开
     private var offlineRows: some View {
         DesignGroup {
             Button {
@@ -237,7 +234,6 @@ struct CloudTab: View {
             }
             .buttonStyle(.pressable(scale: 0.985))
             .accessibilityIdentifier("cloud.transfers")
-            Divider().padding(.leading, LibraryActionRow.dividerInset)
             Button {
                 path.append(.page(.localVideos))
             } label: {
@@ -370,9 +366,9 @@ struct CloudTab: View {
     }
 
     private var statusColor: Color {
-        guard appState.isAuthenticated else { return Color(uiColor: .systemGray3) }
+        guard appState.isAuthenticated else { return Theme.textMuted }
         if !accountInfo.error(for: appState.sessionID).isEmpty { return Theme.warning }
-        guard let status else { return Color(uiColor: .systemGray3) }
+        guard let status else { return Theme.textMuted }
         return status.error == nil ? Theme.success : Theme.warning
     }
 
@@ -383,7 +379,7 @@ struct CloudTab: View {
 
 }
 
-/// 网盘容量条
+/// 网盘容量条：4pt 琥珀实色，压在轨道上
 private struct QuotaBar: View {
     let ratio: Double
 
@@ -392,18 +388,18 @@ private struct QuotaBar: View {
             ZStack(alignment: .leading) {
                 Capsule().fill(Theme.track)
                 Capsule()
-                    .fill(Theme.accentGradient)
-                    .frame(width: max(6, proxy.size.width * ratio))
+                    .fill(Theme.accent)
+                    .frame(width: max(4, proxy.size.width * ratio))
                     .animation(Motion.smooth, value: ratio)
             }
         }
-        .frame(height: 6)
+        .frame(height: 4)
         .accessibilityElement()
         .accessibilityLabel("网盘已用 \(Int((ratio * 100).rounded()))%")
     }
 }
 
-/// 网盘根页的快捷入口：圆形图标、标题，下面一行小字（有下载时显示数量）
+/// 网盘根页的快捷入口：线框图标、标题，下面一行小字（有下载时显示数量，琥珀色）
 private struct QuickEntryButton: View {
     let icon: AppIcon
     let title: String
@@ -414,30 +410,25 @@ private struct QuickEntryButton: View {
 
     var body: some View {
         Button(action: action) {
-            VStack(spacing: 5) {
+            VStack(spacing: Theme.Space.xs) {
                 Image(systemName: icon.name)
-                    .font(.system(size: 17, weight: Theme.iconWeight))
+                    .font(.scaled(20, weight: Theme.iconWeight))
                     .foregroundStyle(Theme.textPrimary)
-                    .frame(width: 36, height: 36)
-                    .background(Theme.surfaceRaised, in: Circle())
+                    .frame(height: 28)
                 Text(title)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(Theme.Typo.caption.weight(.medium))
                     .foregroundStyle(Theme.textPrimary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
-                // 没有数量时也占一行，四个方块高度一致
+                // 没有数量时也占一行，四格高度一致
                 Text(detail.isEmpty ? " " : detail)
-                    .font(.system(size: 10, weight: highlighted ? .semibold : .regular))
+                    .font(Theme.Typo.badge.weight(highlighted ? .semibold : .regular).monospacedDigit())
                     .foregroundStyle(highlighted ? Theme.accent : Theme.textTertiary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
             }
-            .frame(maxWidth: .infinity, minHeight: 84)
-            .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous)
-                    .strokeBorder(Theme.hairline, lineWidth: 0.5)
-            }
+            .padding(.vertical, Theme.Space.md)
+            .frame(maxWidth: .infinity, minHeight: 76)
             .contentShape(Rectangle())
         }
         .buttonStyle(.pressable(scale: 0.95))

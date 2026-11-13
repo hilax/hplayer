@@ -341,14 +341,14 @@ struct LoopingCarousel<Item: Identifiable, Background: View, Foreground: View, H
         return HStack(spacing: 0) {
             ForEach(0..<count, id: \.self) { index in
                 Capsule()
-                    .fill(index == selection ? Color.white : Color.white.opacity(0.45))
+                    .fill(index == selection ? Color.white : Color.white.opacity(Theme.Opacity.medium))
                     .frame(width: index == selection ? 14 : 4, height: 4)
                     .frame(width: index == selection ? 22 : 12, height: 20)
                     .contentShape(Rectangle())
                     .onTapGesture { turn(to: index, forward: index > current) }
             }
         }
-        .shadow(color: .black.opacity(0.25), radius: 2, y: 0.5)
+        .shadow(color: .black.opacity(Theme.Opacity.soft), radius: 2, y: 0.5)
         .animation(reduceMotion ? nil : Motion.snappy, value: selection)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(label)

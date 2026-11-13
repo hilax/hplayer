@@ -452,9 +452,9 @@ struct CatalogTab: View {
         Button { showManagement = true } label: {
             HStack(spacing: 10) {
                 Circle().fill(Theme.gold).frame(width: 8, height: 8)
-                Text("\(snapshot.unmatched.count) 个视频还没配上封面").font(.system(size: 13))
+                Text("\(snapshot.unmatched.count) 个视频还没配上封面").font(.scaled(13))
                 Spacer(minLength: 8)
-                Text("去处理 ›").font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.accent)
+                Text("去处理 ›").font(.scaled(13, weight: .medium)).foregroundStyle(Theme.accent)
             }
             .padding(.horizontal, 14)
             .frame(height: 44)

@@ -25,7 +25,7 @@ struct DramaCover: View {
                     .transition(ArtworkReveal.insertion(reduceMotion: reduceMotion))
             } else {
                 Text(String(title.prefix(1)))
-                    .font(.system(size: 28, weight: .bold))
+                    .font(.scaled(28, weight: .bold))
                     .foregroundStyle(Theme.textTertiary)
             }
         }
@@ -197,20 +197,20 @@ private struct DramaPosterCard: View {
                 .overlay(alignment: .bottomLeading) {
                     if !item.statusText.isEmpty {
                         Text(item.statusText)
-                            .font(.system(size: 10, weight: .semibold))
+                            .font(.scaled(10, weight: .semibold))
                             .foregroundStyle(.white)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 3)
-                            .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                            .background(.black.opacity(Theme.Opacity.strong), in: RoundedRectangle(cornerRadius: Theme.Radius.badge, style: .continuous))
                             .padding(6)
                     }
                 }
             Text(item.title)
-                .font(.system(size: 13, weight: .semibold))
+                .font(.scaled(13, weight: .semibold))
                 .foregroundStyle(Theme.textPrimary)
                 .lineLimit(1)
             Text(item.tags.prefix(2).joined(separator: " · "))
-                .font(.system(size: 11))
+                .font(.scaled(11))
                 .foregroundStyle(Theme.textTertiary)
                 .lineLimit(1)
         }
@@ -281,7 +281,7 @@ struct DramaDetailView: View {
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
             VStack(alignment: .leading, spacing: 8) {
                 Text(detail?.title ?? route.title)
-                    .font(.system(size: 20, weight: .bold))
+                    .font(.scaled(20, weight: .bold))
                     .foregroundStyle(Theme.textPrimary)
                     .lineLimit(3)
                 if let detail {
@@ -293,7 +293,7 @@ struct DramaDetailView: View {
                         Text(detail.isFinished ? "全 \(detail.episodes.count) 集" : "更新至 \(detail.episodes.count) 集")
                             .foregroundStyle(Theme.textSecondary)
                     }
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.scaled(13, weight: .semibold))
                     if !detail.author.isEmpty {
                         Text(detail.author)
                             .font(.caption)
@@ -367,7 +367,7 @@ struct DramaDetailView: View {
                     let progress = recents.progress(for: source(episode, in: detail))
                     Button { play(episode, in: detail) } label: {
                         Text("\(episode.number)")
-                            .font(.system(size: 14, weight: current ? .bold : .medium).monospacedDigit())
+                            .font(.scaled(14, weight: current ? .bold : .medium).monospacedDigit())
                             .foregroundStyle(current ? Theme.onPrimary : Theme.textPrimary)
                             .frame(maxWidth: .infinity, minHeight: 44)
                             .background(current ? Theme.primaryAction : Theme.surface,

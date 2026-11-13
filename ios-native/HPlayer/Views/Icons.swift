@@ -45,6 +45,8 @@ enum AppIcon: String, CaseIterable {
 
     // MARK: 「我的」「网盘」列表
     case transfers, danmaku, metadataSources, appIconStyle, license, version, allFiles
+    /// 「我的」里的播放设置
+    case autoPlayNext, pictureInPicture, readahead, danmakuStyle
 
     /// 线框款（默认）或本来就只有一种样子的图标。
     var name: String {
@@ -182,6 +184,10 @@ enum AppIcon: String, CaseIterable {
 
         case .transfers: return "arrow.down.circle"
         case .danmaku: return "text.bubble"
+        case .autoPlayNext: return "forward.end"
+        case .pictureInPicture: return "pip"
+        case .readahead: return "internaldrive"
+        case .danmakuStyle: return "textformat.size"
         case .metadataSources: return "books.vertical"
         case .appIconStyle: return "app"
         case .license: return "doc.plaintext"
@@ -222,7 +228,7 @@ extension View {
     /// 这样列表行、工具栏、卡片角标里的图标线条粗细一致。
     func iconStyle(size: CGFloat = 18, color: Color? = nil) -> some View {
         self
-            .font(.system(size: size, weight: Theme.iconWeight))
+            .font(.scaled(size, weight: Theme.iconWeight))
             .foregroundStyle(color ?? Theme.accent)
             .symbolRenderingMode(.monochrome)
     }
@@ -267,7 +273,7 @@ struct IconTile: View {
 
     var body: some View {
         Image(systemName: symbolName)
-            .font(.system(size: size * 0.5, weight: Theme.iconWeight))
+            .font(.scaled(size * 0.5, weight: Theme.iconWeight))
             .foregroundStyle(tone.foreground)
             .frame(width: size, height: size)
             .background(tone.background, in: RoundedRectangle(cornerRadius: min(Theme.Radius.tile, size * 0.25), style: .continuous))

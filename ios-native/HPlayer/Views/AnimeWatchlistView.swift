@@ -71,21 +71,16 @@ struct AnimeWatchlistView: View {
             .aspectRatio(2 / 3, contentMode: .fit)
             .overlay(alignment: .bottomTrailing) {
                 if item.hasUpdate {
-                    Text("更新")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(Theme.brandNight)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Theme.accent, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
-                        .padding(6)
+                    TagBadge(text: "更新", style: .accent)
+                        .padding(Theme.Space.sm)
                 }
             }
             Text(item.name)
-                .font(.system(size: 13, weight: .semibold))
+                .font(.scaled(13, weight: .semibold))
                 .foregroundStyle(Theme.textPrimary)
                 .lineLimit(1)
             Text(item.lastContinu ?? "在线动漫")
-                .font(.system(size: 11))
+                .font(.scaled(11))
                 .foregroundStyle(Theme.textTertiary)
                 .lineLimit(1)
         }

@@ -49,7 +49,7 @@ struct DanmakuOverlay: View {
             let text = context.resolve(Text(entry.item.text).font(font).foregroundColor(Self.color(entry.item.color)))
             let width = text.measure(in: CGSize(width: 2000, height: laneHeight)).width
             guard x + Double(width) > 0 else { continue }
-            let shadow = context.resolve(Text(entry.item.text).font(font).foregroundColor(.black.opacity(0.75)))
+            let shadow = context.resolve(Text(entry.item.text).font(font).foregroundColor(.black.opacity(Theme.Opacity.heavy)))
             context.draw(shadow, at: CGPoint(x: x + 1, y: Double(y) + 1), anchor: .leading)
             context.draw(text, at: CGPoint(x: x, y: Double(y)), anchor: .leading)
         }
@@ -92,7 +92,7 @@ struct DanmakuGlyph: View {
 
     var body: some View {
         Text("弹")
-            .font(.system(size: size, weight: .heavy))
+            .font(.scaled(size, weight: .bold))
             .foregroundStyle(enabled ? enabledText : tint)
             .frame(width: size * 1.75, height: size * 1.55)
             .background {
@@ -208,7 +208,7 @@ struct PlayerInfoTabBar: View {
                 } label: {
                     VStack(spacing: 5) {
                         Text(tab.title)
-                            .font(.system(size: 15, weight: selection == tab ? .bold : .medium))
+                            .font(.scaled(15, weight: selection == tab ? .bold : .medium))
                             .foregroundStyle(selection == tab ? Theme.textPrimary : Theme.textSecondary)
                         ZStack {
                             Capsule().fill(Color.clear).frame(width: 18, height: 3)
@@ -258,7 +258,7 @@ private struct DanmakuTabControls: View {
             .accessibilityIdentifier("player.danmaku.toggle")
             Button(action: onSettings) {
                 Image(systemName: AppIcon.tune.name)
-                    .font(.system(size: 16, weight: Theme.iconWeight))
+                    .font(.scaled(16, weight: Theme.iconWeight))
                     .foregroundStyle(Theme.textSecondary)
                     .frame(width: 36, height: 44)
                     .contentShape(Rectangle())
@@ -319,7 +319,7 @@ struct AnimeCommentsView: View {
     private var header: some View {
         HStack {
             Text(visible.isEmpty ? "评论" : "评论 · \(visible.count)\(exhausted ? "" : "+")")
-                .font(.system(size: 15, weight: .bold))
+                .font(.scaled(15, weight: .bold))
                 .foregroundStyle(Theme.textPrimary)
             Spacer()
             HStack(spacing: 2) {
@@ -329,7 +329,7 @@ struct AnimeCommentsView: View {
                         sort = option
                     } label: {
                         Text(option.title)
-                            .font(.system(size: 12, weight: sort == option ? .bold : .medium))
+                            .font(.scaled(12, weight: sort == option ? .bold : .medium))
                             .foregroundStyle(sort == option ? Theme.onPrimary : Theme.textSecondary)
                             .padding(.horizontal, 10)
                             .frame(height: 26)
@@ -370,7 +370,7 @@ struct AnimeCommentsView: View {
     private var stateMessage: some View {
         VStack(spacing: 10) {
             Image(systemName: AppIcon.comment.name)
-                .font(.system(size: 26, weight: Theme.iconWeight))
+                .font(.scaled(26, weight: Theme.iconWeight))
                 .foregroundStyle(Theme.textTertiary)
             Text(stateTitle)
                 .font(.subheadline.weight(.semibold))
@@ -468,14 +468,14 @@ struct AnimeCommentRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             Text(String(comment.userName.prefix(1)))
-                .font(.system(size: 13, weight: .bold))
+                .font(.scaled(13, weight: .bold))
                 .foregroundStyle(.white)
                 .frame(width: 32, height: 32)
                 .background(Circle().fill(avatarColor))
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 6) {
                     Text(comment.userName)
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.scaled(13, weight: .semibold))
                         .foregroundStyle(Theme.textSecondary)
                         .lineLimit(1)
                     if !comment.role.isEmpty { badge(comment.role, color: Theme.info) }
@@ -484,12 +484,12 @@ struct AnimeCommentRow: View {
                     Spacer(minLength: 0)
                     if !comment.time.isEmpty {
                         Text(comment.time)
-                            .font(.system(size: 11).monospacedDigit())
+                            .font(.scaled(11).monospacedDigit())
                             .foregroundStyle(Theme.textTertiary)
                     }
                 }
                 Text(comment.content)
-                    .font(.system(size: 15))
+                    .font(.scaled(15))
                     .foregroundStyle(Theme.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
@@ -499,7 +499,7 @@ struct AnimeCommentRow: View {
                         Label("\(comment.replies) 条回复", systemImage: AppIcon.comment.name)
                     }
                 }
-                .font(.system(size: 12))
+                .font(.scaled(12))
                 .foregroundStyle(Theme.textTertiary)
                 .labelStyle(.titleAndIcon)
             }
@@ -519,7 +519,7 @@ struct AnimeCommentRow: View {
 
     private func badge(_ text: String, color: Color) -> some View {
         Text(text)
-            .font(.system(size: 10, weight: .bold))
+            .font(.scaled(10, weight: .bold))
             .foregroundStyle(color)
             .padding(.horizontal, 5)
             .padding(.vertical, 1.5)

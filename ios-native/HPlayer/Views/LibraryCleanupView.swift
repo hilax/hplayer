@@ -137,9 +137,9 @@ struct LibraryCleanupView: View {
     private func message(symbol: String, title: String, text: String, actionTitle: String = "完成", action: (() -> Void)? = nil) -> some View {
         VStack(spacing: 14) {
             Image(systemName: symbol)
-                .font(.system(size: 34, weight: Theme.iconWeight))
+                .font(.scaled(34, weight: Theme.iconWeight))
                 .foregroundStyle(Theme.accent)
-            Text(title).font(.system(size: 18, weight: .bold))
+            Text(title).font(.scaled(18, weight: .bold))
             Text(text)
                 .font(.subheadline).foregroundStyle(Theme.textSecondary)
                 .multilineTextAlignment(.center)
@@ -164,7 +164,7 @@ private struct CleanupProgress: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 12) {
                 ProgressView()
-                Text("正在核对「\(scopeName)」").font(.system(size: 16, weight: .bold)).lineLimit(1)
+                Text("正在核对「\(scopeName)」").font(.scaled(16, weight: .bold)).lineLimit(1)
             }
             Text(scanner.currentFolderName.isEmpty ? "准备中…" : "正在读取：\(scanner.currentFolderName)")
                 .font(.caption).foregroundStyle(Theme.textSecondary).lineLimit(1)
@@ -201,11 +201,11 @@ private struct StaleGroupRow: View {
         Button(action: onToggle) {
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: isSelected ? AppIcon.selected.name : AppIcon.unselected.name)
-                    .font(.system(size: 20, weight: Theme.iconWeight))
+                    .font(.scaled(20, weight: Theme.iconWeight))
                     .foregroundStyle(isSelected ? Theme.accent : Theme.textTertiary)
                     .frame(width: 28)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(group.folderName).font(.system(size: 14, weight: .medium)).foregroundStyle(.primary).lineLimit(1)
+                    Text(group.folderName).font(.scaled(14, weight: .medium)).foregroundStyle(.primary).lineLimit(1)
                     Text(detail).font(.caption).foregroundStyle(Theme.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                     Text(samples).font(.caption2).foregroundStyle(Theme.textTertiary).lineLimit(1)

@@ -136,9 +136,9 @@ struct AppIconSettingsView: View {
         }
         .padding(24)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.sheet, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
+            RoundedRectangle(cornerRadius: Theme.Radius.sheet, style: .continuous)
                 .strokeBorder(Theme.hairline, lineWidth: 1)
         }
         .accessibilityElement(children: .combine)
@@ -240,7 +240,7 @@ struct AppIconSettingsView: View {
                             .frame(width: 20, height: 20)
                     } else {
                         Image(systemName: selected ? AppIcon.selected.name : AppIcon.unselected.name)
-                            .font(.system(size: 20, weight: Theme.iconWeight))
+                            .font(.scaled(20, weight: Theme.iconWeight))
                             .foregroundStyle(selected ? Theme.textPrimary : Theme.textTertiary)
                             .frame(width: 20, height: 20)
                     }
@@ -337,7 +337,7 @@ private struct IconChangeNoticeCard: View {
                 }
             case .failure(let message):
                 Image(systemName: AppIcon.alert.name)
-                    .font(.system(size: 20, weight: Theme.iconWeight))
+                    .font(.scaled(20, weight: Theme.iconWeight))
                     .foregroundStyle(Theme.danger)
                     .frame(width: 36, height: 36)
                     .accessibilityHidden(true)
@@ -368,7 +368,7 @@ private struct IconChangeNoticeCard: View {
                 store.clearNotice()
             } label: {
                 Image(systemName: AppIcon.close.name)
-                    .font(.system(size: 13, weight: Theme.iconWeight))
+                    .font(.scaled(13, weight: Theme.iconWeight))
                     .foregroundStyle(Theme.textSecondary)
                     .frame(width: 44, height: 44)
                     .contentShape(Rectangle())

@@ -103,7 +103,7 @@ struct DownloadsView: View {
                     Text(free).fontWeight(.semibold).foregroundStyle(Theme.textPrimary)
                 }
             }
-            .font(.system(size: 12))
+            .font(.scaled(12))
             .foregroundStyle(Theme.textSecondary)
             ThinProgressBar(fraction: storage.libraryBytes > 0 ? max(fraction, 0.02) : 0)
         }
@@ -203,7 +203,7 @@ struct DownloadsView: View {
 
     private func sectionLabel(_ title: String) -> some View {
         Text(title)
-            .font(.system(size: 12))
+            .font(.scaled(12))
             .foregroundStyle(Theme.textTertiary)
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityAddTraits(.isHeader)
@@ -214,13 +214,13 @@ struct DownloadsView: View {
 
     private var tip: some View {
         Text("下载的视频保存在 HPlayer 的「本地视频」中，可离线观看；在列表左滑可删除，删除后释放手机空间，不影响网盘里的文件。下载只在 HPlayer 打开时进行，离开后会自动暂停，回来后继续，已经下载的部分不会重来。")
-            .font(.system(size: 12))
+            .font(.scaled(12))
             .lineSpacing(3)
             .foregroundStyle(Theme.textTertiary)
             .padding(.horizontal, 14)
             .padding(.vertical, 11)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous))
             .listRowBackground(Color.clear)
             .listRowSeparator(.hidden)
             .listRowInsets(EdgeInsets(top: 16, leading: 16, bottom: 24, trailing: 16))
@@ -235,12 +235,12 @@ struct DownloadsView: View {
                 fileTile(item)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(item.name)
-                        .font(.system(size: 14, weight: .medium))
+                        .font(.scaled(14, weight: .medium))
                         .foregroundStyle(Theme.textPrimary)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
                     Text(DownloadsText.subtitle(item))
-                        .font(.system(size: 12))
+                        .font(.scaled(12))
                         .foregroundStyle(Theme.textTertiary)
                         .lineLimit(1)
                 }
@@ -287,7 +287,7 @@ struct DownloadsView: View {
                 .foregroundStyle(rightColor)
                 .multilineTextAlignment(.trailing)
         }
-        .font(.system(size: 12))
+        .font(.scaled(12))
         .foregroundStyle(Theme.textSecondary)
         .lineLimit(1)
         .minimumScaleFactor(0.8)
@@ -310,7 +310,7 @@ struct DownloadsView: View {
     private func circleButton(_ glyph: AppIcon, label: String, tinted: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: glyph.name)
-                .font(.system(size: 14, weight: .semibold))
+                .font(.scaled(14, weight: .semibold))
                 .foregroundStyle(tinted ? Theme.accent : Theme.textPrimary)
                 .frame(width: 34, height: 34)
                 .background(tinted ? Theme.tileTint : Theme.surfaceHigh, in: Circle())
@@ -323,7 +323,7 @@ struct DownloadsView: View {
 
     private func fileTile(_ item: DownloadItem) -> some View {
         Image(systemName: item.isVideo ? AppIcon.video.name : AppIcon.file.name)
-            .font(.system(size: 18, weight: Theme.iconWeight))
+            .font(.scaled(18, weight: Theme.iconWeight))
             .foregroundStyle(Theme.textSecondary)
             .frame(width: 72, height: 44)
             .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
@@ -337,7 +337,7 @@ struct DownloadsView: View {
             fileTile(item)
             VStack(alignment: .leading, spacing: 3) {
                 Text(item.name)
-                    .font(.system(size: 14, weight: .medium))
+                    .font(.scaled(14, weight: .medium))
                     .foregroundStyle(Theme.textPrimary)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
@@ -367,15 +367,15 @@ struct DownloadsView: View {
         if exists {
             HStack(spacing: 6) {
                 Image(systemName: AppIcon.success.name)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.scaled(12, weight: .semibold))
                 Text(DownloadsText.savedLine(item))
                     .lineLimit(1)
             }
-            .font(.system(size: 12))
+            .font(.scaled(12))
             .foregroundStyle(Theme.success)
         } else {
             Text("文件已经不在手机上")
-                .font(.system(size: 12))
+                .font(.scaled(12))
                 .foregroundStyle(Theme.textTertiary)
         }
     }
@@ -403,9 +403,9 @@ struct DownloadsView: View {
     private func pillLabel(_ title: String, glyph: AppIcon) -> some View {
         HStack(spacing: 5) {
             Image(systemName: glyph.name)
-                .font(.system(size: 12, weight: .bold))
+                .font(.scaled(12, weight: .bold))
             Text(title)
-                .font(.system(size: 13, weight: .semibold))
+                .font(.scaled(13, weight: .semibold))
         }
         .foregroundStyle(Theme.onPrimary)
         .padding(.horizontal, 14)

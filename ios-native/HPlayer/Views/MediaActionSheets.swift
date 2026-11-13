@@ -112,11 +112,11 @@ struct PerformerCollageCard: View {
             .coverEdge()
             VStack(alignment: .leading, spacing: 2) {
                 Text(group.name)
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.scaled(14, weight: .semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                 Text("\(group.collectionItems.count) 部作品")
-                    .font(.system(size: 12))
+                    .font(.scaled(12))
                     .secondaryTextStyle()
                     .lineLimit(1)
             }

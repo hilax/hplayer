@@ -139,7 +139,7 @@ struct AnimeDetailView: View {
                         LinearGradient(
                             stops: [
                                 .init(color: .black, location: 0.3),
-                                .init(color: .black.opacity(0.15), location: 0.8),
+                                .init(color: .black.opacity(Theme.Opacity.faint), location: 0.8),
                                 .init(color: .clear, location: 1 - 2 / height),
                                 .init(color: .clear, location: 1),
                             ],
@@ -162,7 +162,7 @@ struct AnimeDetailView: View {
         HStack(alignment: .bottom, spacing: 14) {
             // 封面海报
             PosterArtwork(urlString: detail.safePicURLString, title: detail.name, width: 95)
-                .shadow(color: Color.black.opacity(0.4), radius: 8, x: 0, y: 4)
+                .shadow(color: Color.black.opacity(Theme.Opacity.medium), radius: 8, x: 0, y: 4)
 
             // 信息文字
             VStack(alignment: .leading, spacing: 6) {
@@ -173,7 +173,7 @@ struct AnimeDetailView: View {
 
                 if let continu = detail.continu, !continu.isEmpty {
                     Text(continu)
-                        .font(.system(size: 13, weight: .bold))
+                        .font(.scaled(13, weight: .bold))
                         .foregroundStyle(Theme.accent)
                 }
 
@@ -189,14 +189,14 @@ struct AnimeDetailView: View {
                         .foregroundStyle(Theme.rating)
                     }
                 }
-                .font(.system(size: 13, weight: .semibold))
+                .font(.scaled(13, weight: .semibold))
                 .foregroundStyle(Theme.textSecondary)
 
                 // 分类胶囊：与剧集页 chip 同规格（11pt、22pt 高）
                 HStack(spacing: 6) {
                     ForEach(detail.tags.prefix(3), id: \.self) { tag in
                         Text(tag)
-                            .font(.system(size: 11, weight: .medium))
+                            .font(.scaled(11, weight: .medium))
                             .foregroundStyle(Theme.accent)
                             .padding(.horizontal, 9)
                             .frame(height: 22)
@@ -229,7 +229,7 @@ struct AnimeDetailView: View {
             startPlay(episode: ep, detail: detail)
         }) {
             Label(title, systemImage: AppIcon.play.name)
-                .font(.system(size: 15, weight: .bold))
+                .font(.scaled(15, weight: .bold))
                 .foregroundStyle(Theme.onPrimary)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity)
@@ -260,7 +260,7 @@ struct AnimeDetailView: View {
         ].compactMap { $0 }
         if !parts.isEmpty {
             Text(parts.joined(separator: " · "))
-                .font(.system(size: 12))
+                .font(.scaled(12))
                 .foregroundStyle(Theme.textTertiary)
                 .padding(.top, -10)
         }
@@ -279,7 +279,7 @@ struct AnimeDetailView: View {
                         orderToggle
                     } else {
                         Text(episodeSummary(detail, route: route))
-                            .font(.system(size: 12))
+                            .font(.scaled(12))
                             .tertiaryTextStyle()
                             .lineLimit(1)
                     }
@@ -293,7 +293,7 @@ struct AnimeDetailView: View {
                         } label: {
                             HStack(spacing: 3) {
                                 Text(episodesExpanded ? "收起" : "全部")
-                                    .font(.system(size: 13))
+                                    .font(.scaled(13))
                                 Image(icon: episodesExpanded ? .collapse : .expand)
                                     .iconStyle(size: 10, color: Theme.textSecondary)
                             }
@@ -339,7 +339,7 @@ struct AnimeDetailView: View {
 
                 if let ep = activeEpisode, let line = episodeDetailLine(ep, detail: detail) {
                     Text(line)
-                        .font(.system(size: 12))
+                        .font(.scaled(12))
                         .tertiaryTextStyle()
                         .lineLimit(2)
                 }
@@ -354,7 +354,7 @@ struct AnimeDetailView: View {
             orderPill("倒序", icon: .sortDescending, selected: isDescending) { isDescending = true }
         }
         .padding(2)
-        .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
     }
 
     private func orderPill(_ title: String, icon: AppIcon, selected: Bool, action: @escaping () -> Void) -> some View {
@@ -366,12 +366,12 @@ struct AnimeDetailView: View {
                 Image(icon: icon)
                     .iconStyle(size: 11, color: selected ? Theme.onPrimary : Theme.textSecondary)
                 Text(title)
-                    .font(.system(size: 11, weight: selected ? .bold : .medium))
+                    .font(.scaled(11, weight: selected ? .bold : .medium))
                     .foregroundStyle(selected ? Theme.onPrimary : Theme.textSecondary)
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
-            .background(selected ? Theme.primaryAction : Color.clear, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .background(selected ? Theme.primaryAction : Color.clear, in: RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
         }
         .buttonStyle(.pressable)
     }
@@ -426,7 +426,7 @@ struct AnimeDetailView: View {
                 HStack(spacing: 10) {
                     if let total = detail.commentTotal, total > 0 {
                         Text("\(compactCount(total)) 条")
-                            .font(.system(size: 12))
+                            .font(.scaled(12))
                             .tertiaryTextStyle()
                     }
                     NavigationLink {
@@ -455,7 +455,7 @@ struct AnimeDetailView: View {
                 HStack(spacing: 8) {
                     Image(icon: .comment).iconStyle(size: 14, color: Theme.textTertiary)
                     Text(commentPreview == nil ? "评论没有加载出来，点「全部」再试一次" : "还没有评论")
-                        .font(.system(size: 13))
+                        .font(.scaled(13))
                         .foregroundStyle(Theme.textTertiary)
                 }
                 .frame(maxWidth: .infinity, minHeight: 64)
@@ -494,7 +494,7 @@ struct AnimeDetailView: View {
         if !text.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
                 Text(text)
-                    .font(.system(size: 14))
+                    .font(.scaled(14))
                     .foregroundStyle(Theme.textSecondary)
                     .lineSpacing(4)
                     .lineLimit(isOverviewExpanded ? nil : 3)
@@ -502,7 +502,7 @@ struct AnimeDetailView: View {
                     Button(isOverviewExpanded ? "收起" : "更多") {
                         withAnimation(Motion.snappy) { isOverviewExpanded.toggle() }
                     }
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.scaled(14, weight: .semibold))
                     .foregroundStyle(Theme.accent)
                     .buttonStyle(.pressable(scale: 0.94))
                 }

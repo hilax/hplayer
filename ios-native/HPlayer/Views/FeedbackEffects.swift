@@ -38,7 +38,7 @@ private struct SuccessPop: ViewModifier {
     @ViewBuilder private var particleView: some View {
         if let particle {
             Image(systemName: particle.name)
-                .font(.system(size: 11, weight: .semibold))
+                .font(.scaled(11, weight: .semibold))
                 .foregroundStyle(tint)
         }
     }

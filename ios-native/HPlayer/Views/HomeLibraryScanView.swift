@@ -146,7 +146,7 @@ struct HomeLibraryScanView: View {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button { dismiss() } label: {
                         Image(systemName: AppIcon.back.name)
-                            .font(.system(size: 17, weight: .semibold))
+                            .font(.scaled(17, weight: .semibold))
                     }
                     .accessibilityLabel("返回")
                     .accessibilityIdentifier("manage.back")
@@ -176,7 +176,7 @@ struct HomeLibraryScanView: View {
             HStack(spacing: 16) {
                 ProgressRing(value: scanRingValue, lineWidth: 6) {
                     Image(systemName: scanner.phase == .completed ? AppIcon.success.name : AppIcon.autoMatch.name)
-                        .font(.system(size: 22, weight: Theme.iconWeight))
+                        .font(.scaled(22, weight: Theme.iconWeight))
                         .foregroundStyle(Theme.accent)
                         .morphSymbol()
                 }
@@ -184,15 +184,15 @@ struct HomeLibraryScanView: View {
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(scanner.phase == .running ? "正在扫描" : status)
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(status).font(.system(size: 18, weight: .bold))
+                    Text(status).font(.scaled(18, weight: .bold))
                     Text(scanDescription)
-                        .font(.system(size: 13)).foregroundStyle(Theme.textSecondary)
+                        .font(.scaled(13)).foregroundStyle(Theme.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 0)
             }
             HStack(spacing: 6) {
-                Image(systemName: AppIcon.folder.name).font(.system(size: 11, weight: Theme.iconWeight))
+                Image(systemName: AppIcon.folder.name).font(.scaled(11, weight: Theme.iconWeight))
                 Text("扫描范围").foregroundStyle(Theme.textSecondary)
                 Text(scanner.scopeName ?? "整个网盘").fontWeight(.semibold).lineLimit(1)
             }
@@ -329,7 +329,7 @@ struct HomeLibraryScanView: View {
         let ratio = totalVideos == 0 ? 0 : Double(matchedVideos) / Double(totalVideos)
         return VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text("片库概况").font(.system(size: 15, weight: .semibold))
+                Text("片库概况").font(.scaled(15, weight: .semibold))
                 Spacer(minLength: 8)
                 if totalVideos > 0 {
                     Text("\(Int((ratio * 100).rounded()))%")
@@ -382,7 +382,7 @@ struct HomeLibraryScanView: View {
                 HStack(spacing: 12) {
                     RowIcon(icon: .autoMatch)
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("自动匹配封面").font(.system(size: 14, weight: .medium))
+                        Text("自动匹配封面").font(.scaled(14, weight: .medium))
                         Text("关闭后只在手动重新匹配时查找").font(.caption).foregroundStyle(Theme.textSecondary)
                     }
                 }
@@ -421,7 +421,7 @@ struct HomeLibraryScanView: View {
         HStack(spacing: 12) {
             ProgressView().frame(width: 34, height: 34).accessibilityLabel("正在匹配封面")
             VStack(alignment: .leading, spacing: 3) {
-                Text("正在自动匹配封面").font(.system(size: 14, weight: .medium))
+                Text("正在自动匹配封面").font(.scaled(14, weight: .medium))
                 Text("已有封面 \(matchedVideos) 部；未匹配的文件仍可播放").font(.caption).foregroundStyle(Theme.textSecondary)
             }
             Spacer(minLength: 8)
@@ -430,7 +430,7 @@ struct HomeLibraryScanView: View {
                 library.flush()
             } label: {
                 Label("停止", systemImage: AppIcon.stop.name)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.scaled(13, weight: .semibold))
                     .foregroundStyle(Theme.danger)
             }
             .buttonStyle(.pressable(scale: 0.94))
@@ -445,7 +445,7 @@ struct HomeLibraryScanView: View {
             HStack(spacing: 12) {
                 RowIcon(icon: .people)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("演员资料").font(.system(size: 14, weight: .medium))
+                    Text("演员资料").font(.scaled(14, weight: .medium))
                     Text(performerSummary).font(.caption).foregroundStyle(Theme.textSecondary)
                 }
                 Spacer(minLength: 0)
@@ -581,7 +581,7 @@ private struct UnmatchedRow: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 14) {
                 Image(systemName: AppIcon.video.name).font(.title).foregroundStyle(Theme.accent)
-                    .frame(width: 52, height: 68).background(Theme.tileTint, in: RoundedRectangle(cornerRadius: 12))
+                    .frame(width: 52, height: 68).background(Theme.tileTint, in: RoundedRectangle(cornerRadius: Theme.Radius.tile))
                 VStack(alignment: .leading, spacing: 6) {
                     Text(item.media.name).font(.subheadline.weight(.medium)).lineLimit(2)
                     Text([item.sourceLabel, formatSize(item.media.size)].filter { !$0.isEmpty }.joined(separator: " · "))

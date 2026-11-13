@@ -271,6 +271,28 @@ enum Theme {
         static let sheet: CGFloat = 20
     }
 
+    /// 叠在画面上的黑 / 白半透明只用这几档（遮罩、渐变、画面上的控件底）。
+    enum Opacity {
+        static let hint: Double = 0.08
+        static let faint: Double = 0.15
+        static let soft: Double = 0.25
+        static let medium: Double = 0.4
+        static let strong: Double = 0.6
+        static let heavy: Double = 0.75
+        static let solid: Double = 0.9
+    }
+
+    /// 外观设置里的小预览图：分别画浅色和深色两种模式，所以取的是两套固定值（和上面的 token 一致）。
+    enum Preview {
+        static let lightPage = Color(uiColor: UIColor(hex: 0xF7F7F8))
+        static let lightCard = Color(uiColor: UIColor(hex: 0xFFFFFF))
+        static let lightLine = Color.black.opacity(0.14)
+        static let darkPage = Color(uiColor: UIColor(hex: 0x0A0A0B))
+        static let darkCard = Color(uiColor: UIColor(hex: 0x1C1C1F))
+        static let darkLine = Color.white.opacity(0.3)
+        static let accent = Color(uiColor: UIColor(hex: 0xE6A54B))
+    }
+
     /// 2.0 的棱镜渐变改成琥珀实色：进度、选中指示都用它，调用处不用改。
     static var accentGradient: LinearGradient {
         LinearGradient(colors: [accent, accent], startPoint: .topLeading, endPoint: .bottomTrailing)
@@ -325,6 +347,17 @@ extension Font {
     static func display(_ size: CGFloat, relativeTo style: Font.TextStyle? = nil) -> Font {
         let anchor: Font.TextStyle = style ?? (size >= 30 ? .largeTitle : size >= 24 ? .title : size >= 19 ? .title3 : .headline)
         return .system(size: UIFontMetrics(forTextStyle: anchor.uiTextStyle).scaledValue(for: size), weight: .bold)
+    }
+
+    /// 页面里原来写死的字号统一走这里：默认字号下大小不变，随系统「更大字体」放大（最多 1.4 倍，免得固定尺寸的控件被撑破），
+    /// 最小 11pt。字重最多 bold——传进来的 heavy / black 会降成 bold。
+    static func scaled(_ size: CGFloat, weight: Font.Weight = .regular, design: Font.Design = .default) -> Font {
+        let base = max(size, 11)
+        let anchor: Font.TextStyle = base >= 30 ? .largeTitle : base >= 24 ? .title : base >= 19 ? .title3
+            : base >= 16 ? .body : base >= 14 ? .subheadline : base >= 12.5 ? .footnote : base >= 11.5 ? .caption : .caption2
+        let scaledSize = min(UIFontMetrics(forTextStyle: anchor.uiTextStyle).scaledValue(for: base), base * 1.4)
+        let capped: Font.Weight = (weight == .heavy || weight == .black) ? .bold : weight
+        return .system(size: scaledSize, weight: capped, design: design)
     }
 
     /// 排名、序号、统计这类数字：SF 半粗、等宽数字。

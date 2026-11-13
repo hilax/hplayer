@@ -94,7 +94,7 @@ struct FileActionDock: View {
     var body: some View {
         VStack(spacing: 6) {
             Text(hasSelection ? summary.text : "点按项目进行选择")
-                .font(.system(size: 12))
+                .font(.scaled(12))
                 .foregroundStyle(Theme.textSecondary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.85)
@@ -127,10 +127,10 @@ struct FileActionDock: View {
         return Button(action: perform) {
             VStack(spacing: 5) {
                 Image(systemName: icon.name)
-                    .font(.system(size: 20, weight: Theme.iconWeight))
+                    .font(.scaled(20, weight: Theme.iconWeight))
                     .foregroundStyle(iconColor)
                 Text(title)
-                    .font(.system(size: 11))
+                    .font(.scaled(11))
                     .foregroundStyle(titleColor)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
@@ -175,11 +175,11 @@ struct NamePromptSheet: View {
     var body: some View {
         VStack(spacing: 16) {
             ZStack {
-                Text(title).font(.system(size: 17, weight: .semibold))
+                Text(title).font(.scaled(17, weight: .semibold))
                     .accessibilityAddTraits(.isHeader)
                 HStack {
                     Button("取消") { dismiss() }
-                        .font(.system(size: 16))
+                        .font(.scaled(16))
                         .foregroundStyle(Theme.textSecondary)
                         .accessibilityIdentifier("library.name.cancel")
                     Spacer()
@@ -193,7 +193,7 @@ struct NamePromptSheet: View {
                 .onSubmit(confirm)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
-                .font(.system(size: 16))
+                .font(.scaled(16))
                 .padding(.horizontal, 14)
                 .frame(minHeight: 50)
                 .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous))
@@ -201,7 +201,7 @@ struct NamePromptSheet: View {
                     if !text.isEmpty {
                         Button { text = "" } label: {
                             Image(systemName: AppIcon.clear.name)
-                                .font(.system(size: 16))
+                                .font(.scaled(16))
                                 .foregroundStyle(Theme.textTertiary)
                                 .frame(width: 44, height: 44)
                         }
@@ -287,16 +287,16 @@ struct DeleteConfirmSheet: View {
     private var header: some View {
         VStack(spacing: 8) {
             Image(systemName: AppIcon.trash.name)
-                .font(.system(size: 24, weight: Theme.iconWeight))
+                .font(.scaled(24, weight: Theme.iconWeight))
                 .foregroundStyle(Theme.danger)
                 .frame(width: 48, height: 48)
-                .background(Theme.danger.opacity(0.14), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .background(Theme.danger.opacity(0.14), in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
                 .padding(.bottom, 6)
             Text("删除 \(files.count) 项？")
-                .font(.system(size: 18, weight: .semibold))
+                .font(.scaled(18, weight: .semibold))
                 .accessibilityAddTraits(.isHeader)
             Text(explanation)
-                .font(.system(size: 13))
+                .font(.scaled(13))
                 .foregroundStyle(Theme.textSecondary)
                 .multilineTextAlignment(.center)
                 .lineSpacing(3)
@@ -314,16 +314,16 @@ struct DeleteConfirmSheet: View {
             ForEach(shown) { file in
                 HStack(spacing: 10) {
                     Image(systemName: symbol(for: file).name)
-                        .font(.system(size: 14, weight: Theme.iconWeight))
+                        .font(.scaled(14, weight: Theme.iconWeight))
                         .foregroundStyle(file.isDir ? Theme.accent : Theme.textSecondary)
                         .frame(width: 18)
                     Text(file.name)
-                        .font(.system(size: 13))
+                        .font(.scaled(13))
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Spacer(minLength: 8)
                     Text(file.isDir ? "文件夹" : formatSize(file.size))
-                        .font(.system(size: 12))
+                        .font(.scaled(12))
                         .foregroundStyle(Theme.textTertiary)
                 }
                 .frame(height: 38)
@@ -333,7 +333,7 @@ struct DeleteConfirmSheet: View {
             }
             if files.count > shown.count {
                 Text("另有 \(files.count - shown.count) 项")
-                    .font(.system(size: 12))
+                    .font(.scaled(12))
                     .foregroundStyle(Theme.textTertiary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, 10)
@@ -349,9 +349,9 @@ struct DeleteConfirmSheet: View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
                 Text("同时从 HPlayer 资料库移除")
-                    .font(.system(size: 14, weight: .medium))
+                    .font(.scaled(14, weight: .medium))
                 Text("其中 \(libraryVideoCount) 个视频已入库，海报与观看记录将一并清理")
-                    .font(.system(size: 12))
+                    .font(.scaled(12))
                     .foregroundStyle(Theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -466,16 +466,16 @@ struct FolderPickerSheet: View {
     private var header: some View {
         HStack {
             Button("取消") { dismiss() }
-                .font(.system(size: 16))
+                .font(.scaled(16))
                 .foregroundStyle(Theme.textSecondary)
                 .accessibilityIdentifier("library.picker.cancel")
             Spacer()
             Text("选择目标文件夹")
-                .font(.system(size: 17, weight: .semibold))
+                .font(.scaled(17, weight: .semibold))
                 .accessibilityAddTraits(.isHeader)
             Spacer()
             Button("新建") { showNewFolder = true }
-                .font(.system(size: 16, weight: .medium))
+                .font(.scaled(16, weight: .medium))
                 .foregroundStyle(Theme.accent)
                 .accessibilityIdentifier("library.picker.new")
         }
@@ -496,11 +496,11 @@ struct FolderPickerSheet: View {
                     }
                 } label: {
                     Text(option.title)
-                        .font(.system(size: 14, weight: selected ? .semibold : .medium))
+                        .font(.scaled(14, weight: selected ? .semibold : .medium))
                         .foregroundStyle(selected ? Theme.accent : Theme.textSecondary)
                         .frame(maxWidth: .infinity, minHeight: 36)
                         .background(selected ? Theme.surfaceHigh : Color.clear,
-                                    in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                    in: RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous))
                 }
                 .buttonStyle(.plain)
                 .accessibilityAddTraits(selected ? AccessibilityTraits.isSelected : AccessibilityTraits())
@@ -508,7 +508,7 @@ struct FolderPickerSheet: View {
             }
         }
         .padding(3)
-        .background(Theme.pageBackground, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(Theme.pageBackground, in: RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous))
         .padding(.horizontal, 16)
         .padding(.top, 4)
     }
@@ -516,10 +516,10 @@ struct FolderPickerSheet: View {
     private var summaryCard: some View {
         HStack(spacing: 10) {
             Image(systemName: AppIcon.folder.name)
-                .font(.system(size: 16, weight: Theme.iconWeight))
+                .font(.scaled(16, weight: Theme.iconWeight))
                 .foregroundStyle(Theme.accent)
             Text("将 \(summary.count) 项（\(summary.kindsText)）\(mode.verb)到所选位置")
-                .font(.system(size: 13))
+                .font(.scaled(13))
                 .foregroundStyle(Theme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
@@ -548,7 +548,7 @@ struct FolderPickerSheet: View {
                         }
                     } label: {
                         Text(index == 0 ? "网盘" : crumb.name)
-                            .font(.system(size: 13, weight: last ? .semibold : .regular))
+                            .font(.scaled(13, weight: last ? .semibold : .regular))
                             .foregroundStyle(last ? Theme.accent : Theme.textPrimary)
                             .lineLimit(1)
                             .padding(.horizontal, 11)
@@ -580,7 +580,7 @@ struct FolderPickerSheet: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if folders.isEmpty {
             Text("这里没有子文件夹")
-                .font(.system(size: 14))
+                .font(.scaled(14))
                 .foregroundStyle(Theme.textTertiary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
@@ -604,22 +604,22 @@ struct FolderPickerSheet: View {
         } label: {
             HStack(spacing: 12) {
                 Image(systemName: AppIcon.folder.name)
-                    .font(.system(size: 18, weight: Theme.iconWeight))
+                    .font(.scaled(18, weight: Theme.iconWeight))
                     .foregroundStyle(Theme.accent)
                     .frame(width: 36, height: 36)
-                    .background(Theme.tileTint, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .background(Theme.tileTint, in: RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous))
                 Text(folder.name)
-                    .font(.system(size: 15))
+                    .font(.scaled(15))
                     .foregroundStyle(Theme.textPrimary)
                     .lineLimit(1)
                 Spacer(minLength: 8)
                 if blocked {
                     Text("已选中，不可作为目标")
-                        .font(.system(size: 12))
+                        .font(.scaled(12))
                         .foregroundStyle(Theme.textTertiary)
                 } else {
                     Image(systemName: AppIcon.forward.name)
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.scaled(12, weight: .semibold))
                         .foregroundStyle(Theme.textTertiary)
                 }
             }
@@ -640,14 +640,14 @@ struct FolderPickerSheet: View {
         VStack(spacing: 10) {
             HStack(spacing: 8) {
                 Image(systemName: AppIcon.folder.name)
-                    .font(.system(size: 13, weight: Theme.iconWeight))
+                    .font(.scaled(13, weight: Theme.iconWeight))
                     .foregroundStyle(Theme.accent)
                 Text("目标位置：")
-                    .font(.system(size: 13))
+                    .font(.scaled(13))
                     .foregroundStyle(Theme.textSecondary)
                     .fixedSize()
                 Text(pathText)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.scaled(13, weight: .semibold))
                     .foregroundStyle(Theme.textPrimary)
                     .lineLimit(1)
                     .truncationMode(.head)
@@ -798,7 +798,7 @@ struct FileInfoSheet: View {
 
     private var placeholderIcon: some View {
         Image(systemName: file.isDir ? AppIcon.folder.name : (file.isVideo ? AppIcon.video.name : AppIcon.file.name))
-            .font(.system(size: 34, weight: Theme.iconWeight))
+            .font(.scaled(34, weight: Theme.iconWeight))
             .foregroundStyle(Theme.textSecondary)
     }
 
@@ -829,7 +829,7 @@ struct FileInfoSheet: View {
     private var titleBlock: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(file.name)
-                .font(.system(size: 18, weight: .semibold))
+                .font(.scaled(18, weight: .semibold))
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("library.info.name")
             HStack(spacing: 6) {
@@ -846,11 +846,11 @@ struct FileInfoSheet: View {
 
     private func badge(_ text: String, highlighted: Bool = false) -> some View {
         Text(text)
-            .font(.system(size: 11, weight: .semibold))
+            .font(.scaled(11, weight: .semibold))
             .foregroundStyle(highlighted ? Theme.accent : Theme.textSecondary)
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
-            .background(highlighted ? Theme.tileTint : Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .background(highlighted ? Theme.tileTint : Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
     }
 
     private struct Row: Identifiable {
@@ -913,7 +913,7 @@ struct FileInfoSheet: View {
             if loading {
                 HStack(spacing: 8) {
                     ProgressView()
-                    Text("正在读取详细信息").font(.system(size: 13)).foregroundStyle(Theme.textSecondary)
+                    Text("正在读取详细信息").font(.scaled(13)).foregroundStyle(Theme.textSecondary)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 14)
@@ -933,16 +933,16 @@ struct FileInfoSheet: View {
     private func detailRow(_ row: Row) -> some View {
         HStack(alignment: .top, spacing: 12) {
             Text(row.label)
-                .font(.system(size: 13))
+                .font(.scaled(13))
                 .foregroundStyle(Theme.textSecondary)
                 .frame(width: 64, alignment: .leading)
             VStack(alignment: .leading, spacing: 2) {
                 Text(row.value)
-                    .font(row.mono ? .system(size: 12, design: .monospaced) : .system(size: 14))
+                    .font(row.mono ? .scaled(12, design: .monospaced) : .scaled(14))
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
                 if !row.detail.isEmpty {
-                    Text(row.detail).font(.system(size: 12)).foregroundStyle(Theme.textSecondary)
+                    Text(row.detail).font(.scaled(12)).foregroundStyle(Theme.textSecondary)
                 }
             }
             Spacer(minLength: 4)
@@ -960,7 +960,7 @@ struct FileInfoSheet: View {
             copied = value
         } label: {
             Image(systemName: copied == value ? AppIcon.check.name : AppIcon.copy.name)
-                .font(.system(size: 14, weight: Theme.iconWeight))
+                .font(.scaled(14, weight: Theme.iconWeight))
                 .foregroundStyle(Theme.accent)
                 .frame(width: 32, height: 32)
                 .contentShape(Rectangle())

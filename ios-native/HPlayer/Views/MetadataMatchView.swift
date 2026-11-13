@@ -177,7 +177,7 @@ struct MetadataRow: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(metadata.title)
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.scaled(16, weight: .semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(2)
                 if let original = metadata.originalTitle, !original.isEmpty {

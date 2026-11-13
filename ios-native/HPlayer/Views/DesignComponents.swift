@@ -71,6 +71,82 @@ extension ScreenTitleBar where Trailing == EmptyView {
     }
 }
 
+/// 大标题滚出屏幕后，顶部出现的紧凑标题栏：和系统导航栏「大标题收起成行内标题」一样的手感。
+/// 系统材质底 + 一条细线，居中 17pt 半粗标题，右侧放图标按钮。没出现时不占点按、不进无障碍树。
+struct CompactTitleBar<Trailing: View>: View {
+    let title: String
+    let visible: Bool
+    @ViewBuilder var trailing: () -> Trailing
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        ZStack {
+            Text(title)
+                .font(Theme.Typo.headline)
+                .foregroundStyle(Theme.textPrimary)
+                .lineLimit(1)
+                .padding(.horizontal, 96)
+            HStack(spacing: 0) {
+                Spacer(minLength: 0)
+                if visible { trailing() }
+            }
+            .padding(.trailing, Theme.Space.xs)
+        }
+        .frame(maxWidth: .infinity, minHeight: 44)
+        .background(.bar, ignoresSafeAreaEdges: .top)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Theme.rule).frame(height: Theme.Stroke.hairline)
+        }
+        .offset(y: visible || reduceMotion ? 0 : -6)
+        .opacity(visible ? 1 : 0)
+        .allowsHitTesting(visible)
+        .accessibilityHidden(!visible)
+        .animation(reduceMotion ? nil : Motion.quick, value: visible)
+    }
+}
+
+extension CompactTitleBar where Trailing == EmptyView {
+    init(title: String, visible: Bool) {
+        self.init(title: title, visible: visible) { EmptyView() }
+    }
+}
+
+/// 记录一块内容（通常是页面大标题）是否已经往上滚出去了：滚过它自身高度的九成，或者被列表回收时算「滚走了」。
+/// 不依赖坐标空间和 preference，所以在 List 和 ScrollView 里都能用。
+private struct ScrolledAwayTracker: ViewModifier {
+    @Binding var away: Bool
+    @State private var restingMaxY: CGFloat?
+
+    func body(content: Content) -> some View {
+        content
+            .background {
+                GeometryReader { proxy in
+                    let maxY = proxy.frame(in: .global).maxY
+                    Color.clear
+                        .onAppear {
+                            if restingMaxY == nil { restingMaxY = maxY }
+                            update(maxY, height: proxy.size.height)
+                        }
+                        .onChange(of: maxY) { update($0, height: proxy.size.height) }
+                }
+            }
+            .onDisappear { if !away { away = true } }
+    }
+
+    private func update(_ maxY: CGFloat, height: CGFloat) {
+        guard let resting = restingMaxY else { return }
+        let next = maxY < resting - height * 0.9
+        if next != away { away = next }
+    }
+}
+
+extension View {
+    /// 见 `ScrolledAwayTracker`。配合 `CompactTitleBar` 用。
+    func scrolledAway(_ away: Binding<Bool>) -> some View {
+        modifier(ScrolledAwayTracker(away: away))
+    }
+}
+
 /// 栏目标题：左边是 17pt 半粗栏目名，右边是「全部 ›」之类的入口。
 struct ShelfHeader<Trailing: View>: View {
     let title: String
@@ -126,7 +202,7 @@ struct BarIconButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: icon.name)
-                .font(.system(size: 20, weight: Theme.iconWeight))
+                .font(.scaled(20, weight: Theme.iconWeight))
                 .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
                 .hoverEffect(.highlight)
@@ -148,7 +224,7 @@ struct SheetCloseButton: View {
             if let action { action() } else { dismiss() }
         } label: {
             Image(systemName: AppIcon.close.name)
-                .font(.system(size: 12, weight: .semibold))
+                .font(.scaled(12, weight: .semibold))
                 .foregroundStyle(Theme.textSecondary)
                 .frame(width: 30, height: 30)
                 .background(Theme.surfaceRaised, in: Circle())
@@ -187,7 +263,7 @@ struct LibraryActionRow: View {
         HStack(spacing: 14) {
             // 图标不垫底色：线框图标直接摆在行首，和标题同色
             Image(systemName: symbol)
-                .font(.system(size: 19, weight: Theme.iconWeight))
+                .font(.scaled(19, weight: Theme.iconWeight))
                 .foregroundStyle(titleColor)
                 .frame(width: 24)
                 .accessibilityHidden(true)
@@ -225,7 +301,7 @@ struct RowIcon: View {
 
     var body: some View {
         Image(systemName: icon.name)
-            .font(.system(size: 19, weight: Theme.iconWeight))
+            .font(.scaled(19, weight: Theme.iconWeight))
             .foregroundStyle(tint)
             .frame(width: 24)
     }

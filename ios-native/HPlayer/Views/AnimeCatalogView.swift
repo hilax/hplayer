@@ -188,11 +188,11 @@ struct AnimeCatalogView: View {
         let spacing: CGFloat = 10
         let cardWidth = ((width - Theme.contentInset * 2 - spacing * 2) / 3).rounded(.down)
         let trending = Array(online.trending.prefix(6))
-        return VStack(alignment: .leading, spacing: 28) {
+        return VStack(alignment: .leading, spacing: Theme.Space.shelf) {
             VStack(alignment: .leading, spacing: 10) {
                 ShelfHeader(title: "热门新番", identifier: "anime.shelf.trending", inset: 0) {
                     NavigationLink(value: AnimeBrowseRoute(channelId: nil, title: "热门新番", sort: "hits")) {
-                        ShelfLinkLabel(text: "更多")
+                        ShelfLinkLabel(text: "全部")
                             .frame(minWidth: 44, minHeight: 44, alignment: .trailing)
                     }
                     .buttonStyle(.pressable(scale: 0.92))
@@ -242,7 +242,7 @@ struct AnimeCatalogView: View {
                     HStack(spacing: 8) {
                         Image(icon: .refresh).iconStyle(size: 13, color: Theme.accent)
                         Text("没有加载出来，点按重试")
-                            .font(.system(size: 13))
+                            .font(.scaled(13))
                             .foregroundStyle(Theme.textSecondary)
                     }
                     .frame(maxWidth: .infinity, minHeight: 44)
@@ -339,10 +339,10 @@ struct AnimePosterSkeleton: View {
             RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous)
                 .fill(Theme.surfaceRaised)
                 .frame(width: width, height: width * 1.5)
-            RoundedRectangle(cornerRadius: 3, style: .continuous)
+            RoundedRectangle(cornerRadius: Theme.Radius.badge, style: .continuous)
                 .fill(Theme.surfaceRaised)
                 .frame(width: width * 0.72, height: 12)
-            RoundedRectangle(cornerRadius: 3, style: .continuous)
+            RoundedRectangle(cornerRadius: Theme.Radius.badge, style: .continuous)
                 .fill(Theme.surfaceRaised)
                 .frame(width: width * 0.48, height: 10)
         }

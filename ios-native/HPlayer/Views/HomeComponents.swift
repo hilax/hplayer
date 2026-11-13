@@ -331,7 +331,7 @@ struct PosterArtwork: View {
                 .allowsHitTesting(false)
 
             if !caption.isEmpty {
-                LinearGradient(colors: [.clear, .black.opacity(0.7)], startPoint: .center, endPoint: .bottom)
+                LinearGradient(colors: [.clear, .black.opacity(Theme.Opacity.heavy)], startPoint: .center, endPoint: .bottom)
                 Text(caption)
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.white)
@@ -369,11 +369,11 @@ struct PosterCard: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(item.title)
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.scaled(13, weight: .medium))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                     Text(item.year.isEmpty ? item.sourceLabel : "\(item.year) · \(item.sourceLabel)")
-                        .font(.system(size: 11))
+                        .font(.scaled(11))
                         .secondaryTextStyle()
                         .lineLimit(1)
                 }
@@ -409,11 +409,11 @@ struct SeriesPosterCard: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(group.title)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.scaled(13, weight: .medium))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                 Text(group.detailText)
-                    .font(.system(size: 11))
+                    .font(.scaled(11))
                     .secondaryTextStyle()
                     .lineLimit(1)
             }
@@ -436,7 +436,7 @@ struct ContinueCard: View {
                 .allowsHitTesting(false)
                 .overlay(alignment: .bottomLeading) {
                     Image(systemName: AppIcon.play.name)
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(.scaled(10, weight: .semibold))
                         .foregroundStyle(Theme.onPrimary)
                         .frame(width: 26, height: 26)
                         .background(Theme.gold, in: Circle())
@@ -445,7 +445,7 @@ struct ContinueCard: View {
                 .overlay(alignment: .bottomLeading) {
                     if let progress = entry.progress {
                         GeometryReader { proxy in
-                            Rectangle().fill(.white.opacity(0.18))
+                            Rectangle().fill(.white.opacity(Theme.Opacity.faint))
                                 .overlay(alignment: .leading) {
                                     Rectangle().fill(Theme.gold)
                                         .frame(width: proxy.size.width * min(max(progress, 0), 1))
@@ -456,8 +456,8 @@ struct ContinueCard: View {
                 }
                 .coverEdge()
             VStack(alignment: .leading, spacing: 2) {
-                Text(entry.title).font(.system(size: 13, weight: .medium)).lineLimit(1)
-                Text(entry.subtitle).font(.system(size: 11)).secondaryTextStyle().lineLimit(1)
+                Text(entry.title).font(.scaled(13, weight: .medium)).lineLimit(1)
+                Text(entry.subtitle).font(.scaled(11)).secondaryTextStyle().lineLimit(1)
             }
             .frame(width: width, alignment: .leading)
         }
@@ -536,7 +536,7 @@ struct ContinueHistoryView: View {
                         .overlay(alignment: .bottomLeading) {
                             if let progress = validProgress(entry.progress) {
                                 GeometryReader { proxy in
-                                    Rectangle().fill(.white.opacity(0.45))
+                                    Rectangle().fill(.white.opacity(Theme.Opacity.medium))
                                         .overlay(alignment: .leading) {
                                             Rectangle().fill(Theme.primaryAction)
                                                 .frame(width: proxy.size.width * progress)
@@ -545,7 +545,7 @@ struct ContinueHistoryView: View {
                                 }.frame(height: 4)
                             }
                         }
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.control))
                     VStack(alignment: .leading, spacing: 5) {
                         Text(entry.title).font(.subheadline.weight(.semibold)).lineLimit(1)
                         Text(entry.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
@@ -808,7 +808,7 @@ struct PosterPlaceholder: View {
             if letterSize > 4 {
                 Text(title.isEmpty ? " " : title)
                     .font(.display(max(12, letterSize * 0.32)))
-                    .foregroundStyle(.white.opacity(0.92))
+                    .foregroundStyle(.white.opacity(Theme.Opacity.solid))
                     .lineLimit(3)
                     .minimumScaleFactor(0.6)
                     .padding(9)

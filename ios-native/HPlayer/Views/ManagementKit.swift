@@ -109,7 +109,7 @@ struct ManagementBanner: View {
     var body: some View {
         HStack(alignment: .top, spacing: Theme.Space.md) {
             Image(systemName: AppIcon.info.name)
-                .font(.system(size: 14, weight: Theme.iconWeight))
+                .font(.scaled(14, weight: Theme.iconWeight))
                 .foregroundStyle(Theme.accent)
                 .padding(.top, 1)
             Text(text)
@@ -172,7 +172,7 @@ struct FolderTrailBar: View {
             }
         } label: {
             Text(index == 0 ? "网盘" : crumb.name)
-                .font(.system(size: 13, weight: last ? .semibold : .regular))
+                .font(.scaled(13, weight: last ? .semibold : .regular))
                 .foregroundStyle(last ? Theme.accent : Theme.textPrimary)
                 .lineLimit(1)
                 .padding(.horizontal, 11)

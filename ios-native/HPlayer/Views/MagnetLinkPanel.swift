@@ -50,7 +50,7 @@ struct MagnetLinkPanel: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: AppIcon.magnet.name)
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(.scaled(18, weight: .semibold))
                     .foregroundStyle(Theme.Source.magnet)
                     .frame(width: 40, height: 40)
                     .background(Theme.Source.magnet.opacity(0.14), in: RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous))
@@ -73,7 +73,7 @@ struct MagnetLinkPanel: View {
                 Button(action: onPlay) {
                     HStack(spacing: 6) {
                         Image(systemName: AppIcon.play.name)
-                            .font(.system(size: 12))
+                            .font(.scaled(12))
                         Text("在线播放")
                     }
                 }
@@ -86,7 +86,7 @@ struct MagnetLinkPanel: View {
                             ProgressView().controlSize(.mini)
                         } else {
                             Image(systemName: saveState == .saved ? AppIcon.check.name : AppIcon.cloudDownload.name)
-                                .font(.system(size: 13))
+                                .font(.scaled(13))
                         }
                         Text(saveState.title)
                     }
@@ -100,7 +100,7 @@ struct MagnetLinkPanel: View {
 
                 Button(action: copy) {
                     Image(systemName: copied ? AppIcon.check.name : AppIcon.copy.name)
-                        .font(.system(size: 14))
+                        .font(.scaled(14))
                         .foregroundStyle(copied ? Theme.accent : Color.primary)
                 }
                 .buttonStyle(MagnetActionStyle(prominent: false))

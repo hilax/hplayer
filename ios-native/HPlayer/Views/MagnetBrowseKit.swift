@@ -217,7 +217,7 @@ struct MagnetCodeChip: View {
 
     var body: some View {
         Text(code)
-            .font(.system(size: 10, weight: .bold))
+            .font(.scaled(10, weight: .bold))
             .lineLimit(1)
             .minimumScaleFactor(0.8)
             .foregroundStyle(Color.white)
@@ -275,14 +275,14 @@ struct MagnetPosterCard: View {
 
                 // 和动漫、片库的海报卡同一套字：13pt 标题（两行，番号已经在封面上）、11pt 次要信息
                 Text(movie.title)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.scaled(13, weight: .medium))
                     .foregroundStyle(.primary)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
                     .frame(maxWidth: .infinity, minHeight: 32, alignment: .topLeading)
 
                 Text([movie.stars.first?.name ?? "", movie.releaseDate ?? ""].filter { !$0.isEmpty }.joined(separator: " · "))
-                    .font(.system(size: 11))
+                    .font(.scaled(11))
                     .secondaryTextStyle()
                     .lineLimit(1)
             }
@@ -343,12 +343,12 @@ struct MagnetListRow: View {
                 VStack(alignment: .leading, spacing: 4) {
                     if !movie.code.isEmpty {
                         Text(movie.code)
-                            .font(.system(size: 15, weight: .bold))
+                            .font(.scaled(15, weight: .bold))
                             .foregroundStyle(Theme.textPrimary)
                     }
 
                     Text(movie.title)
-                        .font(.system(size: 13))
+                        .font(.scaled(13))
                         .foregroundStyle(Theme.textSecondary)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
@@ -358,13 +358,13 @@ struct MagnetListRow: View {
                     HStack(spacing: 8) {
                         if let star = movie.stars.first {
                             Text(star.name)
-                                .font(.system(size: 12, weight: .semibold))
+                                .font(.scaled(12, weight: .semibold))
                                 .foregroundStyle(Theme.accent)
                                 .lineLimit(1)
                         }
                         if let date = movie.releaseDate {
                             Text(date)
-                                .font(.system(size: 12))
+                                .font(.scaled(12))
                                 .foregroundStyle(Theme.textTertiary)
                         }
                     }
@@ -395,7 +395,7 @@ struct MagnetCategoryTabs: View {
                     withAnimation(reduceMotion ? nil : Motion.snappy) { selection = category }
                 } label: {
                     Text(category.title)
-                        .font(.system(size: selected ? 20 : 16, weight: selected ? .heavy : .medium))
+                        .font(.scaled(selected ? 20 : 16, weight: selected ? .heavy : .medium))
                         .foregroundStyle(selected ? Theme.textPrimary : Theme.textSecondary)
                         .frame(height: 40)
                         .overlay(alignment: .bottom) {
@@ -429,7 +429,7 @@ struct MagnetSearchField: View {
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: AppIcon.search.name)
-                .font(.system(size: 15, weight: Theme.iconWeight))
+                .font(.scaled(15, weight: Theme.iconWeight))
                 .foregroundStyle(Theme.textSecondary)
 
             TextField("番号、女优，或粘贴磁力链接", text: $text)
@@ -499,7 +499,7 @@ struct MagnetStudioCard: View {
             Spacer(minLength: 0)
 
             Image(systemName: AppIcon.forward.name)
-                .font(.system(size: 13, weight: .semibold))
+                .font(.scaled(13, weight: .semibold))
                 .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 16)
@@ -554,7 +554,7 @@ struct MagnetStarChip: View {
             }
 
             Image(systemName: AppIcon.forward.name)
-                .font(.system(size: 11, weight: .semibold))
+                .font(.scaled(11, weight: .semibold))
                 .foregroundStyle(.secondary)
         }
         .padding(.leading, 8)
@@ -578,13 +578,13 @@ struct MagnetSectionHeader: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
             Text(title)
-                .font(.system(size: 18, weight: .bold))
+                .font(.scaled(18, weight: .bold))
                 .foregroundStyle(Theme.textPrimary)
                 .accessibilityAddTraits(.isHeader)
             Spacer(minLength: 8)
             if let trailing {
                 Text(trailing)
-                    .font(.system(size: 12))
+                    .font(.scaled(12))
                     .foregroundStyle(Theme.textTertiary)
             }
         }
@@ -601,7 +601,7 @@ struct MagnetActionStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 14, weight: prominent ? .bold : .semibold))
+            .font(.scaled(14, weight: prominent ? .bold : .semibold))
             .foregroundStyle(prominent ? Theme.onPrimary : Color.primary)
             .frame(maxWidth: .infinity, minHeight: 44)
             .background {
@@ -677,7 +677,7 @@ struct MagnetLoadingView: View {
 
     private func bar(widthFactor: CGFloat) -> some View {
         GeometryReader { proxy in
-            RoundedRectangle(cornerRadius: 5, style: .continuous)
+            RoundedRectangle(cornerRadius: Theme.Radius.badge, style: .continuous)
                 .fill(Theme.surfaceRaised)
                 .frame(width: proxy.size.width * widthFactor)
         }
@@ -694,7 +694,7 @@ struct MagnetErrorState: View {
     var body: some View {
         VStack(spacing: 10) {
             Image(systemName: AppIcon.alert.name)
-                .font(.system(size: 28))
+                .font(.scaled(28))
                 .foregroundStyle(Theme.accent)
 
             Text("加载未完成")
@@ -732,7 +732,7 @@ struct MagnetEmptyState: View {
     var body: some View {
         VStack(spacing: 10) {
             Image(systemName: icon.name)
-                .font(.system(size: 28))
+                .font(.scaled(28))
                 .foregroundStyle(.secondary)
             Text(title)
                 .font(.subheadline.weight(.semibold))

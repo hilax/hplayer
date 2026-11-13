@@ -93,7 +93,7 @@ struct HomeChannelBar: View {
                     withAnimation(reduceMotion ? nil : Motion.snappy) { selection = channel }
                 } label: {
                     Text(channel.title)
-                        .font(.system(size: selected ? 20 : 16, weight: selected ? .heavy : .medium))
+                        .font(.scaled(selected ? 20 : 16, weight: selected ? .heavy : .medium))
                         .foregroundStyle(selected ? Theme.textPrimary : Theme.textSecondary)
                         .frame(height: 40)
                         .overlay(alignment: .bottom) {

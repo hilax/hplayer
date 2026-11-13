@@ -117,7 +117,7 @@ private struct LocalVideoRow: View {
 
             VStack(alignment: .leading, spacing: 5) {
                 Text(file.name)
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.scaled(15, weight: .semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
@@ -129,7 +129,7 @@ private struct LocalVideoRow: View {
 
             Spacer(minLength: 0)
             Image(systemName: AppIcon.play.name)
-                .font(.system(size: 12, weight: .bold))
+                .font(.scaled(12, weight: .bold))
                 .foregroundStyle(Theme.onPrimary)
                 .frame(width: 34, height: 34)
                 .background(Theme.gold, in: Circle())

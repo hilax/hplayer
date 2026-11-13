@@ -44,12 +44,12 @@ private struct StarModePicker: View {
                     withAnimation(Motion.snappy) { mode = option }
                 } label: {
                     Text(option.title)
-                        .font(.system(size: 14, weight: selected ? .bold : .medium))
+                        .font(.scaled(14, weight: selected ? .bold : .medium))
                         .foregroundStyle(selected ? Theme.onPrimary : Theme.textSecondary)
                         .frame(maxWidth: .infinity, minHeight: 38)
                         .background {
                             if selected {
-                                RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.primaryAction)
+                                RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous).fill(Theme.primaryAction)
                             }
                         }
                         .contentShape(Rectangle())
@@ -365,7 +365,7 @@ private struct MagnetTorrentCard: View {
                         .foregroundStyle(Theme.onPrimary)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 3)
-                        .background(Theme.primaryAction, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        .background(Theme.primaryAction, in: RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
                 }
 
                 if torrent.isHD {
@@ -375,7 +375,7 @@ private struct MagnetTorrentCard: View {
                         .padding(.horizontal, 7)
                         .padding(.vertical, 2)
                         .overlay {
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous)
                                 .strokeBorder(Theme.accent.opacity(0.6), lineWidth: 1)
                         }
                 }
@@ -403,7 +403,7 @@ private struct MagnetTorrentCard: View {
                 Button(action: onPlay) {
                     HStack(spacing: 8) {
                         Image(systemName: AppIcon.play.name)
-                            .font(.system(size: 12))
+                            .font(.scaled(12))
                         Text(playTitle)
                     }
                 }
@@ -416,7 +416,7 @@ private struct MagnetTorrentCard: View {
                             ProgressView().controlSize(.mini)
                         } else {
                             Image(systemName: saveState == .saved ? AppIcon.check.name : AppIcon.cloudDownload.name)
-                                .font(.system(size: 13))
+                                .font(.scaled(13))
                         }
                         Text(saveState.title)
                             .lineLimit(1)
@@ -432,7 +432,7 @@ private struct MagnetTorrentCard: View {
 
                 Button(action: onCopy) {
                     Image(systemName: copied ? AppIcon.check.name : AppIcon.copy.name)
-                        .font(.system(size: 14))
+                        .font(.scaled(14))
                         .foregroundStyle(copied ? Theme.accent : Color.primary)
                 }
                 .buttonStyle(MagnetActionStyle(prominent: false))
@@ -526,7 +526,7 @@ struct MagnetDetailView: View {
                     RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous)
                         .strokeBorder(Theme.hairline, lineWidth: 0.5)
                 }
-                .shadow(color: Color.black.opacity(0.35), radius: 14, x: 0, y: 8)
+                .shadow(color: Color.black.opacity(Theme.Opacity.medium), radius: 14, x: 0, y: 8)
 
             VStack(alignment: .leading, spacing: 10) {
                 if !item.code.isEmpty {
@@ -575,7 +575,7 @@ struct MagnetDetailView: View {
                                     .font(.footnote.weight(.semibold))
                                     .foregroundStyle(.primary)
                                 Image(systemName: AppIcon.forward.name)
-                                    .font(.system(size: 11, weight: .bold))
+                                    .font(.scaled(11, weight: .bold))
                                     .foregroundStyle(.secondary)
                             }
                             .padding(.leading, 8)

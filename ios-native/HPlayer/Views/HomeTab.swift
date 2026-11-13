@@ -267,7 +267,7 @@ struct HomeTab: View {
     /// 片库还什么都没有时，在轮播下面放引导。
     private func sections(_ library: HomeSnapshot, continueItems: [ContinueEntry], width: CGFloat) -> some View {
         let contentWidth = max(width - Theme.contentInset * 2, 1)
-        return VStack(alignment: .leading, spacing: 28) {
+        return VStack(alignment: .leading, spacing: Theme.Space.shelf) {
             if library.items.isEmpty {
                 emptyState
             }
@@ -307,7 +307,7 @@ struct HomeTab: View {
         ShelfHeader(title: title, identifier: identifier, inset: 0) {
             HStack(spacing: 10) {
                 Text(detail)
-                    .font(.system(size: 12))
+                    .font(.scaled(12))
                     .tertiaryTextStyle()
                 NavigationLink {
                     destination()
@@ -331,7 +331,7 @@ struct HomeTab: View {
         ShelfHeader(title: title, identifier: identifier, inset: 0) {
             HStack(spacing: 10) {
                 Text(detail)
-                    .font(.system(size: 12))
+                    .font(.scaled(12))
                     .tertiaryTextStyle()
                 NavigationLink(value: value) {
                     ShelfLinkLabel(text: "全部")
@@ -484,7 +484,7 @@ struct HomeTab: View {
                 let updates = watchlist.items.filter(\.hasUpdate).count
                 ShelfHeader(title: "我的追番", identifier: "home.shelf.watchlist", inset: 0) {
                     Text(updates > 0 ? "\(updates) 部有更新" : "\(watchlist.items.count) 部")
-                        .font(.system(size: 12))
+                        .font(.scaled(12))
                         .tertiaryTextStyle()
                 }
                 ScrollView(.horizontal) {
@@ -515,7 +515,7 @@ struct HomeTab: View {
             ShelfHeader(title: "热门新番", identifier: "home.shelf.trending", inset: 0) {
                 // 「更多」推进完整的热门列表（按播放量），不跳到动漫频道
                 NavigationLink(value: AnimeBrowseRoute(channelId: nil, title: "热门新番", sort: "hits")) {
-                    ShelfLinkLabel(text: "更多")
+                    ShelfLinkLabel(text: "全部")
                         .frame(minWidth: 44, minHeight: 44, alignment: .trailing)
                 }
                 .buttonStyle(.pressable(scale: 0.92))
@@ -539,22 +539,17 @@ struct HomeTab: View {
                 .allowsHitTesting(false)
                 .overlay(alignment: .bottomTrailing) {
                     if item.hasUpdate {
-                        Text("更新")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(Theme.brandNight)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Theme.accent, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
-                            .padding(6)
+                        TagBadge(text: "更新", style: .accent)
+                            .padding(Theme.Space.sm)
                     }
                 }
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.name)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.scaled(13, weight: .semibold))
                     .foregroundStyle(Theme.textPrimary)
                     .lineLimit(1)
                 Text(item.lastContinu ?? "在线动漫")
-                    .font(.system(size: 11))
+                    .font(.scaled(11))
                     .tertiaryTextStyle()
                     .lineLimit(1)
             }
@@ -711,16 +706,16 @@ struct HomeTab: View {
     private var emptyState: some View {
         VStack(spacing: 16) {
             Image(systemName: AppIcon.playback.name)
-                .font(.system(size: 34, weight: Theme.iconWeight))
+                .font(.scaled(34, weight: Theme.iconWeight))
                 .foregroundStyle(Theme.accent)
                 .frame(width: 84, height: 84)
-                .background(Theme.tileTint, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+                .background(Theme.tileTint, in: RoundedRectangle(cornerRadius: Theme.Radius.sheet, style: .continuous))
                 .reveal(0)
             Text("让好内容，在这里相遇")
                 .font(.display(22))
                 .reveal(1)
             Text("连接你的 115 网盘，或导入本机视频。\n把喜欢的影片，变成随时可看的片库。")
-                .font(.system(size: 14))
+                .font(.scaled(14))
                 .foregroundStyle(Theme.textSecondary)
                 .multilineTextAlignment(.center)
                 .lineSpacing(5)
@@ -733,7 +728,7 @@ struct HomeTab: View {
             .padding(.top, 6)
             .reveal(3)
             Button("浏览网盘", action: onBrowseLibrary)
-                .font(.system(size: 14, weight: .medium))
+                .font(.scaled(14, weight: .medium))
                 .foregroundStyle(Theme.accent)
                 .frame(minHeight: 44)
                 .accessibilityIdentifier("home.browseLibrary")

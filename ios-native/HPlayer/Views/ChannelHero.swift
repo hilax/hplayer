@@ -191,7 +191,7 @@ struct ChannelSearchField: View {
             Button(action: onSearch) {
                 HStack(spacing: 8) {
                     Image(systemName: AppIcon.search.name)
-                        .font(.system(size: 15, weight: Theme.iconWeight))
+                        .font(.scaled(15, weight: Theme.iconWeight))
                     Text(placeholder)
                         .font(Theme.Typo.row)
                         .lineLimit(1)
@@ -236,11 +236,12 @@ struct ChannelSearchField: View {
 // MARK: - 快捷入口
 
 /// 轮播下面一排圆形快捷入口（动漫：最新上架 / 最多播放 / 我的追番…；片库：全部 / 电影 / 剧集…）。
-/// 选中的那个实心底，其余是同色浅底。
+/// 单色：未选中是极淡的灰底 + 正文色线框图标，选中是主操作色（白 / 墨）实心 + 反色图标。
+/// `tint` 参数保留只为了调用处不用改，3.0 起不再按入口上不同颜色。
 struct ChannelShortcut: View {
     let title: String
     let icon: AppIcon
-    var tint: Color = Theme.accentFill
+    var tint: Color = Theme.textPrimary
     var selected = false
     let action: () -> Void
 
@@ -248,7 +249,7 @@ struct ChannelShortcut: View {
         Button(action: action) {
             ChannelShortcutLabel(title: title, icon: icon, tint: tint, selected: selected)
         }
-        .buttonStyle(.pressable(scale: 0.92))
+        .buttonStyle(.pressable(scale: 0.94))
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
@@ -256,34 +257,35 @@ struct ChannelShortcut: View {
 struct ChannelShortcutLabel: View {
     let title: String
     let icon: AppIcon
-    var tint: Color = Theme.accentFill
+    var tint: Color = Theme.textPrimary
     var selected = false
 
     var body: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: Theme.Space.sm) {
             Image(systemName: icon.name)
-                .font(.system(size: 18, weight: .semibold))
-                // 琥珀底很亮，选中时图标用深色；其他颜色的底压白色
-                .foregroundStyle(selected ? (tint == Theme.accentFill ? Theme.onAccentFill : Color.white) : tint)
-                .frame(width: 46, height: 46)
-                .background(selected ? tint : tint.opacity(0.14), in: Circle())
+                .font(.scaled(18, weight: Theme.iconWeight))
+                .foregroundStyle(selected ? Theme.onPrimary : Theme.textPrimary)
+                .frame(width: 48, height: 48)
+                .background(selected ? Theme.primaryAction : Theme.tileTint, in: Circle())
+                .overlay { Circle().strokeBorder(selected ? Color.clear : Theme.hairline, lineWidth: Theme.Stroke.hairline) }
             Text(title)
-                .font(.system(size: 11, weight: selected ? .semibold : .medium))
+                .font(Theme.Typo.caption.weight(selected ? .semibold : .regular))
                 .foregroundStyle(selected ? Theme.textPrimary : Theme.textSecondary)
                 .lineLimit(1)
         }
         .frame(maxWidth: .infinity)
         .contentShape(Rectangle())
+        .animation(Motion.snappy, value: selected)
     }
 }
 
-/// 快捷入口的几种颜色：琥珀、橙、紫、蓝、绿
+/// 快捷入口原来的五种颜色。3.0 起快捷入口统一单色，这些名字保留只为了调用处不用改。
 enum ShortcutTint {
-    static let amber = Theme.accentFill
-    static let orange = Color(uiColor: UIColor(hex: 0xE08A1E))
-    static let purple = Color(uiColor: UIColor(hex: 0x7A5AF0))
-    static let blue = Color(uiColor: UIColor(hex: 0x1F9BC7))
-    static let green = Color(uiColor: UIColor(hex: 0x2CA67E))
+    static let amber = Theme.textPrimary
+    static let orange = Theme.textPrimary
+    static let purple = Theme.textPrimary
+    static let blue = Theme.textPrimary
+    static let green = Theme.textPrimary
 }
 
 /// 下拉选择的筛选胶囊：「全部地区 ▾」。选了非默认值时实心高亮。
@@ -305,9 +307,9 @@ struct FilterMenuChip<Option: Hashable>: View {
         } label: {
             HStack(spacing: 4) {
                 Text(title(selection))
-                    .font(.system(size: 13, weight: active ? .semibold : .medium))
+                    .font(.scaled(13, weight: active ? .semibold : .medium))
                 Image(systemName: AppIcon.expand.name)
-                    .font(.system(size: 9, weight: .bold))
+                    .font(.scaled(9, weight: .bold))
             }
             .foregroundStyle(active ? Theme.onPrimary : Theme.textPrimary)
             .padding(.horizontal, 12)

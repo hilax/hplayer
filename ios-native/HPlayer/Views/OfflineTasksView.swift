@@ -291,12 +291,12 @@ struct OfflineTasksView: View {
                 statusTile(task.status)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(task.name.isEmpty ? "未命名任务" : task.name)
-                        .font(.system(size: 14, weight: .medium))
+                        .font(.scaled(14, weight: .medium))
                         .foregroundStyle(Theme.textPrimary)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
                     Text(OfflineTaskText.subtitle(task, folder: folderLabels[task.folderID]))
-                        .font(.system(size: 12))
+                        .font(.scaled(12))
                         .foregroundStyle(Theme.textTertiary)
                         .lineLimit(1)
                 }
@@ -334,10 +334,10 @@ struct OfflineTasksView: View {
             background = Theme.danger.opacity(0.14)
         }
         return Image(systemName: symbol)
-            .font(.system(size: 18, weight: Theme.iconWeight))
+            .font(.scaled(18, weight: Theme.iconWeight))
             .foregroundStyle(tint)
             .frame(width: 40, height: 40)
-            .background(background, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background(background, in: RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous))
     }
 
     @ViewBuilder
@@ -356,7 +356,7 @@ struct OfflineTasksView: View {
                     Spacer(minLength: 8)
                     Text(OfflineTaskText.rate(task))
                 }
-                .font(.system(size: 12))
+                .font(.scaled(12))
                 .foregroundStyle(Theme.textSecondary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.85)
@@ -365,15 +365,15 @@ struct OfflineTasksView: View {
         case .done:
             HStack(spacing: 6) {
                 Image(systemName: AppIcon.success.name)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.scaled(13, weight: .semibold))
                 Text(OfflineTaskText.finished(task))
             }
-            .font(.system(size: 12))
+            .font(.scaled(12))
             .foregroundStyle(Theme.success)
             .padding(.top, 10)
         case .failed:
             Text("下载失败，可能是资源已失效或没有下载源。可以删除后重新添加。")
-                .font(.system(size: 12))
+                .font(.scaled(12))
                 .foregroundStyle(Theme.danger)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 10)
@@ -403,7 +403,7 @@ struct OfflineTasksView: View {
             }
         } label: {
             Image(systemName: AppIcon.more.name)
-                .font(.system(size: 16, weight: .semibold))
+                .font(.scaled(16, weight: .semibold))
                 .foregroundStyle(Theme.textSecondary)
                 .frame(width: 32, height: 32)
                 .contentShape(Rectangle())
@@ -419,7 +419,7 @@ struct OfflineTasksView: View {
             showAdd = true
         } label: {
             Image(systemName: AppIcon.add.name)
-                .font(.system(size: 15, weight: .bold))
+                .font(.scaled(15, weight: .bold))
                 .foregroundStyle(Theme.onPrimary)
                 .frame(width: 32, height: 32)
                 .background(Theme.primaryAction, in: Circle())
@@ -694,7 +694,7 @@ struct OfflineAddSheet: View {
                     editor
                     hintRow(batch)
                     Text("保存设置")
-                        .font(.system(size: 13))
+                        .font(.scaled(13))
                         .foregroundStyle(Theme.textTertiary)
                         .padding(.top, 18)
                         .padding(.bottom, 8)
@@ -724,12 +724,12 @@ struct OfflineAddSheet: View {
     private var header: some View {
         HStack {
             Button("取消") { dismiss() }
-                .font(.system(size: 16))
+                .font(.scaled(16))
                 .foregroundStyle(Theme.textSecondary)
                 .accessibilityIdentifier("library.offlineAdd.cancel")
             Spacer()
             Text("添加离线任务")
-                .font(.system(size: 17, weight: .semibold))
+                .font(.scaled(17, weight: .semibold))
                 .accessibilityAddTraits(.isHeader)
             Spacer()
             Color.clear.frame(width: 32, height: 1)
@@ -743,14 +743,14 @@ struct OfflineAddSheet: View {
     private var linksLabel: some View {
         HStack {
             Text("下载链接（一行一条）")
-                .font(.system(size: 13))
+                .font(.scaled(13))
                 .foregroundStyle(Theme.textTertiary)
             Spacer(minLength: 8)
             Button {
                 paste()
             } label: {
                 Label("从剪贴板粘贴", systemImage: AppIcon.paste.name)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.scaled(13, weight: .medium))
                     .foregroundStyle(Theme.accent)
                     .frame(minHeight: 32)
             }
@@ -763,7 +763,7 @@ struct OfflineAddSheet: View {
     private var editor: some View {
         ZStack(alignment: .topLeading) {
             TextEditor(text: $text)
-                .font(.system(size: 13, design: .monospaced))
+                .font(.scaled(13, design: .monospaced))
                 .scrollContentBackground(.hidden)
                 .focused($focused)
                 .textInputAutocapitalization(.never)
@@ -772,7 +772,7 @@ struct OfflineAddSheet: View {
                 .accessibilityIdentifier("library.offlineAdd.links")
             if text.isEmpty {
                 Text("粘贴磁力、HTTP、ed2k 链接，一行一条")
-                    .font(.system(size: 13))
+                    .font(.scaled(13))
                     .foregroundStyle(Theme.textTertiary)
                     .padding(.horizontal, 15)
                     .padding(.vertical, 18)
@@ -780,9 +780,9 @@ struct OfflineAddSheet: View {
             }
         }
         .frame(height: 150)
-        .background(Theme.pageBackground, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .background(Theme.pageBackground, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
+            RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
                 .strokeBorder(Theme.accent.opacity(0.45), lineWidth: 1)
         }
     }
@@ -791,13 +791,13 @@ struct OfflineAddSheet: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 Text("已识别 \(batch.links.count) 条")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.scaled(11, weight: .semibold))
                     .foregroundStyle(Theme.accent)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 2)
-                    .background(Theme.tileTint, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    .background(Theme.tileTint, in: RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
                 Text(batch.links.isEmpty ? "支持磁力、HTTP、ed2k、FTP 链接，也可以只贴 BT 哈希" : batch.kindSummary + "，支持 ed2k、ftp 与 BT 链接")
-                    .font(.system(size: 12))
+                    .font(.scaled(12))
                     .foregroundStyle(Theme.textTertiary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.85)
@@ -839,7 +839,7 @@ struct OfflineAddSheet: View {
                 .accessibilityIdentifier("library.offlineAdd.defaultFolder")
             }
         }
-        .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
     }
 
     private func footer(_ batch: OfflineLinkBatch) -> some View {
@@ -867,7 +867,7 @@ struct OfflineAddSheet: View {
             .disabled(!canSubmit)
             .accessibilityIdentifier("library.offlineAdd.submit")
             Text("任务由 115 云端下载，不占用手机流量与存储")
-                .font(.system(size: 12))
+                .font(.scaled(12))
                 .foregroundStyle(Theme.textTertiary)
         }
         .padding(.horizontal, 16)
@@ -993,16 +993,16 @@ struct SaveFolderPickerSheet: View {
     private var header: some View {
         HStack {
             Button("取消") { dismiss() }
-                .font(.system(size: 16))
+                .font(.scaled(16))
                 .foregroundStyle(Theme.textSecondary)
                 .accessibilityIdentifier("library.savePicker.cancel")
             Spacer()
             Text("选择保存位置")
-                .font(.system(size: 17, weight: .semibold))
+                .font(.scaled(17, weight: .semibold))
                 .accessibilityAddTraits(.isHeader)
             Spacer()
             Button("新建") { showNewFolder = true }
-                .font(.system(size: 16, weight: .medium))
+                .font(.scaled(16, weight: .medium))
                 .foregroundStyle(Theme.accent)
                 .accessibilityIdentifier("library.savePicker.new")
         }
@@ -1027,7 +1027,7 @@ struct SaveFolderPickerSheet: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if folders.isEmpty {
             Text("这里没有子文件夹")
-                .font(.system(size: 14))
+                .font(.scaled(14))
                 .foregroundStyle(Theme.textTertiary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
@@ -1049,17 +1049,17 @@ struct SaveFolderPickerSheet: View {
         } label: {
             HStack(spacing: 12) {
                 Image(systemName: AppIcon.folder.name)
-                    .font(.system(size: 18, weight: Theme.iconWeight))
+                    .font(.scaled(18, weight: Theme.iconWeight))
                     .foregroundStyle(Theme.accent)
                     .frame(width: 36, height: 36)
-                    .background(Theme.tileTint, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .background(Theme.tileTint, in: RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous))
                 Text(folder.name)
-                    .font(.system(size: 15))
+                    .font(.scaled(15))
                     .foregroundStyle(Theme.textPrimary)
                     .lineLimit(1)
                 Spacer(minLength: 8)
                 Image(systemName: AppIcon.forward.name)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.scaled(12, weight: .semibold))
                     .foregroundStyle(Theme.textTertiary)
             }
             .padding(.horizontal, 16)
@@ -1077,14 +1077,14 @@ struct SaveFolderPickerSheet: View {
         VStack(spacing: 10) {
             HStack(spacing: 8) {
                 Image(systemName: AppIcon.folder.name)
-                    .font(.system(size: 13, weight: Theme.iconWeight))
+                    .font(.scaled(13, weight: Theme.iconWeight))
                     .foregroundStyle(Theme.accent)
                 Text("保存位置：")
-                    .font(.system(size: 13))
+                    .font(.scaled(13))
                     .foregroundStyle(Theme.textSecondary)
                     .fixedSize()
                 Text(pathText)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.scaled(13, weight: .semibold))
                     .foregroundStyle(Theme.textPrimary)
                     .lineLimit(1)
                     .truncationMode(.head)

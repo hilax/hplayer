@@ -167,7 +167,7 @@ struct DramaFeedView: View {
             HStack(spacing: 10) {
                 Button { close() } label: {
                     Image(icon: .back)
-                        .font(.system(size: 18, weight: .semibold))
+                        .font(.scaled(18, weight: .semibold))
                         .foregroundStyle(.white)
                         .frame(width: 44, height: 44)
                         .contentShape(Rectangle())
@@ -176,14 +176,14 @@ struct DramaFeedView: View {
                 .accessibilityIdentifier("drama.feed.close")
                 VStack(alignment: .leading, spacing: 1) {
                     Text(model.detail.title)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.scaled(15, weight: .semibold))
                         .lineLimit(1)
                     Text("第 \(model.episode(at: model.index)?.number ?? model.index + 1) 集 · 共 \(model.count) 集")
-                        .font(.system(size: 11, weight: .medium).monospacedDigit())
+                        .font(.scaled(11, weight: .medium).monospacedDigit())
                         .foregroundStyle(Theme.textSecondaryOnArtwork)
                 }
                 .foregroundStyle(.white)
-                .shadow(color: .black.opacity(0.4), radius: 4)
+                .shadow(color: .black.opacity(Theme.Opacity.medium), radius: 4)
                 Spacer(minLength: 0)
             }
             .padding(.top, insets.top + 2)
@@ -205,11 +205,11 @@ struct DramaFeedView: View {
 
             if let edgeHint {
                 Text(edgeHint)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.scaled(13, weight: .semibold))
                     .foregroundStyle(.white)
                     .padding(.horizontal, 14)
                     .frame(height: 34)
-                    .background(.black.opacity(0.6), in: Capsule())
+                    .background(.black.opacity(Theme.Opacity.strong), in: Capsule())
                     .frame(maxHeight: .infinity)
                     .transition(.opacity)
                     .allowsHitTesting(false)
@@ -221,12 +221,12 @@ struct DramaFeedView: View {
         Button(action: action) {
             VStack(spacing: 4) {
                 Image(systemName: icon.name)
-                    .font(.system(size: 24, weight: .semibold))
+                    .font(.scaled(24, weight: .semibold))
                 Text(title)
-                    .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                    .font(.scaled(11, weight: .semibold).monospacedDigit())
             }
             .foregroundStyle(.white)
-            .shadow(color: .black.opacity(0.45), radius: 4)
+            .shadow(color: .black.opacity(Theme.Opacity.medium), radius: 4)
             .frame(width: 56, height: 56)
             .contentShape(Rectangle())
         }
@@ -303,7 +303,7 @@ private struct DramaFeedPage: View {
             DramaCover(urlString: detail.cover, title: detail.title)
                 .frame(width: size.width, height: size.height)
                 .blur(radius: 24)
-                .overlay(Color.black.opacity(0.45))
+                .overlay(Color.black.opacity(Theme.Opacity.medium))
                 .clipped()
                 .opacity(player.state == .ready && player.videoSize != .zero ? 0 : 1)
 
@@ -313,10 +313,10 @@ private struct DramaFeedPage: View {
 
             // 上下压暗，白字在亮画面上也看得清
             VStack(spacing: 0) {
-                LinearGradient(colors: [.black.opacity(0.45), .clear], startPoint: .top, endPoint: .bottom)
+                LinearGradient(colors: [.black.opacity(Theme.Opacity.medium), .clear], startPoint: .top, endPoint: .bottom)
                     .frame(height: insets.top + 90)
                 Spacer()
-                LinearGradient(colors: [.clear, .black.opacity(0.6)], startPoint: .top, endPoint: .bottom)
+                LinearGradient(colors: [.clear, .black.opacity(Theme.Opacity.strong)], startPoint: .top, endPoint: .bottom)
                     .frame(height: insets.bottom + 220)
             }
             .allowsHitTesting(false)
@@ -351,11 +351,11 @@ private struct DramaFeedPage: View {
                     Image(systemName: AppIcon.speed.name)
                     Text("2× 快进中")
                 }
-                .font(.system(size: 13, weight: .semibold))
+                .font(.scaled(13, weight: .semibold))
                 .foregroundStyle(.white)
                 .padding(.horizontal, 14)
                 .frame(height: 32)
-                .background(.black.opacity(0.55), in: Capsule())
+                .background(.black.opacity(Theme.Opacity.strong), in: Capsule())
                 .padding(.top, insets.top + 56)
                 .transition(.opacity)
             }
@@ -369,14 +369,14 @@ private struct DramaFeedPage: View {
         case .failed(let message):
             VStack(spacing: 12) {
                 Image(systemName: AppIcon.alert.name)
-                    .font(.system(size: 28, weight: .semibold))
+                    .font(.scaled(28, weight: .semibold))
                     .foregroundStyle(Theme.rating)
                 Text(message)
-                    .font(.system(size: 14))
+                    .font(.scaled(14))
                     .foregroundStyle(.white)
                     .multilineTextAlignment(.center)
                 Button("重新加载") { player.retry() }
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.scaled(14, weight: .semibold))
                     .foregroundStyle(.black)
                     .padding(.horizontal, 22)
                     .frame(height: 40)
@@ -390,9 +390,9 @@ private struct DramaFeedPage: View {
                 ProgressView().tint(.white).controlSize(.large)
             } else if !player.isPlaying && isActive && !scrubbing && !boosting {
                 Image(systemName: AppIcon.play.name)
-                    .font(.system(size: 54, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.85))
-                    .shadow(color: .black.opacity(0.35), radius: 10)
+                    .font(.scaled(54, weight: .semibold))
+                    .foregroundStyle(.white.opacity(Theme.Opacity.solid))
+                    .shadow(color: .black.opacity(Theme.Opacity.medium), radius: 10)
                     .allowsHitTesting(false)
                     .transition(.scale(scale: 1.3).combined(with: .opacity))
             }
@@ -406,12 +406,12 @@ private struct DramaFeedPage: View {
                 Image(systemName: AppIcon.fullscreen.name)
                 Text("全屏观看")
             }
-            .font(.system(size: 13, weight: .semibold))
+            .font(.scaled(13, weight: .semibold))
             .foregroundStyle(.white)
             .padding(.horizontal, 16)
             .frame(height: 36)
-            .background(.white.opacity(0.16), in: Capsule())
-            .overlay(Capsule().strokeBorder(.white.opacity(0.28), lineWidth: 0.5))
+            .background(.white.opacity(Theme.Opacity.faint), in: Capsule())
+            .overlay(Capsule().strokeBorder(.white.opacity(Theme.Opacity.soft), lineWidth: 0.5))
         }
         .buttonStyle(.pressable(scale: 0.94))
         .offset(y: videoHeight / 2 + 34)
@@ -424,13 +424,13 @@ private struct DramaFeedPage: View {
         VStack(alignment: .leading, spacing: 8) {
             Spacer()
             Text(detail.title)
-                .font(.system(size: 16, weight: .bold))
+                .font(.scaled(16, weight: .bold))
             Text("第 \(episode.number) 集 · 共 \(total) 集" + (detail.isFinished ? " · 已完结" : ""))
-                .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                .font(.scaled(13, weight: .semibold).monospacedDigit())
                 .foregroundStyle(Theme.textSecondaryOnArtwork)
             if !detail.summary.isEmpty {
                 Text(detail.summary)
-                    .font(.system(size: 13))
+                    .font(.scaled(13))
                     .foregroundStyle(Theme.textSecondaryOnArtwork)
                     .lineLimit(expanded ? 6 : 2)
                     .onTapGesture { withAnimation(Motion.smooth) { expanded.toggle() } }
@@ -439,7 +439,7 @@ private struct DramaFeedPage: View {
                 .padding(.top, 4)
         }
         .foregroundStyle(.white)
-        .shadow(color: .black.opacity(0.35), radius: 3)
+        .shadow(color: .black.opacity(Theme.Opacity.medium), radius: 3)
         .padding(.leading, 16)
         .padding(.trailing, 84)
         .padding(.bottom, max(insets.bottom, 12) + 6)
@@ -453,13 +453,13 @@ private struct DramaFeedPage: View {
         return VStack(alignment: .leading, spacing: 6) {
             if active {
                 Text("\(Self.time(shown)) / \(Self.time(player.duration))")
-                    .font(.system(size: 15, weight: .bold).monospacedDigit())
+                    .font(.scaled(15, weight: .bold).monospacedDigit())
                     .frame(maxWidth: .infinity)
                     .transition(.opacity)
             }
             GeometryReader { proxy in
                 ZStack(alignment: .leading) {
-                    Capsule().fill(.white.opacity(0.25))
+                    Capsule().fill(.white.opacity(Theme.Opacity.soft))
                     Capsule().fill(.white).frame(width: proxy.size.width * fraction)
                 }
                 .frame(height: active ? 6 : 2.5)
@@ -554,13 +554,13 @@ private struct DramaLandscapeView: View {
             HStack(spacing: 10) {
                 Button(action: onExit) {
                     Image(icon: .back)
-                        .font(.system(size: 18, weight: .semibold))
+                        .font(.scaled(18, weight: .semibold))
                         .frame(width: 44, height: 44)
                         .contentShape(Rectangle())
                 }
                 .accessibilityLabel("退出全屏")
                 Text(title)
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.scaled(16, weight: .semibold))
                     .lineLimit(1)
                 Spacer()
             }
@@ -568,22 +568,22 @@ private struct DramaLandscapeView: View {
             HStack(spacing: 14) {
                 Button { player.togglePlay(); scheduleHide() } label: {
                     Image(systemName: player.isPlaying ? AppIcon.pause.name : AppIcon.play.name)
-                        .font(.system(size: 22, weight: .semibold))
+                        .font(.scaled(22, weight: .semibold))
                         .frame(width: 44, height: 44)
                 }
                 .accessibilityLabel(player.isPlaying ? "暂停" : "播放")
                 Text(DramaFeedPage.time(player.currentTime))
-                    .font(.system(size: 12, weight: .medium).monospacedDigit())
+                    .font(.scaled(12, weight: .medium).monospacedDigit())
                 Slider(value: Binding(
                     get: { player.duration > 0 ? player.currentTime / player.duration : 0 },
                     set: { player.seek(to: $0 * player.duration); scheduleHide() }
                 ))
                 .tint(.white)
                 Text(DramaFeedPage.time(player.duration))
-                    .font(.system(size: 12, weight: .medium).monospacedDigit())
+                    .font(.scaled(12, weight: .medium).monospacedDigit())
                 Button(action: onExit) {
                     Image(systemName: AppIcon.exitFullscreen.name)
-                        .font(.system(size: 18, weight: .semibold))
+                        .font(.scaled(18, weight: .semibold))
                         .frame(width: 44, height: 44)
                 }
                 .accessibilityLabel("退出全屏")
@@ -595,9 +595,9 @@ private struct DramaLandscapeView: View {
         .padding(.vertical, 8)
         .background {
             VStack {
-                LinearGradient(colors: [.black.opacity(0.55), .clear], startPoint: .top, endPoint: .bottom).frame(height: 90)
+                LinearGradient(colors: [.black.opacity(Theme.Opacity.strong), .clear], startPoint: .top, endPoint: .bottom).frame(height: 90)
                 Spacer()
-                LinearGradient(colors: [.clear, .black.opacity(0.6)], startPoint: .top, endPoint: .bottom).frame(height: 110)
+                LinearGradient(colors: [.clear, .black.opacity(Theme.Opacity.strong)], startPoint: .top, endPoint: .bottom).frame(height: 110)
             }
             .ignoresSafeArea()
             .allowsHitTesting(false)
@@ -633,7 +633,7 @@ private struct DramaFeedEpisodeSheet: View {
                         let progress = recents.progress(for: .drama(ref))
                         Button { onSelect(position) } label: {
                             Text("\(episode.number)")
-                                .font(.system(size: 14, weight: current ? .bold : .medium).monospacedDigit())
+                                .font(.scaled(14, weight: current ? .bold : .medium).monospacedDigit())
                                 .foregroundStyle(current ? Theme.onPrimary : Theme.textPrimary)
                                 .frame(maxWidth: .infinity, minHeight: 44)
                                 .background(current ? Theme.primaryAction : Theme.surface,

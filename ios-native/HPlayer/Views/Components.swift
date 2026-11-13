@@ -79,7 +79,7 @@ struct EmptyStateView: View {
     var body: some View {
         VStack(spacing: 14) {
             Image(systemName: icon)
-                .font(.system(size: 30, weight: Theme.iconWeight))
+                .font(.scaled(30, weight: Theme.iconWeight))
                 .foregroundStyle(Theme.accent)
                 .frame(width: 76, height: 76)
                 .background(Theme.tileTint, in: RoundedRectangle(cornerRadius: Theme.Radius.sheet, style: .continuous))

@@ -30,7 +30,7 @@ struct HomeChannelsView: View {
                     if channel == .recommend {
                         Button { addRequest += 1 } label: {
                             Image(systemName: AppIcon.addCircle.name)
-                                .font(.system(size: 20, weight: Theme.iconWeight))
+                                .font(.scaled(20, weight: Theme.iconWeight))
                                 .foregroundStyle(Theme.textPrimary)
                                 .frame(width: 44, height: 44)
                                 .contentShape(Rectangle())

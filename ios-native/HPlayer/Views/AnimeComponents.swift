@@ -27,11 +27,11 @@ struct AnimePosterCard: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.name)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.scaled(13, weight: .medium))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                 Text(subtitle)
-                    .font(.system(size: 11))
+                    .font(.scaled(11))
                     .secondaryTextStyle()
                     .lineLimit(1)
             }
@@ -114,14 +114,14 @@ struct AnimeEpisodeCell: View {
                 RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous)
                     .fill(isCurrent ? Theme.gold : Theme.surface)
                 Text(Self.shortTitle(title))
-                    .font(.system(size: 16, weight: .semibold).monospacedDigit())
+                    .font(.scaled(16, weight: .semibold).monospacedDigit())
                     .foregroundStyle(isCurrent ? Theme.onPrimary : (finished ? Theme.textTertiary : Theme.textPrimary))
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
                     .padding(.horizontal, 4)
                 if finished && !isCurrent {
                     Image(icon: .check)
-                        .font(.system(size: 8, weight: .bold))
+                        .font(.scaled(8, weight: .bold))
                         .foregroundStyle(Theme.textTertiary)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                         .padding(6)
