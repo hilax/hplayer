@@ -164,6 +164,10 @@ jobs:
         run: |
           mkdir -p Payload
           cp -R ios-native/build/Build/Products/Release-iphoneos/HPlayer.app Payload/
+          # 每次构建的版本号（CFBundleVersion）都不同：同一个版本号覆盖安装时，
+          # 系统不会刷新桌面图标缓存，装完后图标可能显示为空白。用构建序号保证递增。
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${GITHUB_RUN_NUMBER}" Payload/HPlayer.app/Info.plist
+          /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" Payload/HPlayer.app/Info.plist
           zip -r HPlayer-unsigned.ipa Payload
           ls -lh HPlayer-unsigned.ipa
 
