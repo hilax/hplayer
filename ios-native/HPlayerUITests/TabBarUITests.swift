@@ -25,20 +25,25 @@ final class TabBarUITests: XCTestCase {
 
         let mine = app.tabButton("我的")
         XCTAssertTrue(mine.waitForExistence(timeout: 25))
-        app.buttons["mine.transfers"].tap()
-        let downloads = app.buttons["transfers.downloads"]
-        XCTAssertTrue(downloads.waitForExistence(timeout: 10))
-        downloads.tap()
-        XCTAssertFalse(downloads.isHittable)
+        // 3.0：传输中心只在网盘页，「我的」里两层深的路径改用 开源许可 → 许可全文
+        let licenses = app.buttons["settings.licenses"]
+        XCTAssertTrue(licenses.waitForExistence(timeout: 10))
+        for _ in 0..<8 where !licenses.isHittable { app.swipeUp() }
+        licenses.tap()
+        let mpv = app.buttons["settings.license.MPVKit-LICENSE"]
+        XCTAssertTrue(mpv.waitForExistence(timeout: 10))
+        mpv.tap()
+        XCTAssertTrue(app.navigationBars["mpv / MPVKit"].waitForExistence(timeout: 10))
+        XCTAssertFalse(mpv.isHittable)
         XCTAssertFalse(mine.isHittable)
 
         app.navigationBars.buttons.element(boundBy: 0).tap()
-        XCTAssertTrue(downloads.isHittable, "The first pop returns to the transfer center")
+        XCTAssertTrue(mpv.waitForExistence(timeout: 5) && mpv.isHittable, "The first pop returns to the license list")
         XCTAssertFalse(mine.isHittable, "A nested pop must not reveal the root tab bar")
 
         app.navigationBars.buttons.element(boundBy: 0).tap()
         XCTAssertTrue(mine.isHittable && mine.isSelected)
-        XCTAssertTrue(app.buttons["mine.transfers"].isHittable)
+        XCTAssertTrue(licenses.waitForExistence(timeout: 5) && licenses.isHittable)
     }
 
     /// 从片库、网盘点搜索再返回：原来的页面应该纹丝不动，不能随键盘弹出 / 收起而回弹。

@@ -279,7 +279,7 @@ struct HomeTab: View {
                 trendingGrid(width: contentWidth)
             }
             if !library.movies.isEmpty {
-                movieGrid(library, width: contentWidth)
+                movieShelf(library)
             }
             if !library.series.isEmpty {
                 seriesShelf(library)
@@ -545,7 +545,7 @@ struct HomeTab: View {
                 }
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.name)
-                    .font(.scaled(13, weight: .semibold))
+                    .font(.scaled(13, weight: .medium))
                     .foregroundStyle(Theme.textPrimary)
                     .lineLimit(1)
                 Text(item.lastContinu ?? "在线动漫")
@@ -587,27 +587,30 @@ struct HomeTab: View {
 
     // MARK: 电影与剧集
 
-    /// 我的片库 · 电影：两列横卡，先放四部；「全部」进完整的海报墙。
-    private func movieGrid(_ library: HomeSnapshot, width: CGFloat) -> some View {
-        let spacing: CGFloat = 10
-        let cardWidth = ((width - spacing) / 2).rounded(.down)
-        let items = Array(library.movies.prefix(4))
-        return VStack(alignment: .leading, spacing: 10) {
+    /// 我的片库 · 电影：和剧集、追番同一种 108pt 竖海报横滑货架；「全部」进完整的海报墙。
+    /// 3.0 起首页只有三种卡片：继续观看的 16:9 横卡、片子的 2:3 竖海报、演员合集的双海报拼贴。
+    private func movieShelf(_ library: HomeSnapshot) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Space.sm) {
             shelfHeader("我的片库 · 电影", detail: "\(library.movies.count) 部", identifier: "home.shelf.movies") {
                 PosterGridScreen(title: "电影", items: library.movies) { item, width in
                     posterCard(item, library: library, width: width)
                 }
             }
-            FixedGrid(items: items, columns: 2, spacing: spacing) { index, item in
-                LibraryWideCard(item: item, width: cardWidth) {
-                    playing = HomeLibrary.queue(for: item, in: library.items)
-                } onDelete: {
-                    delete(item)
-                } onMatch: {
-                    matching = MatchRequest(item: item)
+            ScrollView(.horizontal) {
+                LazyHStack(alignment: .top, spacing: Theme.Space.md) {
+                    ForEach(Array(library.movies.enumerated()), id: \.element.id) { index, item in
+                        posterCard(item, library: library, width: 108)
+                            .reveal(index, id: item.id)
+                            .shelfCard()
+                            .prefetchArtwork(after: index, in: library.movies, count: 4) { $0.posterURL }
+                    }
                 }
-                .reveal(index)
+                .shelfContent()
+                .padding(.vertical, Theme.Space.xs)
             }
+            .shelfScrolling()
+            .padding(.horizontal, -Theme.contentInset)
+            .scrollIndicators(.hidden)
         }
     }
 
@@ -628,7 +631,8 @@ struct HomeTab: View {
             ScrollView(.horizontal) {
                 LazyHStack(alignment: .top, spacing: 14) {
                     ForEach(Array(library.performers.enumerated()), id: \.element.id) { index, group in
-                        performerLink(group, width: 200)
+                        // 两张 2:3 海报并排，高度和 108pt 的竖海报一致
+                        performerLink(group, width: 216)
                             .reveal(index, id: group.id)
                             .shelfCard()
                     }

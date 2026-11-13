@@ -134,6 +134,8 @@ final class SettingsUITests: XCTestCase {
 
         let appearance = app.buttons["settings.appearance"]
         XCTAssertTrue(appearance.waitForExistence(timeout: 10))
+        // 3.0 起「我的」多了播放、弹幕两组，外观在第一屏下面一点
+        for _ in 0..<6 where !appearance.isHittable { app.swipeUp() }
         let settingsShot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         settingsShot.name = "Settings - redesign"
         settingsShot.lifetime = .keepAlways
@@ -152,7 +154,7 @@ final class SettingsUITests: XCTestCase {
 
         app.navigationBars.buttons.element(boundBy: 0).tap()
         let licenses = app.buttons["settings.licenses"]
-        if !licenses.isHittable { app.swipeUp() }
+        for _ in 0..<8 where !licenses.isHittable { app.swipeUp() }
         XCTAssertTrue(licenses.waitForExistence(timeout: 5))
         XCTAssertTrue(licenses.isHittable)
         licenses.tap()
@@ -179,7 +181,7 @@ final class SettingsUITests: XCTestCase {
         XCTAssertTrue(settings.waitForExistence(timeout: 20))
         settings.tap()
         let iconSettings = app.buttons["settings.appIcon"]
-        if !iconSettings.isHittable { app.swipeUp() }
+        for _ in 0..<6 where !iconSettings.isHittable { app.swipeUp() }
         XCTAssertTrue(iconSettings.waitForExistence(timeout: 10))
         iconSettings.tap()
         XCTAssertTrue(app.navigationBars["应用图标"].waitForExistence(timeout: 10))

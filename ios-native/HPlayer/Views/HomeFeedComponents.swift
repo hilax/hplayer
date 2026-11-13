@@ -266,7 +266,7 @@ struct HomeAnimeGridCard: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(item.name)
-                        .font(.scaled(13, weight: .semibold))
+                        .font(.scaled(13, weight: .medium))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                         .padding(.trailing, 22)
@@ -357,98 +357,9 @@ enum AnimeEpisodeText {
     }
 }
 
-// MARK: - 我的片库 · 电影（两列横卡）
-
-/// 片库电影两列横卡：有横版背景图（Cinemeta / TMDB）就用；DMM 这类横版封套直接铺；
-/// 只有竖海报的，铺一层虚化再把海报立在中间。右上角评分，下面片名和「年份 · 类型」。
-struct LibraryWideCard: View {
-    let item: HomeMediaItem
-    let width: CGFloat
-    let onPlay: () -> Void
-    let onDelete: () -> Void
-    let onMatch: () -> Void
-
-    private var height: CGFloat { (width * 9 / 16).rounded() }
-
-    var body: some View {
-        Button(action: onPlay) {
-            VStack(alignment: .leading, spacing: 6) {
-                artwork
-                    .frame(width: width, height: height)
-                    .coverEdge()
-                    .overlay(alignment: .topTrailing) {
-                        if !item.rating.isEmpty { RatingBadge(rating: item.rating).padding(6) }
-                    }
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(item.title)
-                        .font(.scaled(14, weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                    Text(detail)
-                        .font(.scaled(12))
-                        .secondaryTextStyle()
-                        .lineLimit(1)
-                }
-                .frame(width: width, alignment: .leading)
-            }
-        }
-        .buttonStyle(PosterButtonStyle())
-        .accessibilityIdentifier("home.poster.\(item.metadata?.imdbID ?? item.id)")
-        .contextMenu {
-            Button("播放", systemImage: AppIcon.play.name, action: onPlay)
-            Button("匹配封面", systemImage: AppIcon.poster.name, action: onMatch)
-            Button(item.isCloud ? "从媒体库移除" : "删除本地文件", systemImage: AppIcon.trash.name, role: .destructive, action: onDelete)
-        }
-    }
-
-    private var detail: String {
-        var parts: [String] = []
-        if !item.year.isEmpty { parts.append(item.year) }
-        if let genre = item.metadata?.genres.first { parts.append(genre) }
-        return parts.isEmpty ? item.sourceLabel : parts.joined(separator: " · ")
-    }
-
-    @ViewBuilder private var artwork: some View {
-        if !item.backgroundURL.isEmpty {
-            ArtworkView(urlString: item.backgroundURL, fallbackURLString: item.posterURL, title: item.title)
-                .scaledToFill()
-                .frame(width: width, height: height)
-                .clipped()
-                .allowsHitTesting(false)
-        } else if item.metadata?.isWideJacket == true {
-            ArtworkView(urlString: item.posterURL, title: item.title)
-                .scaledToFill()
-                .frame(width: width, height: height)
-                .clipped()
-                .allowsHitTesting(false)
-        } else {
-            ZStack {
-                ArtworkView(urlString: item.posterURL, title: "", maxPixel: ArtworkSize.backdrop,
-                            loading: .neutral, drawsFallback: false)
-                    .scaledToFill()
-                    .frame(width: width / 3, height: height / 3)
-                    .clipped()
-                    .blur(radius: 5)
-                    .scaleEffect(3.4)
-                    .frame(width: width, height: height)
-                    .clipped()
-                    .overlay(Color.black.opacity(Theme.Opacity.faint))
-                ArtworkView(urlString: item.posterURL, title: item.title)
-                    .scaledToFill()
-                    .frame(width: height * 0.84 / 1.5, height: height * 0.84)
-                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
-                    .shadow(color: .black.opacity(Theme.Opacity.soft), radius: 6, y: 2)
-            }
-            .frame(width: width, height: height)
-            .background(Theme.surfaceRaised)
-            .allowsHitTesting(false)
-        }
-    }
-}
-
 // MARK: - 固定行数的小网格
 
-/// 首页里只有几张卡片的网格（热门新番六张、片库电影四张）：按列数排成几行，一次建好。
+/// 首页里只有几张卡片的网格（热门新番六张）：按列数排成几行，一次建好。
 /// 不用 LazyVGrid——懒加载网格在屏幕外不建视图，首页往下才有的卡片在滚到之前根本不存在。
 struct FixedGrid<Item: Identifiable, Cell: View>: View {
     let items: [Item]

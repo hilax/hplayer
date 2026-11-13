@@ -75,7 +75,7 @@ final class HomeUITests: XCTestCase {
         XCTAssertTrue(chineseSeries.waitForExistence(timeout: 30), "Chinese title should match through Bangumi")
 
         // 首页布局变了：先滑回顶部，保证要长按的那张海报在屏幕里。
-        // 电影是热门新番下面的两列横卡：先回顶部，还看不到就一点点往下找。
+        // 电影是热门新番下面的竖海报货架：先回顶部，还看不到就一点点往下找。
         for _ in 0..<3 where !dune.isHittable { app.swipeDown() }
         for _ in 0..<6 where !dune.isHittable { app.swipeUp(velocity: .slow) }
         XCTAssertTrue(dune.isHittable, "The movie card should be reachable on the home page")

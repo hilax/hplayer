@@ -21,7 +21,6 @@ struct SettingsView: View {
     @State private var showManagement = false
     @State private var titleAway = false
     @ObservedObject private var watchlist = AnimeWatchlistStore.shared
-    @ObservedObject private var downloads = DownloadManager.shared
 
     // 播放偏好：和播放页用的是同一组键
     @AppStorage("player.autoPlayNext") private var autoPlayNext = true
@@ -236,7 +235,7 @@ struct SettingsView: View {
         }
     }
 
-    /// 我的内容：追番、传输中心。右边是数量（有更新、在下载时琥珀色）
+    /// 我的内容：追番。右边是数量（有更新时琥珀色）。传输中心只在「网盘」页，这里不重复。
     private var contentGroup: some View {
         group("我的内容") {
             NavigationLink(value: MineRoute.watchlist) {
@@ -246,13 +245,6 @@ struct SettingsView: View {
             }
             .buttonStyle(.pressable(scale: 0.985))
             .accessibilityIdentifier("mine.watchlist")
-            NavigationLink(value: MineRoute.transfers) {
-                LibraryActionRow(symbol: AppIcon.transfers.name, title: "传输中心",
-                                 value: activeDownloads == 0 ? "" : "\(activeDownloads) 个下载中",
-                                 valueHighlighted: activeDownloads > 0)
-            }
-            .buttonStyle(.pressable(scale: 0.985))
-            .accessibilityIdentifier("mine.transfers")
         }
     }
 
@@ -453,10 +445,6 @@ struct SettingsView: View {
 
     private var watchUpdates: Int { watchlist.items.filter(\.hasUpdate).count }
 
-    private var activeDownloads: Int {
-        downloads.items.filter { $0.state == .downloading || $0.state == .queued }.count
-    }
-
     private var accountState: (text: String, color: Color) {
         let idle = Theme.textMuted
         guard appState.isAuthenticated else { return ("尚未登录 115", idle) }
@@ -621,7 +609,9 @@ struct LicensesView: View {
                 ForEach(entries) { entry in
                     NavigationLink { LicenseTextView(title: entry.title, url: entry.url) } label: {
                         LibraryActionRow(symbol: AppIcon.document.name, title: entry.title, subtitle: entryDetail(entry.id))
-                    }.buttonStyle(.plain)
+                    }
+                    .buttonStyle(.pressable(scale: 0.985))
+                    .accessibilityIdentifier("settings.license.\(entry.id)")
                 }
             }
             DesignNotice(text: "许可文件随应用打包，可在离线状态下阅读。")
