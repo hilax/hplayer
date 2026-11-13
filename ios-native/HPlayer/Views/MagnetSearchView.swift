@@ -63,7 +63,7 @@ struct MagnetSearchView: View {
     // 镜像域名变化时（在设置里保存后）自动重新加载。
     @AppStorage(JavBusSource.hostDefaultsKey) private var customHost = ""
     @EnvironmentObject private var appState: AppState
-    @State private var playLaunch: MagnetLaunch?
+    @State private var playLaunch: MagnetPlaybackRequest?
     @ObservedObject private var favoriteStars = FavoriteStarStore.shared
 
     @State private var keyword = ""
@@ -132,10 +132,7 @@ struct MagnetSearchView: View {
         .sheet(isPresented: $showingSettingsSheet) {
             JavBusHostSettingsSheet()
         }
-        .sheet(item: $playLaunch) { launch in
-            NavigationStack { MagnetPlayerView(initialMagnet: launch.value, closesAfterPlayback: true) }
-                .environmentObject(appState)
-        }
+        .magnetPlayer(item: $playLaunch)
         .animation(Motion.smooth, value: detectedLink != nil)
         .animation(Motion.smooth, value: inSearchMode)
         .task { loadIfNeeded(selectedCategory) }
@@ -209,7 +206,7 @@ struct MagnetSearchView: View {
             VStack(alignment: .leading, spacing: 0) {
                 Color.clear.frame(height: insets.top)
                 if let link = detectedLink {
-                    MagnetLinkPanel(link: link) { playLaunch = MagnetLaunch(value: link.uri) }
+                    MagnetLinkPanel(link: link) { playLaunch = MagnetPlaybackRequest(magnet: link.uri, title: link.displayName ?? "") }
                         .padding(.horizontal, Theme.contentInset)
                         .padding(.top, 8)
                 } else if isSearching {

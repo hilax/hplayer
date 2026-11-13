@@ -1,12 +1,12 @@
 import SwiftUI
+import UIKit
 
 /// 磁力「播放记录」：在磁力页右上角打开。以前在「传输中心 › 边下边播」里，传输中心拆掉后放到磁力页自己身上。
 /// 点一条直接续播（引擎读本机保存的种子信息，不用重新解析），左滑删除，右上角可清空。
 struct MagnetHistoryView: View {
-    @EnvironmentObject private var appState: AppState
     @ObservedObject private var history = MagnetHistoryStore.shared
 
-    @State private var playLaunch: MagnetLaunch?
+    @State private var playLaunch: MagnetPlaybackRequest?
     @State private var confirmClear = false
 
     var body: some View {
@@ -21,7 +21,7 @@ struct MagnetHistoryView: View {
                 List {
                     ForEach(history.items) { item in
                         Button {
-                            playLaunch = MagnetLaunch(value: item.magnet)
+                            playLaunch = MagnetPlaybackRequest(magnet: item.magnet, title: item.name)
                         } label: {
                             MagnetHistoryRow(item: item)
                         }
@@ -39,7 +39,7 @@ struct MagnetHistoryView: View {
                         }
                         .contextMenu {
                             Button {
-                                playLaunch = MagnetLaunch(value: item.magnet)
+                                playLaunch = MagnetPlaybackRequest(magnet: item.magnet, title: item.name)
                             } label: {
                                 Label(item.lastProgress == nil ? "播放" : "续播", systemImage: AppIcon.play.name)
                             }
@@ -83,10 +83,7 @@ struct MagnetHistoryView: View {
         } message: {
             Text("只删除记录和观看进度，不影响 115 网盘里的文件。")
         }
-        .sheet(item: $playLaunch) { launch in
-            NavigationStack { MagnetPlayerView(initialMagnet: launch.value, closesAfterPlayback: true) }
-                .environmentObject(appState)
-        }
+        .magnetPlayer(item: $playLaunch)
         .designScreen("magnet-history")
     }
 

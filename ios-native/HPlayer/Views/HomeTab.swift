@@ -38,6 +38,8 @@ struct HomeTab: View {
     @State private var showCloudBrowser = false
     @State private var matching: MatchRequest?
     @State private var magnetLaunch: MagnetLaunch?
+    /// 继续观看里的磁力记录：直接打开播放窗口续播
+    @State private var magnetPlay: MagnetPlaybackRequest?
     /// 首页和片库共用的分组结果：HomeView 在后台算好（先等封面缓存恢复完，第一屏直接带封面），
     /// 匹配、扫描期间界面不会被整页重算拖住。见 LibrarySnapshotStore。
     @EnvironmentObject private var librarySnapshots: LibrarySnapshotStore
@@ -167,6 +169,7 @@ struct HomeTab: View {
                 }
             })
         }
+        .magnetPlayer(item: $magnetPlay)
         .sheet(item: $magnetLaunch) { launch in
             NavigationStack {
                 MagnetPlayerView(initialMagnet: launch.value)
@@ -462,7 +465,7 @@ struct HomeTab: View {
                 playError = "找不到这个视频，可能已经被删除。"
             }
         case .magnet(let item):
-            magnetLaunch = MagnetLaunch(value: item.magnet)
+            magnetPlay = MagnetPlaybackRequest(magnet: item.magnet, title: item.name)
         }
     }
 

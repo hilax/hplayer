@@ -500,8 +500,9 @@ struct MagnetDetailView: View {
     @State private var isLoading = true
     @State private var errorText: String?
     @State private var copiedMagnetID: String?
-    /// 点了播放：播放页盖在详情页上面，关掉后仍停留在这一页。
-    @State private var playLaunch: MagnetLaunch?
+    /// 点了播放：直接打开播放窗口，解析进度在窗口里显示；关掉后仍停留在这一页。
+    @State private var playLaunch: MagnetPlaybackRequest?
+    @ObservedObject private var relay = MagnetRelayCenter.shared
     @State private var saveStates: [String: Offline115SaveState] = [:]
 
     var body: some View {
@@ -537,10 +538,7 @@ struct MagnetDetailView: View {
         }
         .navigationTitle(item.code)
         .navigationBarTitleDisplayMode(.inline)
-        .sheet(item: $playLaunch) { launch in
-            NavigationStack { MagnetPlayerView(initialMagnet: launch.value, closesAfterPlayback: true) }
-                .environmentObject(appState)
-        }
+        .magnetPlayer(item: $playLaunch)
         .task {
             // 从女优页返回时页面会再次出现，已经取到的磁力不重新拉取。
             guard magnets.isEmpty, stars.isEmpty, errorText == nil else { return }
@@ -656,10 +654,14 @@ struct MagnetDetailView: View {
                         MagnetTorrentCard(
                             torrent: torrent,
                             highlighted: index == 0,
-                            playTitle: cloudRelay ? "115 云下载播放" : "磁力播放",
+                            playTitle: playTitle(for: torrent),
                             copied: copiedMagnetID == torrent.id,
                             saveState: saveStates[torrent.id] ?? .idle,
-                            onPlay: { playLaunch = MagnetLaunch(value: torrent.magnetURL) },
+                            onPlay: {
+                                playLaunch = MagnetPlaybackRequest(magnet: torrent.magnetURL,
+                                                                   title: item.code.isEmpty ? item.title : item.code,
+                                                                   coverURL: item.coverURL)
+                            },
                             onSave: { save(torrent) },
                             onCopy: { copy(torrent) }
                         )
@@ -667,6 +669,14 @@ struct MagnetDetailView: View {
                 }
             }
         }
+    }
+
+    /// 后台已经在 115 准备好：直接「播放」；还在等：「115 下载中」；否则按解析方式
+    private func playTitle(for torrent: MagnetTorrentItem) -> String {
+        let hash = MagnetLink.parse(torrent.magnetURL)?.infoHash
+        if relay.isReady(hash) { return "播放" }
+        if relay.isWorking(hash) { return "115 下载中" }
+        return cloudRelay ? "115 云下载播放" : "磁力播放"
     }
 
     private func save(_ torrent: MagnetTorrentItem) {

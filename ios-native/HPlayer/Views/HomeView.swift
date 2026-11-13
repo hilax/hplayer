@@ -17,6 +17,7 @@ struct HomeView: View {
     @StateObject private var librarySnapshots = LibrarySnapshotStore()
     /// 标记过「不在精选中显示」的影片，变化时精选要重新挑。
     @ObservedObject private var featuredStore = FeaturedStore.shared
+    @ObservedObject private var magnetRelay = MagnetRelayCenter.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
     /// 当前标签（系统原生 TabView 的选中项）。
@@ -260,6 +261,8 @@ struct HomeView: View {
             }
         }
         .background(Theme.pageBackground.ignoresSafeArea())
+        // 磁力「后台继续」：115 准备好时在任何页面都提示一句
+        .toast($magnetRelay.message)
     }
 
     /// 整个原生标签容器属于同一个根页面。二级页盖住整个容器，返回时连同胶囊栏一起回来。

@@ -2,7 +2,7 @@ import SwiftUI
 
 struct RootView: View {
     @EnvironmentObject private var appState: AppState
-    @State private var incomingMagnet: IncomingMagnet?
+    @State private var incomingMagnet: MagnetPlaybackRequest?
 
     var body: some View {
         HomeView(appState: appState)
@@ -12,16 +12,9 @@ struct RootView: View {
             }
             .onOpenURL { url in
                 guard url.scheme?.lowercased() == "magnet" else { return }
-                incomingMagnet = IncomingMagnet(value: url.absoluteString)
+                incomingMagnet = MagnetPlaybackRequest(magnet: url.absoluteString)
             }
-            .sheet(item: $incomingMagnet) { magnet in
-                NavigationStack { MagnetPlayerView(initialMagnet: magnet.value) }
-                    .environmentObject(appState)
-            }
+            // 从别的 App 打开的磁力链接：直接进播放窗口，解析进度显示在窗口里
+            .magnetPlayer(item: $incomingMagnet)
     }
-}
-
-private struct IncomingMagnet: Identifiable {
-    let id = UUID()
-    let value: String
 }
