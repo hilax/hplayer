@@ -30,7 +30,8 @@ final class AnimeNavigationUITests: XCTestCase {
         let posterFrame = poster.frame
         poster.tap()
 
-        let loading = app.progressIndicators["anime.loading"]
+        // iOS 将旋转加载指示器暴露为 ActivityIndicator，而非 ProgressIndicator。
+        let loading = app.descendants(matching: .any)["anime.loading"].firstMatch
         XCTAssertTrue(loading.waitForExistence(timeout: 3), "Exercise a real loading-to-content transition")
         let navigationBar = app.navigationBars.firstMatch
         XCTAssertTrue(navigationBar.waitForExistence(timeout: 3), "The back button is available while loading")
