@@ -122,6 +122,11 @@ struct MagnetSearchView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(isTabRoot ? .hidden : .automatic, for: .navigationBar)
         .magnetPlayer(item: $playLaunch)
+        // 链接面板上点了 115 播放：准备好后直接打开播放器
+        .magnetCloudReady(hashes: detectedLink.map { [$0.infoHash] } ?? []) { _ in
+            guard let link = detectedLink else { return }
+            playLaunch = MagnetPlaybackRequest(magnet: link.uri, title: link.displayName ?? "", mode: .cloud)
+        }
         .animation(Motion.smooth, value: detectedLink != nil)
         .animation(Motion.smooth, value: inSearchMode)
         .task { loadIfNeeded(selectedCategory) }
@@ -180,7 +185,7 @@ struct MagnetSearchView: View {
             VStack(alignment: .leading, spacing: 0) {
                 Color.clear.frame(height: insets.top)
                 if let link = detectedLink {
-                    MagnetLinkPanel(link: link) { playLaunch = MagnetPlaybackRequest(magnet: link.uri, title: link.displayName ?? "") }
+                    MagnetLinkPanel(link: link) { mode in playLaunch = MagnetPlaybackRequest(magnet: link.uri, title: link.displayName ?? "", mode: mode) }
                         .padding(.horizontal, Theme.contentInset)
                         .padding(.top, 8)
                 } else if isSearching {

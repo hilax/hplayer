@@ -373,21 +373,14 @@ struct StudioMoviesView: View {
 
 // MARK: - 磁力详情页 (MagnetDetailView，带女优下钻)
 
-/// 一条磁力资源：标签、大小、日期、文件名，以及「播放」「复制」两个操作。
+/// 一条磁力资源：标签、大小、日期、文件名，以及「115 播放」「磁力播放」「复制」。
+/// 点了 115 播放，进度就显示在这张卡片上。
 private struct MagnetTorrentCard: View {
     let torrent: MagnetTorrentItem
     let highlighted: Bool
-    let playTitle: String
-    let copied: Bool
-    var saveState: Offline115SaveState = .idle
-    let onPlay: () -> Void
-    var onSave: () -> Void = {}
-    let onCopy: () -> Void
-
-    private var saveFailed: Bool {
-        if case .failed = saveState { return true }
-        return false
-    }
+    /// 115 准备好时提示里用的名字
+    let title: String
+    let onPlay: (MagnetPlaybackRequest.Mode) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -432,54 +425,7 @@ private struct MagnetTorrentCard: View {
                 .lineLimit(2)
                 .multilineTextAlignment(.leading)
 
-            HStack(spacing: 8) {
-                Button(action: onPlay) {
-                    HStack(spacing: 8) {
-                        Image(systemName: AppIcon.play.name)
-                            .font(.scaled(12))
-                        Text(playTitle)
-                    }
-                }
-                .buttonStyle(MagnetActionStyle(prominent: true))
-                .accessibilityIdentifier("magnet.play")
-
-                Button(action: onSave) {
-                    HStack(spacing: 6) {
-                        if saveState == .saving {
-                            ProgressView().controlSize(.mini)
-                        } else {
-                            Image(systemName: saveState == .saved ? AppIcon.check.name : AppIcon.cloudDownload.name)
-                                .font(.scaled(13))
-                        }
-                        Text(saveState.title)
-                            .lineLimit(1)
-                    }
-                    .foregroundStyle(saveState == .saved ? Theme.success : Color.primary)
-                }
-                .buttonStyle(MagnetActionStyle(prominent: false))
-                .frame(width: 112)
-                .disabled(saveState == .saving || saveState == .saved)
-                .successPop(saveState == .saved, particle: .check, tint: Theme.success)
-                .failureShake(saveFailed)
-                .accessibilityIdentifier("magnet.save115")
-
-                Button(action: onCopy) {
-                    Image(systemName: copied ? AppIcon.check.name : AppIcon.copy.name)
-                        .font(.scaled(14))
-                        .foregroundStyle(copied ? Theme.accent : Color.primary)
-                }
-                .buttonStyle(MagnetActionStyle(prominent: false))
-                .frame(width: 52)
-                .successPop(copied)
-                .accessibilityLabel(copied ? "已复制" : "复制磁力")
-                .accessibilityIdentifier("magnet.copy")
-            }
-            if case .failed(let message) = saveState {
-                Text(message)
-                    .font(.caption)
-                    .foregroundStyle(Theme.danger)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            MagnetPlayActions(magnet: torrent.magnetURL, title: title, onPlay: onPlay)
         }
         .padding(14)
         .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
@@ -494,16 +440,12 @@ struct MagnetDetailView: View {
     let item: MagnetSearchItem
 
     @EnvironmentObject private var appState: AppState
-    @AppStorage("hplayer.magnet.cloudRelay") private var cloudRelay = true
     @State private var magnets: [MagnetTorrentItem] = []
     @State private var stars: [MagnetStarItem] = []
     @State private var isLoading = true
     @State private var errorText: String?
-    @State private var copiedMagnetID: String?
     /// 点了播放：直接打开播放窗口，解析进度在窗口里显示；关掉后仍停留在这一页。
     @State private var playLaunch: MagnetPlaybackRequest?
-    @ObservedObject private var relay = MagnetRelayCenter.shared
-    @State private var saveStates: [String: Offline115SaveState] = [:]
 
     var body: some View {
         ScrollView {
@@ -539,6 +481,11 @@ struct MagnetDetailView: View {
         .navigationTitle(item.code)
         .navigationBarTitleDisplayMode(.inline)
         .magnetPlayer(item: $playLaunch)
+        // 卡片上的 115 进度走完：直接打开播放器
+        .magnetCloudReady(hashes: magnets.compactMap { MagnetLink.parse($0.magnetURL)?.infoHash }) { hash in
+            guard let torrent = magnets.first(where: { MagnetLink.parse($0.magnetURL)?.infoHash.lowercased() == hash }) else { return }
+            play(torrent, mode: .cloud)
+        }
         .task {
             // 从女优页返回时页面会再次出现，已经取到的磁力不重新拉取。
             guard magnets.isEmpty, stars.isEmpty, errorText == nil else { return }
@@ -654,16 +601,8 @@ struct MagnetDetailView: View {
                         MagnetTorrentCard(
                             torrent: torrent,
                             highlighted: index == 0,
-                            playTitle: playTitle(for: torrent),
-                            copied: copiedMagnetID == torrent.id,
-                            saveState: saveStates[torrent.id] ?? .idle,
-                            onPlay: {
-                                playLaunch = MagnetPlaybackRequest(magnet: torrent.magnetURL,
-                                                                   title: item.code.isEmpty ? item.title : item.code,
-                                                                   coverURL: item.coverURL)
-                            },
-                            onSave: { save(torrent) },
-                            onCopy: { copy(torrent) }
+                            title: displayCode,
+                            onPlay: { mode in play(torrent, mode: mode) }
                         )
                     }
                 }
@@ -671,37 +610,11 @@ struct MagnetDetailView: View {
         }
     }
 
-    /// 后台已经在 115 准备好：直接「播放」；还在等：「115 下载中」；否则按解析方式
-    private func playTitle(for torrent: MagnetTorrentItem) -> String {
-        let hash = MagnetLink.parse(torrent.magnetURL)?.infoHash
-        if relay.isReady(hash) { return "播放" }
-        if relay.isWorking(hash) { return "115 下载中" }
-        return cloudRelay ? "115 云下载播放" : "磁力播放"
-    }
+    private var displayCode: String { item.code.isEmpty ? item.title : item.code }
 
-    private func save(_ torrent: MagnetTorrentItem) {
-        Haptics.tap()
-        let id = torrent.id
-        saveStates[id] = .saving
-        Task { @MainActor in
-            do {
-                _ = try await Offline115Saver.save([torrent.magnetURL], appState: appState)
-                Haptics.success()
-                saveStates[id] = .saved
-            } catch {
-                Haptics.warning()
-                saveStates[id] = .failed((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
-            }
-        }
-    }
-
-    private func copy(_ torrent: MagnetTorrentItem) {
-        UIPasteboard.general.string = torrent.magnetURL
-        Haptics.success()
-        copiedMagnetID = torrent.id
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-            if copiedMagnetID == torrent.id { copiedMagnetID = nil }
-        }
+    private func play(_ torrent: MagnetTorrentItem, mode: MagnetPlaybackRequest.Mode) {
+        playLaunch = MagnetPlaybackRequest(magnet: torrent.magnetURL, title: displayCode,
+                                           coverURL: item.coverURL, mode: mode)
     }
 
     @MainActor

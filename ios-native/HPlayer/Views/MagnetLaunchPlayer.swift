@@ -3,10 +3,14 @@ import UIKit
 
 /// 点「播放」时要打开的磁力资源。封面用来做播放窗口里等待时的模糊背景。
 struct MagnetPlaybackRequest: Identifiable {
+    /// 播放方式：115（离线后用 115 播放）还是 BT 边下边播；nil 表示按「使用 115 解析」开关
+    enum Mode { case cloud, bt }
+
     let id = UUID()
     let magnet: String
     var title: String = ""
     var coverURL: URL? = nil
+    var mode: Mode? = nil
 
     var infoHash: String? { MagnetLink.parse(magnet)?.infoHash }
 }
@@ -40,7 +44,8 @@ struct MagnetLaunchPlayer: View {
     init(request: MagnetPlaybackRequest) {
         self.request = request
         // 「后台继续」过的资源：接手那份控制器，不重新提交离线任务
-        let hash = request.infoHash
+        // 选了 BT 边下边播时不接手 115 那份（卡片上的 115 进度照常继续）
+        let hash = request.mode == .bt ? nil : request.infoHash
         _controller = StateObject(wrappedValue: MagnetRelayCenter.shared.take(infoHash: hash) ?? MagnetController())
     }
 
@@ -65,13 +70,23 @@ struct MagnetLaunchPlayer: View {
         .task {
             guard !InterfacePreview.active else { return }
             controller.activate()
-            controller.configureCloud(client: appState.directClient(), enabled: cloudRelay)
+            let useCloud: Bool
+            switch request.mode {
+            case .cloud: useCloud = true
+            case .bt: useCloud = false
+            case nil: useCloud = cloudRelay
+            }
+            controller.configureCloud(client: appState.directClient(), enabled: useCloud)
             if let link = MagnetLink.parse(request.magnet) {
                 controller.open(link)
             }
             autoPlayIfReady()
         }
         .onChange(of: controller.phase) { _ in autoPlayIfReady() }
+        // 115 离线成功：记下来，资源卡片下次直接显示「播放」
+        .onChange(of: controller.cloud == .ready) { ready in
+            if ready { MagnetRelayCenter.shared.markDownloaded(controller.link?.infoHash) }
+        }
         .onChange(of: controller.catalog != nil) { _ in autoPlayIfReady() }
         .onChange(of: controller.playerVisible) { visible in
             if visible { watchedBT = true; return }
