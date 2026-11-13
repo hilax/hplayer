@@ -120,24 +120,33 @@ struct AnimeDetailView: View {
         GeometryReader { proxy in
             let minY = proxy.frame(in: .named(Self.scrollSpace)).minY
             let stretch = max(minY, 0)
+            let height = backdropHeight + stretch
 
-            ZStack(alignment: .bottom) {
+            ZStack {
+                Theme.pageBackground
+
                 ArtworkView(urlString: detail.safePicURLString, title: detail.name, maxPixel: ArtworkSize.hero, loading: .clear, drawsFallback: false)
                     .scaledToFill()
-                    .frame(width: proxy.size.width, height: backdropHeight + stretch)
+                    .frame(width: proxy.size.width, height: height)
                     .clipped()
-
-                LinearGradient(
-                    stops: [
-                        .init(color: Theme.pageBackground.opacity(0), location: 0.3),
-                        .init(color: Theme.pageBackground.opacity(0.85), location: 0.8),
-                        .init(color: Theme.pageBackground, location: 1.0),
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
+                    // 图片的加载缩放也必须经过同一个蒙版；底部留 2pt 全透明区，
+                    // 避免合成、裁剪边界的像素取样露出一条原图色边。
+                    .mask {
+                        LinearGradient(
+                            stops: [
+                                .init(color: .black, location: 0.3),
+                                .init(color: .black.opacity(0.15), location: 0.8),
+                                .init(color: .clear, location: 1 - 2 / height),
+                                .init(color: .clear, location: 1),
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    }
             }
-            .frame(width: proxy.size.width, height: backdropHeight + stretch)
+            .frame(width: proxy.size.width, height: height)
+            .compositingGroup()
+            .clipped()
             .offset(y: -stretch)
         }
         .frame(height: backdropHeight)
