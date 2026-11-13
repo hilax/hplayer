@@ -272,10 +272,11 @@ func playbackTimeText(_ value: Double) -> String {
 // MARK: - 海报与卡片
 
 extension View {
-    /// 压在图片上的小标签：近黑的半透明底、5pt 圆角，白字或金字在任何画面上都清楚。
+    /// 压在图片上的小标签：暖黑半透明底、3pt 圆角，纸色字或铜金字在任何画面上都清楚。
+    /// 新代码直接用 `TagBadge(style: .onArtwork)`。
     func glassBadge() -> some View {
-        self.background(Color(uiColor: UIColor(hex: 0x07080B, alpha: 0.72)),
-                        in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+        self.background(Theme.badgeScrim,
+                        in: RoundedRectangle(cornerRadius: Theme.Radius.badge, style: .continuous))
     }
 }
 
@@ -283,12 +284,7 @@ struct RatingBadge: View {
     let rating: String
 
     var body: some View {
-        Text(rating)
-            .font(.system(size: 10, weight: .bold).monospacedDigit())
-            .foregroundStyle(Theme.rating)
-            .padding(.horizontal, 6)
-            .frame(height: 18)
-            .glassBadge()
+        TagBadge(text: rating, style: .onArtwork, foreground: Theme.ratingOnArtwork)
             .accessibilityElement(children: .combine)
             .accessibilityLabel("评分 \(rating)")
     }
@@ -299,9 +295,9 @@ struct SourceBadge: View {
 
     var body: some View {
         Image(systemName: isCloud ? AppIcon.cloud.name : AppIcon.device.name)
-            .font(.system(size: 9, weight: .semibold))
-            .foregroundStyle(.white)
-            .frame(width: 20, height: 18)
+            .font(Theme.Typo.badge)
+            .foregroundStyle(Theme.paper)
+            .frame(width: 22, height: 18)
             .glassBadge()
             .accessibilityHidden(true)
     }
@@ -311,13 +307,7 @@ struct EpisodeCountBadge: View {
     let text: String
 
     var body: some View {
-        Text(text)
-            .font(.system(size: 10, weight: .medium))
-            .foregroundStyle(.white)
-            .lineLimit(1)
-            .padding(.horizontal, 6)
-            .frame(height: 18)
-            .glassBadge()
+        TagBadge(text: text, style: .onArtwork)
     }
 }
 
@@ -654,8 +644,8 @@ struct PosterButtonStyle: ButtonStyle {
             // 整张卡片（含封面和标题之间的空隙）就是点击区域，且不会超出卡片：
             // 铺满裁剪的图片伸出去的部分不能抢相邻卡片的点击。
             .contentShape(Rectangle())
-            .scaleEffect(!reduceMotion && configuration.isPressed ? 0.95 : 1)
-            .opacity(configuration.isPressed ? 0.9 : 1)
+            .scaleEffect(!reduceMotion && configuration.isPressed ? 0.97 : 1)
+            .opacity(configuration.isPressed ? 0.85 : 1)
             .animation(reduceMotion ? nil : Motion.snappy, value: configuration.isPressed)
     }
 }

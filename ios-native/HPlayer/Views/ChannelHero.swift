@@ -193,14 +193,14 @@ struct ChannelSearchField: View {
                     Image(systemName: AppIcon.search.name)
                         .font(.system(size: 15, weight: Theme.iconWeight))
                     Text(placeholder)
-                        .font(.system(size: 14))
+                        .font(Theme.Typo.row)
                         .lineLimit(1)
                     Spacer(minLength: 0)
                 }
-                .foregroundStyle(Theme.textSecondary)
-                .padding(.leading, 14)
-                .padding(.trailing, onFilter == nil ? 14 : 0)
-                .frame(maxWidth: .infinity, minHeight: 38)
+                .foregroundStyle(Theme.textTertiary)
+                .padding(.leading, Theme.Space.md + 2)
+                .padding(.trailing, onFilter == nil ? Theme.Space.md + 2 : 0)
+                .frame(maxWidth: .infinity, minHeight: 40)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.pressable(scale: 0.98))
@@ -209,8 +209,8 @@ struct ChannelSearchField: View {
 
             if let onFilter {
                 Rectangle()
-                    .fill(Theme.textTertiary.opacity(0.4))
-                    .frame(width: 1, height: 14)
+                    .fill(Theme.rule)
+                    .frame(width: Theme.Stroke.rule, height: 16)
                     .accessibilityHidden(true)
 
                 Button {
@@ -218,10 +218,10 @@ struct ChannelSearchField: View {
                     onFilter()
                 } label: {
                     Text("筛选")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(Theme.Typo.meta.weight(.semibold))
                         .foregroundStyle(Theme.textPrimary)
-                        .padding(.horizontal, 14)
-                        .frame(minHeight: 38)
+                        .padding(.horizontal, Theme.Space.md + 2)
+                        .frame(minHeight: 40)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.pressable(scale: 0.94))
@@ -229,7 +229,7 @@ struct ChannelSearchField: View {
                 .accessibilityIdentifier(filterIdentifier)
             }
         }
-        .background(Theme.track, in: Capsule())
+        .fieldChrome()
     }
 }
 

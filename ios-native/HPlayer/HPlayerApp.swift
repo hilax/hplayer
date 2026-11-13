@@ -7,6 +7,8 @@ struct HPlayerApp: App {
     @AppStorage(AppearanceMode.storageKey) private var appearance: AppearanceMode = .system
 
     init() {
+        // 标题用的宋体是按需下载的系统字体：已下载过就立即激活，没有就后台下载，期间标题用系统衬线体
+        EditorialFont.prepare()
         #if DEBUG
         if ProcessInfo.processInfo.environment["HPLAYER_RESET_AUTOMATCH_TEST"] == "1" {
             UserDefaults.standard.removeObject(forKey: CoverMatchingSettings.automaticKey)

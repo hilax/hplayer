@@ -3,20 +3,10 @@ import UIKit
 
 // MARK: - 危险操作的主按钮
 
-/// 删除这类危险操作的主按钮：红色胶囊 + 白字。
+/// 删除这类危险操作的主按钮：红色实心 + 白字（8pt 圆角，和其他按钮同一套状态）。
 struct DestructiveActionStyle: ButtonStyle {
-    @Environment(\.isEnabled) private var isEnabled
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 16, weight: .semibold))
-            .foregroundStyle(Color.white)
-            .frame(maxWidth: .infinity, minHeight: 50)
-            .background(Theme.danger, in: Capsule())
-            .scaleEffect(!reduceMotion && configuration.isPressed ? 0.97 : 1)
-            .opacity(isEnabled ? (configuration.isPressed ? 0.88 : 1) : 0.4)
-            .animation(reduceMotion ? nil : Motion.snappy, value: configuration.isPressed)
+        ActionButtonBody(configuration: configuration, kind: .destructive, minHeight: 50)
     }
 }
 
@@ -31,14 +21,13 @@ private struct ToastModifier: ViewModifier {
             .overlay(alignment: .bottom) {
                 if let message = text {
                     Text(message)
-                        .font(.system(size: 14, weight: .medium))
+                        .font(Theme.Typo.row.weight(.medium))
                         .foregroundStyle(Theme.textPrimary)
                         .multilineTextAlignment(.center)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 11)
-                        .background(Theme.surfaceHigh, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                        .shadow(color: Color.black.opacity(0.25), radius: 12, x: 0, y: 6)
-                        .padding(.horizontal, 24)
+                        .padding(.horizontal, Theme.Space.lg)
+                        .padding(.vertical, Theme.Space.md)
+                        .floatingSurface()
+                        .padding(.horizontal, Theme.Space.xl)
                         .padding(.bottom, 96)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                         .allowsHitTesting(false)
@@ -67,15 +56,14 @@ struct OperationOverlay: View {
 
     var body: some View {
         ZStack {
-            Color.black.opacity(0.35).ignoresSafeArea()
-            HStack(spacing: 12) {
-                ProgressView()
-                Text(text).font(.system(size: 14, weight: .medium))
+            Theme.scrim.ignoresSafeArea()
+            HStack(spacing: Theme.Space.md) {
+                ProgressView().tint(Theme.textSecondary)
+                Text(text).font(Theme.Typo.row.weight(.medium)).foregroundStyle(Theme.textPrimary)
             }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 16)
-            .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
-            .overlay { RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous).strokeBorder(Theme.hairline, lineWidth: 0.5) }
+            .padding(.horizontal, Theme.Space.page)
+            .padding(.vertical, Theme.Space.lg)
+            .floatingSurface()
         }
         .transition(.opacity)
         .accessibilityElement(children: .combine)
@@ -124,9 +112,7 @@ struct FileActionDock: View {
         .padding(.top, 10)
         .padding(.bottom, 6)
         .padding(.horizontal, 4)
-        .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .overlay { RoundedRectangle(cornerRadius: 24, style: .continuous).strokeBorder(Theme.hairline, lineWidth: 0.5) }
-        .shadow(color: Color.black.opacity(0.28), radius: 18, x: 0, y: 8)
+        .floatingSurface(cornerRadius: Theme.Radius.sheet)
         .padding(.horizontal, 12)
         .padding(.bottom, 8)
         .accessibilityElement(children: .contain)

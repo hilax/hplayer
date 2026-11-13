@@ -23,7 +23,12 @@ struct CountSegmentedControl: View {
             }
         }
         .padding(3)
-        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        // 外圆角 = 选中块圆角 + 内边距
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.chip + 3, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: Theme.Radius.chip + 3, style: .continuous)
+                .strokeBorder(Theme.hairline, lineWidth: Theme.Stroke.hairline)
+        }
     }
 
     private func segmentButton(_ segment: CountSegment) -> some View {
@@ -36,14 +41,14 @@ struct CountSegmentedControl: View {
             HStack(spacing: 4) {
                 Text(segment.title)
                 Text(String(segment.count))
-                    .font(.system(size: 11))
-                    .opacity(0.8)
+                    .font(Theme.Typo.caption.monospacedDigit())
+                    .foregroundStyle(selected ? Theme.textSecondary : Theme.textTertiary)
             }
-            .font(.system(size: 14, weight: selected ? .semibold : .medium))
-            .foregroundStyle(selected ? Theme.accent : Theme.textSecondary)
+            .font(Theme.Typo.row.weight(selected ? .semibold : .regular))
+            .foregroundStyle(selected ? Theme.textPrimary : Theme.textSecondary)
             .frame(maxWidth: .infinity, minHeight: 36)
             .background(selected ? Theme.surfaceHigh : Color.clear,
-                        in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        in: RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -55,7 +60,7 @@ struct CountSegmentedControl: View {
 
 // MARK: - 细进度条
 
-/// 灰色轨道上的金色进度；暂停时变成灰色。
+/// 线色轨道上的朱砂进度（4pt）；暂停时变成三级文字的灰。
 struct ThinProgressBar: View {
     let fraction: Double
     var paused = false
@@ -72,7 +77,7 @@ struct ThinProgressBar: View {
                 fill(width: fillWidth(in: proxy.size.width))
             }
         }
-        .frame(height: 6)
+        .frame(height: 4)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("进度")
         .accessibilityValue("\(Int((clamped * 100).rounded()))%")
@@ -80,7 +85,7 @@ struct ThinProgressBar: View {
 
     private func fillWidth(in total: CGFloat) -> CGFloat {
         guard clamped > 0 else { return 0 }
-        return max(6, total * CGFloat(clamped))
+        return max(4, total * CGFloat(clamped))
     }
 
     @ViewBuilder
@@ -97,46 +102,38 @@ struct ThinProgressBar: View {
 
 // MARK: - 提示条
 
-/// 页面顶部的金色提示条：一个小图标加一段说明。
+/// 页面顶部的提示条：纸面底、细边，朱砂小图标加一段次要文字。
 struct ManagementBanner: View {
     let text: String
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .top, spacing: Theme.Space.md) {
             Image(systemName: AppIcon.info.name)
                 .font(.system(size: 14, weight: Theme.iconWeight))
+                .foregroundStyle(Theme.accent)
                 .padding(.top, 1)
             Text(text)
-                .font(.system(size: 12.5))
+                .font(Theme.Typo.meta)
+                .foregroundStyle(Theme.textSecondary)
                 .lineSpacing(3)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }
-        .foregroundStyle(Theme.accent)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 11)
-        .background(Theme.tileTint, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(.horizontal, Theme.Space.lg)
+        .padding(.vertical, Theme.Space.md)
+        .surfaceCard()
         .accessibilityElement(children: .combine)
     }
 }
 
 // MARK: - 页面底部的按钮
 
-/// 页面底部并排的两个胶囊按钮：次要的是深灰底，主要的是金色。高 50，比弹层里的按钮略高一点。
+/// 页面底部并排的两个按钮：次要的是纸面底加细线，主要的是墨 / 纸实心。高 50，比弹层里的按钮略高一点。
 struct FooterButtonStyle: ButtonStyle {
     var prominent = false
-    @Environment(\.isEnabled) private var isEnabled
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 15, weight: prominent ? .semibold : .medium))
-            .foregroundStyle(prominent ? Theme.onPrimary : Theme.textPrimary)
-            .frame(maxWidth: .infinity, minHeight: 50)
-            .background(prominent ? Theme.primaryAction : Theme.surfaceHigh, in: Capsule())
-            .scaleEffect(!reduceMotion && configuration.isPressed ? 0.97 : 1)
-            .opacity(isEnabled ? (configuration.isPressed ? 0.88 : 1) : 0.4)
-            .animation(reduceMotion ? nil : Motion.snappy, value: configuration.isPressed)
+        ActionButtonBody(configuration: configuration, kind: prominent ? .primary : .secondary, minHeight: 50)
     }
 }
 

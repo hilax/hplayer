@@ -433,7 +433,8 @@ struct MagnetSearchField: View {
                 .foregroundStyle(Theme.textSecondary)
 
             TextField("番号、女优，或粘贴磁力链接", text: $text)
-                .font(.system(size: 14))
+                .font(Theme.Typo.row)
+                .tint(Theme.accent)
                 .submitLabel(.search)
                 .focused($focused)
                 .autocorrectionDisabled()
@@ -458,21 +459,17 @@ struct MagnetSearchField: View {
                     Task { @MainActor in text = first.trimmingCharacters(in: .whitespacesAndNewlines) }
                 }
                 .labelStyle(.iconOnly)
-                .buttonBorderShape(.capsule)
+                .buttonBorderShape(.roundedRectangle(radius: Theme.Radius.chip))
                 .tint(Theme.surfaceHigh)
                 .foregroundStyle(Theme.textPrimary)
                 .controlSize(.mini)
                 .accessibilityIdentifier("magnet.paste")
             }
         }
-        .padding(.leading, 14)
+        .padding(.leading, Theme.Space.md + 2)
         .padding(.trailing, text.isEmpty ? 6 : 0)
-        .frame(minHeight: 38)
-        .background(Theme.track, in: Capsule())
-        .overlay {
-            Capsule().strokeBorder(Theme.accent.opacity(focused ? 0.6 : 0), lineWidth: 1)
-        }
-        .animation(Motion.quick, value: focused)
+        .frame(minHeight: 40)
+        .fieldChrome(focused: focused)
     }
 }
 

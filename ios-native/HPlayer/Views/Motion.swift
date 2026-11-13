@@ -48,17 +48,18 @@ enum Haptics {
 
 // MARK: - 按压反馈
 
-/// 全应用的按钮按压手感：按下略微缩小并压暗，松手弹回。
-/// 海报、行、胶囊按钮都用它，所以手感一致。
+/// 全应用的按钮按压手感：按下略微缩小并变淡，松手弹回；不可用时整体退成 45% 且不响应。
+/// 海报、行、图标按钮都用它，所以手感一致。缩放只改绘制、不改布局，周围的内容不会跟着动。
 struct PressableStyle: ButtonStyle {
-    var scale: CGFloat = 0.96
+    var scale: CGFloat = 0.97
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.isEnabled) private var isEnabled
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .contentShape(Rectangle())
             .scaleEffect(!reduceMotion && configuration.isPressed ? scale : 1)
-            .opacity(configuration.isPressed ? 0.86 : 1)
+            .opacity(isEnabled ? (configuration.isPressed ? 0.78 : 1) : 0.45)
             .animation(reduceMotion ? nil : Motion.snappy, value: configuration.isPressed)
     }
 }
@@ -198,7 +199,7 @@ extension View {
 /// 圆环进度：从 0 转到目标值，中间放任意内容。媒体库管理的扫描进度用它。
 struct ProgressRing<Center: View>: View {
     let value: Double
-    var lineWidth: CGFloat = 7
+    var lineWidth: CGFloat = 4
     @ViewBuilder var center: () -> Center
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -207,7 +208,7 @@ struct ProgressRing<Center: View>: View {
             Circle().stroke(Theme.track, lineWidth: lineWidth)
             Circle()
                 .trim(from: 0, to: CGFloat(min(max(value, 0), 1)))
-                .stroke(Theme.accentGradient, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+                .stroke(Theme.accent, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
                 .rotationEffect(.degrees(-90))
                 .animation(reduceMotion ? nil : Motion.smooth, value: value)
             center()
@@ -217,7 +218,7 @@ struct ProgressRing<Center: View>: View {
 
 // MARK: - 勾选标记
 
-/// 勾选圆圈：选中时金色实心 + 白勾弹出，取消时缩回。
+/// 勾选圆圈：选中时主操作色（墨 / 纸）实心 + 反色勾弹出，取消时缩回成一圈细线。
 struct CheckBadge: View {
     let selected: Bool
     var size: CGFloat = 24
@@ -226,7 +227,7 @@ struct CheckBadge: View {
     var body: some View {
         ZStack {
             Circle()
-                .strokeBorder(Theme.textTertiary, lineWidth: 1.5)
+                .strokeBorder(Theme.ruleStrong, lineWidth: 1.5)
                 .opacity(selected ? 0 : 1)
             Circle()
                 .fill(Theme.gold)

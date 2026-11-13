@@ -228,7 +228,7 @@ extension View {
     }
 }
 
-/// 圆角方块图标底：琥珀色淡底 + 琥珀色线框图标。列表行、工具卡、设置行都用它。
+/// 圆角方块图标底：极淡的墨色底 + 线框图标。工具卡、设置行用它。
 struct IconTile: View {
     let symbolName: String
     var size: CGFloat = 34
@@ -260,7 +260,7 @@ struct IconTile: View {
             switch self {
             case .accent: return Theme.tileTint
             case .neutral: return Theme.surfaceRaised
-            case .danger: return Theme.danger.opacity(0.14)
+            case .danger: return Theme.danger.opacity(0.12)
             }
         }
     }
@@ -270,7 +270,7 @@ struct IconTile: View {
             .font(.system(size: size * 0.5, weight: Theme.iconWeight))
             .foregroundStyle(tone.foreground)
             .frame(width: size, height: size)
-            .background(tone.background, in: RoundedRectangle(cornerRadius: size * 0.3, style: .continuous))
+            .background(tone.background, in: RoundedRectangle(cornerRadius: min(Theme.Radius.tile, size * 0.25), style: .continuous))
             .accessibilityHidden(true)
     }
 }
