@@ -351,15 +351,13 @@ struct PosterArtwork: View {
         }
         .frame(width: width, height: width * 1.5)
         .contentShape(Rectangle())
-        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous)
-                .strokeBorder(Theme.hairline, lineWidth: 0.5)
-        }
+        .coverEdge()
         .background {
-            // 阴影画在纯色形状上，滚动时不用对整张海报图重新取阴影
+            // 阴影画在纯色形状上，滚动时不用对整张海报图重新取阴影。
+            // 形状往里收 1pt、用中性色：原来是同样大小的纯黑底，圆角抗锯齿时会在封面边缘透出一圈黑边。
             RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous)
-                .fill(Color.black)
+                .fill(Theme.surfaceRaised)
+                .padding(1)
                 .shadow(color: Theme.shadow, radius: 10, x: 0, y: 6)
         }
     }
@@ -466,7 +464,7 @@ struct ContinueCard: View {
                         .frame(height: 3)
                     }
                 }
-                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
+                .coverEdge()
             VStack(alignment: .leading, spacing: 2) {
                 Text(entry.title).font(.system(size: 13, weight: .medium)).lineLimit(1)
                 Text(entry.subtitle).font(.system(size: 11)).secondaryTextStyle().lineLimit(1)

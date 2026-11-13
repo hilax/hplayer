@@ -86,23 +86,43 @@ struct MediaActionSheet: View {
     }
 }
 
+/// 演员卡：两部作品的海报并排，每张保持 2:3 不裁；只有一部作品时整张铺满。
+/// 边缘和货架海报同一套（coverEdge），标题字号与其他卡片一致。
 struct PerformerCollageCard: View {
     let group: PerformerGroup
     let width: CGFloat
+
+    private var covers: [HomeMediaItem] { Array(group.collectionItems.prefix(2)) }
+    /// 两张并排时每张的宽度；整体高度按它的 2:3 算
+    private var halfWidth: CGFloat { (width - 2) / 2 }
+    private var height: CGFloat { (halfWidth * 1.5).rounded() }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 2) {
-                ForEach(Array(group.collectionItems.prefix(2))) { item in
+                ForEach(covers) { item in
                     ArtworkView(urlString: item.posterURL, title: item.title)
-                        .scaledToFill().frame(width: (width - 2) / 2, height: width * 0.62)
-                        .clipped().allowsHitTesting(false)
+                        .scaledToFill()
+                        .frame(width: covers.count > 1 ? halfWidth : width, height: height)
+                        .clipped()
+                        .allowsHitTesting(false)
                 }
             }
-            .frame(width: width, height: width * 0.62)
-            .clipShape(RoundedRectangle(cornerRadius: 14))
-            Text(group.name).font(.subheadline.weight(.semibold)).foregroundStyle(.primary).lineLimit(1)
-            Text("\(group.collectionItems.count) 部作品").font(.caption).foregroundStyle(.secondary)
-        }.frame(width: width, alignment: .leading).contentShape(Rectangle())
+            .frame(width: width, height: height, alignment: .leading)
+            .coverEdge()
+            VStack(alignment: .leading, spacing: 2) {
+                Text(group.name)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Text("\(group.collectionItems.count) 部作品")
+                    .font(.system(size: 12))
+                    .secondaryTextStyle()
+                    .lineLimit(1)
+            }
+        }
+        .frame(width: width, alignment: .leading)
+        .contentShape(Rectangle())
     }
 }
 

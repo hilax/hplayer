@@ -384,11 +384,7 @@ struct LibraryWideCard: View {
             VStack(alignment: .leading, spacing: 6) {
                 artwork
                     .frame(width: width, height: height)
-                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous)
-                            .strokeBorder(Theme.hairline, lineWidth: 0.5)
-                    }
+                    .coverEdge()
                     .overlay(alignment: .topTrailing) {
                         if !item.rating.isEmpty { RatingBadge(rating: item.rating).padding(6) }
                     }

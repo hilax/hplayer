@@ -243,6 +243,16 @@ extension View {
             .tint(Theme.accent)
     }
 
+    /// 封面统一的边缘：底下垫一层中性色（图片还没出来、或图片本身带透明边时不露黑），按圆角裁切，
+    /// 再描一圈很淡的内描边，把浅色封面和页面底色分开。货架、网格里的所有封面都用这一套。
+    func coverEdge(cornerRadius: CGFloat = Theme.Radius.poster) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        return self
+            .background(Theme.surfaceRaised)
+            .clipShape(shape)
+            .overlay { shape.strokeBorder(Theme.hairline, lineWidth: 0.5) }
+    }
+
     func designScreen(_ identifier: String) -> some View {
         // Contain the page's children so its identifier cannot replace controls' identifiers.
         self.accessibilityElement(children: .contain).accessibilityIdentifier("screen.\(identifier)")

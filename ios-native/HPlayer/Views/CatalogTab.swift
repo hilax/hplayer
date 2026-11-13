@@ -481,13 +481,17 @@ struct CatalogTab: View {
             )
             .frame(minHeight: 320)
         } else {
-            let spacing: CGFloat = 10
+            // 演员卡是两张海报拼在一起，三列时每张只剩一半宽，挤成碎条；演员分类改成两列（宽屏按 170pt 一格往上加）
+            let performers = kind == .performer
+            let spacing: CGFloat = performers ? 14 : 10
             let available = max(width - Theme.contentInset * 2, 200)
-            let columns = max(3, Int((available + spacing) / (118 + spacing)))
+            let columns = performers
+                ? max(2, Int((available + spacing) / (170 + spacing)))
+                : max(3, Int((available + spacing) / (118 + spacing)))
             let cell = floor((available - spacing * CGFloat(columns - 1)) / CGFloat(columns))
             LazyVGrid(
                 columns: Array(repeating: GridItem(.fixed(cell), spacing: spacing, alignment: .top), count: columns),
-                alignment: .leading, spacing: 16
+                alignment: .leading, spacing: performers ? 20 : 16
             ) {
                 ForEach(Array(list.enumerated()), id: \.element.id) { index, entry in
                     card(entry, width: cell)
