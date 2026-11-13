@@ -112,7 +112,7 @@ struct HomeSlideArtwork: View {
         }
         return Text(text)
             .font(.system(size: 11, weight: .bold))
-            .foregroundStyle(.white)
+            .foregroundStyle(Theme.onAccentFill)
             .padding(.horizontal, 7)
             .frame(height: 20)
             .background(Theme.accentFill, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
@@ -265,7 +265,7 @@ struct HomeAnimeGridCard: View {
                         if let status = AnimeEpisodeText.status(item) {
                             Text(status.title)
                                 .font(.system(size: 10, weight: .bold))
-                                .foregroundStyle(.white)
+                                .foregroundStyle(status.highlighted ? Theme.onAccentFill : Color.white)
                                 .padding(.horizontal, 6)
                                 .frame(height: 18)
                                 .background(status.highlighted ? Theme.accentFill : Color.black.opacity(0.62),

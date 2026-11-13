@@ -128,7 +128,7 @@ extension CatalogKind {
 
     var tint: Color {
         switch self {
-        case .all: return ShortcutTint.mist
+        case .all: return ShortcutTint.amber
         case .movie: return ShortcutTint.orange
         case .series: return ShortcutTint.purple
         case .anime: return ShortcutTint.blue

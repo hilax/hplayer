@@ -69,24 +69,26 @@ extension UIColor {
     }
 }
 
-/// Prism Noir（2.0）：近黑底承载内容，白色是唯一的主操作色，雾青（低饱和的灰调青绿）标出「在看、更新、我的」，
+/// Prism Noir（2.0）：近黑底承载内容，白色是唯一的主操作色，琥珀色标出「在看、更新、我的」，
 /// 棱镜渐变（光轨）只用在进度、选中指示、发送与解析中。浅色是同一套色相的冷白版本。
 /// 名称沿用 1.x（gold / onPrimary / tileTint …），调用处不用改：
 /// `gold` / `primaryAction` 现在是「主操作色」——深色模式为白，浅色模式为墨黑；`onPrimary` 与它反相。
 enum Theme {
-    static let accentUIColor = UIColor.adaptive(light: UIColor(hex: 0x3D6F68), dark: UIColor(hex: 0x8EC5BC))
-    static let accentAltUIColor = UIColor.adaptive(light: UIColor(hex: 0x315A54), dark: UIColor(hex: 0xB0D8D1))
+    static let accentUIColor = UIColor.adaptive(light: UIColor(hex: 0xB26A14), dark: UIColor(hex: 0xE9B061))
+    static let accentAltUIColor = UIColor.adaptive(light: UIColor(hex: 0x8A5210), dark: UIColor(hex: 0xF4CB8A))
 
-    /// 雾青：更新、在看、置顶、链接文字等强调（原来是玫红）
+    /// 琥珀：更新、在看、置顶、链接文字等强调（沿用原琥珀金主题的色值）
     static let accent = Color(uiColor: accentUIColor)
     static let accentAlt = Color(uiColor: accentAltUIColor)
-    /// 雾青实心（压白字 5:1）：开关、实心强调
-    static let accentFill = Color(uiColor: UIColor(hex: 0x43786F))
+    /// 琥珀实心：开关、角标等实心强调。底色很亮，上面的字和图标用 onAccentFill（深色），不要用白色
+    static let accentFill = Color(uiColor: UIColor(hex: 0xE9B061))
+    /// 压在琥珀实心上的文字和图标（对比度约 10:1）
+    static let onAccentFill = Color(uiColor: UIColor(hex: 0x1A1206))
 
     /// 主操作色：每屏唯一的主按钮、当前集、选中胶囊、实心角标。深色为白，浅色为墨黑。
     static let gold = Color(uiColor: .adaptive(light: UIColor(hex: 0x111318), dark: UIColor(hex: 0xF5F6F8)))
     static let goldLight = Color(uiColor: .adaptive(light: UIColor(hex: 0x2A2D36), dark: UIColor.white))
-    static let goldDeep = Color(uiColor: UIColor(hex: 0x43786F))
+    static let goldDeep = Color(uiColor: UIColor(hex: 0xC98A32))
     /// 压在主操作色上的文字和图标（与 gold 反相）
     static let onPrimary = Color(uiColor: .adaptive(light: .white, dark: UIColor(hex: 0x07080B)))
     static let brandNight = Color(uiColor: UIColor(hex: 0x07080B))
@@ -98,7 +100,7 @@ enum Theme {
 
     /// 来源色点：在线 / 115 / 磁力 / 本地
     enum Source {
-        static let online = Color(uiColor: UIColor(hex: 0x6FA89E))
+        static let online = Color(uiColor: UIColor(hex: 0xE9B061))
         static let cloud115 = Color(uiColor: UIColor(hex: 0x4C8DFF))
         static let magnet = Color(uiColor: UIColor(hex: 0x9A84FF))
         static let local = Color(uiColor: UIColor(hex: 0x33D6A6))

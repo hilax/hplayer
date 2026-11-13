@@ -84,9 +84,11 @@ struct DanmakuGlyph: View {
     /// 打开时的填充色。不传就用 tint 填、黑字（画面上的白色款）；
     /// 信息区的深色字款要传主题色，否则浅色下会填成一块黑底黑字
     var enabledFill: Color? = nil
+    /// 打开时「弹」字的颜色（压在 enabledFill 上）
+    var enabledTextColor: Color = .white
 
     private var fill: Color { enabledFill ?? tint }
-    private var enabledText: Color { enabledFill == nil ? .black : .white }
+    private var enabledText: Color { enabledFill == nil ? .black : enabledTextColor }
 
     var body: some View {
         Text("弹")
@@ -247,7 +249,7 @@ private struct DanmakuTabControls: View {
                 Haptics.tap()
                 store.enabled.toggle()
             } label: {
-                DanmakuGlyph(enabled: store.enabled, size: 12, tint: Theme.textPrimary, enabledFill: Theme.accentFill)
+                DanmakuGlyph(enabled: store.enabled, size: 12, tint: Theme.textPrimary, enabledFill: Theme.accentFill, enabledTextColor: Theme.onAccentFill)
                     .frame(width: 40, height: 44)
                     .contentShape(Rectangle())
             }

@@ -263,7 +263,8 @@ struct ChannelShortcutLabel: View {
         VStack(spacing: 6) {
             Image(systemName: icon.name)
                 .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(selected ? Color.white : tint)
+                // 琥珀底很亮，选中时图标用深色；其他颜色的底压白色
+                .foregroundStyle(selected ? (tint == Theme.accentFill ? Theme.onAccentFill : Color.white) : tint)
                 .frame(width: 46, height: 46)
                 .background(selected ? tint : tint.opacity(0.14), in: Circle())
             Text(title)
@@ -276,9 +277,9 @@ struct ChannelShortcutLabel: View {
     }
 }
 
-/// 快捷入口的几种颜色：雾青、橙、紫、蓝、绿（雾青原来是玫红）
+/// 快捷入口的几种颜色：琥珀、橙、紫、蓝、绿
 enum ShortcutTint {
-    static let mist = Color(uiColor: UIColor(hex: 0x5E9C92))
+    static let amber = Theme.accentFill
     static let orange = Color(uiColor: UIColor(hex: 0xE08A1E))
     static let purple = Color(uiColor: UIColor(hex: 0x7A5AF0))
     static let blue = Color(uiColor: UIColor(hex: 0x1F9BC7))
