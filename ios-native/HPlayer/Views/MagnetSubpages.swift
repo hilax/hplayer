@@ -481,10 +481,10 @@ struct MagnetDetailView: View {
         .navigationTitle(item.code)
         .navigationBarTitleDisplayMode(.inline)
         .magnetPlayer(item: $playLaunch)
-        // 卡片上的 115 进度走完：直接打开播放器
-        .magnetCloudReady(hashes: magnets.compactMap { MagnetLink.parse($0.magnetURL)?.infoHash }) { hash in
+        // 卡片上的 115 / 磁力解析进度走完：直接打开播放器
+        .magnetCloudReady(hashes: magnets.compactMap { MagnetLink.parse($0.magnetURL)?.infoHash }) { hash, mode in
             guard let torrent = magnets.first(where: { MagnetLink.parse($0.magnetURL)?.infoHash.lowercased() == hash }) else { return }
-            play(torrent, mode: .cloud)
+            play(torrent, mode: mode)
         }
         .task {
             // 从女优页返回时页面会再次出现，已经取到的磁力不重新拉取。

@@ -1,8 +1,9 @@
 import Combine
 import Foundation
 
-/// 磁力「115 播放」的进度中心。
-/// - 资源卡片上点「115 播放」：在这里起一份 MagnetController（只走 115 离线），进度直接画在卡片上，不遮住播放器
+/// 磁力播放的进度中心：开播前的等待都画在资源卡片上，不遮住播放器。
+/// - 资源卡片上点「115 播放」：在这里起一份 MagnetController（只走 115 离线），卡片显示 提交 → 下载中 xx% → 准备播放
+/// - 点「磁力播放」：同样起一份（只走软件自带的 BT 解析），卡片显示 连接节点 → 读取文件列表
 /// - 115 准备好时：卡片所在页面还开着就直接打开播放器；页面已经关了就弹一句全局提示
 /// - 已经在 115 下载好的资源记在本机，下次卡片按钮直接是「播放」
 /// - 播放窗口里点了「后台继续」的控制器也放在这里（park）
@@ -14,6 +15,10 @@ final class MagnetRelayCenter: ObservableObject {
 
     /// 卡片上显示的 115 进度
     enum Status: Equatable {
+        /// BT：正在找节点（已连上几个）
+        case connecting(Int)
+        /// BT：连上了，正在读取文件列表
+        case reading
         case submitting
         case downloading(Double)
         /// 115 下载完了，正在找视频
@@ -23,7 +28,7 @@ final class MagnetRelayCenter: ObservableObject {
 
         var isWorking: Bool {
             switch self {
-            case .submitting, .downloading, .preparing: return true
+            case .connecting, .reading, .submitting, .downloading, .preparing: return true
             case .ready, .failed: return false
             }
         }
@@ -32,7 +37,15 @@ final class MagnetRelayCenter: ObservableObject {
     private struct Job {
         let controller: MagnetController
         let title: String
+        let mode: MagnetPlaybackRequest.Mode
         var watcher: AnyCancellable?
+    }
+
+    /// 准备好、该打开播放器的资源
+    struct ReadyItem: Equatable {
+        let hash: String
+        let mode: MagnetPlaybackRequest.Mode
+        let token = UUID()
     }
 
     /// 全局轻提示（首页根视图上显示）
@@ -42,7 +55,7 @@ final class MagnetRelayCenter: ObservableObject {
     /// 已经在 115 下载好过的资源（保存在本机）
     @Published private(set) var downloaded: Set<String> = []
     /// 刚准备好、而且它所在的页面还开着的资源：页面看到后打开播放器，再调用 consumeReady
-    @Published private(set) var readyToOpen: String?
+    @Published private(set) var readyToOpen: ReadyItem?
 
     private var jobs: [String: Job] = [:]
     /// 正开着的页面关心的资源（计数，同一资源可能出现在多个页面）
@@ -70,6 +83,18 @@ final class MagnetRelayCenter: ObservableObject {
     }
 
     func isWorking(_ infoHash: String?) -> Bool { status(infoHash)?.isWorking ?? false }
+
+    /// 失败的那份是哪种方式（卡片上「重试」用）
+    func failedMode(_ infoHash: String?) -> MagnetPlaybackRequest.Mode? {
+        guard let hash = Self.normalize(infoHash), case .failed = statuses[hash] else { return nil }
+        return jobs[hash]?.mode
+    }
+
+    /// 已经准备好、等着打开的那份是哪种方式
+    func readyMode(_ infoHash: String?) -> MagnetPlaybackRequest.Mode? {
+        guard let hash = Self.normalize(infoHash), statuses[hash] == .ready else { return nil }
+        return jobs[hash]?.mode
+    }
 
     /// 别处（播放窗口）用 115 播放成功时也记一笔
     func markDownloaded(_ infoHash: String?) {
@@ -101,16 +126,26 @@ final class MagnetRelayCenter: ObservableObject {
         guard let link = MagnetLink.parse(magnet), let client else { return }
         let hash = link.infoHash.lowercased()
         if let status = statuses[hash], status.isWorking { return }
-        if statuses[hash] == .ready, jobs[hash] != nil {
-            readyToOpen = hash
-            return
-        }
         removeJob(hash)
         let controller = MagnetController()
         controller.activate()
         controller.configureCloud(client: client, enabled: true)
         statuses[hash] = downloaded.contains(hash) ? .preparing : .submitting
-        adopt(controller, hash: hash, title: title)
+        adopt(controller, hash: hash, title: title, mode: .cloud)
+        controller.open(link)
+    }
+
+    /// 资源卡片上点了「磁力播放」：软件自带的 BT 解析，连节点、读文件列表的进度在卡片上显示
+    func startBT(magnet: String, title: String) {
+        guard let link = MagnetLink.parse(magnet) else { return }
+        let hash = link.infoHash.lowercased()
+        if let status = statuses[hash], status.isWorking { return }
+        removeJob(hash)
+        let controller = MagnetController()
+        controller.activate()
+        controller.configureCloud(client: nil, enabled: false)
+        statuses[hash] = .connecting(0)
+        adopt(controller, hash: hash, title: title, mode: .bt)
         controller.open(link)
     }
 
@@ -119,7 +154,7 @@ final class MagnetRelayCenter: ObservableObject {
         guard let hash = Self.normalize(infoHash) else { return }
         removeJob(hash)
         statuses[hash] = nil
-        if readyToOpen == hash { readyToOpen = nil }
+        if readyToOpen?.hash == hash { readyToOpen = nil }
     }
 
     /// 播放窗口里点了「后台继续」
@@ -127,23 +162,25 @@ final class MagnetRelayCenter: ObservableObject {
         guard let hash = Self.normalize(controller.link?.infoHash) else { return }
         removeJob(hash)
         statuses[hash] = .submitting
-        adopt(controller, hash: hash, title: title)
+        adopt(controller, hash: hash, title: title, mode: .cloud)
         message = "已转到后台，115 准备好后会提醒你"
     }
 
-    /// 播放窗口打开时取回这份控制器（没有就返回 nil）
-    func take(infoHash: String?) -> MagnetController? {
-        guard let hash = Self.normalize(infoHash), let job = jobs.removeValue(forKey: hash) else { return nil }
+    /// 播放窗口打开时取回这份控制器；指定了方式时只取同一种方式的（没有就返回 nil）
+    func take(infoHash: String?, mode: MagnetPlaybackRequest.Mode?) -> MagnetController? {
+        guard let hash = Self.normalize(infoHash), let job = jobs[hash] else { return nil }
+        if let mode, job.mode != mode { return nil }
+        jobs[hash] = nil
         job.watcher?.cancel()
         statuses[hash] = nil
-        if readyToOpen == hash { readyToOpen = nil }
+        if readyToOpen?.hash == hash { readyToOpen = nil }
         return job.controller
     }
 
     // MARK: 内部
 
-    private func adopt(_ controller: MagnetController, hash: String, title: String) {
-        var job = Job(controller: controller, title: title)
+    private func adopt(_ controller: MagnetController, hash: String, title: String, mode: MagnetPlaybackRequest.Mode) {
+        var job = Job(controller: controller, title: title, mode: mode)
         // objectWillChange 在改动之前发出；放到下一轮再读，拿到的是改动后的值
         job.watcher = controller.objectWillChange
             .receive(on: RunLoop.main)
@@ -164,44 +201,63 @@ final class MagnetRelayCenter: ObservableObject {
         guard let job = jobs[hash] else { return }
         let controller = job.controller
         let previous = statuses[hash]
-        let next: Status
-        switch controller.cloud {
-        case .off:
-            if controller.phase == .failed {
-                next = .failed(controller.error.isEmpty ? "115 离线没有完成" : controller.error)
-            } else {
-                next = previous ?? .submitting
-            }
-        case .submitting:
-            next = previous == .preparing ? .preparing : .submitting
-        case .downloading(let percent):
-            next = percent >= 100 || (previous == .preparing && percent <= 0) ? .preparing : .downloading(percent)
-        case .ready:
-            next = .ready
-        case .failed(let reason):
-            next = .failed(reason)
-        }
+        let next = job.mode == .cloud ? cloudStatus(controller, previous: previous) : btStatus(controller)
         guard next != previous else { return }
         statuses[hash] = next
         switch next {
         case .ready:
-            markDownloaded(hash)
-            // 结果（文件列表、115 播放地址）留在控制器里；BT 引擎这时用不上，先放掉
-            controller.deactivate()
+            if job.mode == .cloud {
+                markDownloaded(hash)
+                // 结果（文件列表、115 播放地址）留在控制器里；BT 引擎这时用不上，先放掉
+                controller.deactivate()
+            } else if controller.playerVisible {
+                // 只有一个正片时控制器会自己开播；这时还没有播放窗口，先停下，等播放窗口接手再播
+                controller.closePlayer()
+            }
             if watching[hash] != nil {
-                readyToOpen = hash
+                readyToOpen = ReadyItem(hash: hash, mode: job.mode)
             } else {
-                message = "「\(job.title)」已在 115 准备好，点「播放」就能看"
+                message = job.mode == .cloud ? "「\(job.title)」已在 115 准备好，点「播放」就能看"
+                    : "「\(job.title)」可以播放了，点「播放」开始"
             }
         case .failed(let reason):
             // 以前下载过、这次却找不到了（比如网盘里删掉了）：按钮回到「115 播放」
-            if downloaded.remove(hash) != nil { save() }
+            if job.mode == .cloud, downloaded.remove(hash) != nil { save() }
             job.watcher?.cancel()
             controller.deactivate()
-            jobs[hash] = Job(controller: controller, title: job.title, watcher: nil)
+            jobs[hash] = Job(controller: controller, title: job.title, mode: job.mode, watcher: nil)
             if watching[hash] == nil { message = "「\(job.title)」没有准备好：\(reason)" }
-        case .submitting, .downloading, .preparing:
+        case .connecting, .reading, .submitting, .downloading, .preparing:
             break
+        }
+    }
+
+    private func cloudStatus(_ controller: MagnetController, previous: Status?) -> Status {
+        switch controller.cloud {
+        case .off:
+            if controller.phase == .failed {
+                return .failed(controller.error.isEmpty ? "115 离线没有完成" : controller.error)
+            }
+            return previous ?? .submitting
+        case .submitting:
+            return previous == .preparing ? .preparing : .submitting
+        case .downloading(let percent):
+            return percent >= 100 || (previous == .preparing && percent <= 0) ? .preparing : .downloading(percent)
+        case .ready:
+            return .ready
+        case .failed(let reason):
+            return .failed(reason)
+        }
+    }
+
+    private func btStatus(_ controller: MagnetController) -> Status {
+        switch controller.phase {
+        case .failed:
+            return .failed(controller.error.isEmpty ? "没能解析这个磁力链接" : controller.error)
+        case .ready:
+            return controller.catalog == nil ? .reading : .ready
+        case .idle, .resolving:
+            return controller.step >= .metadata ? .reading : .connecting(controller.swarm.connected)
         }
     }
 

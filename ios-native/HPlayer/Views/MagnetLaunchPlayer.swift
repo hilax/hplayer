@@ -44,9 +44,10 @@ struct MagnetLaunchPlayer: View {
     init(request: MagnetPlaybackRequest) {
         self.request = request
         // 「后台继续」过的资源：接手那份控制器，不重新提交离线任务
-        // 选了 BT 边下边播时不接手 115 那份（卡片上的 115 进度照常继续）
-        let hash = request.mode == .bt ? nil : request.infoHash
-        _controller = StateObject(wrappedValue: MagnetRelayCenter.shared.take(infoHash: hash) ?? MagnetController())
+        // 卡片上已经在跑（或者已经准备好）的同一种方式：直接接手，不重新解析 / 提交
+        let hash = request.infoHash
+        let mode = request.mode
+        _controller = StateObject(wrappedValue: MagnetRelayCenter.shared.take(infoHash: hash, mode: mode) ?? MagnetController())
     }
 
     var body: some View {
