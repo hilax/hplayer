@@ -982,7 +982,7 @@ struct PlaybackControlsView: View {
                     .foregroundStyle(.white.opacity(0.75))
                 Toggle("自动连播", isOn: $autoPlayNext)
                     .labelsHidden()
-                    .tint(Theme.gold)
+                    .tint(Theme.accentFill)
                     .accessibilityIdentifier("playback.autoNext")
             }
             .padding(.leading, 10)
@@ -1175,15 +1175,16 @@ struct PlaybackControlsView: View {
                             .font(.system(size: 16))
                             .foregroundStyle(.white.opacity(0.75))
                             .frame(width: 22)
-                        Text("回桌面自动小窗")
+                        Text("自动小窗")
                             .font(.system(size: 15, weight: .medium))
+                            .lineLimit(1)
                         Spacer(minLength: 12)
                         Toggle("回桌面自动小窗", isOn: Binding(
                             get: { playback.autoPictureInPicture },
                             set: { playback.setAutoPictureInPicture($0) }
                         ))
                         .labelsHidden()
-                        .tint(Theme.gold)
+                        .tint(Theme.accentFill)
                         .accessibilityIdentifier("playback.autoPip")
                     }
                     .padding(.horizontal, 12)
