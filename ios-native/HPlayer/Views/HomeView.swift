@@ -232,6 +232,10 @@ struct HomeView: View {
                     .navigationDestination(for: DramaRoute.self) { route in
                         DramaDetailView(route: route).environmentObject(appState)
                     }
+                    // 程序化路径的目标注册在整个 TabView 的外层，网盘根页退场后仍可解析。
+                    .navigationDestination(for: CloudRoute.self) { route in
+                        CloudTab(route: route)
+                    }
                     .navigationDestination(for: MineRoute.self) { route in
                         switch route {
                         case .watchlist:

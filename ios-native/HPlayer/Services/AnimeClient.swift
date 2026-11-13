@@ -125,7 +125,10 @@ final class AnimeClient {
 
     /// 视频详情（含选集与多线路）
     func fetchDetail(id: Int) async throws -> AnimeVideoDetail {
-        try await request(path: "/app/video/detail?id=\(id)")
+        #if DEBUG
+        if let preview = try await InterfacePreview.animeDetail(id: id) { return preview }
+        #endif
+        return try await request(path: "/app/video/detail?id=\(id)")
     }
 
     /// 一段弹幕：按播放进度 60 秒一段拉取（毫秒时间点）。没有弹幕时返回空数组。

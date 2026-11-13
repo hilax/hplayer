@@ -395,6 +395,7 @@ struct DirectoryView: View {
                             .frame(maxWidth: 180)
                             .frame(height: 28)
                             .background(Theme.tileTint, in: Capsule())
+                            .accessibilityIdentifier("library.crumb.\(crumb.cid)")
                     } else {
                         Button {
                             onJump?(index)
@@ -410,6 +411,7 @@ struct DirectoryView: View {
                         }
                         .buttonStyle(.pressable(scale: 0.94))
                         .disabled(onJump == nil)
+                        .accessibilityIdentifier("library.crumb.\(crumb.cid)")
                     }
                 }
             }
