@@ -45,8 +45,10 @@ final class HomeUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["尚未登录 115"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.staticTexts["测试账号 1"].exists, "Signing out must hide the previous account")
         library.tap()
-        XCTAssertTrue(wait { account.label.contains("连接 115 网盘") })
-        XCTAssertFalse(account.label.contains("测试账号 1"))
+        // 退出后网盘页换成登录引导，账号条随之消失
+        XCTAssertTrue(app.buttons["cloud.login"].waitForExistence(timeout: 5), "Signed out, the Cloud tab shows the login card")
+        XCTAssertFalse(account.exists, "The account strip disappears after signing out")
+        XCTAssertFalse(app.staticTexts["测试账号 1"].exists)
     }
 
     func testPosterLibraryAndManualMatching() {
