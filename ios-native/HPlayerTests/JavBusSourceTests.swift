@@ -2,16 +2,6 @@ import XCTest
 @testable import HPlayer
 
 final class JavBusSourceTests: XCTestCase {
-    override func setUp() {
-        super.setUp()
-        UserDefaults.standard.removeObject(forKey: JavBusSource.hostDefaultsKey)
-    }
-
-    override func tearDown() {
-        UserDefaults.standard.removeObject(forKey: JavBusSource.hostDefaultsKey)
-        super.tearDown()
-    }
-
     func testParseSearchItems() {
         let sampleHTML = """
         <div class="row">
@@ -325,24 +315,8 @@ final class JavBusSourceTests: XCTestCase {
         XCTAssertEqual(magnets.first?.magnetURL, "magnet:?xt=urn:btih:AAAA&dn=HD-2M-sample")
     }
 
-    func testNormalizedHost() {
-        XCTAssertEqual(JavBusSource.normalizedHost("javbus.com"), "https://javbus.com")
-        XCTAssertEqual(JavBusSource.normalizedHost("  https://www.javbus.com/  "), "https://www.javbus.com")
-        XCTAssertEqual(JavBusSource.normalizedHost("http://mirror.example.com:8080/x"), "http://mirror.example.com:8080")
-        XCTAssertNil(JavBusSource.normalizedHost(""))
-        XCTAssertNil(JavBusSource.normalizedHost("not a host"))
-        XCTAssertNil(JavBusSource.normalizedHost("localhost"))
-    }
-
-    func testCurrentHostFallsBackToDefaultWhenCustomHostIsInvalid() {
-        let source = JavBusSource()
-        XCTAssertEqual(source.currentHost, JavBusSource.defaultHost)
-
-        UserDefaults.standard.set("mirror.example.com", forKey: JavBusSource.hostDefaultsKey)
-        XCTAssertEqual(source.currentHost, "https://mirror.example.com")
-
-        UserDefaults.standard.set("not a host", forKey: JavBusSource.hostDefaultsKey)
-        XCTAssertEqual(source.currentHost, JavBusSource.defaultHost)
+    func testCurrentHostIsAlwaysJavBus() {
+        XCTAssertEqual(JavBusSource().currentHost, "https://www.javbus.com")
     }
 
     func testEncodePathSegmentEscapesSeparators() {
@@ -707,12 +681,6 @@ final class JavBusSourceTests: XCTestCase {
 
         let other = try XCTUnwrap(URL(string: "https://images.example/a.jpg"))
         XCTAssertTrue(JavBusSource.imageHeaders(for: other).isEmpty)
-    }
-
-    func testImageHeadersFollowTheConfiguredMirror() throws {
-        UserDefaults.standard.set("https://mirror.example.com", forKey: JavBusSource.hostDefaultsKey)
-        let cover = try XCTUnwrap(URL(string: "https://img.example.com/pics/a.jpg"))
-        XCTAssertEqual(JavBusSource.imageHeaders(for: cover)["Referer"], "https://mirror.example.com/")
     }
 }
 

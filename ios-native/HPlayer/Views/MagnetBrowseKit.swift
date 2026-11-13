@@ -752,11 +752,10 @@ struct MagnetLoadingView: View {
     }
 }
 
-/// 加载失败：说明原因，给出「重新加载」和「更换镜像域名」两条出路。
+/// 加载失败：说明原因，给出「重新加载」。
 struct MagnetErrorState: View {
     let message: String
     let retry: () -> Void
-    @State private var showingSettings = false
 
     var body: some View {
         VStack(spacing: 10) {
@@ -772,21 +771,15 @@ struct MagnetErrorState: View {
                 .foregroundStyle(Theme.textSecondary)
                 .multilineTextAlignment(.center)
 
-            HStack(spacing: 8) {
-                Button("重新加载", action: retry)
-                    .buttonStyle(MagnetActionStyle(prominent: true))
-                Button("更换镜像域名") { showingSettings = true }
-                    .buttonStyle(MagnetActionStyle(prominent: false))
-            }
+            Button("重新加载", action: retry)
+                .buttonStyle(MagnetActionStyle(prominent: true))
+                .frame(maxWidth: 200)
             .padding(.top, 8)
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 22)
         .frame(maxWidth: .infinity)
         .surfaceCard()
-        .sheet(isPresented: $showingSettings) {
-            JavBusHostSettingsSheet()
-        }
     }
 }
 

@@ -15,9 +15,9 @@ enum JavBusError: LocalizedError {
         case .invalidURL:
             return "无效的请求地址"
         case .cloudflareBlocked:
-            return "受到网络防护拦截（Cloudflare），请检查代理或更换镜像域名"
+            return "受到网络防护拦截（Cloudflare），请检查网络或代理后重试"
         case .ageVerificationRequired:
-            return "站点要求年龄验证，自动验证未通过，请更换镜像域名后重试"
+            return "站点要求年龄验证，自动验证未通过，请稍后重试"
         case .notFound:
             return "未找到对应页面 (404)"
         case let .serverError(code):
@@ -37,7 +37,6 @@ final class JavBusSource: MagnetSearchSource, @unchecked Sendable {
     static let shared = JavBusSource()
 
     static let defaultHost = "https://www.javbus.com"
-    static let hostDefaultsKey = "hplayer.magnet.javbus_host"
 
     /// 磁力列表的 AJAX 接口，依次尝试，直到拿到磁力为止。
     static let magnetAjaxEndpoints = ["uncensoredcors.php", "uncledatoolsbyajax.php"]
@@ -67,33 +66,8 @@ final class JavBusSource: MagnetSearchSource, @unchecked Sendable {
 
     // MARK: - 域名
 
-    /// 把用户输入整理成 `scheme://host[:port]`；缺少 scheme 时补 https，非法输入返回 nil。
-    static func normalizedHost(_ raw: String) -> String? {
-        var text = trim(raw)
-        guard !text.isEmpty else { return nil }
-        let lower = text.lowercased()
-        if !lower.hasPrefix("http://") && !lower.hasPrefix("https://") {
-            text = "https://" + text
-        }
-        guard let components = URLComponents(string: text),
-              let scheme = components.scheme?.lowercased(),
-              scheme == "http" || scheme == "https",
-              let host = components.host,
-              host.contains(".") else {
-            return nil
-        }
-        var result = "\(scheme)://\(host)"
-        if let port = components.port {
-            result += ":\(port)"
-        }
-        return result
-    }
-
-    /// 当前配置的基础访问域名（支持用户在设置中自定义镜像站）。
-    var currentHost: String {
-        let custom = UserDefaults.standard.string(forKey: Self.hostDefaultsKey) ?? ""
-        return Self.normalizedHost(custom) ?? Self.defaultHost
-    }
+    /// 固定使用 JavBus 官方域名（不再提供镜像域名配置）。
+    var currentHost: String { Self.defaultHost }
 
     private func makeURL(path: String) -> URL? {
         let clean = path.hasPrefix("/") ? String(path.dropFirst()) : path
@@ -107,7 +81,7 @@ final class JavBusSource: MagnetSearchSource, @unchecked Sendable {
     private var mobileUserAgent: String { Self.userAgent }
 
     /// 取封面、头像时要带的请求头：站点的图片做了防盗链，没有 Referer / 浏览器 UA 会被拒绝（403）。
-    /// 只对 JavBus 自己的域名（默认域名和当前配置的镜像域名及其子域名）生效，别的图床不加。
+    /// 只对 JavBus 自己的域名（javbus.com 及其子域名）生效，别的图床不加。
     static func imageHeaders(for url: URL) -> [String: String] {
         guard let host = url.host?.lowercased() else { return [:] }
 

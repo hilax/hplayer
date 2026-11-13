@@ -53,22 +53,19 @@ func mergeUnique<T: Identifiable>(_ existing: [T], with new: [T]) -> (merged: [T
 /// 影片、女优、片商都是普通的逐层跳转（左上角返回上一层）；在磁力详情页点播放，
 /// 播放页盖在详情页上面，关掉就回到详情页。版式见 docs/ui-design-system.md「磁力聚合」。
 struct MagnetSearchView: View {
-    /// 作为「磁力」Tab 的根页面：隐藏系统导航栏，右上角提供「粘贴链接播放」和镜像域名。
+    /// 作为「磁力」Tab 的根页面：隐藏系统导航栏，右上角提供「粘贴链接播放」和「播放记录」。
     var isTabRoot = false
 
     init(isTabRoot: Bool = false) {
         self.isTabRoot = isTabRoot
     }
 
-    // 镜像域名变化时（在设置里保存后）自动重新加载。
-    @AppStorage(JavBusSource.hostDefaultsKey) private var customHost = ""
     @EnvironmentObject private var appState: AppState
     @State private var playLaunch: MagnetPlaybackRequest?
     @ObservedObject private var favoriteStars = FavoriteStarStore.shared
 
     @State private var keyword = ""
     @State private var selectedCategory: MagnetCategory = .latest
-    @State private var showingSettingsSheet = false
 
     // 分类浏览数据：每个分类各存一份
     @State private var movies: [MagnetCategory: [MagnetSearchItem]] = [:]
@@ -124,22 +121,11 @@ struct MagnetSearchView: View {
         .navigationTitle(isTabRoot ? "磁力" : "磁力聚合")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(isTabRoot ? .hidden : .automatic, for: .navigationBar)
-        .toolbar {
-            if !isTabRoot {
-                ToolbarItem(placement: .primaryAction) { settingsButton }
-            }
-        }
-        .sheet(isPresented: $showingSettingsSheet) {
-            JavBusHostSettingsSheet()
-        }
         .magnetPlayer(item: $playLaunch)
         .animation(Motion.smooth, value: detectedLink != nil)
         .animation(Motion.smooth, value: inSearchMode)
         .task { loadIfNeeded(selectedCategory) }
         .onChange(of: selectedCategory) { category in loadIfNeeded(category) }
-        .onChange(of: customHost) { _ in
-            reloadForHostChange()
-        }
         .onChange(of: keyword) { _ in
             // 把输入框清空（包括手动删光）等于退出搜索，回到分类浏览。
             if trimmedKeyword.isEmpty && searchActive {
@@ -150,7 +136,7 @@ struct MagnetSearchView: View {
 
     // MARK: - 头部
 
-    /// 第一行：分类（最新 / 专题 / 女优 / 最热，和首页频道条同一个样子），右边「粘贴链接播放」「播放记录」和「镜像域名」
+    /// 第一行：分类（最新 / 专题 / 女优 / 最热，和首页频道条同一个样子），右边「粘贴链接播放」和「播放记录」
     private var topRow: some View {
         HStack(spacing: 4) {
             MagnetCategoryTabs(selection: categorySelection)
@@ -172,22 +158,10 @@ struct MagnetSearchView: View {
                 .buttonStyle(.pressable(scale: 0.88))
                 .accessibilityLabel("磁力播放记录")
                 .accessibilityIdentifier("magnet.history")
-                settingsButton
             }
         }
         .padding(.leading, Theme.contentInset)
         .padding(.trailing, 6)
-    }
-
-    private var settingsButton: some View {
-        Button {
-            showingSettingsSheet = true
-        } label: {
-            topIcon(.mirror)
-        }
-        .buttonStyle(.pressable(scale: 0.88))
-        .accessibilityLabel("镜像域名设置")
-        .accessibilityIdentifier("magnet.settings")
     }
 
     private func topIcon(_ icon: AppIcon) -> some View {
@@ -472,7 +446,7 @@ struct MagnetSearchView: View {
         MagnetEmptyState(
             icon: .archive,
             title: "暂无内容",
-            message: "站点没有返回内容，可以稍后重试，或在右上角更换镜像域名。"
+            message: "站点没有返回内容，可以稍后重试。"
         )
     }
 
@@ -624,16 +598,6 @@ struct MagnetSearchView: View {
         matchedStars = []
         searchPaging = PagingState()
     }
-
-    private func reloadForHostChange() {
-        movies = [:]
-        stars = []
-        errors = [:]
-        loadCategory(selectedCategory)
-        if inSearchMode {
-            runSearch(activeQuery)
-        }
-    }
 }
 
 /// 磁力页的一页（某个分类，或搜索结果）：一个纵向滚动视图，内容从屏幕顶端开始，
@@ -661,93 +625,5 @@ private struct MagnetCategoryPage<Content: View>: View {
             .ignoresSafeArea(edges: .top)
         }
         .background(Theme.pageBackground.ignoresSafeArea())
-    }
-}
-
-// MARK: - 镜像域名设置弹窗
-
-struct JavBusHostSettingsSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    @AppStorage(JavBusSource.hostDefaultsKey) private var customHost = ""
-    @State private var inputHost = ""
-
-    private let presets = [
-        "https://www.javbus.com",
-        "https://www.busdmm.work",
-        "https://www.dmmsee.art"
-    ]
-
-    private var trimmedInput: String {
-        inputHost.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    /// 输入为空（恢复默认）或能整理成合法的 http(s) 域名才允许保存。
-    private var isInputValid: Bool {
-        trimmedInput.isEmpty || JavBusSource.normalizedHost(trimmedInput) != nil
-    }
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    TextField("https://www.javbus.com", text: $inputHost)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
-                        .keyboardType(.URL)
-                } header: {
-                    Text("JavBus 访问域名")
-                } footer: {
-                    if isInputValid {
-                        Text("当默认域名 javbus.com 受到网络屏蔽或 Cloudflare 防护拦截时，可切换为备用或镜像域名。未写 https:// 时会自动补全。")
-                    } else {
-                        Text("域名格式不正确，请输入形如 https://www.javbus.com 的地址。")
-                            .foregroundStyle(.red)
-                    }
-                }
-
-                Section("常用预设域名") {
-                    ForEach(presets, id: \.self) { preset in
-                        Button {
-                            inputHost = preset
-                        } label: {
-                            HStack {
-                                Text(preset)
-                                    .foregroundStyle(.primary)
-                                Spacer()
-                                if inputHost == preset {
-                                    Image(systemName: AppIcon.check.name)
-                                        .foregroundStyle(Theme.accent)
-                                }
-                            }
-                        }
-                    }
-                }
-
-                Section {
-                    Button("恢复默认域名") {
-                        inputHost = JavBusSource.defaultHost
-                    }
-                    .foregroundStyle(.red)
-                }
-            }
-            .navigationTitle("镜像域名配置")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("取消") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("保存") {
-                        customHost = JavBusSource.normalizedHost(trimmedInput) ?? ""
-                        dismiss()
-                    }
-                    .foregroundStyle(isInputValid ? Theme.accent : Color.secondary)
-                    .disabled(!isInputValid)
-                }
-            }
-            .onAppear {
-                inputHost = customHost.isEmpty ? JavBusSource.defaultHost : customHost
-            }
-        }
     }
 }
