@@ -95,11 +95,11 @@ final class HomeUITests: XCTestCase {
         XCTAssertFalse(app.buttons["home.scanStatus"].exists, "Home never shows scan or matching maintenance")
         XCTAssertFalse(app.otherElements["home.matchingState"].exists)
         app.tabButton("网盘").tap()
-        // 3.0：传输中心拆掉了。网盘页只留离线下载和回收站，本机视频在「我的」，磁力记录在磁力页
-        let offline = app.buttons["cloud.offline"]
-        XCTAssertTrue(offline.waitForExistence(timeout: 5), "Cloud tab offers offline downloads")
-        XCTAssertTrue(app.buttons["cloud.recycleBin"].exists, "Cloud tab offers the recycle bin")
+        // 3.0：传输中心拆掉了。没登录 115 时网盘页只有登录卡片（离线下载、回收站要登录后才出现，
+        // 本机视频在「我的」，磁力记录在磁力页）
+        XCTAssertTrue(app.buttons["cloud.login"].waitForExistence(timeout: 5), "Signed out, the Cloud tab shows the login card")
         XCTAssertFalse(app.buttons["cloud.transfers"].exists, "The transfer center is gone")
+        XCTAssertFalse(app.buttons["cloud.local"].exists, "Local videos moved to the Mine tab")
         XCTAssertFalse(app.buttons["library.manage"].exists, "Library management lives in the Mine tab only")
         // 2.0：磁力是一级 Tab。磁力聚合：搜索框 + 四个分类标签；专题是固定的片商入口，不依赖网络
         app.tabButton("磁力").tap()
@@ -127,7 +127,7 @@ final class HomeUITests: XCTestCase {
         if !wait(timeout: 2, { app.keyboards.count == 0 }) { app.swipeDown() }
         XCTAssertTrue(wait { app.keyboards.count == 0 }, "The keyboard is dismissed before switching tabs")
         app.tabButton("网盘").tap()
-        XCTAssertTrue(app.buttons["cloud.offline"].waitForExistence(timeout: 5), "Switching back shows the Cloud tab")
+        XCTAssertTrue(app.buttons["cloud.login"].waitForExistence(timeout: 5), "Switching back shows the Cloud tab")
         capture("Resources - redesign", in: app)
         // 媒体库管理只留在「我的」页
         app.tabButton("我的").tap()
