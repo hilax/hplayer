@@ -203,6 +203,8 @@ final class PlaybackController: ObservableObject {
     private var pictureInPictureStillReady = false
     /// 小窗刚开始、内核还在切换输出的这段时间，也算在小窗里（不要关画面）
     private var pictureInPictureStarting = false
+    /// 点了小窗按钮：小窗出来以后自动回到桌面
+    private var leaveAppAfterPictureInPicture = false
     private var pendingOpen: (() -> Void)?
     /// 内核正在后台创建
     private var creatingEngine = false
@@ -973,6 +975,7 @@ final class PlaybackController: ObservableObject {
                 notice = "视频开始播放后才能开小窗"
                 return
             }
+            leaveAppAfterPictureInPicture = true
             pictureInPicture.start()
         }
     }
@@ -1003,11 +1006,26 @@ final class PlaybackController: ObservableObject {
     func pictureInPictureDidStart() {
         pictureInPictureStarting = false
         pictureInPictureActive = true
+        guard leaveAppAfterPictureInPicture else { return }
+        leaveAppAfterPictureInPicture = false
+        // 小窗飞出去的动画走完再回桌面，视频留在小窗里继续播
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            guard let self, self.pictureInPictureActive,
+                  UIApplication.shared.applicationState == .active else { return }
+            Self.returnToHomeScreen()
+        }
+    }
+
+    /// 回到桌面（和按 Home 键一样，App 只是退到后台）
+    private static func returnToHomeScreen() {
+        UIControl().sendAction(#selector(URLSessionTask.suspend), to: UIApplication.shared, for: nil)
     }
 
     /// 小窗结束。resume 为 true 表示用户点了「回到播放页」，接着播；直接关掉小窗则暂停（和系统播放器一样）
     func pictureInPictureDidStop(resume: Bool) {
         let wasActive = pictureInPictureActive || pictureInPictureStarting
+        leaveAppAfterPictureInPicture = false
         pictureInPictureStarting = false
         pictureInPictureActive = false
         guard wasActive else { return }

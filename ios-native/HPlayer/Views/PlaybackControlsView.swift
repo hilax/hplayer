@@ -442,6 +442,10 @@ struct PlaybackControlsView: View {
             // 字幕和音轨在底栏右边已经有一个按钮，顶栏不再重复
             GlassButtonGroup {
                 if landscape {
+                    if playback.pictureInPictureSupported {
+                        GlassIconButton(systemImage: pipIconName, label: pipLabel) { togglePictureInPicture() }
+                            .accessibilityIdentifier("playback.pip")
+                    }
                     GlassIconButton(systemImage: AppIcon.aspect.name, label: "画面比例") { togglePopover(.aspect) }
                         .overlay { popoverRing(.aspect) }
                         .accessibilityIdentifier("playback.aspect")
@@ -1512,14 +1516,8 @@ struct PlaybackControlsView: View {
                 GlassIconButton(systemImage: AppIcon.unlock.name, label: "锁定", diameter: 40, action: lock)
                     .accessibilityIdentifier("playback.lock")
                 Spacer()
-                VStack(spacing: 14) {
-                    if playback.pictureInPictureSupported {
-                        GlassIconButton(systemImage: pipIconName, label: pipLabel, diameter: 40) { togglePictureInPicture() }
-                            .accessibilityIdentifier("playback.pip")
-                    }
-                    GlassIconButton(systemImage: AppIcon.screenshot.name, label: "截图", diameter: 40) { takeScreenshot() }
-                        .accessibilityIdentifier("playback.screenshot")
-                }
+                GlassIconButton(systemImage: AppIcon.screenshot.name, label: "截图", diameter: 40) { takeScreenshot() }
+                    .accessibilityIdentifier("playback.screenshot")
             }
             .padding(.leading, edgeControlInset(safe: insets.leading, width: width))
             .padding(.trailing, edgeControlInset(safe: insets.trailing, width: width))
@@ -2343,7 +2341,8 @@ struct PlaybackControlsView: View {
     /// 为两侧操作按钮留出空间；横屏还保留至少一段片名，竖屏使用较短的提示条。
     private func topHUDWidth(landscape: Bool, insets: EdgeInsets, width: CGFloat) -> CGFloat {
         let side = landscape
-            ? max(max(insets.leading, insets.trailing), 28) + 42 + 12 + 80 + 12
+            // 右上角多了小窗按钮时再让出一个按钮的宽度
+            ? max(max(insets.leading, insets.trailing), 28) + 42 + 12 + 80 + 12 + (playback.pictureInPictureSupported ? 52 : 0)
             : 4 + 88 + 12
         return max(96, min(280, width - side * 2))
     }
