@@ -66,6 +66,7 @@ private struct StarModePicker: View {
 
 struct StarMoviesView: View {
     let star: MagnetStarItem
+    @ObservedObject private var favorites = FavoriteStarStore.shared
 
     @State private var mode: StarWorksMode = .lead
     @State private var movies: [MagnetSearchItem] = []
@@ -150,10 +151,41 @@ struct StarMoviesView: View {
                     .multilineTextAlignment(.center)
                     .padding(.top, 8)
             }
+
+            favoriteButton
+                .padding(.top, 14)
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 24)
         .padding(.top, 8)
+    }
+
+    /// 存进「喜欢」的条目：身份（id、详情路径）用进来时的，名字和头像用资料页更完整的
+    private var favoriteEntry: MagnetStarItem {
+        MagnetStarItem(id: star.id, name: shownStar.name, avatarURL: shownStar.avatarURL ?? star.avatarURL,
+                       detailPath: star.detailPath)
+    }
+
+    /// 喜欢：喜欢过的人排在「女优」列表最上面。未喜欢是描边胶囊，喜欢后是琥珀浅底 + 实心红心
+    private var favoriteButton: some View {
+        let liked = favorites.contains(star)
+        return Button {
+            Haptics.select()
+            withAnimation(Motion.snappy) { _ = favorites.toggle(favoriteEntry) }
+        } label: {
+            Label(liked ? "已喜欢" : "喜欢", systemImage: liked ? AppIcon.heartFill.name : AppIcon.heart.name)
+                .font(Theme.Typo.meta.weight(.semibold))
+                .foregroundStyle(liked ? Theme.accent : Theme.textPrimary)
+                .padding(.horizontal, Theme.Space.lg)
+                .frame(minHeight: 36)
+                .background(liked ? Theme.accentWash : Color.clear, in: Capsule())
+                .overlay { Capsule().strokeBorder(liked ? Color.clear : Theme.ruleStrong, lineWidth: Theme.Stroke.rule) }
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.pressable(scale: 0.94))
+        .accessibilityLabel(liked ? "取消喜欢" : "喜欢")
+        .accessibilityAddTraits(liked ? .isSelected : [])
+        .accessibilityIdentifier("magnet.star.favorite")
     }
 
     /// 头部资料（身高、罩杯等）来自女优页；取不到不影响作品列表。
@@ -162,6 +194,7 @@ struct StarMoviesView: View {
         guard detailedStar == nil else { return }
         if let result = try? await JavBusSource.shared.fetchStarDetail(starPath: star.detailPath, page: 1) {
             detailedStar = result.star
+            if result.star != nil { favorites.refresh(favoriteEntry) }
         }
     }
 

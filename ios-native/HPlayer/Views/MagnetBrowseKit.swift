@@ -521,10 +521,15 @@ struct MagnetStudioCard: View {
 /// 女优分类里的一格：圆头像加姓名。
 struct MagnetStarGridCell: View {
     let star: MagnetStarItem
+    /// 已经喜欢：头像右下角一个小红心
+    var favorite = false
 
     var body: some View {
         VStack(spacing: 8) {
             MagnetStarAvatar(star: star, size: 84)
+                .overlay(alignment: .bottomTrailing) {
+                    if favorite { FavoriteHeartBadge().offset(x: -2, y: -2) }
+                }
             Text(star.name)
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(.primary)
@@ -532,6 +537,68 @@ struct MagnetStarGridCell: View {
         }
         .frame(maxWidth: .infinity)
         .contentShape(Rectangle())
+    }
+}
+
+/// 喜欢的女优头像角上的小心形：琥珀心放在页面底色的圆里，压在任何头像上都看得清
+struct FavoriteHeartBadge: View {
+    var size: CGFloat = 22
+
+    var body: some View {
+        Image(systemName: AppIcon.heartFill.name)
+            .font(.system(size: size * 0.5, weight: .bold))
+            .foregroundStyle(Theme.accent)
+            .frame(width: size, height: size)
+            .background(Theme.pageBackground, in: Circle())
+            .overlay { Circle().strokeBorder(Theme.hairline, lineWidth: Theme.Stroke.hairline) }
+            .accessibilityHidden(true)
+    }
+}
+
+/// 女优列表顶部「我喜欢的」：按喜欢的时间排的一行头像，横向滑动。长按可以取消喜欢。
+struct FavoriteStarsRow: View {
+    @ObservedObject private var favorites = FavoriteStarStore.shared
+
+    var body: some View {
+        if !favorites.items.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                MagnetSectionHeader(title: "我喜欢的", trailing: "\(favorites.items.count) 位")
+                ScrollView(.horizontal) {
+                    LazyHStack(alignment: .top, spacing: 14) {
+                        ForEach(favorites.items) { entry in
+                            let star = entry.item
+                            NavigationLink {
+                                StarMoviesView(star: star)
+                            } label: {
+                                VStack(spacing: 6) {
+                                    MagnetStarAvatar(star: star, size: 64)
+                                    Text(star.name)
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(Theme.textPrimary)
+                                        .lineLimit(1)
+                                }
+                                .frame(width: 72)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.pressable(scale: 0.95))
+                            .accessibilityIdentifier("magnet.favorite.\(star.id)")
+                            .contextMenu {
+                                Button(role: .destructive) {
+                                    Haptics.select()
+                                    withAnimation(Motion.smooth) { _ = favorites.toggle(star) }
+                                } label: {
+                                    Label("取消喜欢", systemImage: AppIcon.heart.name)
+                                }
+                            }
+                        }
+                    }
+                    .padding(.horizontal, Theme.contentInset)
+                }
+                .scrollIndicators(.hidden)
+                .padding(.horizontal, -Theme.contentInset)
+            }
+            .transition(.opacity)
+        }
     }
 }
 

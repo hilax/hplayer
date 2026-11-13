@@ -64,6 +64,7 @@ struct MagnetSearchView: View {
     @AppStorage(JavBusSource.hostDefaultsKey) private var customHost = ""
     @EnvironmentObject private var appState: AppState
     @State private var playLaunch: MagnetLaunch?
+    @ObservedObject private var favoriteStars = FavoriteStarStore.shared
 
     @State private var keyword = ""
     @State private var selectedCategory: MagnetCategory = .latest
@@ -394,10 +395,12 @@ struct MagnetSearchView: View {
         }
     }
 
-    /// 女优：三列头像，按人气排序，分页加载。
+    /// 女优：顶部「我喜欢的」一行（有才显示），下面三列头像按人气排序，分页加载。
     private var actressesContent: some View {
         let state = paging[.actresses] ?? PagingState()
         return VStack(alignment: .leading, spacing: 14) {
+            FavoriteStarsRow()
+                .padding(.bottom, favoriteStars.items.isEmpty ? 0 : 10)
             MagnetSectionHeader(title: "热门女优", trailing: "按人气排序")
 
             if stars.isEmpty {
@@ -408,9 +411,19 @@ struct MagnetSearchView: View {
                         NavigationLink {
                             StarMoviesView(star: star)
                         } label: {
-                            MagnetStarGridCell(star: star)
+                            MagnetStarGridCell(star: star, favorite: favoriteStars.contains(star))
                         }
                         .buttonStyle(.pressable(scale: 0.97))
+                        .contextMenu {
+                            // 长按头像：喜欢 / 取消喜欢
+                            let liked = favoriteStars.contains(star)
+                            Button {
+                                Haptics.select()
+                                withAnimation(Motion.smooth) { _ = favoriteStars.toggle(star) }
+                            } label: {
+                                Label(liked ? "取消喜欢" : "喜欢", systemImage: liked ? AppIcon.heart.name : AppIcon.heartFill.name)
+                            }
+                        }
                         .onAppear {
                             if star.id == stars.last?.id { loadMore(.actresses) }
                         }
