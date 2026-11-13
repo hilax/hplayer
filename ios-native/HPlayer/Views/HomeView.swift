@@ -247,6 +247,7 @@ struct HomeView: View {
                         }
                     }
             }
+            .tint(Theme.textPrimary)
             .ignoresSafeArea(.keyboard, edges: .bottom)
             .accessibilityHidden(searchOpen)
 

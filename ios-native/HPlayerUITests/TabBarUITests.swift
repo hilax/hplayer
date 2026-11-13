@@ -77,6 +77,7 @@ final class TabBarUITests: XCTestCase {
         for (screen, title, entryID) in [
             ("home", "首页", "home.series.tt11280740"),
             ("catalog", "首页", "catalog.series.tt11280740"),
+            ("home", "首页", "home.performer."),
             ("magnet-tab", "磁力", "magnet.studio.s1"),
             ("library", "网盘", "cloud.local"),
             ("settings", "我的", "settings.appearance")
@@ -91,7 +92,7 @@ final class TabBarUITests: XCTestCase {
             if screen == "magnet-tab" {
                 app.buttons["magnet.category.topics"].tap()
             }
-            let entry = app.buttons[entryID].firstMatch
+            let entry = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", entryID)).firstMatch
             for _ in 0..<8 where !entry.isHittable { app.swipeUp() }
             XCTAssertTrue(entry.isHittable, "\(title): the secondary-page entry must be visible")
             let before = entry.frame
@@ -121,7 +122,7 @@ final class TabBarUITests: XCTestCase {
             XCTAssertEqual(entry.frame.minY, before.minY, accuracy: 1, "\(title): returning preserves the scroll position")
 
             let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
-            screenshot.name = "TabReturn-\(screen)-\(usingGesture ? "swipe" : "button")"
+            screenshot.name = "TabReturn-\(screen)-\(entryID)-\(usingGesture ? "swipe" : "button")"
             screenshot.lifetime = .keepAlways
             add(screenshot)
         }

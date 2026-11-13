@@ -11,6 +11,13 @@ on:
           - macos-15
           - macos-26
           - macos-15-intel
+      test_scope:
+        description: Simulator test coverage
+        type: choice
+        default: all
+        options:
+          - all
+          - navigation
   push:
     branches: [main, 'feat/*']
 
@@ -20,6 +27,8 @@ jobs:
     runs-on: ${{ inputs.runner || 'macos-15' }}
     # 公开仓库的构建机速度差异很大（同一套测试 5～15 分钟都出现过），整体留足时间，免得跑到一半被取消
     timeout-minutes: 85
+    env:
+      HPLAYER_TEST_SCOPE: ${{ inputs.test_scope || 'all' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -163,11 +172,24 @@ jobs:
           path: HPlayer-unsigned.ipa
           retention-days: 30
 
-      - name: Test playback and controls on iPhone simulator
+      - name: Test on iPhone simulator (${{ env.HPLAYER_TEST_SCOPE }})
         id: native-tests
         # 公开仓库的构建机较慢，测试有时要 7～15 分钟
         timeout-minutes: 60
         run: |
+          test_filters=()
+          if [[ "$HPLAYER_TEST_SCOPE" == 'navigation' ]]; then
+            test_filters=(
+              -only-testing:HPlayerTests/HomeNavigationTests
+              -only-testing:HPlayerUITests/TabBarUITests
+              -only-testing:HPlayerUITests/PerformerCollectionUITests
+              -only-testing:HPlayerUITests/SettingsUITests
+              -only-testing:HPlayerUITests/MotionUITests/testCarouselAndSeriesNavigationRemainUsable
+              -only-testing:HPlayerUITests/RedesignFlowUITests/testHomeHeaderPinsSearchAndPagesSwipe
+              -only-testing:HPlayerUITests/RedesignFlowUITests/testSourcePanelAndFilmMatchingRoute
+            )
+          fi
+          echo "Simulator test scope: $HPLAYER_TEST_SCOPE"
           # Match the iPhone 15 Pro's 393-point screen when the runner supports it.
           runtime=$(xcrun simctl list runtimes --json | python3 -c 'import json,re,sys; runtimes=[x for x in json.load(sys.stdin)["runtimes"] if x.get("isAvailable") and x["name"].startswith("iOS ")]; runtimes.sort(key=lambda x:tuple(map(int,re.findall(r"[0-9]+",x["version"]))),reverse=True); print(runtimes[0]["identifier"] if runtimes else "")')
           device=""
@@ -186,6 +208,7 @@ jobs:
           server_pid=$!
           trap 'kill "$server_pid" 2>/dev/null || true' EXIT
           xcodebuild test \
+            "${test_filters[@]}" \
             -project ios-native/HPlayer.xcodeproj \
             -scheme HPlayer \
             -configuration Debug \
@@ -222,7 +245,7 @@ jobs:
           fi
 
       - name: Verify all 47 prototype screenshots
-        if: always() && steps.native-tests.outcome != 'skipped'
+        if: always() && steps.native-tests.outcome != 'skipped' && env.HPLAYER_TEST_SCOPE == 'all'
         run: |
           python3 ios-native/scripts/verify-interface-coverage.py \
             --manifest "$RUNNER_TEMP/player-ui/manifest.json" \
