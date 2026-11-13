@@ -414,7 +414,7 @@ struct MagnetSearchView: View {
         }
     }
 
-    /// 最热：一次算好的榜单（没有下一页），顶部说明口径，前三名序号是玫红。
+    /// 最热：一次算好的榜单（没有下一页），顶部说明口径，前三名序号是强调色。
     private var hotContent: some View {
         let list = movies[.hot] ?? []
         return VStack(alignment: .leading, spacing: 18) {

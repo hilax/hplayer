@@ -216,7 +216,7 @@ struct SettingsView: View {
         Divider().padding(.leading, LibraryActionRow.dividerInset)
     }
 
-    /// 我的内容：追番、传输中心。列表只写标题，右边是数量（有更新、在下载时玫红）
+    /// 我的内容：追番、传输中心。列表只写标题，右边是数量（有更新、在下载时强调色）
     private var contentGroup: some View {
         group("我的内容") {
             NavigationLink(value: MineRoute.watchlist) {

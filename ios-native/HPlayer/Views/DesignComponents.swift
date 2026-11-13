@@ -149,7 +149,7 @@ struct LibraryActionRow: View {
     var value: String = ""
     var showsChevron = true
     var tone: IconTile.Tone = .accent
-    /// 右侧数值高亮（例如「3 部更新」用玫红）
+    /// 右侧数值高亮（例如「3 部更新」用强调色）
     var valueHighlighted = false
 
     /// 图标列宽：分隔线从这里往右对齐标题（14 + 24 + 14）

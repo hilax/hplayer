@@ -230,7 +230,7 @@ struct HomeSlideCaption: View {
 // MARK: - 热门新番（三列竖版海报）
 
 /// 首页「热门新番」三列网格里的一张：竖版海报 + 右上角状态角标 + 右下角集数，
-/// 下面是片名、右侧「⋮」更多，再下面是播放排名（前三名，玫红）或类型。
+/// 下面是片名、右侧「⋮」更多，再下面是播放排名（前三名，强调色）或类型。
 /// 整张点进动漫详情；「⋮」是叠在上面的独立按钮，不和详情入口嵌套。
 struct HomeAnimeGridCard: View {
     let item: AnimeVideoItem
@@ -344,7 +344,7 @@ enum AnimeEpisodeText {
         return raw
     }
 
-    /// 右上角的状态：完结（灰），连载中写着「更」的（玫红「更新」）；其他不标。
+    /// 右上角的状态：完结（灰），连载中写着「更」的（强调色「更新」）；其他不标。
     static func status(_ item: AnimeVideoItem) -> Status? {
         let raw = item.continu ?? ""
         if item.isend == 1 || raw.hasPrefix("全") || raw.contains("完结") { return Status(title: "完结", highlighted: false) }

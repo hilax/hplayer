@@ -276,9 +276,9 @@ struct ChannelShortcutLabel: View {
     }
 }
 
-/// 快捷入口的几种颜色（和原型一致：玫红、橙、紫、蓝、绿）
+/// 快捷入口的几种颜色：雾青、橙、紫、蓝、绿（雾青原来是玫红）
 enum ShortcutTint {
-    static let pink = Color(uiColor: UIColor(hex: 0xFF4D8D))
+    static let mist = Color(uiColor: UIColor(hex: 0x5E9C92))
     static let orange = Color(uiColor: UIColor(hex: 0xE08A1E))
     static let purple = Color(uiColor: UIColor(hex: 0x7A5AF0))
     static let blue = Color(uiColor: UIColor(hex: 0x1F9BC7))
