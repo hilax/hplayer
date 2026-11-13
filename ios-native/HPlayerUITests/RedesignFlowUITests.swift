@@ -313,10 +313,15 @@ final class RedesignFlowUITests: XCTestCase {
         dismiss()
         XCTAssertTrue(wait { !hardware.exists })
 
-        // 选集还是底部抽屉
-        app.buttons["playback.playlist"].tap()
-        XCTAssertTrue(app.buttons["关闭选集"].waitForExistence(timeout: 5))
-        app.buttons["关闭选集"].tap()
+        // 选集和动漫详情页一样：「全部」原地展开成网格，展开后有正序 / 倒序，再点收起
+        let all = app.buttons["playback.episodes.all"]
+        if all.waitForExistence(timeout: 5) {
+            all.tap()
+            XCTAssertTrue(app.buttons["playback.episodes.descending"].waitForExistence(timeout: 5), "Expanded episodes show the order toggle")
+            XCTAssertTrue(app.switches["playback.episodes.autoNext"].exists)
+            all.tap()
+            XCTAssertTrue(wait { !app.buttons["playback.episodes.descending"].exists }, "Collapsing hides the order toggle")
+        }
         XCTAssertTrue(app.buttons["playback.playPause"].isHittable)
     }
 
