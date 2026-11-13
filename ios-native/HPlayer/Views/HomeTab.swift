@@ -467,6 +467,8 @@ struct HomeTab: View {
     }
 
     private func remove(_ entry: ContinueEntry) {
+        // 截下的画面一起删
+        PlaybackFrameStore.shared.remove(PlaybackFrameStore.key(for: entry.target))
         switch entry.target {
         case .recent(let recent):
             recents.remove(recent)

@@ -466,6 +466,8 @@ final class MagnetController: ObservableObject {
         do {
             let engine = try await host.engine()
             playback.stop(detach: false)
+            // 这部资源在「继续观看」里的封面：暂停、换集、退出时截下的画面
+            if let link { playback.resumeFrameKey = PlaybackFrameStore.key(forMagnet: link.infoHash) }
             if let old = stream {
                 stream = nil
                 try? await engine.stopStream(old.id)

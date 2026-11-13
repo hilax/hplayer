@@ -144,7 +144,10 @@ struct HomeLibraryScanView: View {
         .tint(Theme.textPrimary)
         .designScreen("manage")
         .confirmationDialog("清空继续观看记录？", isPresented: $confirmClearHistory, titleVisibility: .visible) {
-            Button("清空记录", role: .destructive) { recents.clear(); magnetHistory.removeAll() }
+            Button("清空记录", role: .destructive) {
+                recents.clear(); magnetHistory.removeAll()
+                PlaybackFrameStore.shared.removeAll()
+            }
         }
         .sheet(isPresented: $pickingFolder) {
             ScanFolderPicker(onSelect: onStartFolder).environmentObject(appState)

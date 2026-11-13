@@ -168,7 +168,7 @@ final class RecentStore: ObservableObject {
         }
     }
 
-    private static func key(of item: RecentItem) -> String {
+    static func key(of item: RecentItem) -> String {
         if let ref = item.animeRef { return ref.id }
         if let pickCode = item.pickCode, !pickCode.isEmpty { return "p115|\(pickCode)" }
         guard let url = URL(string: item.url) else { return "url|\(item.url)" }

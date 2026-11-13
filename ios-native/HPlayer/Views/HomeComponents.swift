@@ -447,7 +447,7 @@ struct ContinueCard: View {
                         GeometryReader { proxy in
                             Rectangle().fill(.white.opacity(Theme.Opacity.faint))
                                 .overlay(alignment: .leading) {
-                                    Rectangle().fill(Theme.gold)
+                                    Rectangle().fill(Theme.accent)
                                         .frame(width: proxy.size.width * min(max(progress, 0), 1))
                                 }
                         }

@@ -27,6 +27,8 @@ final class DramaEpisodePlayer: ObservableObject {
     var onFinished: (() -> Void)?
 
     var source: PlaybackSource { .drama(ref) }
+    /// 取当前画面用：暂停和离开时截一帧给「继续观看」当封面
+    private var frameOutput: AVPlayerItemVideoOutput?
     var isPortraitVideo: Bool { videoSize == .zero || videoSize.height >= videoSize.width }
 
     private var wantsPlay = false
@@ -76,6 +78,9 @@ final class DramaEpisodePlayer: ObservableObject {
             let asset = AVURLAsset(url: playback.url, options: ["AVURLAssetHTTPHeaderFieldsKey": playback.headers])
             let item = AVPlayerItem(asset: asset)
             item.preferredForwardBufferDuration = 10
+            let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
+            item.add(output)
+            frameOutput = output
             pendingSeek = RecentStore.shared.position(for: source)
             observe(item)
             player.replaceCurrentItem(with: item)
@@ -171,6 +176,14 @@ final class DramaEpisodePlayer: ObservableObject {
         wantsPlay = false
         player.pause()
         savePosition()
+        captureResumeFrame()
+    }
+
+    /// 把当前画面存成这一集在「继续观看」里的封面
+    private func captureResumeFrame() {
+        guard state == .ready, currentTime > 3, !finished, let output = frameOutput,
+              let buffer = output.copyPixelBuffer(forItemTime: player.currentTime(), itemTimeForDisplay: nil) else { return }
+        PlaybackFrameStore.shared.ingest(pixelBuffer: buffer, for: PlaybackFrameStore.key(for: source))
     }
 
     func togglePlay() {
@@ -201,7 +214,7 @@ final class DramaEpisodePlayer: ObservableObject {
 
     /// 离开播放器或这一集被回收时调用：存好进度，停下并释放网络连接。
     func tearDown() {
-        if state == .ready { savePosition() }
+        if state == .ready { savePosition(); captureResumeFrame() }
         wantsPlay = false
         loadTask?.cancel()
         player.pause()

@@ -56,6 +56,8 @@ struct PlayerView: View {
             // 不等转屏：要播放地址是网络请求，不占主线程，和转屏同时进行；
             // load 里只有真正打开视频那一步才等转屏结束。
             danmaku.configure(animeRef)
+            // 暂停、换集、退出时截下的画面，存成这一集在「继续观看」里的封面（UI 测试不记）
+            playback.resumeFrameKey = tracksHistory ? PlaybackFrameStore.key(for: current) : nil
             await load(current)
         }
         .onChange(of: playback.currentTime) { time in

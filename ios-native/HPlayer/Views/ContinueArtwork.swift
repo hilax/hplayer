@@ -105,17 +105,26 @@ final class ContinueArtworkStore: ObservableObject {
     }
 }
 
-/// 继续观看卡片 / 观看历史行里的封面：片库影片用自己的图；在线动漫、短剧、磁力用 ContinueArtworkStore 找到的封面。
-/// 不管横图竖图都等比例铺满卡片、居中裁切。
+/// 继续观看卡片 / 观看历史行里的封面：
+/// 1. 优先用停下来那一刻截下的播放画面（`PlaybackFrameStore`）；
+/// 2. 没有截图时，片库影片用自己的图；在线动漫、短剧、磁力用 ContinueArtworkStore 找到的封面。
+/// 横图等比例铺满卡片、居中裁切；竖屏画面（短剧）铺一层虚化，画面立在中间。
 struct ContinueArtworkView: View {
     let entry: ContinueEntry
     let width: CGFloat
     let height: CGFloat
     @ObservedObject private var store = ContinueArtworkStore.shared
+    @ObservedObject private var frames = PlaybackFrameStore.shared
+
+    private var frameKey: String { PlaybackFrameStore.key(for: entry.target) }
 
     var body: some View {
         Group {
-            if !entry.artworkURL.isEmpty {
+            // frames 是观察对象：新截图存好（revisions 变化）时卡片跟着刷新
+            if let frame = frames.image(for: frameKey) {
+                frameView(frame)
+                    .transition(.opacity)
+            } else if !entry.artworkURL.isEmpty {
                 wide(entry.artworkURL)
             } else {
                 switch store.artwork(for: entry.target) {
@@ -138,6 +147,36 @@ struct ContinueArtworkView: View {
         .clipped()
         .task(id: entry.id) {
             if entry.artworkURL.isEmpty { await store.resolve(entry.target) }
+        }
+    }
+
+    @ViewBuilder
+    private func frameView(_ image: UIImage) -> some View {
+        if image.size.height > image.size.width {
+            // 竖屏画面：虚化铺底，画面本身立在中间，不硬裁
+            ZStack {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: width, height: height)
+                    .blur(radius: 18)
+                    .overlay(Color.black.opacity(Theme.Opacity.soft))
+                    .clipped()
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(height: height)
+            }
+            .accessibilityHidden(true)
+        } else {
+            Color.clear
+                .overlay {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                }
+                .clipped()
+                .accessibilityHidden(true)
         }
     }
 

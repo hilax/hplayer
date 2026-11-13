@@ -292,6 +292,8 @@ final class PlaybackController: ObservableObject {
             NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
                 // 退到后台时只留声音，回来再打开画面，避免回到前台画面变黑；小窗播放时画面还要继续
                 Task { @MainActor [weak self] in
+                    // 关画面之前先给「继续观看」留一张当前画面
+                    self?.captureResumeFrame()
                     guard let self, !self.pictureInPictureActive, !self.pictureInPictureStarting,
                           self.engine?.softwareOutputActive != true else { return }
                     self.engine?.set("vid", "no")
@@ -647,6 +649,25 @@ final class PlaybackController: ObservableObject {
         openTimeoutTask?.cancel()
         engine?.set("pause", true)
         updateFlags()
+        captureResumeFrame()
+    }
+
+    // MARK: 继续观看封面
+
+    /// 这一集在「继续观看」里的键（见 `PlaybackFrameStore`）。播放页、磁力播放打开视频时设置；为 nil 时不截图。
+    var resumeFrameKey: String?
+    private var lastResumeFrame: (key: String, time: Double, at: Date)?
+
+    /// 截一张当前画面（只有视频本身，不带字幕和控件）给「继续观看」当封面。
+    /// 在暂停、换集、退出、退到后台时调用；同一位置 2 秒内不重复截。缩小和黑场判断在后台做。
+    func captureResumeFrame() {
+        guard let key = resumeFrameKey, let engine, loaded, error.isEmpty, !ended, currentTime > 3 else { return }
+        if let last = lastResumeFrame, last.key == key, abs(last.time - currentTime) < 1,
+           Date().timeIntervalSince(last.at) < 2 { return }
+        lastResumeFrame = (key, currentTime, Date())
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("hplayer-frame-\(UUID().uuidString).jpg")
+        guard engine.command(["screenshot-to-file", file.path, "video"]) >= 0 else { return }
+        PlaybackFrameStore.shared.ingest(file: file, for: key)
     }
 
     /// Magnet playback can reuse its controller for the next presentation.
@@ -665,6 +686,7 @@ final class PlaybackController: ObservableObject {
         if playing {
             userPaused = true
             engine?.set("pause", true)
+            captureResumeFrame()
         } else {
             userPaused = false
             noDataSeconds = 0
@@ -815,6 +837,8 @@ final class PlaybackController: ObservableObject {
     }
 
     func stop(detach: Bool = true) {
+        // 换集、退出都会先 stop：停之前把当前画面留给「继续观看」当封面
+        captureResumeFrame()
         // 换集也会先 stop：小窗不关，下一集接着在小窗里播
         session += 1
         cancelAddressResolution()
