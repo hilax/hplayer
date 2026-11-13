@@ -9,6 +9,8 @@ enum CloudRoute: Hashable {
 /// 网盘：115 账号卡片、全部文件、离线下载与本机视频（2.0：磁力播放和磁力聚合移到「磁力」Tab）。
 struct CloudTab: View {
     var onSearch: () -> Void = {}
+    /// 同一套网盘页面由 HomeView 的公共导航栈呈现；nil 为标签根页。
+    var route: CloudRoute? = nil
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var localStore: LocalMediaStore
     @EnvironmentObject private var accountInfo: P115AccountInfoStore
@@ -34,29 +36,10 @@ struct CloudTab: View {
 
     var body: some View {
         Group {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    ScreenTitleBar(title: "网盘") {
-                        BarIconButton(icon: .search, label: "搜索网盘", identifier: "cloud.search", action: onSearch)
-                    }
-                    .padding(.horizontal, -Theme.contentInset)
-                    accountCard.reveal(0)
-                    toolRows.reveal(1)
-                }
-                .frame(maxWidth: 620)
-                .frame(maxWidth: .infinity)
-                .padding(.horizontal, Theme.contentInset)
-                .padding(.top, 6)
-                .padding(.bottom, 36)
-            }
-            .scrollIndicators(.hidden)
-            .background(Theme.pageBackground.ignoresSafeArea())
-            .navigationTitle("")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar(.hidden, for: .navigationBar)
-            .designScreen(appState.isAuthenticated ? "library" : "library-empty")
-            .navigationDestination(for: CloudRoute.self) { route in
+            if let route {
                 destination(route)
+            } else {
+                rootPage
             }
         }
         .playerWindow(item: $playing) { queue in
@@ -84,6 +67,30 @@ struct CloudTab: View {
             openRequestID = UUID()
             connecting = false
         }
+    }
+
+    private var rootPage: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                ScreenTitleBar(title: "网盘") {
+                    BarIconButton(icon: .search, label: "搜索网盘", identifier: "cloud.search", action: onSearch)
+                }
+                .padding(.horizontal, -Theme.contentInset)
+                accountCard.reveal(0)
+                toolRows.reveal(1)
+            }
+            .frame(maxWidth: 620)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, Theme.contentInset)
+            .padding(.top, 6)
+            .padding(.bottom, 36)
+        }
+        .scrollIndicators(.hidden)
+        .background(Theme.pageBackground.ignoresSafeArea())
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .navigationBar)
+        .designScreen(appState.isAuthenticated ? "library" : "library-empty")
     }
 
     private var accountCard: some View {
@@ -188,9 +195,18 @@ struct CloudTab: View {
                       onOpenDir: { path.append(.folder($0)) }, onPlay: { file, files in
             let source = PlaybackSource.p115(title: file.name, pickCode: file.pickCode)
             playing = PlaybackQueue(source: source, items: files.map { .p115(title: $0.name, pickCode: $0.pickCode) })
-        }, management: true, onOpenPage: { path.append(.page($0)) })
+        }, management: true, onOpenPage: { path.append(.page($0)) },
+                      initialFiles: previewFiles(in: crumb))
         .navigationTitle(crumb.name)
         .toolbar(.visible, for: .navigationBar)
+    }
+
+    private func previewFiles(in crumb: Crumb) -> [P115File]? {
+        #if DEBUG
+        return InterfacePreview.cloudFiles(cid: crumb.cid)
+        #else
+        return nil
+        #endif
     }
 
     @ViewBuilder
@@ -286,6 +302,12 @@ struct CloudTab: View {
     private func open115() async {
         guard !connecting else { return }
         guard let direct = appState.directClient() else { showDirectLogin = true; return }
+        #if DEBUG
+        if InterfacePreview.active {
+            path.append(.folder(Crumb(cid: "0", name: "115 网盘")))
+            return
+        }
+        #endif
         let sessionID = appState.sessionID
         let requestID = UUID()
         openRequestID = requestID

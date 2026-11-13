@@ -12,6 +12,23 @@ enum InterfacePreview {
     static var active: Bool { screen != nil }
 
     #if DEBUG
+    /// 通过实际网盘入口检查目录路由，沿用 DirectoryView 的初始文件接口。
+    static func cloudFiles(cid: String) -> [P115File]? {
+        guard active else { return nil }
+        func file(_ id: String, _ name: String, folder: Bool = true) -> P115File {
+            P115File(id: id, parentId: cid, name: name, isDir: folder,
+                     kind: folder ? "folder" : "video", size: folder ? 0 : 1_000_000,
+                     pickCode: folder ? "" : "preview-" + id, sha1: "", updatedAt: "", thumbUrl: "")
+        }
+        switch cid {
+        case "0": return [file("100", "电影"), file("200", "剧集")]
+        case "100": return [file("101", "科幻"), file("movie", "电影.mp4", folder: false)]
+        case "101": return [file("science-fiction", "科幻电影.mp4", folder: false)]
+        case "200": return [file("episode", "剧集.S01E01.mp4", folder: false)]
+        default: return []
+        }
+    }
+
     /// 从真实首页海报进入详情的界面测试，不访问外部动漫服务。
     static func animeDetail(id: Int) async throws -> AnimeVideoDetail? {
         guard active else { return nil }

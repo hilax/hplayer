@@ -183,6 +183,7 @@ jobs:
               -only-testing:HPlayerTests/HomeNavigationTests
               -only-testing:HPlayerUITests/TabBarUITests
               -only-testing:HPlayerUITests/AnimeNavigationUITests
+              -only-testing:HPlayerUITests/CloudNavigationUITests
               -only-testing:HPlayerUITests/PerformerCollectionUITests
               -only-testing:HPlayerUITests/SettingsUITests
               -only-testing:HPlayerUITests/MotionUITests/testCarouselAndSeriesNavigationRemainUsable
