@@ -201,22 +201,24 @@ struct RecycleBinView: View {
         return Button {
             toggle(item)
         } label: {
-            HStack(spacing: 12) {
-                CheckBadge(selected: selected, size: 22)
+            HStack(spacing: Theme.Space.md) {
+                CheckBadge(selected: selected, size: 24)
                 tile(for: item)
-                VStack(alignment: .leading, spacing: 3) {
+                    .frame(width: 96, height: 54)
+                    .coverEdge()
+                VStack(alignment: .leading, spacing: Theme.Space.xs) {
                     Text(item.name)
-                        .font(.scaled(14, weight: .medium))
+                        .font(Theme.Typo.row.weight(.medium))
                         .foregroundStyle(Theme.textPrimary)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
                     Text(subtitle(for: item))
-                        .font(.scaled(12))
-                        .foregroundStyle(Theme.textSecondary)
+                        .font(Theme.Typo.caption.monospacedDigit())
+                        .foregroundStyle(Theme.textTertiary)
                         .lineLimit(1)
                     if !item.parentName.isEmpty {
                         Text("原位置：" + item.parentName)
-                            .font(.scaled(11))
+                            .font(Theme.Typo.caption)
                             .foregroundStyle(Theme.textTertiary)
                             .lineLimit(1)
                     }
@@ -229,14 +231,14 @@ struct RecycleBinView: View {
         .accessibilityAddTraits(selected ? AccessibilityTraits.isSelected : AccessibilityTraits())
         .accessibilityIdentifier("library.recycle.row.\(item.id)")
         .listRowBackground(selected ? Theme.tileTint : Color.clear)
-        .listRowSeparator(.visible)
-        .listRowSeparatorTint(Theme.hairline)
-        .listRowInsets(EdgeInsets(top: 9, leading: 16, bottom: 9, trailing: 16))
+        .listRowSeparator(.hidden)
+        .listRowInsets(EdgeInsets(top: Theme.Space.sm - 2, leading: Theme.contentInset, bottom: Theme.Space.sm - 2, trailing: Theme.contentInset))
         .onAppear {
             if item.id == items.last?.id { loadMore() }
         }
     }
 
+    /// 和网盘文件行同一套：文件夹、视频、其他文件都是中性灰图标放在抬高一级的底上（琥珀只留给进度和强调）
     private func tile(for item: Direct115RecycleItem) -> some View {
         let kind = RecycleItemKind.of(item)
         let symbol: String
@@ -247,10 +249,9 @@ struct RecycleBinView: View {
         }
         return Image(systemName: symbol)
             .font(.scaled(kind == .folder ? 22 : 18, weight: Theme.iconWeight))
-            .foregroundStyle(kind == .folder ? Theme.accent : Theme.textSecondary)
-            .frame(width: 84, height: 48)
-            .background(kind == .folder ? Theme.tileTint : Theme.surfaceRaised,
-                        in: RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
+            .foregroundStyle(Theme.textSecondary)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Theme.surfaceRaised)
     }
 
     private func subtitle(for item: Direct115RecycleItem) -> String {
@@ -287,46 +288,40 @@ struct RecycleBinView: View {
         items.filter { selection.contains($0.id) }
     }
 
+    /// 选中后浮起的操作栏：统一的浮层外观（floatingSurface），按钮用统一的主按钮 / 次要危险按钮
     @ViewBuilder
     private var dock: some View {
         if !selection.isEmpty {
-            VStack(spacing: 10) {
+            VStack(spacing: Theme.Space.sm) {
                 Text("已选 \(selection.count) 项")
-                    .font(.scaled(12))
+                    .font(Theme.Typo.caption.monospacedDigit())
                     .foregroundStyle(Theme.textSecondary)
                     .accessibilityIdentifier("library.recycle.dock.summary")
-                HStack(spacing: 10) {
+                HStack(spacing: Theme.Space.sm) {
                     Button {
                         confirmation = .delete(selectedItems)
                     } label: {
                         Label("彻底删除", systemImage: AppIcon.trash.name)
-                            .font(.scaled(15, weight: .semibold))
-                            .foregroundStyle(Theme.danger)
-                            .frame(maxWidth: .infinity, minHeight: 46)
-                            .background(Theme.danger.opacity(0.14), in: Capsule())
+                            .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.pressable(scale: 0.96))
+                    .buttonStyle(ActionButtonStyle(kind: .secondaryDestructive))
                     .accessibilityIdentifier("library.recycle.delete")
 
                     Button {
                         restore(selectedItems)
                     } label: {
                         Label("还原", systemImage: AppIcon.restore.name)
-                            .font(.scaled(15, weight: .semibold))
-                            .foregroundStyle(Theme.onPrimary)
-                            .frame(maxWidth: .infinity, minHeight: 46)
-                            .background(Theme.primaryAction, in: Capsule())
+                            .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.pressable(scale: 0.96))
+                    .buttonStyle(PrimaryActionStyle())
                     .accessibilityIdentifier("library.recycle.restore")
                 }
             }
-            .padding(12)
-            .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: Theme.Radius.sheet, style: .continuous))
-            .overlay { RoundedRectangle(cornerRadius: Theme.Radius.sheet, style: .continuous).strokeBorder(Theme.hairline, lineWidth: 0.5) }
-            .shadow(color: Color.black.opacity(Theme.Opacity.soft), radius: 18, x: 0, y: 8)
-            .padding(.horizontal, 12)
-            .padding(.bottom, 8)
+            .padding(Theme.Space.md)
+            .floatingSurface(cornerRadius: Theme.Radius.sheet)
+            .padding(.horizontal, Theme.Space.md)
+            .padding(.bottom, Theme.Space.sm)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("library.recycle.dock")
         }

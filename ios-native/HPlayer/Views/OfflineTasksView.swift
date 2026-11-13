@@ -125,6 +125,7 @@ struct OfflineTasksView: View {
             CountSegmentedControl(segments: segments, selection: $filter, identifierPrefix: "library.offline.segment")
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
+            clearRow
             content
         }
         .background(Theme.pageBackground.ignoresSafeArea())
@@ -135,7 +136,6 @@ struct OfflineTasksView: View {
             ToolbarItem(placement: .primaryAction) { addButton }
         }
         .designScreen("offline")
-        .safeAreaInset(edge: .bottom, spacing: 0) { footer }
         .overlay { operationOverlay }
         .toast($message)
         .task {
@@ -419,10 +419,6 @@ struct OfflineTasksView: View {
             showAdd = true
         } label: {
             Image(systemName: AppIcon.add.name)
-                .font(.scaled(15, weight: .bold))
-                .foregroundStyle(Theme.onPrimary)
-                .frame(width: 32, height: 32)
-                .background(Theme.primaryAction, in: Circle())
         }
         .accessibilityLabel("添加任务")
         .accessibilityIdentifier("library.offline.add")
@@ -438,29 +434,31 @@ struct OfflineTasksView: View {
         return tasks.contains { $0.status == .done }
     }
 
-    private var footer: some View {
-        HStack(spacing: 10) {
-            Button {
-                pendingClear = clearScope
-            } label: {
-                Label(selectedFilter == .failed ? "清除失败任务" : "清除已完成", systemImage: AppIcon.trash.name)
+    /// 已完成 / 失败两段有记录时，在分段下面给一个小的文字按钮清除；进行中没有这一行。
+    /// 添加任务只在右上角「＋」（以及进行中为空时的空状态按钮），底部不再重复。
+    @ViewBuilder
+    private var clearRow: some View {
+        if selectedFilter != .running && !visibleTasks.isEmpty && !loading {
+            HStack {
+                Spacer(minLength: 0)
+                Button {
+                    pendingClear = clearScope
+                } label: {
+                    Text(selectedFilter == .failed ? "清除失败任务" : "清除已完成")
+                        .font(Theme.Typo.meta)
+                        .foregroundStyle(Theme.textSecondary)
+                        .padding(.horizontal, Theme.Space.xs)
+                        .frame(minHeight: 36)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.pressable(scale: 0.95))
+                .disabled(!canClear)
+                .accessibilityIdentifier("library.offline.clear")
             }
-            .buttonStyle(FooterButtonStyle())
-            .disabled(!canClear)
-            .accessibilityIdentifier("library.offline.clear")
-
-            Button {
-                showAdd = true
-            } label: {
-                Label("添加任务", systemImage: AppIcon.add.name)
-            }
-            .buttonStyle(FooterButtonStyle(prominent: true))
-            .accessibilityIdentifier("library.offline.addBottom")
+            .padding(.horizontal, 16)
+            .padding(.top, 2)
+            .transition(.opacity)
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 10)
-        .padding(.bottom, 10)
-        .background(Theme.pageBackground.opacity(0.96))
     }
 
     @ViewBuilder
