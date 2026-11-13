@@ -60,7 +60,7 @@ struct CountSegmentedControl: View {
 
 // MARK: - 细进度条
 
-/// 线色轨道上的朱砂进度（4pt）；暂停时变成三级文字的灰。
+/// 线色轨道上的琥珀进度（4pt）；暂停时变成三级文字的灰。
 struct ThinProgressBar: View {
     let fraction: Double
     var paused = false
@@ -102,7 +102,7 @@ struct ThinProgressBar: View {
 
 // MARK: - 提示条
 
-/// 页面顶部的提示条：纸面底、细边，朱砂小图标加一段次要文字。
+/// 页面顶部的提示条：卡片底、细边，琥珀小图标加一段次要文字。
 struct ManagementBanner: View {
     let text: String
 
@@ -128,7 +128,7 @@ struct ManagementBanner: View {
 
 // MARK: - 页面底部的按钮
 
-/// 页面底部并排的两个按钮：次要的是纸面底加细线，主要的是墨 / 纸实心。高 50，比弹层里的按钮略高一点。
+/// 页面底部并排的两个按钮：次要的是卡片底加细线的圆角矩形，主要的是白 / 墨实心胶囊。高 50，比弹层里的按钮略高一点。
 struct FooterButtonStyle: ButtonStyle {
     var prominent = false
 

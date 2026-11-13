@@ -228,7 +228,7 @@ extension View {
     }
 }
 
-/// 圆角方块图标底：极淡的墨色底 + 线框图标。工具卡、设置行用它。
+/// 圆角方块图标底：极淡的灰底 + 线框图标。工具卡、设置行用它。
 struct IconTile: View {
     let symbolName: String
     var size: CGFloat = 34

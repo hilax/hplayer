@@ -218,7 +218,7 @@ struct ProgressRing<Center: View>: View {
 
 // MARK: - 勾选标记
 
-/// 勾选圆圈：选中时主操作色（墨 / 纸）实心 + 反色勾弹出，取消时缩回成一圈细线。
+/// 勾选圆圈：选中时主操作色（白 / 墨）实心 + 反色勾弹出，取消时缩回成一圈细线。
 struct CheckBadge: View {
     let selected: Bool
     var size: CGFloat = 24

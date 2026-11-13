@@ -5,10 +5,10 @@ import SwiftUI
 /// 规范全文见仓库根目录 `.interface-design/system.md`。
 ///
 /// 交互状态（所有控件同一套，克制、不改尺寸）：
-/// - 默认：墨 / 纸 / 线，最多一处朱砂
+/// - 默认：灰阶 + 白 / 墨主操作，最多一处琥珀
 /// - 按下：压一层同色 12% 的薄层，缩到 0.98（减少动态效果时只变明度）
 /// - 悬停（iPad 指针）：系统高亮
-/// - 焦点：输入框边线变 1pt 朱砂；按钮用系统焦点环
+/// - 焦点：输入框边线变 1pt 琥珀；按钮用系统焦点环
 /// - 不可用：底色退成最浅的一层，文字退成 `textMuted`，不响应点按
 
 // MARK: - 标题
@@ -36,7 +36,7 @@ struct PageIntroduction: View {
     }
 }
 
-/// 一级页面（网盘、我的）顶部的大标题行：宋体大标题，右侧放图标按钮。
+/// 一级页面（网盘、我的）顶部的大标题行：34pt 粗体大标题，右侧放图标按钮。
 struct ScreenTitleBar<Trailing: View>: View {
     let title: String
     var subtitle = ""
@@ -71,7 +71,7 @@ extension ScreenTitleBar where Trailing == EmptyView {
     }
 }
 
-/// 栏目标题：左边是宋体栏目名，右边是「全部 ›」之类的入口。
+/// 栏目标题：左边是 17pt 半粗栏目名，右边是「全部 ›」之类的入口。
 struct ShelfHeader<Trailing: View>: View {
     let title: String
     var identifier = ""
@@ -213,7 +213,7 @@ struct LibraryActionRow: View {
         }
         .padding(.horizontal, Theme.Space.lg)
         .padding(.vertical, Theme.Space.md)
-        .frame(minHeight: 56)
+        .frame(minHeight: 52)
         .contentShape(Rectangle())
     }
 }
@@ -231,7 +231,7 @@ struct RowIcon: View {
     }
 }
 
-/// 列表行之间的分隔线：1pt 的线色，从标题处开始。
+/// 列表行之间的分隔线：0.5pt 的线色，从标题处开始。
 struct RowDivider: View {
     var leading: CGFloat = LibraryActionRow.dividerInset
 
@@ -246,18 +246,18 @@ struct RowDivider: View {
 
 // MARK: - 按钮
 
-/// 所有文字按钮共用的外观：8pt 圆角矩形（印刷品的方，不用胶囊），按下压一层薄色、缩到 0.98。
+/// 所有文字按钮共用的外观：主按钮、危险按钮是胶囊，次按钮是 10pt 圆角矩形；按下压一层薄色、缩到 0.98。
 /// 外观画在 `ActionButtonBody` 这个视图里，这样「不可用」「减少动态效果」这些环境值才能读到；
 /// 其他按钮样式（主 / 次 / 底部 / 危险）都直接返回它，不要手动调用别的 ButtonStyle 的 makeBody。
 struct ActionButtonStyle: ButtonStyle {
     enum Kind {
-        /// 主按钮：墨底纸字（深色模式纸底墨字）。每屏只放一个。
+        /// 主按钮：白底墨字（浅色模式墨底白字）的胶囊。每屏只放一个。
         case primary
-        /// 压在封面 / 播放画面上的主按钮：始终纸底墨字
+        /// 压在封面 / 播放画面上的主按钮：始终白底墨字
         case primaryOnArtwork
-        /// 次按钮：纸面底 + 1pt 线
+        /// 次按钮：卡片底 + 1pt 线的圆角矩形
         case secondary
-        /// 危险操作：红底白字
+        /// 危险操作：红底白字的胶囊
         case destructive
     }
 
@@ -277,9 +277,16 @@ struct ActionButtonBody: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
+        if kind == .secondary {
+            decorated(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous))
+        } else {
+            decorated(Capsule())
+        }
+    }
+
+    private func decorated<S: InsettableShape>(_ shape: S) -> some View {
         let pressed = configuration.isPressed
-        configuration.label
+        return configuration.label
             .font(kind == .secondary ? Theme.Typo.row.weight(.medium) : Theme.Typo.button)
             .lineLimit(1)
             .foregroundStyle(foreground)
@@ -327,9 +334,9 @@ struct ActionButtonBody: View {
     }
 }
 
-/// 主按钮：墨底纸字（深色模式纸底墨字）。每屏只放一个。
+/// 主按钮：白底墨字（浅色模式墨底白字）的胶囊。每屏只放一个。
 struct PrimaryActionStyle: ButtonStyle {
-    /// 压在深色画面上时用 true：始终纸底墨字
+    /// 压在深色画面上时用 true：始终白底墨字
     var light = false
 
     func makeBody(configuration: Configuration) -> some View {
@@ -337,7 +344,7 @@ struct PrimaryActionStyle: ButtonStyle {
     }
 }
 
-/// 次按钮：纸面底 + 1pt 线 + 正文色字。
+/// 次按钮：卡片底 + 1pt 线 + 正文色字，10pt 圆角矩形。
 struct SecondaryActionStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         ActionButtonBody(configuration: configuration, kind: .secondary, minHeight: 46)
@@ -399,7 +406,7 @@ struct DesignPage<Content: View>: View {
     }
 }
 
-/// 一组列表行：纸面卡片 + 细边，不用投影。行之间用 `RowDivider`。
+/// 一组列表行：卡片底 + 细边，不用投影。行之间用 `RowDivider`。
 struct DesignGroup<Content: View>: View {
     @ViewBuilder var content: () -> Content
     var body: some View {
@@ -411,7 +418,7 @@ struct DesignGroup<Content: View>: View {
 
 // MARK: - 输入框
 
-/// 表单输入框：上方小标签，下方是比周围略深的输入区；获得焦点时边线变成 1pt 朱砂。
+/// 表单输入框：上方小标签，下方是比周围略深的输入区；获得焦点时边线变成 1pt 琥珀。
 struct DesignField: View {
     let label: String
     let placeholder: String
@@ -462,7 +469,7 @@ struct DesignNotice: View {
 
 // MARK: - 筛选块
 
-/// 筛选块：选中是墨底纸字（深色模式纸底墨字）的 6pt 圆角块，未选中只有灰字。
+/// 筛选胶囊：选中是白底墨字（浅色模式墨底白字）的胶囊，未选中只有灰字。
 /// 同一排里选中的底会滑到新选中的那个上（共用 `namespace` 即可）。看上去 32pt 高，点按区域上下各扩 6pt 到 44pt。
 struct SelectionPill: View {
     let title: String
@@ -504,7 +511,7 @@ struct SelectionPill: View {
     }
 
     @ViewBuilder private var background: some View {
-        let shape = RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous)
+        let shape = Capsule()
         if selected {
             if let namespace {
                 shape.fill(Theme.primaryAction).matchedGeometryEffect(id: "pill.selection", in: namespace)
@@ -515,7 +522,7 @@ struct SelectionPill: View {
     }
 }
 
-/// 把点按区域只往上下扩：一排紧挨着的筛选块左右不会互相抢点按。
+/// 把点按区域只往上下扩：一排紧挨着的筛选胶囊左右不会互相抢点按。
 struct VerticalHitArea: Shape {
     var extra: CGFloat
 
@@ -526,12 +533,12 @@ struct VerticalHitArea: Shape {
 
 // MARK: - 角标
 
-/// 小标签：「更新」「完结」「12 集」「8.6」。最小 11pt，3pt 圆角，横向 5pt、高 18pt。
+/// 小标签：「更新」「完结」「12 集」「8.6」。最小 11pt，4pt 圆角，横向 5pt、高 18pt。
 struct TagBadge: View {
     enum Style {
-        /// 压在封面上：暖黑半透明底 + 纸色字（任何画面上都清楚）
+        /// 压在封面上：近黑半透明底 + 白字（任何画面上都清楚）
         case onArtwork
-        /// 朱砂实心：只用于「更新」这类需要被注意到的状态
+        /// 琥珀实心：只用于「更新」这类需要被注意到的状态
         case accent
         /// 页面上的中性标签：极淡底 + 次要文字
         case neutral

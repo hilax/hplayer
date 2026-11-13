@@ -3,7 +3,7 @@ import UIKit
 
 // MARK: - 危险操作的主按钮
 
-/// 删除这类危险操作的主按钮：红色实心 + 白字（8pt 圆角，和其他按钮同一套状态）。
+/// 删除这类危险操作的主按钮：红色胶囊 + 白字（和其他按钮同一套状态）。
 struct DestructiveActionStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         ActionButtonBody(configuration: configuration, kind: .destructive, minHeight: 50)

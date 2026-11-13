@@ -272,7 +272,7 @@ func playbackTimeText(_ value: Double) -> String {
 // MARK: - 海报与卡片
 
 extension View {
-    /// 压在图片上的小标签：暖黑半透明底、3pt 圆角，纸色字或铜金字在任何画面上都清楚。
+    /// 压在图片上的小标签：近黑半透明底、4pt 圆角，白字或琥珀字在任何画面上都清楚。
     /// 新代码直接用 `TagBadge(style: .onArtwork)`。
     func glassBadge() -> some View {
         self.background(Theme.badgeScrim,
