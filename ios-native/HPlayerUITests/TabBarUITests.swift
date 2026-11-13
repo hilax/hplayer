@@ -113,7 +113,13 @@ final class TabBarUITests: XCTestCase {
                            thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)),
                            withVelocity: .slow, thenHoldForDuration: 0.1)
             } else {
-                app.navigationBars.buttons.element(boundBy: 0).tap()
+                let back = app.navigationBars.buttons.element(boundBy: 0)
+                let ready = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                    back.isEnabled && back.isHittable
+                }, object: nil)
+                XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 5), .completed,
+                               "\(title): the destination's back button must be interactive before tapping")
+                back.tap()
             }
 
             // 不给胶囊栏另留等待时间：返回操作结束时，内容和系统标签按钮都应可用。

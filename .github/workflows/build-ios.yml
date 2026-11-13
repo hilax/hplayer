@@ -18,6 +18,7 @@ on:
         options:
           - all
           - navigation
+          - navigation-details
   push:
     branches: [main, 'feat/*']
 
@@ -189,6 +190,13 @@ jobs:
               -only-testing:HPlayerUITests/MotionUITests/testCarouselAndSeriesNavigationRemainUsable
               -only-testing:HPlayerUITests/RedesignFlowUITests/testHomeHeaderPinsSearchAndPagesSwipe
               -only-testing:HPlayerUITests/RedesignFlowUITests/testSourcePanelAndFilmMatchingRoute
+            )
+          elif [[ "$HPLAYER_TEST_SCOPE" == 'navigation-details' ]]; then
+            test_filters=(
+              -only-testing:HPlayerTests/HomeNavigationTests
+              -only-testing:HPlayerUITests/AnimeNavigationUITests
+              -only-testing:HPlayerUITests/CloudNavigationUITests
+              -only-testing:HPlayerUITests/TabBarUITests/testBackButtonReturnsEachTabWithItsNativeBar
             )
           fi
           echo "Simulator test scope: $HPLAYER_TEST_SCOPE"
