@@ -3,12 +3,13 @@ import XCTest
 final class SettingsUITests: XCTestCase {
     func testAppIconChoicesAreAccessibleFromSettings() {
         continueAfterFailure = false
-        let app = XCUIApplication()
-        app.launchEnvironment["HPLAYER_HOME_TEST"] = "1"
-        app.launchEnvironment["HPLAYER_METADATA_TEST_ENDPOINT"] = "http://127.0.0.1:8765"
-        app.launch()
+        let app = launchIconTestApp()
 
         openIconSettings(in: app)
+        let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        screenshot.name = "AppIconSettings - redesigned collection"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
         let names = ["prism", "classic", "ocean", "mint", "iris", "coral"]
         var found = Set<String>()
         var selected = Set<String>()
@@ -29,10 +30,7 @@ final class SettingsUITests: XCTestCase {
 
     func testCanRestoreDefaultPrismAfterChangingIcon() {
         continueAfterFailure = false
-        let app = XCUIApplication()
-        app.launchEnvironment["HPLAYER_HOME_TEST"] = "1"
-        app.launchEnvironment["HPLAYER_METADATA_TEST_ENDPOINT"] = "http://127.0.0.1:8765"
-        app.launch()
+        let app = launchIconTestApp()
         openIconSettings(in: app)
 
         let ocean = app.buttons["settings.appIcon.ocean"]
@@ -71,10 +69,7 @@ final class SettingsUITests: XCTestCase {
 
     func testConfirmationNoticeUndoRestoresPreviousIcon() {
         continueAfterFailure = false
-        let app = XCUIApplication()
-        app.launchEnvironment["HPLAYER_HOME_TEST"] = "1"
-        app.launchEnvironment["HPLAYER_METADATA_TEST_ENDPOINT"] = "http://127.0.0.1:8765"
-        app.launch()
+        let app = launchIconTestApp()
         openIconSettings(in: app)
 
         let coral = app.buttons["settings.appIcon.coral"]
@@ -93,6 +88,37 @@ final class SettingsUITests: XCTestCase {
         if done.waitForExistence(timeout: 3) { done.tap() }
         XCTAssertTrue(wait { !app.descendants(matching: .any)["settings.appIcon.notice"].exists },
                       "Dismissing the notice should remove it")
+    }
+
+    func testSelectedIconSurvivesStaleSystemReadBackgroundReentryAndRelaunch() {
+        continueAfterFailure = false
+        // The simulated system deliberately keeps reporting the old primary icon.
+        let app = launchIconTestApp(staleSystem: true)
+        openIconSettings(in: app)
+        let ocean = app.buttons["settings.appIcon.ocean"]
+        for _ in 0..<6 {
+            if ocean.isHittable { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(ocean.isHittable)
+        ocean.tap()
+        XCTAssertTrue(wait { ocean.isSelected && ocean.isEnabled })
+
+        XCUIDevice.shared.press(.home)
+        // Cross the old two-second settling window before the scene becomes active.
+        Thread.sleep(forTimeInterval: 3)
+        app.activate()
+        XCTAssertTrue(wait { ocean.isSelected }, "Returning from the background must not restore the old selection")
+
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        openIconSettings(in: app)
+        XCTAssertTrue(ocean.isSelected, "Recreating the settings page must retain the confirmed style")
+
+        app.terminate()
+        app.launch()
+        openIconSettings(in: app)
+        XCTAssertTrue(ocean.isSelected, "The choice must survive relaunch even when the system getter is stale")
+        XCTAssertFalse(app.buttons["settings.appIcon.prism"].isSelected)
     }
 
     func testAppearanceSelectionAndLicenseNavigation() {
@@ -134,6 +160,18 @@ final class SettingsUITests: XCTestCase {
                       "License entry should open the bundled license list")
         XCTAssertTrue(app.staticTexts["mpv / MPVKit"].waitForExistence(timeout: 5),
                       "The shipped MPVKit license should be listed")
+    }
+
+    private func launchIconTestApp(staleSystem: Bool = false) -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchEnvironment["HPLAYER_HOME_TEST"] = "1"
+        app.launchEnvironment["HPLAYER_METADATA_TEST_ENDPOINT"] = "http://127.0.0.1:8765"
+        app.launchEnvironment["HPLAYER_ICON_TEST_RESET"] = "1"
+        if staleSystem { app.launchEnvironment["HPLAYER_ICON_STALE_SYSTEM"] = "1" }
+        app.launch()
+        // Subsequent launches in this test verify persistence rather than resetting it.
+        app.launchEnvironment.removeValue(forKey: "HPLAYER_ICON_TEST_RESET")
+        return app
     }
 
     private func openIconSettings(in app: XCUIApplication) {
