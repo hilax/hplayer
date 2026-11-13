@@ -6,7 +6,7 @@ import UIKit
 /// - 115 里已经下载好过的资源：主按钮直接是「播放」
 /// - 点了「115 播放」：进度画在卡片上（提交 → 下载中 xx% → 准备播放），准备好后页面自动打开播放器，不遮住画面等
 /// - 点了「磁力播放」：同样在卡片上显示（连接节点 → 读取文件列表），文件列表到了就打开播放器
-/// - 115 里已经有了的资源：「播放」直接打开播放器
+/// - 115 里已经有了的资源：主按钮是「播放」，卡片上很快核对完就打开播放器
 /// - 没登录 115：只有「磁力播放」+ 复制
 /// 打开播放器由所在页面负责（onPlay），这样列表的格子被回收时播放窗口也不受影响。
 struct MagnetPlayActions: View {
@@ -14,7 +14,7 @@ struct MagnetPlayActions: View {
     let title: String
     /// 无障碍标识前缀：详情页是 magnet，链接面板是 magnet.link
     var identifierPrefix = "magnet"
-    /// 打开播放窗口（卡片上已经准备好的那份，或者 115 里已经下载好的资源）
+    /// 打开播放窗口（卡片上已经准备好的那份）
     let onPlay: (MagnetPlaybackRequest.Mode) -> Void
 
     @EnvironmentObject private var appState: AppState
@@ -186,13 +186,11 @@ struct MagnetPlayActions: View {
         return "115 播放"
     }
 
-    /// 卡片上那份已经准备好：直接打开；115 里已经有了：直接用 115 打开（播放器里很快就能开播）；否则交给 115
+    /// 卡片上那份已经准备好：直接打开；否则交给 115（115 里已经有的资源只是核对一下，卡片上显示「正在准备播放」，
+    /// 好了自动打开）。播放器只在真正能播的时候才出现。
     private func playPrimary() {
         if let mode = relay.readyMode(hash) {
             onPlay(mode)
-        } else if relay.isDownloaded(hash) {
-            Haptics.tap()
-            onPlay(.cloud)
         } else {
             playCloud()
         }
@@ -276,5 +274,55 @@ private struct MagnetCloudReadyModifier: ViewModifier {
         guard let item, token.hashes.contains(item.hash) else { return }
         relay.consumeReady()
         open(item.hash, item.mode)
+    }
+}
+
+extension View {
+    /// 页面开着时让 BT 引擎先跑起来（DHT 先热），并在后台预取最可能被点的那个资源的种子信息。
+    /// 页面真正被移除时才放开引擎（引擎空闲 20 秒后自己关）。
+    func magnetEngineWarmup(prefetch magnet: String?) -> some View {
+        modifier(MagnetEngineWarmupModifier(magnet: magnet))
+    }
+}
+
+private struct MagnetEngineWarmupModifier: ViewModifier {
+    let magnet: String?
+    @StateObject private var warmup = MagnetEngineWarmup()
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear {
+                warmup.start()
+                warmup.prefetch(magnet)
+            }
+            .onChange(of: magnet) { next in warmup.prefetch(next) }
+    }
+}
+
+/// 跟页面同生命周期的引擎占用：播放窗口隐藏主窗口时 SwiftUI 会发 onDisappear，所以不靠它来放开。
+@MainActor
+private final class MagnetEngineWarmup: ObservableObject {
+    private var held = false
+    private var prefetched: Set<String> = []
+
+    func start() {
+        guard !held, !InterfacePreview.active else { return }
+        held = true
+        MagnetEngineHost.shared.acquire()
+        Task {
+            await PublicTrackers.refreshIfNeeded()
+            _ = try? await MagnetEngineHost.shared.engine()
+        }
+    }
+
+    func prefetch(_ magnet: String?) {
+        guard held, let magnet, !magnet.isEmpty, !prefetched.contains(magnet) else { return }
+        prefetched.insert(magnet)
+        MagnetEngineHost.shared.prefetch(magnet)
+    }
+
+    deinit {
+        guard held else { return }
+        Task { @MainActor in MagnetEngineHost.shared.release() }
     }
 }

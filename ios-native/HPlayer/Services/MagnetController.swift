@@ -15,8 +15,37 @@ final class MagnetEngineHost {
     private var shuttingDown: Task<Void, Never>?
     private var idleShutdown: Task<Void, Never>?
     private var users = 0
+    /// 每个资源（信息哈希，小写）拿种子信息的任务：预取和真正播放共用同一个，不重复向引擎添加
+    private var metadataTasks: [String: Task<String, Error>] = [:]
 
     var isRunning: Bool { runningEngine != nil }
+
+    /// 拿到这个磁力的种子 ID（种子信息已就绪，可以列文件）。
+    /// 同一个资源只解析一次：详情页的预取、卡片上的「磁力播放」、播放窗口都等同一个任务。
+    func metadataTask(infoHash: String, uri: String) -> Task<String, Error> {
+        let key = infoHash.lowercased()
+        if let existing = metadataTasks[key] { return existing }
+        let task = Task<String, Error> { [weak self] in
+            guard let self else { throw CancellationError() }
+            let engine = try await self.engine()
+            return try await engine.addMagnet(uri)
+        }
+        metadataTasks[key] = task
+        // 失败了就忘掉，下次重新解析
+        Task { [weak self] in
+            if case .failure = await task.result, self?.metadataTasks[key] == task {
+                self?.metadataTasks[key] = nil
+            }
+        }
+        return task
+    }
+
+    /// 详情页打开时先在后台解析排在最前面的资源：点「磁力播放」时文件列表往往已经到了。
+    /// 只拿种子信息（几百 KB），不下载视频内容。
+    func prefetch(_ magnet: String) {
+        guard let link = MagnetLink.parse(magnet) else { return }
+        _ = metadataTask(infoHash: link.infoHash, uri: link.engineURI(publicTrackers: PublicTrackers.current))
+    }
 
     func acquire() {
         users += 1
@@ -62,6 +91,8 @@ final class MagnetEngineHost {
         guard users == 0, let current = candidate else { return }
         runningEngine = nil
         creating = nil
+        // 引擎关了，里面的种子 ID 都不能再用
+        metadataTasks.removeAll()
         let task = Task { await current.shutdown() }
         shuttingDown = task
         await task.value
@@ -346,8 +377,10 @@ final class MagnetController: ObservableObject {
             engineReady = true
             guard !Task.isCancelled else { return }
             if step < .peers { step = .peers }
+            // 详情页可能已经在预取这个资源：直接等那份结果，不重复添加
+            let pending = host.metadataTask(infoHash: link.infoHash, uri: uri)
             let id = try await Self.withTimeout(seconds: 150, message: Self.timeoutMessage) {
-                try await engine.addMagnet(uri)
+                try await awaitCancellable(pending)
             }
             guard !Task.isCancelled else { return }
             let files = try await engine.files(for: id)
@@ -811,5 +844,59 @@ final class MagnetController: ObservableObject {
         if let value = error as? APIError { return value.localizedDescription }
         let message = (error as? NuvioEngineError)?.message ?? error.localizedDescription
         return "视频准备失败：\(message)"
+    }
+}
+
+
+// MARK: - 可以取消的等待
+
+/// 等一个共享的任务，但自己被取消（比如超时、关掉页面）时立刻返回，不等那个任务结束。
+/// 共享的任务继续在后台跑，下次再来等的人还能用上它的结果。
+func awaitCancellable<T: Sendable>(_ task: Task<T, Error>) async throws -> T {
+    let waiter = SharedWaiter<T>()
+    return try await withTaskCancellationHandler {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<T, Error>) in
+            guard waiter.install(continuation) else {
+                continuation.resume(throwing: CancellationError())
+                return
+            }
+            Task {
+                do { waiter.finish(.success(try await task.value)) } catch { waiter.finish(.failure(error)) }
+            }
+        }
+    } onCancel: {
+        waiter.cancel()
+    }
+}
+
+private final class SharedWaiter<T: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<T, Error>?
+    private var cancelled = false
+
+    /// 已经被取消时返回 false
+    func install(_ continuation: CheckedContinuation<T, Error>) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if cancelled { return false }
+        self.continuation = continuation
+        return true
+    }
+
+    func finish(_ result: Result<T, Error>) {
+        lock.lock()
+        let pending = continuation
+        continuation = nil
+        lock.unlock()
+        pending?.resume(with: result)
+    }
+
+    func cancel() {
+        lock.lock()
+        cancelled = true
+        let pending = continuation
+        continuation = nil
+        lock.unlock()
+        pending?.resume(throwing: CancellationError())
     }
 }

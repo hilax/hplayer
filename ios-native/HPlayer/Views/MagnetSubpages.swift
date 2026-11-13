@@ -481,6 +481,8 @@ struct MagnetDetailView: View {
         .navigationTitle(item.code)
         .navigationBarTitleDisplayMode(.inline)
         .magnetPlayer(item: $playLaunch)
+        // 打开详情页就让 BT 引擎热起来，并预取排第一的资源的种子信息，点「磁力播放」时更快
+        .magnetEngineWarmup(prefetch: magnets.first?.magnetURL)
         // 卡片上的 115 / 磁力解析进度走完：直接打开播放器
         .magnetCloudReady(hashes: magnets.compactMap { MagnetLink.parse($0.magnetURL)?.infoHash }) { hash, mode in
             guard let torrent = magnets.first(where: { MagnetLink.parse($0.magnetURL)?.infoHash.lowercased() == hash }) else { return }

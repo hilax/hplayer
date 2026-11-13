@@ -6,7 +6,6 @@ import Foundation
 /// - 点「磁力播放」：同样起一份（只走软件自带的 BT 解析），卡片显示 连接节点 → 读取文件列表
 /// - 115 准备好时：卡片所在页面还开着就直接打开播放器；页面已经关了就弹一句全局提示
 /// - 已经在 115 下载好的资源记在本机，下次卡片按钮直接是「播放」
-/// - 播放窗口里点了「后台继续」的控制器也放在这里（park）
 /// 播放窗口打开时用 take 接手同一份控制器，不会重复提交离线任务。
 /// 只负责「持有、汇总状态和提示」，115 离线和 BT 解析的流程仍然全部在 MagnetController 里。
 @MainActor
@@ -155,15 +154,6 @@ final class MagnetRelayCenter: ObservableObject {
         removeJob(hash)
         statuses[hash] = nil
         if readyToOpen?.hash == hash { readyToOpen = nil }
-    }
-
-    /// 播放窗口里点了「后台继续」
-    func park(_ controller: MagnetController, title: String) {
-        guard let hash = Self.normalize(controller.link?.infoHash) else { return }
-        removeJob(hash)
-        statuses[hash] = .submitting
-        adopt(controller, hash: hash, title: title, mode: .cloud)
-        message = "已转到后台，115 准备好后会提醒你"
     }
 
     /// 播放窗口打开时取回这份控制器；指定了方式时只取同一种方式的（没有就返回 nil）

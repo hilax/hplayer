@@ -49,6 +49,8 @@ struct MagnetLinkPanel: View {
             RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
                 .strokeBorder(Theme.Source.magnet.opacity(0.45), lineWidth: 1)
         }
+        // 认出链接就先让 BT 引擎热起来、预取种子信息
+        .magnetEngineWarmup(prefetch: link.uri)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("magnet.link.panel")
     }
