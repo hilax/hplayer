@@ -6,21 +6,17 @@ struct SettingsTab: View {
     }
 }
 
-/// 「我的」：账号、三项统计，然后是我的内容、播放、弹幕、外观、媒体库、关于。
-/// 播放和弹幕两组直接读写播放器已有的偏好（解码、边播边存、字幕样式、自动连播、后台小窗、弹幕样式），
-/// 下次打开播放器时生效；这里只是界面，不碰播放器内核。
+/// 「我的」：账号，然后是播放、弹幕、外观、媒体库、关于。
+/// 追番在动漫频道、观看记录在首页「继续观看」、传输中心在网盘页，这里都不重复。
+/// 播放和弹幕两组直接读写播放器已有的偏好，下次打开播放器时生效；这里只是界面，不碰播放器内核。
 struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var accountInfo: P115AccountInfoStore
-    @EnvironmentObject private var recents: RecentStore
-    @EnvironmentObject private var localStore: LocalMediaStore
-    @EnvironmentObject private var mediaLibrary: MediaLibraryStore
 
     @AppStorage(AppearanceMode.storageKey) private var appearance: AppearanceMode = .system
     @State private var confirmLogout = false
-    @State private var showManagement = false
     @State private var titleAway = false
-    @ObservedObject private var watchlist = AnimeWatchlistStore.shared
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     // 播放偏好：和播放页用的是同一组键
     @AppStorage("player.autoPlayNext") private var autoPlayNext = true
@@ -33,10 +29,6 @@ struct SettingsView: View {
     @AppStorage(DanmakuPrefs.enabled) private var danmakuEnabled = true
     @AppStorage(DanmakuPrefs.area) private var danmakuArea = 0.5
     @AppStorage(DanmakuPrefs.opacity) private var danmakuOpacity = 0.9
-    @AppStorage(DanmakuPrefs.scale) private var danmakuScale = 1.0
-    @AppStorage(DanmakuPrefs.speed) private var danmakuSpeed = 1.0
-    @State private var danmakuExpanded = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var status: P115Status? { appState.isAuthenticated ? accountInfo.status(for: appState.sessionID) : nil }
     private var loadingStatus: Bool { appState.isAuthenticated && accountInfo.isLoading(for: appState.sessionID) }
@@ -48,17 +40,12 @@ struct SettingsView: View {
                 ScreenTitleBar("我的")
                     .padding(.horizontal, -Theme.contentInset)
                     .scrolledAway($titleAway)
-                VStack(spacing: Theme.Space.md) {
-                    profileCard
-                    statsRow
-                }
-                .reveal(0)
-                contentGroup.reveal(1)
-                playbackGroup.reveal(2)
-                danmakuGroup.reveal(3)
-                appearanceGroup.reveal(4)
-                mediaGroup.reveal(5)
-                aboutGroup.reveal(6)
+                profileCard.reveal(0)
+                playbackGroup.reveal(1)
+                danmakuGroup.reveal(2)
+                appearanceGroup.reveal(3)
+                mediaGroup.reveal(4)
+                aboutGroup.reveal(5)
             }
             .frame(maxWidth: 620)
             .frame(maxWidth: .infinity)
@@ -71,7 +58,6 @@ struct SettingsView: View {
         .overlay(alignment: .top) { CompactTitleBar(title: "我的", visible: titleAway) }
         .toolbar(.hidden, for: .navigationBar)
         .designScreen("settings")
-        .fullScreenCover(isPresented: $showManagement) { LibraryManagementView() }
         // 播放页里也能改这几项：回到这一页时重新读一遍
         .onAppear(perform: reloadPlayerPreferences)
         .onChange(of: decoding) { VideoDecoding.saved = $0 }
@@ -185,73 +171,10 @@ struct SettingsView: View {
         .animation(reduceMotion ? nil : Motion.smooth, value: error)
     }
 
-    // MARK: 统计
-
-    /// 视频、观看记录、追番：三格并排，大数字靠字重而不是颜色
-    private var statsRow: some View {
-        let videos = localStore.files.count + mediaLibrary.files(for: appState).count
-        return HStack(spacing: 0) {
-            stat("\(videos)", "视频")
-            stat("\(recents.items.count)", "观看记录")
-            stat("\(watchlist.items.count)", "追番")
-        }
-        .padding(.vertical, Theme.Space.md + 2)
-        .frame(maxWidth: .infinity)
-        .surfaceCard()
-    }
-
-    private func stat(_ value: String, _ title: String) -> some View {
-        VStack(spacing: 2) {
-            Text(value)
-                .font(.scaled(22, weight: .semibold).monospacedDigit())
-                .foregroundStyle(Theme.textPrimary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-                .rollingNumber()
-                .animation(Motion.smooth, value: value)
-            Text(title)
-                .font(Theme.Typo.caption)
-                .foregroundStyle(Theme.textTertiary)
-        }
-        .frame(maxWidth: .infinity)
-        .accessibilityElement(children: .combine)
-    }
-
-    // MARK: 分组
-
-    /// 分组：小标题 + 一张卡片，可选一行脚注。行之间不画分隔线。
-    private func group<Content: View>(_ title: String, footnote: String = "",
-                                      @ViewBuilder _ content: @escaping () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: Theme.Space.sm) {
-            GroupLabel(title: title)
-            DesignGroup { content() }
-            if !footnote.isEmpty {
-                Text(footnote)
-                    .font(Theme.Typo.caption)
-                    .foregroundStyle(Theme.textTertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, Theme.Space.xs)
-            }
-        }
-    }
-
-    /// 我的内容：追番。右边是数量（有更新时琥珀色）。传输中心只在「网盘」页，这里不重复。
-    private var contentGroup: some View {
-        group("我的内容") {
-            NavigationLink(value: MineRoute.watchlist) {
-                LibraryActionRow(symbol: AppIcon.heart.name, title: "我的追番",
-                                 value: watchUpdates > 0 ? "\(watchUpdates) 部更新" : (watchlist.items.isEmpty ? "" : "\(watchlist.items.count)"),
-                                 valueHighlighted: watchUpdates > 0)
-            }
-            .buttonStyle(.pressable(scale: 0.985))
-            .accessibilityIdentifier("mine.watchlist")
-        }
-    }
-
     // MARK: 播放
 
     private var playbackGroup: some View {
-        group("播放", footnote: "从下一次打开播放器开始生效。播放时也可以在播放页的「更多」里临时调整。") {
+        SettingsSection(title: "播放", footnote: "从下一次打开播放器开始生效。播放时也可以在播放页的「更多」里临时调整。") {
             SettingRow(icon: .autoPlayNext, title: "自动连播") {
                 Toggle("自动连播", isOn: $autoPlayNext)
                     .labelsHidden()
@@ -267,138 +190,43 @@ struct SettingsView: View {
                 }
             }
             SettingRow(icon: .subtitle, title: "字幕样式") {
-                menuPicker("字幕样式", selection: $subtitleStyle, options: SubtitleStyle.allCases, title: \.title,
-                           identifier: "mine.playback.subtitle")
+                SettingsMenuPicker(label: "字幕样式", selection: $subtitleStyle, options: SubtitleStyle.allCases,
+                                   title: \.title, identifier: "mine.playback.subtitle")
             }
             SettingRow(icon: .readahead, title: "边播边存") {
-                menuPicker("边播边存", selection: $readahead, options: ReadaheadLevel.allCases, title: \.title,
-                           identifier: "mine.playback.readahead")
+                SettingsMenuPicker(label: "边播边存", selection: $readahead, options: ReadaheadLevel.allCases,
+                                   title: \.title, identifier: "mine.playback.readahead")
             }
             SettingRow(icon: .decoder, title: "解码方式") {
-                menuPicker("解码方式", selection: $decoding, options: VideoDecoding.allCases, title: \.title,
-                           identifier: "mine.playback.decoding")
+                SettingsMenuPicker(label: "解码方式", selection: $decoding, options: VideoDecoding.allCases,
+                                   title: \.title, identifier: "mine.playback.decoding")
             }
         }
-    }
-
-    /// 行尾的下拉选择：系统菜单样式，显示当前值
-    private func menuPicker<Option: Hashable & Identifiable>(_ label: String, selection: Binding<Option>, options: [Option],
-                                                             title: KeyPath<Option, String>, identifier: String) -> some View {
-        Picker(label, selection: selection) {
-            ForEach(options) { option in
-                Text(option[keyPath: title]).tag(option)
-            }
-        }
-        .pickerStyle(.menu)
-        .labelsHidden()
-        .tint(Theme.textSecondary)
-        .accessibilityIdentifier(identifier)
     }
 
     // MARK: 弹幕
 
-    private var danmakuSummary: String {
-        let area: String
-        switch danmakuArea {
-        case ..<0.3: area = "1/4 屏"
-        case ..<0.6: area = "半屏"
-        case ..<0.9: area = "3/4 屏"
-        default: area = "全屏"
-        }
-        return "\(area) · \(Int((danmakuOpacity * 100).rounded()))%"
-    }
-
+    /// 弹幕：开关在这里；样式（区域、不透明度、字号、速度）放进单独一页，带实时预览。
     private var danmakuGroup: some View {
-        group("弹幕") {
+        SettingsSection(title: "弹幕") {
             SettingRow(icon: .danmaku, title: "显示弹幕") {
                 Toggle("显示弹幕", isOn: $danmakuEnabled)
                     .labelsHidden()
                     .tint(Theme.accentFill)
                     .accessibilityIdentifier("mine.danmaku")
             }
-            Button {
-                Haptics.tap()
-                withAnimation(reduceMotion ? nil : Motion.smooth) { danmakuExpanded.toggle() }
-            } label: {
-                SettingRow(icon: .danmakuStyle, title: "弹幕样式") {
-                    HStack(spacing: Theme.Space.sm) {
-                        Text(danmakuSummary)
-                            .font(Theme.Typo.meta.monospacedDigit())
-                            .foregroundStyle(Theme.textTertiary)
-                        Image(systemName: AppIcon.forward.name)
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(Theme.textMuted)
-                            .rotationEffect(.degrees(danmakuExpanded ? 90 : 0))
-                    }
-                }
+            NavigationLink { DanmakuStyleView() } label: {
+                LibraryActionRow(symbol: AppIcon.danmakuStyle.name, title: "弹幕样式", value: DanmakuStyleView.summary(area: danmakuArea, opacity: danmakuOpacity))
             }
             .buttonStyle(.pressable(scale: 0.985))
-            .accessibilityValue(danmakuExpanded ? "已展开" : "已收起")
             .accessibilityIdentifier("mine.danmaku.style")
-
-            if danmakuExpanded {
-                danmakuStyleEditor
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-            }
-        }
-    }
-
-    /// 展开后的弹幕样式：上面一块实时预览，下面是区域、不透明度、字号、速度
-    private var danmakuStyleEditor: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.lg) {
-            DanmakuPreview(area: danmakuArea, opacity: danmakuOpacity, scale: danmakuScale, enabled: danmakuEnabled)
-            VStack(alignment: .leading, spacing: Theme.Space.sm) {
-                Text("显示区域")
-                    .font(Theme.Typo.row)
-                    .foregroundStyle(Theme.textPrimary)
-                Picker("显示区域", selection: $danmakuArea) {
-                    Text("1/4").tag(0.25)
-                    Text("半屏").tag(0.5)
-                    Text("3/4").tag(0.75)
-                    Text("全屏").tag(1.0)
-                }
-                .pickerStyle(.segmented)
-                .accessibilityIdentifier("mine.danmaku.area")
-            }
-            sliderRow("不透明度", value: $danmakuOpacity, range: 0.2...1, step: 0.05,
-                      text: "\(Int((danmakuOpacity * 100).rounded()))%", identifier: "mine.danmaku.opacity")
-            sliderRow("字号", value: $danmakuScale, range: 0.7...1.5, step: 0.1,
-                      text: String(format: "%.1f×", danmakuScale), identifier: "mine.danmaku.scale")
-            sliderRow("速度", value: $danmakuSpeed, range: 0.6...1.6, step: 0.1,
-                      text: String(format: "%.1f×", danmakuSpeed), identifier: "mine.danmaku.speed")
-        }
-        .padding(.horizontal, Theme.Space.lg)
-        .padding(.top, Theme.Space.xs)
-        .padding(.bottom, Theme.Space.lg)
-        .disabled(!danmakuEnabled)
-        .opacity(danmakuEnabled ? 1 : 0.5)
-    }
-
-    private func sliderRow(_ title: String, value: Binding<Double>, range: ClosedRange<Double>, step: Double,
-                           text: String, identifier: String) -> some View {
-        VStack(alignment: .leading, spacing: Theme.Space.xs) {
-            HStack {
-                Text(title)
-                    .font(Theme.Typo.row)
-                    .foregroundStyle(Theme.textPrimary)
-                Spacer()
-                Text(text)
-                    .font(Theme.Typo.meta.monospacedDigit())
-                    .foregroundStyle(Theme.textSecondary)
-                    .contentTransition(.numericText())
-            }
-            Slider(value: value, in: range, step: step)
-                .tint(Theme.accentFill)
-                .accessibilityLabel(title)
-                .accessibilityValue(text)
-                .accessibilityIdentifier(identifier)
         }
     }
 
     // MARK: 外观、媒体库、关于
 
     private var appearanceGroup: some View {
-        group("外观") {
+        SettingsSection(title: "外观") {
             NavigationLink { AppearanceSettingsView() } label: {
                 LibraryActionRow(symbol: AppIcon.appearance.name, title: "显示方式", value: appearance.title)
             }
@@ -413,8 +241,9 @@ struct SettingsView: View {
     }
 
     private var mediaGroup: some View {
-        group("媒体库") {
-            Button { showManagement = true } label: {
+        SettingsSection(title: "媒体库") {
+            // 和其他二级页面一样从右侧推入，用系统返回键
+            NavigationLink { LibraryManagementView(pushed: true) } label: {
                 LibraryActionRow(symbol: AppIcon.folderSettings.name, title: "媒体库管理")
             }
             .buttonStyle(.pressable(scale: 0.985))
@@ -430,7 +259,7 @@ struct SettingsView: View {
     }
 
     private var aboutGroup: some View {
-        group("关于") {
+        SettingsSection(title: "关于") {
             LibraryActionRow(symbol: AppIcon.version.name, title: "版本", value: appVersion, showsChevron: false)
             NavigationLink {
                 LicensesView()
@@ -442,8 +271,6 @@ struct SettingsView: View {
             .accessibilityIdentifier("settings.licenses")
         }
     }
-
-    private var watchUpdates: Int { watchlist.items.filter(\.hasUpdate).count }
 
     private var accountState: (text: String, color: Color) {
         let idle = Theme.textMuted
@@ -464,75 +291,168 @@ struct SettingsView: View {
     }
 }
 
-/// 设置行：线框图标 + 标题，右边放开关、下拉或数值。和 `LibraryActionRow` 同样的尺寸。
-private struct SettingRow<Trailing: View>: View {
-    let icon: AppIcon
-    let title: String
-    @ViewBuilder var trailing: () -> Trailing
-    @Environment(\.isEnabled) private var isEnabled
+/// 行尾的下拉选择：系统菜单样式，显示当前值
+private struct SettingsMenuPicker<Option: Hashable & Identifiable>: View {
+    let label: String
+    @Binding var selection: Option
+    let options: [Option]
+    let title: KeyPath<Option, String>
+    let identifier: String
 
     var body: some View {
-        HStack(spacing: 14) {
-            RowIcon(icon: icon, tint: isEnabled ? Theme.textPrimary : Theme.textMuted)
-                .accessibilityHidden(true)
-            Text(title)
-                .font(Theme.Typo.row)
-                .foregroundStyle(isEnabled ? Theme.textPrimary : Theme.textMuted)
-                .lineLimit(1)
-                .layoutPriority(1)
-            Spacer(minLength: Theme.Space.sm)
-            trailing()
+        Picker(label, selection: $selection) {
+            ForEach(options) { option in
+                Text(option[keyPath: title]).tag(option)
+            }
         }
-        .padding(.horizontal, Theme.Space.lg)
-        .padding(.vertical, Theme.Space.sm - 2)
-        .frame(minHeight: 52)
-        .contentShape(Rectangle())
+        .pickerStyle(.menu)
+        .labelsHidden()
+        .tint(Theme.textSecondary)
+        .accessibilityIdentifier(identifier)
     }
 }
 
-/// 弹幕样式的实时预览：一块深色「画面」，按当前的区域、不透明度和字号摆几条示例弹幕。
+// MARK: - 弹幕样式
+
+/// 弹幕样式：上面一块固定的实时预览，下面是区域、不透明度、字号、速度。
+/// 和播放页的弹幕设置读写同一组偏好。
+struct DanmakuStyleView: View {
+    @AppStorage(DanmakuPrefs.enabled) private var enabled = true
+    @AppStorage(DanmakuPrefs.area) private var area = 0.5
+    @AppStorage(DanmakuPrefs.opacity) private var opacity = 0.9
+    @AppStorage(DanmakuPrefs.scale) private var scale = 1.0
+    @AppStorage(DanmakuPrefs.speed) private var speed = 1.0
+
+    static func summary(area: Double, opacity: Double) -> String {
+        let name: String
+        switch area {
+        case ..<0.3: name = "1/4 屏"
+        case ..<0.6: name = "半屏"
+        case ..<0.9: name = "3/4 屏"
+        default: name = "全屏"
+        }
+        return "\(name) · \(Int((opacity * 100).rounded()))%"
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: Theme.Space.xl) {
+                VStack(alignment: .leading, spacing: Theme.Space.sm) {
+                    DanmakuPreview(area: area, opacity: opacity, scale: scale, enabled: enabled)
+                    if !enabled {
+                        Text("弹幕已关闭，预览里不显示。可以在「我的」里打开。")
+                            .font(Theme.Typo.caption)
+                            .foregroundStyle(Theme.textTertiary)
+                            .padding(.horizontal, Theme.Space.xs)
+                    }
+                }
+
+                SettingsSection(title: "显示区域") {
+                    Picker("显示区域", selection: $area) {
+                        Text("1/4").tag(0.25)
+                        Text("半屏").tag(0.5)
+                        Text("3/4").tag(0.75)
+                        Text("全屏").tag(1.0)
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(Theme.Space.md)
+                    .accessibilityIdentifier("mine.danmaku.area")
+                }
+
+                SettingsSection(title: "外观", footnote: "和播放页里的弹幕设置是同一组，改哪边都一样。") {
+                    sliderRow("不透明度", value: $opacity, range: 0.2...1, step: 0.05,
+                              text: "\(Int((opacity * 100).rounded()))%", identifier: "mine.danmaku.opacity")
+                    sliderRow("字号", value: $scale, range: 0.7...1.5, step: 0.1,
+                              text: String(format: "%.1f×", scale), identifier: "mine.danmaku.scale")
+                    sliderRow("速度", value: $speed, range: 0.6...1.6, step: 0.1,
+                              text: String(format: "%.1f×", speed), identifier: "mine.danmaku.speed")
+                }
+            }
+            .frame(maxWidth: 620)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, Theme.contentInset)
+            .padding(.vertical, Theme.Space.lg)
+        }
+        .scrollIndicators(.hidden)
+        .background(Theme.pageBackground.ignoresSafeArea())
+        .navigationTitle("弹幕样式")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
+        .designScreen("danmaku-style")
+    }
+
+    private func sliderRow(_ title: String, value: Binding<Double>, range: ClosedRange<Double>, step: Double,
+                           text: String, identifier: String) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
+            HStack {
+                Text(title)
+                    .font(Theme.Typo.row)
+                    .foregroundStyle(Theme.textPrimary)
+                Spacer()
+                Text(text)
+                    .font(Theme.Typo.meta.monospacedDigit())
+                    .foregroundStyle(Theme.textSecondary)
+            }
+            Slider(value: value, in: range, step: step)
+                .tint(Theme.accentFill)
+                .accessibilityLabel(title)
+                .accessibilityValue(text)
+                .accessibilityIdentifier(identifier)
+        }
+        .padding(.horizontal, Theme.Space.lg)
+        .padding(.vertical, Theme.Space.md)
+    }
+}
+
+/// 弹幕样式的实时预览：一块 16:9 的深色「画面」，按当前的区域、不透明度和字号摆几条示例弹幕。
+/// 弹幕能用的区域在上面，下沿一条虚线。示例弹幕按轨道排，不会叠在一起。
 private struct DanmakuPreview: View {
     let area: Double
     let opacity: Double
     let scale: Double
     let enabled: Bool
 
-    private static let samples = ["前方高能", "这一段配乐太好了", "第一次看到这里", "名场面", "哈哈哈哈", "终于更新了"]
-    private static let height: CGFloat = 112
+    private static let samples = ["前方高能", "这一段配乐太好了", "第一次看到这里", "名场面", "哈哈哈哈", "终于更新了", "已三刷", "BGM 是什么"]
 
     var body: some View {
-        let fontSize = DanmakuPrefs.baseFontSize * CGFloat(scale) * 0.78
-        let lane = fontSize + 8
-        let visibleHeight = Self.height * CGFloat(area)
-        let lanes = max(1, Int((visibleHeight - 8) / lane))
-        ZStack(alignment: .topLeading) {
-            RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous)
-                .fill(Theme.ink)
-            // 弹幕能用的区域：上面一块，下沿一条虚线
-            Rectangle()
-                .fill(Theme.paper.opacity(Theme.Opacity.hint))
-                .frame(height: visibleHeight)
-                .overlay(alignment: .bottom) {
-                    Rectangle()
-                        .stroke(Theme.paper.opacity(Theme.Opacity.soft), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
-                        .frame(height: 1)
-                }
-            if enabled {
-                ForEach(0..<min(lanes, Self.samples.count), id: \.self) { index in
-                    Text(Self.samples[index])
-                        .font(.system(size: fontSize, weight: .semibold))
-                        .foregroundStyle(Theme.paper)
-                        .shadow(color: .black.opacity(Theme.Opacity.strong), radius: 1, x: 0, y: 1)
-                        .opacity(opacity)
-                        .lineLimit(1)
-                        .fixedSize()
-                        .offset(x: index.isMultiple(of: 2) ? 16 + CGFloat(index) * 14 : 96 + CGFloat(index) * 10,
-                                y: 6 + CGFloat(index) * lane)
+        GeometryReader { proxy in
+            let size = proxy.size
+            let fontSize = DanmakuPrefs.baseFontSize * CGFloat(scale) * 0.8
+            let lane = fontSize + 10
+            let usable = size.height * CGFloat(area)
+            let lanes = max(1, Int((usable - 6) / lane))
+            ZStack(alignment: .topLeading) {
+                Theme.ink
+                Rectangle()
+                    .fill(Theme.paper.opacity(Theme.Opacity.hint))
+                    .frame(height: usable)
+                Rectangle()
+                    .fill(Theme.paper.opacity(Theme.Opacity.soft))
+                    .frame(height: 1)
+                    .offset(y: usable - 1)
+                if enabled {
+                    ForEach(0..<min(lanes, Self.samples.count), id: \.self) { index in
+                        Text(Self.samples[index])
+                            .font(.system(size: fontSize, weight: .semibold))
+                            .foregroundStyle(Theme.paper)
+                            .shadow(color: .black.opacity(Theme.Opacity.strong), radius: 1, x: 0, y: 1)
+                            .lineLimit(1)
+                            .fixedSize()
+                            .opacity(opacity)
+                            .offset(x: index.isMultiple(of: 2) ? size.width * 0.08 + CGFloat(index) * 10
+                                                               : size.width * 0.42 + CGFloat(index) * 6,
+                                    y: 6 + CGFloat(index) * lane)
+                    }
                 }
             }
+            .frame(width: size.width, height: size.height, alignment: .topLeading)
         }
-        .frame(height: Self.height)
-        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous))
+        .aspectRatio(16 / 9, contentMode: .fit)
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
+                .strokeBorder(Theme.hairline, lineWidth: Theme.Stroke.hairline)
+        }
         .animation(Motion.quick, value: area)
         .animation(Motion.quick, value: scale)
         .accessibilityElement()
@@ -540,32 +460,27 @@ private struct DanmakuPreview: View {
     }
 }
 
+// MARK: - 外观
+
+/// 外观：三张手机小预览（跟随系统 / 浅色 / 深色），下面是单选圈，和系统「显示与亮度」一样的选法。
 struct AppearanceSettingsView: View {
     @AppStorage(AppearanceMode.storageKey) private var appearance: AppearanceMode = .system
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Space.xl) {
-                AppearancePicker(selection: $appearance)
-                VStack(alignment: .leading, spacing: Theme.Space.sm) {
-                    GroupLabel(title: "预览")
-                    HStack(spacing: Theme.Space.md) {
-                        IconTile(icon: .playback, size: 48, tone: .neutral)
-                        VStack(alignment: .leading, spacing: Theme.Space.xs + 2) {
-                            Text("继续观看").font(Theme.Typo.row.weight(.semibold)).foregroundStyle(Theme.textPrimary)
-                            Text("第 7 集 · 看到 18:42").font(Theme.Typo.caption.monospacedDigit()).foregroundStyle(Theme.textTertiary)
-                            ProgressView(value: 0.42).tint(Theme.accent)
-                        }
-                    }
-                    .padding(Theme.Space.lg)
-                    .surfaceCard()
+                SettingsSection(title: "显示方式",
+                                footnote: "「跟随系统」会随 iPhone 的深浅色设置自动切换。播放页始终是深色，看片时不受亮色界面干扰。") {
+                    AppearancePicker(selection: $appearance)
+                        .padding(.horizontal, Theme.Space.lg)
+                        .padding(.vertical, Theme.Space.page)
                 }
-                DesignNotice(symbol: AppIcon.appearance.name, text: "播放页面始终使用深色外观，避免观看时受到亮色界面干扰。")
             }
             .frame(maxWidth: 620).frame(maxWidth: .infinity)
             .padding(.horizontal, Theme.contentInset)
             .padding(.vertical, Theme.Space.lg)
         }
+        .scrollIndicators(.hidden)
         .background(Theme.pageBackground.ignoresSafeArea())
         .designScreen("appearance")
         .navigationTitle("外观")
@@ -657,110 +572,116 @@ private struct LicenseTextView: View {
     }
 }
 
-/// 外观选择：三张小预览图，选中的那张描边高亮。
+/// 外观选择：三张手机小预览 + 名称 + 单选圈。大字号时改成竖排。
 private struct AppearancePicker: View {
     @Binding var selection: AppearanceMode
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        Group {
-            if dynamicTypeSize.isAccessibilitySize {
-                VStack(spacing: 10) {
-                    ForEach(AppearanceMode.allCases) { mode in option(mode) }
-                }
-            } else {
-                HStack(spacing: 10) {
-                    ForEach(AppearanceMode.allCases) { mode in option(mode) }
-                }
-            }
+        let layout = dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(spacing: Theme.Space.lg))
+            : AnyLayout(HStackLayout(alignment: .top, spacing: Theme.Space.md))
+        layout {
+            ForEach(AppearanceMode.allCases) { mode in option(mode) }
         }
     }
 
     private func option(_ mode: AppearanceMode) -> some View {
         let selected = selection == mode
         return Button {
-            if selection != mode { Haptics.select() }
-            withAnimation(Motion.snappy) { selection = mode }
+            guard selection != mode else { return }
+            Haptics.select()
+            withAnimation(reduceMotion ? nil : Motion.snappy) { selection = mode }
         } label: {
-            VStack(spacing: 9) {
+            VStack(spacing: Theme.Space.md) {
                 AppearancePreview(mode: mode)
-                    .frame(height: 116)
-                    .overlay(alignment: .topTrailing) {
-                        if selected {
-                            Image(systemName: AppIcon.selected.name)
-                                .font(.scaled(18, weight: .semibold))
-                                .symbolRenderingMode(.palette)
-                                .foregroundStyle(Theme.onPrimary, Theme.gold)
-                                .offset(x: 4, y: -4)
-                                .transition(.scale.combined(with: .opacity))
-                        }
+                    .aspectRatio(0.62, contentMode: .fit)
+                    .frame(maxWidth: 96)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
+                            .strokeBorder(selected ? Theme.primaryAction : Theme.rule,
+                                          lineWidth: selected ? 2 : Theme.Stroke.hairline)
                     }
                 Text(mode.title)
-                    .font(Theme.Typo.caption.weight(.semibold))
-                    .foregroundStyle(.primary)
+                    .font(Theme.Typo.meta.weight(selected ? .semibold : .regular))
+                    .foregroundStyle(selected ? Theme.textPrimary : Theme.textSecondary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
+                CheckBadge(selected: selected, size: 22)
             }
-            .padding(10)
             .frame(maxWidth: .infinity)
-            .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
-                    .strokeBorder(selected ? Theme.primaryAction : Theme.hairline, lineWidth: selected ? 1.5 : Theme.Stroke.hairline)
-            }
             .contentShape(Rectangle())
         }
-        .buttonStyle(.pressable(scale: 0.96))
+        .buttonStyle(.pressable(scale: 0.97))
         .accessibilityLabel(mode.title)
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityIdentifier("settings.appearance.\(mode.rawValue)")
     }
 }
 
+/// 外观预览：画一部很小的手机——标题条、一排三张海报、一条琥珀进度线、底部标签栏胶囊。
+/// 「跟随系统」左半浅色、右半深色。颜色取 `Theme.Preview` 的两套固定值。
 private struct AppearancePreview: View {
     let mode: AppearanceMode
 
     var body: some View {
-        if mode == .system {
-            miniScreen(dark: false)
-                .overlay {
-                    miniScreen(dark: true)
-                        .mask {
-                            HStack(spacing: 0) {
-                                Color.clear
-                                Color.black
+        Group {
+            if mode == .system {
+                miniScreen(dark: false)
+                    .overlay {
+                        miniScreen(dark: true)
+                            .mask {
+                                HStack(spacing: 0) {
+                                    Color.clear
+                                    Color.black
+                                }
                             }
-                        }
-                }
-        } else {
-            miniScreen(dark: mode == .dark)
+                    }
+            } else {
+                miniScreen(dark: mode == .dark)
+            }
         }
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
     }
 
     private func miniScreen(dark: Bool) -> some View {
         let background = dark ? Theme.Preview.darkPage : Theme.Preview.lightPage
         let card = dark ? Theme.Preview.darkCard : Theme.Preview.lightCard
         let line = dark ? Theme.Preview.darkLine : Theme.Preview.lightLine
-        return ZStack(alignment: .topLeading) {
-            background
-            VStack(alignment: .leading, spacing: 5) {
-                RoundedRectangle(cornerRadius: Theme.Radius.badge, style: .continuous)
-                    .fill(Theme.Preview.accent)
-                    .frame(height: 24)
-                HStack(spacing: 4) {
-                    ForEach(0..<3, id: \.self) { _ in
-                        RoundedRectangle(cornerRadius: Theme.Radius.badge, style: .continuous)
+        return GeometryReader { proxy in
+            let width = proxy.size.width
+            let unit = width / 12
+            ZStack(alignment: .top) {
+                background
+                VStack(alignment: .leading, spacing: unit * 0.8) {
+                    // 标题
+                    Capsule().fill(line).frame(width: width * 0.42, height: unit * 0.9)
+                        .padding(.top, unit * 1.6)
+                    // 一张横卡和进度线
+                    VStack(alignment: .leading, spacing: unit * 0.4) {
+                        RoundedRectangle(cornerRadius: unit * 0.6, style: .continuous)
                             .fill(card)
-                            .frame(width: 15, height: 20)
+                            .frame(height: unit * 4.2)
+                        Capsule().fill(Theme.Preview.accent).frame(width: width * 0.38, height: unit * 0.35)
                     }
+                    // 一排三张海报
+                    HStack(spacing: unit * 0.5) {
+                        ForEach(0..<3, id: \.self) { _ in
+                            RoundedRectangle(cornerRadius: unit * 0.4, style: .continuous)
+                                .fill(card)
+                                .aspectRatio(2 / 3, contentMode: .fit)
+                        }
+                    }
+                    Spacer(minLength: 0)
+                    // 底部标签栏
+                    Capsule().fill(card)
+                        .frame(height: unit * 1.6)
+                        .padding(.bottom, unit * 0.8)
                 }
-                Capsule()
-                    .fill(line)
-                    .frame(width: 36, height: 3)
+                .padding(.horizontal, unit)
             }
-            .padding(8)
         }
-        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous))
     }
 }
 

@@ -198,7 +198,6 @@ struct CatalogTab: View {
     @State private var sort: CatalogSort = .recentlyAdded
     @State private var playing: PlaybackQueue?
     @State private var matching: MatchRequest?
-    @State private var showManagement = false
 
     init(onSearch: @escaping () -> Void = {}, preset: Binding<CatalogPreset?> = .constant(nil), filterRequest: Int = 0) {
         self.onSearch = onSearch
@@ -224,7 +223,6 @@ struct CatalogTab: View {
             PlayerView(source: queue.source, playlist: queue.items)
                 .environmentObject(appState)
         }
-        .fullScreenCover(isPresented: $showManagement) { LibraryManagementView() }
         .sheet(item: $matching) { request in
             MetadataMatchView(file: request.file, current: request.current, onMatch: { metadata in
                 for target in request.targets { await metadataStore.match(metadata, to: target) }
@@ -449,9 +447,10 @@ struct CatalogTab: View {
     }
 
     private var unmatchedBanner: some View {
-        Button { showManagement = true } label: {
+        // 媒体库管理和其他二级页面一样从右侧推入
+        NavigationLink { LibraryManagementView(pushed: true) } label: {
             HStack(spacing: 10) {
-                Circle().fill(Theme.gold).frame(width: 8, height: 8)
+                Circle().fill(Theme.accent).frame(width: 8, height: 8)
                 Text("\(snapshot.unmatched.count) 个视频还没配上封面").font(.scaled(13))
                 Spacer(minLength: 8)
                 Text("去处理 ›").font(.scaled(13, weight: .medium)).foregroundStyle(Theme.accent)

@@ -116,44 +116,32 @@ struct HomeLibraryScanView: View {
         }
     }
 
+    /// 从「我的」或片库频道压进公共导航栈时为 true：用系统返回键，和其他二级页面一样从右侧推入。
+    /// 单独作为根页面（界面截图、扫描页测试）时为 false：自带导航栈和返回键。
+    var pushed = false
+
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    scanCard
-                    if !appState.isAuthenticated { loginHint }
-                    overviewCard
-                    coverGroup
-                    if adultMatching { performerCard }
-                    maintenanceGroup
-                    DesignNotice(symbol: AppIcon.privacy.name,
-                                 text: "只读取文件列表，不下载整部视频，也不删除网盘文件。扫描在前台进行，退出后可继续。")
-                        .padding(.horizontal, 4)
-                }
-                .padding(.horizontal, Theme.contentInset)
-                .padding(.top, 14)
-                .padding(.bottom, 36)
-                .frame(maxWidth: 680)
-                .frame(maxWidth: .infinity)
-            }
-            .scrollIndicators(.hidden)
-            .background(Theme.pageBackground.ignoresSafeArea())
-            .task(id: "\(metadata.revision)|\(library.revision)|\(local.files.count)|\(appState.libraryAccountID ?? "local")") { refreshMatched() }
-            .navigationTitle("媒体库管理")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                // 和「资料来源」页一样用返回键，不再用「完成」
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button { dismiss() } label: {
-                        Image(systemName: AppIcon.back.name)
-                            .font(.scaled(17, weight: .semibold))
-                    }
-                    .accessibilityLabel("返回")
-                    .accessibilityIdentifier("manage.back")
+        Group {
+            if pushed {
+                page
+                    .toolbar(.visible, for: .navigationBar)
+            } else {
+                NavigationStack {
+                    page
+                        .toolbar {
+                            ToolbarItem(placement: .navigationBarLeading) {
+                                Button { dismiss() } label: {
+                                    Image(systemName: AppIcon.back.name)
+                                        .font(.scaled(17, weight: .semibold))
+                                }
+                                .accessibilityLabel("返回")
+                                .accessibilityIdentifier("manage.back")
+                            }
+                        }
                 }
             }
         }
-        .tint(Theme.accent)
+        .tint(Theme.textPrimary)
         .designScreen("manage")
         .confirmationDialog("清空继续观看记录？", isPresented: $confirmClearHistory, titleVisibility: .visible) {
             Button("清空记录", role: .destructive) { recents.clear(); magnetHistory.removeAll() }
@@ -164,6 +152,34 @@ struct HomeLibraryScanView: View {
         .sheet(isPresented: $showCleanup) {
             LibraryCleanupView(appState: appState, library: library).environmentObject(appState)
         }
+    }
+
+    private var page: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                scanCard
+                if !appState.isAuthenticated { loginHint }
+                overviewCard
+                coverGroup
+                if adultMatching { performerCard }
+                maintenanceGroup
+                DesignNotice(symbol: AppIcon.privacy.name,
+                             text: "只读取文件列表，不下载整部视频，也不删除网盘文件。扫描在前台进行，退出后可继续。")
+                    .padding(.horizontal, 4)
+            }
+            .padding(.horizontal, Theme.contentInset)
+            .padding(.top, 14)
+            .padding(.bottom, 36)
+            .frame(maxWidth: 680)
+            .frame(maxWidth: .infinity)
+            // 页面里的开关用琥珀；导航栏（返回键）跟随全局的正文色
+            .tint(Theme.accentFill)
+        }
+        .scrollIndicators(.hidden)
+        .background(Theme.pageBackground.ignoresSafeArea())
+        .task(id: "\(metadata.revision)|\(library.revision)|\(local.files.count)|\(appState.libraryAccountID ?? "local")") { refreshMatched() }
+        .navigationTitle("媒体库管理")
+        .navigationBarTitleDisplayMode(.inline)
     }
 
     private var unmatchedCount: Int { max(0, totalVideos - matchedVideos) }

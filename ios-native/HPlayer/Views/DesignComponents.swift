@@ -307,6 +307,63 @@ struct RowIcon: View {
     }
 }
 
+/// 设置行：线框图标 + 标题，右边放开关、下拉或数值。和 `LibraryActionRow` 同样的尺寸。
+struct SettingRow<Trailing: View>: View {
+    let icon: AppIcon
+    let title: String
+    var subtitle = ""
+    @ViewBuilder var trailing: () -> Trailing
+    @Environment(\.isEnabled) private var isEnabled
+
+    var body: some View {
+        HStack(spacing: 14) {
+            RowIcon(icon: icon, tint: isEnabled ? Theme.textPrimary : Theme.textMuted)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                Text(title)
+                    .font(Theme.Typo.row)
+                    .foregroundStyle(isEnabled ? Theme.textPrimary : Theme.textMuted)
+                    .lineLimit(1)
+                if !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(Theme.Typo.caption)
+                        .foregroundStyle(Theme.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .layoutPriority(1)
+            Spacer(minLength: Theme.Space.sm)
+            trailing()
+        }
+        .padding(.horizontal, Theme.Space.lg)
+        .padding(.vertical, Theme.Space.sm - 2)
+        .frame(minHeight: 52)
+        .contentShape(Rectangle())
+    }
+}
+
+/// 分组：小标题 + 一张卡片，可选一行脚注。行之间不画分隔线。设置类页面都用它。
+struct SettingsSection<Content: View>: View {
+    let title: String
+    var footnote = ""
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.sm) {
+            if !title.isEmpty { GroupLabel(title: title) }
+            DesignGroup(content: content)
+            if !footnote.isEmpty {
+                Text(footnote)
+                    .font(Theme.Typo.caption)
+                    .foregroundStyle(Theme.textTertiary)
+                    .lineSpacing(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, Theme.Space.xs)
+            }
+        }
+    }
+}
+
 /// 列表行之间的分隔线：0.5pt 的线色，从标题处开始。
 struct RowDivider: View {
     var leading: CGFloat = LibraryActionRow.dividerInset
@@ -335,6 +392,8 @@ struct ActionButtonStyle: ButtonStyle {
         case secondary
         /// 危险操作：红底白字的胶囊
         case destructive
+        /// 次要的危险操作（删除凭证、清空记录）：次按钮的外形，红字
+        case secondaryDestructive
     }
 
     var kind: Kind
@@ -353,7 +412,7 @@ struct ActionButtonBody: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        if kind == .secondary {
+        if kind == .secondary || kind == .secondaryDestructive {
             decorated(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous))
         } else {
             decorated(Capsule())
@@ -363,7 +422,7 @@ struct ActionButtonBody: View {
     private func decorated<S: InsettableShape>(_ shape: S) -> some View {
         let pressed = configuration.isPressed
         return configuration.label
-            .font(kind == .secondary ? Theme.Typo.row.weight(.medium) : Theme.Typo.button)
+            .font(kind == .secondary || kind == .secondaryDestructive ? Theme.Typo.row.weight(.medium) : Theme.Typo.button)
             .lineLimit(1)
             .foregroundStyle(foreground)
             .padding(.horizontal, Theme.Space.lg)
@@ -389,22 +448,23 @@ struct ActionButtonBody: View {
         case .primaryOnArtwork: return Theme.ink
         case .secondary: return Theme.textPrimary
         case .destructive: return .white
+        case .secondaryDestructive: return Theme.danger
         }
     }
 
     private var background: Color {
-        guard isEnabled else { return kind == .secondary ? Color.clear : Theme.tileTint }
+        guard isEnabled else { return kind == .secondary || kind == .secondaryDestructive ? Color.clear : Theme.tileTint }
         switch kind {
         case .primary: return Theme.primaryAction
         case .primaryOnArtwork: return Theme.paper
-        case .secondary: return Theme.surface
+        case .secondary, .secondaryDestructive: return Theme.surface
         case .destructive: return Theme.dangerFill
         }
     }
 
     private var border: Color? {
         switch kind {
-        case .secondary: return isEnabled ? Theme.rule : Theme.hairline
+        case .secondary, .secondaryDestructive: return isEnabled ? Theme.rule : Theme.hairline
         default: return isEnabled ? nil : Theme.hairline
         }
     }

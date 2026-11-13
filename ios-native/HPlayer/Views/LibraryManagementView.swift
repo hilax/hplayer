@@ -8,11 +8,14 @@ struct LibraryManagementView: View {
     @EnvironmentObject private var library: MediaLibraryStore
     @EnvironmentObject private var local: LocalMediaStore
 
+    /// 从「我的」、片库频道压进公共导航栈时为 true（系统返回键、从右侧推入）
+    var pushed = false
+
     private var files: [LibraryMedia] { HomeLibrary.media(local: local, cloud: library, appState: appState) }
 
     var body: some View {
         HomeLibraryScanView(onStart: { start($0) }, onStartFolder: { start(true, root: ($0, $1)) },
-                            onRetryMatching: { metadata.retryFailed(files: files) })
+                            onRetryMatching: { metadata.retryFailed(files: files) }, pushed: pushed)
     }
 
     private func start(_ restart: Bool, root: (id: String, name: String)? = nil) {
