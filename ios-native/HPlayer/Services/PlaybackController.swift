@@ -665,6 +665,11 @@ final class PlaybackController: ObservableObject {
         if let last = lastResumeFrame, last.key == key, abs(last.time - currentTime) < 1,
            Date().timeIntervalSince(last.at) < 2 { return }
         lastResumeFrame = (key, currentTime, Date())
+        // 直接取当前帧的像素（不依赖 mpv 的图片编码器）；取不到时再试写文件
+        if let image = engine.videoFrameImage() {
+            PlaybackFrameStore.shared.ingest(image: image, for: key)
+            return
+        }
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("hplayer-frame-\(UUID().uuidString).jpg")
         guard engine.command(["screenshot-to-file", file.path, "video"]) >= 0 else { return }
         PlaybackFrameStore.shared.ingest(file: file, for: key)
@@ -934,24 +939,32 @@ final class PlaybackController: ObservableObject {
         let authorization = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
         guard authorization == .authorized || authorization == .limited,
               !Task.isCancelled, loaded, self.engine === engine else { return false }
+        // 直接取当前帧的像素做成图片（原始分辨率，不含字幕）；取不到时再试 mpv 写文件
+        if let frame = engine.videoFrameImage() {
+            return await saveToPhotos(UIImage(cgImage: frame))
+        }
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("hplayer-shot-\(UUID().uuidString).jpg")
         defer { try? FileManager.default.removeItem(at: file) }
         guard engine.command(["screenshot-to-file", file.path, "video"]) >= 0 else { return false }
         for _ in 0..<20 {
             guard !Task.isCancelled else { return false }
             if let image = UIImage(contentsOfFile: file.path) {
-                do {
-                    try await PHPhotoLibrary.shared().performChanges {
-                        PHAssetChangeRequest.creationRequestForAsset(from: image)
-                    }
-                    return true
-                } catch {
-                    return false
-                }
+                return await saveToPhotos(image)
             }
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
         return false
+    }
+
+    private func saveToPhotos(_ image: UIImage) async -> Bool {
+        do {
+            try await PHPhotoLibrary.shared().performChanges {
+                PHAssetChangeRequest.creationRequestForAsset(from: image)
+            }
+            return true
+        } catch {
+            return false
+        }
     }
 
     private func reopenInPlace() {

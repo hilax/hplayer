@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreGraphics
 import Foundation
 import Libmpv
 import QuartzCore
@@ -264,6 +265,20 @@ final class MPVEngine {
         guard format == "bgr0", width > 0, height > 0, stride >= width * 4,
               let pixels, pixels.count >= stride * height else { return nil }
         return RawFrame(width: width, height: height, stride: stride, pixels: pixels)
+    }
+
+    /// 当前这一帧画面做成图片（不含字幕）。
+    /// 截图和「继续观看」封面都用它：不经过 mpv 的图片编码器（`screenshot-to-file` 写 jpg / png
+    /// 要 FFmpeg 带对应的编码器，播放内核的精简版里没有，所以以前截不出来）。
+    func videoFrameImage() -> CGImage? {
+        guard let frame = rawVideoFrame(),
+              let provider = CGDataProvider(data: frame.pixels as CFData),
+              let space = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
+        // mpv 的 bgr0：内存里依次是 B、G、R、空，相当于小端的 32 位 xRGB
+        let info = CGBitmapInfo(rawValue: CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.noneSkipFirst.rawValue)
+        return CGImage(width: frame.width, height: frame.height, bitsPerComponent: 8, bitsPerPixel: 32,
+                       bytesPerRow: frame.stride, space: space, bitmapInfo: info, provider: provider,
+                       decode: nil, shouldInterpolate: true, intent: .defaultIntent)
     }
 
     // MARK: 事件

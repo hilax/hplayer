@@ -68,6 +68,15 @@ final class PlaybackFrameStore: ObservableObject {
     }
 
     /// AVPlayer（短剧）取到的一帧
+    /// mpv 当前画面（`MPVEngine.videoFrameImage`）：后台缩小、判断黑场、存档。
+    func ingest(image: CGImage, for key: String) {
+        let target = fileURL(for: key)
+        Task.detached(priority: .utility) { [weak self] in
+            guard let scaled = ResumeFrameImaging.render(CIImage(cgImage: image)) else { return }
+            await self?.commit(scaled, to: target, key: key)
+        }
+    }
+
     func ingest(pixelBuffer: CVPixelBuffer, for key: String) {
         let target = fileURL(for: key)
         let image = CIImage(cvPixelBuffer: pixelBuffer)
