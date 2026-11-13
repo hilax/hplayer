@@ -59,6 +59,7 @@ struct AnimeDetailView: View {
                     .tint(Theme.textSecondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .accessibilityLabel("正在加载番剧详情")
+                    .accessibilityIdentifier("anime.loading")
             } else {
                 EmptyStateView(icon: AppIcon.alert.name, title: "番剧详情没有加载出来",
                                message: errorMessage ?? "网络不太稳定，稍后再试。",
@@ -72,22 +73,25 @@ struct AnimeDetailView: View {
         .designScreen("anime-detail")
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
+        // 首页隐藏了导航栏；详情页从加载的第一帧起就固定显示，避免数据到达后再展开。
+        .toolbar(.visible, for: .navigationBar)
         .modifier(TransparentNavigationBar())
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                if let detail {
-                    Button {
-                        Haptics.tap()
-                        watchlist.toggle(detail: detail)
-                    } label: {
-                        Image(icon: watchlist.isWatched(id: detail.id) ? .heartFill : .heart)
-                            .foregroundStyle(watchlist.isWatched(id: detail.id) ? Theme.accent : Theme.textPrimary)
-                    }
-                    // 加入追番时爱心轻轻一跳并飘出几颗小心；取消时不动
-                    .successPop(watchlist.isWatched(id: detail.id), particle: .heartFill)
-                    .accessibilityLabel(watchlist.isWatched(id: detail.id) ? "取消追番" : "追番")
-                    .accessibilityIdentifier("anime.watchlist.\(detail.id)")
+                Button {
+                    guard let detail else { return }
+                    Haptics.tap()
+                    watchlist.toggle(detail: detail)
+                } label: {
+                    Image(icon: watchlist.isWatched(id: animeId) ? .heartFill : .heart)
+                        .foregroundStyle(watchlist.isWatched(id: animeId) ? Theme.accent : Theme.textPrimary)
                 }
+                // 加载、成功和失败时都保留同一个按钮，导航栏不会因工具项增删而重新布局。
+                .disabled(detail == nil)
+                // 加入追番时爱心轻轻一跳并飘出几颗小心；取消时不动
+                .successPop(watchlist.isWatched(id: animeId), particle: .heartFill)
+                .accessibilityLabel(watchlist.isWatched(id: animeId) ? "取消追番" : "追番")
+                .accessibilityIdentifier("anime.watchlist.\(animeId)")
             }
         }
         .task {
