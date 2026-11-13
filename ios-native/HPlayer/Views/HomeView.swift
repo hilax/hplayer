@@ -248,6 +248,8 @@ struct HomeView: View {
                             DownloadsView()
                         case .page(.recycleBin):
                             RecycleBinView()
+                        case .page(.localVideos):
+                            LocalVideosView()
                         }
                     }
             }
@@ -347,7 +349,7 @@ struct HomeView: View {
         case .magnet:
             MagnetTab()
         case .cloud:
-            CloudTab(onSearch: { openSearch() })
+            CloudTab(onSearch: { openSearch() }, onOpenAccount: { selection = .mine })
         case .mine:
             SettingsView()
         case .search:

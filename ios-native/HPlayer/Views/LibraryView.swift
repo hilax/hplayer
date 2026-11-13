@@ -53,6 +53,8 @@ enum ManagementPage: Hashable {
     case offline
     case recycleBin
     case downloads
+    /// 本机视频（网盘根页的快捷入口）
+    case localVideos
 }
 
 struct DirectoryView: View {
@@ -69,6 +71,12 @@ struct DirectoryView: View {
     var management = false
     /// 菜单里的离线下载、回收站、下载管理由上一层的导航栈打开
     var onOpenPage: ((ManagementPage) -> Void)? = nil
+    /// 网盘标签根页：不显示导航栏，列表顶上是页面标题、rootHeader（账号条、快捷入口）和「全部文件」，
+    /// 下面直接是根目录的文件。nil 时是普通的目录页。
+    var rootTitle: String? = nil
+    var rootHeader: AnyView? = nil
+    var onSearch: (() -> Void)? = nil
+    private var isRoot: Bool { rootTitle != nil }
 
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var mediaLibrary: MediaLibraryStore
@@ -106,7 +114,9 @@ struct DirectoryView: View {
          onImported: (() -> Void)? = nil, management: Bool = false,
          onOpenPage: ((ManagementPage) -> Void)? = nil,
          initialFiles: [P115File]? = nil, initialSelection: Set<String>? = nil,
-         initialSheet: DirectorySheet? = nil, initialInfo: Direct115FileInfo? = nil) {
+         initialSheet: DirectorySheet? = nil, initialInfo: Direct115FileInfo? = nil,
+         rootTitle: String? = nil, rootHeader: AnyView? = nil, onSearch: (() -> Void)? = nil) {
+        self.rootTitle = rootTitle; self.rootHeader = rootHeader; self.onSearch = onSearch
         self.cid = cid; self.trail = trail; self.onJump = onJump
         self.onOpenDir = onOpenDir; self.onPlay = onPlay; self.onImported = onImported
         self.management = management; self.onOpenPage = onOpenPage
@@ -123,8 +133,9 @@ struct DirectoryView: View {
     var body: some View {
         content
             .background(Theme.pageBackground.ignoresSafeArea())
-            .designScreen(selecting ? "files-select" : "files")
-            .toolbar(.visible, for: .navigationBar)
+            .designScreen(selecting ? "files-select" : (isRoot ? "library" : "files"))
+            // 根页用自己的标题栏；进入选择模式时才显示导航栏（全选 / 完成）
+            .toolbar(isRoot && !selecting ? .hidden : .visible, for: .navigationBar)
             .navigationBarTitleDisplayMode(.inline)
             .navigationBarBackButtonHidden(selecting)
             .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -132,7 +143,8 @@ struct DirectoryView: View {
                 bottomBar
             }
             .task(id: "\(cid)|\(appState.sessionID.uuidString)") {
-                if !InterfacePreview.active { await load() }
+                // 已经加载过这个账号的目录（切标签、从子目录返回）时静默刷新，不再整页转圈
+                if !InterfacePreview.active { await load(silent: loadedSessionID == appState.sessionID) }
             }
             .toolbar { toolbarItems }
             .onChange(of: sortKey) { _ in applySort() }
@@ -156,8 +168,29 @@ struct DirectoryView: View {
             }
     }
 
+    /// 根页在加载、出错、空目录时也保留顶上的标题、账号条和快捷入口
     @ViewBuilder
     private var content: some View {
+        if isRoot && !selecting && (loading || !error.isEmpty || items.isEmpty) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    rootTop
+                    statusContent
+                        .frame(maxWidth: .infinity)
+                        .frame(minHeight: 320)
+                }
+                .padding(.horizontal, Theme.contentInset)
+                .padding(.top, 6)
+            }
+            .scrollIndicators(.hidden)
+            .refreshable { await load(silent: true) }
+        } else {
+            statusContent
+        }
+    }
+
+    @ViewBuilder
+    private var statusContent: some View {
         if loading {
             ProgressView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -320,8 +353,41 @@ struct DirectoryView: View {
 
     private var listHeader: some View {
         VStack(alignment: .leading, spacing: 10) {
+            if isRoot && !selecting { rootTop }
             if trail.count > 1 { breadcrumb }
             summaryLine
+        }
+    }
+
+    /// 根页顶部：页面标题（搜索、更多）、账号条和快捷入口、「全部文件」
+    @ViewBuilder
+    private var rootTop: some View {
+        if let rootTitle {
+            VStack(alignment: .leading, spacing: 14) {
+                ScreenTitleBar(title: rootTitle) {
+                    if let onSearch {
+                        BarIconButton(icon: .search, label: "搜索网盘", identifier: "cloud.search", action: onSearch)
+                    }
+                    Menu {
+                        menuContent
+                    } label: {
+                        Image(systemName: AppIcon.more.name)
+                            .font(.system(size: 20, weight: Theme.iconWeight))
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .disabled(loading)
+                    .accessibilityLabel("更多")
+                    .accessibilityIdentifier("library.menu")
+                }
+                .padding(.horizontal, -Theme.contentInset)
+                if let rootHeader { rootHeader }
+                Text("全部文件")
+                    .font(.system(size: 19, weight: .bold))
+                    .foregroundStyle(Theme.textPrimary)
+                    .accessibilityAddTraits(.isHeader)
+                    .padding(.top, 4)
+            }
         }
     }
 
@@ -452,7 +518,7 @@ struct DirectoryView: View {
                     .fontWeight(.semibold)
             }
         }
-        if !selecting {
+        if !selecting && !isRoot {
             ToolbarItem(placement: .primaryAction) {
                 moreMenu
             }

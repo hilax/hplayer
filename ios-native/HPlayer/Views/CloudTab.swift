@@ -6,9 +6,12 @@ enum CloudRoute: Hashable {
     case page(ManagementPage)
 }
 
-/// 网盘：115 账号卡片、全部文件、离线下载与本机视频（2.0：磁力播放和磁力聚合移到「磁力」Tab）。
+/// 网盘：登录了 115 就直接是根目录的文件，顶上是账号条和快捷入口（传输中心、离线下载、本机视频、回收站）；
+/// 没登录时是登录引导，传输中心和本机视频不用登录也能用。「我的」页和这里共用同一个 115 登录。
 struct CloudTab: View {
     var onSearch: () -> Void = {}
+    /// 点账号条：去「我的」页看账号详情
+    var onOpenAccount: () -> Void = {}
     /// 同一套网盘页面由 HomeView 的公共导航栈呈现；nil 为标签根页。
     var route: CloudRoute? = nil
     @EnvironmentObject private var appState: AppState
@@ -21,9 +24,6 @@ struct CloudTab: View {
     }
     @State private var playing: PlaybackQueue?
     @State private var showDirectLogin = false
-    @State private var connecting = false
-    @State private var connectionError = ""
-    @State private var openRequestID = UUID()
 
     @ObservedObject private var downloads = DownloadManager.shared
 
@@ -47,37 +47,130 @@ struct CloudTab: View {
         }
         .sheet(isPresented: $showDirectLogin) {
             NavigationStack {
+                // 登录成功后根页自动换成文件列表
                 CookieWebLoginView {
                     showDirectLogin = false
-                    path.append(.folder(Crumb(cid: "0", name: "115 网盘")))
                 }
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { showDirectLogin = false } } }
             }
         }
-        .alert("无法连接 115", isPresented: Binding(get: { !connectionError.isEmpty }, set: { if !$0 { connectionError = "" } })) {
-            Button("重新登录 115") { connectionError = ""; showDirectLogin = true }
-            Button("关闭", role: .cancel) { connectionError = "" }
-        } message: { Text(connectionError) }
         .onChange(of: appState.sessionID) { _ in
-            openRequestID = UUID()
             path = []; playing = nil
-            connecting = false; connectionError = ""
-        }
-        .onDisappear {
-            openRequestID = UUID()
-            connecting = false
         }
     }
 
+    @ViewBuilder
     private var rootPage: some View {
+        if appState.isAuthenticated {
+            DirectoryView(cid: "0", onOpenDir: { path.append(.folder($0)) }, onPlay: { file, files in
+                play(file, files)
+            }, management: true, onOpenPage: { openPage($0) },
+                          initialFiles: previewFiles(cid: "0"),
+                          rootTitle: "网盘", rootHeader: AnyView(rootHeader), onSearch: onSearch)
+            .id(appState.sessionID)
+            .navigationTitle("")
+        } else {
+            signedOutPage
+        }
+    }
+
+    // MARK: 已登录：账号条和快捷入口
+
+    private var rootHeader: some View {
+        VStack(spacing: 12) {
+            accountStrip
+            quickEntries
+        }
+    }
+
+    /// 账号、连接状态和容量缩成一条；点它去「我的」页看账号详情
+    private var accountStrip: some View {
+        Button(action: onOpenAccount) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 10) {
+                    Text("115")
+                        .font(.system(size: 12, weight: .heavy, design: .rounded))
+                        .foregroundStyle(.white)
+                        .frame(width: 34, height: 34)
+                        .background(Color(uiColor: UIColor(hex: 0x2A6BFF)), in: Circle())
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("115 网盘")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(Theme.textPrimary)
+                        Text(status?.userName ?? "正在读取账号")
+                            .font(.caption)
+                            .foregroundStyle(Theme.textSecondary)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 4)
+                    HStack(spacing: 4) {
+                        Circle().fill(statusColor).frame(width: 6, height: 6)
+                        Text(syncText)
+                    }
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(statusColor)
+                    Image(systemName: AppIcon.forward.name)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Theme.textTertiary)
+                }
+                if let quota {
+                    HStack(spacing: 10) {
+                        QuotaBar(ratio: quotaRatio(quota))
+                        Text("已用 \(quota.usedText) / \(quota.totalText)")
+                            .font(.caption2)
+                            .foregroundStyle(Theme.textSecondary)
+                            .monospacedDigit()
+                            .fixedSize()
+                    }
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
+            .overlay { RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous).strokeBorder(Theme.hairline, lineWidth: 0.5) }
+        }
+        .buttonStyle(.pressable(scale: 0.98))
+        .accessibilityIdentifier("library.account")
+    }
+
+    /// 传输中心、离线下载、本机视频、回收站：一排四个方块
+    private var quickEntries: some View {
+        HStack(spacing: 8) {
+            QuickEntryButton(icon: .transfers, title: "传输中心",
+                             detail: activeDownloads == 0 ? "" : "\(activeDownloads) 个下载中",
+                             highlighted: activeDownloads > 0, identifier: "cloud.transfers") {
+                path.append(.page(.transfers))
+            }
+            QuickEntryButton(icon: .cloudDownload, title: "离线下载", identifier: "cloud.offline") {
+                openPage(.offline)
+            }
+            QuickEntryButton(icon: .device, title: "本机视频",
+                             detail: localStore.files.isEmpty ? "" : "\(localStore.files.count) 个",
+                             identifier: "cloud.local") {
+                path.append(.page(.localVideos))
+            }
+            QuickEntryButton(icon: .recycleBin, title: "回收站", identifier: "cloud.recycleBin") {
+                openPage(.recycleBin)
+            }
+        }
+    }
+
+    // MARK: 未登录
+
+    private var signedOutPage: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                ScreenTitleBar(title: "网盘") {
-                    BarIconButton(icon: .search, label: "搜索网盘", identifier: "cloud.search", action: onSearch)
+                ScreenTitleBar(title: "网盘") { EmptyView() }
+                    .padding(.horizontal, -Theme.contentInset)
+                loginCard.reveal(0)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("不用登录也能用")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Theme.textSecondary)
+                        .padding(.leading, 4)
+                    offlineRows
                 }
-                .padding(.horizontal, -Theme.contentInset)
-                accountCard.reveal(0)
-                toolRows.reveal(1)
+                .reveal(1)
             }
             .frame(maxWidth: 620)
             .frame(maxWidth: .infinity)
@@ -90,74 +183,50 @@ struct CloudTab: View {
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .navigationBar)
-        .designScreen(appState.isAuthenticated ? "library" : "library-empty")
+        .designScreen("library-empty")
     }
 
-    private var accountCard: some View {
-        Button { Task { await open115() } } label: {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(spacing: 12) {
-                    Text("115")
-                        .font(.system(size: 13, weight: .heavy, design: .rounded))
-                        .foregroundStyle(.white)
-                        .frame(width: 38, height: 38)
-                        .background(Color(uiColor: UIColor(hex: 0x2A6BFF)), in: Circle())
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(appState.isAuthenticated ? "115 网盘" : "连接 115 网盘")
-                            .font(.system(size: 15, weight: .semibold)).foregroundStyle(.primary)
-                        Text(status?.userName ?? "把云端收藏，变成私人影院")
-                            .font(.caption).foregroundStyle(Theme.textSecondary).lineLimit(1)
-                    }
-                    Spacer(minLength: 4)
-                    if connecting { ProgressView() } else {
-                        Text(syncText).font(.caption2.weight(.semibold))
-                            .foregroundStyle(statusColor)
-                            .padding(.horizontal, 9).padding(.vertical, 5)
-                            .background(statusColor.opacity(0.14), in: Capsule())
-                    }
-                }
-                if let quota {
-                    VStack(spacing: 8) {
-                        QuotaBar(ratio: quotaRatio(quota))
-                        HStack {
-                            Text("已使用 \(quota.usedText)")
-                            Spacer()
-                            Text("共 \(quota.totalText)")
-                        }
-                        .font(.caption).foregroundStyle(Theme.textSecondary)
-                    }
-                }
-                HStack(spacing: 4) {
-                    Text(appState.isAuthenticated ? primaryActionTitle : "登录并连接")
-                        .font(.system(size: 14, weight: .bold))
-                    Spacer()
-                    Image(systemName: AppIcon.forward.name).font(.system(size: 12, weight: .bold))
-                }
-                .foregroundStyle(appState.isAuthenticated ? Theme.accent : Theme.onPrimary)
-                .padding(.horizontal, appState.isAuthenticated ? 0 : 16)
-                .frame(minHeight: appState.isAuthenticated ? 28 : 44)
-                .background(appState.isAuthenticated ? Color.clear : Theme.primaryAction, in: Capsule())
+    private var loginCard: some View {
+        VStack(spacing: 12) {
+            Text("115")
+                .font(.system(size: 18, weight: .heavy, design: .rounded))
+                .foregroundStyle(.white)
+                .frame(width: 60, height: 60)
+                .background(Color(uiColor: UIColor(hex: 0x2A6BFF)), in: Circle())
+            Text("登录 115，文件直接显示在这里")
+                .font(.system(size: 20, weight: .heavy))
+                .foregroundStyle(Theme.textPrimary)
+                .multilineTextAlignment(.center)
+                .padding(.top, 4)
+            Text("登录一次就行。「我的」页和这里用的是同一个账号，在哪边登录都可以。")
+                .font(.system(size: 14))
+                .foregroundStyle(Theme.textSecondary)
+                .multilineTextAlignment(.center)
+                .lineSpacing(3)
+            Button {
+                showDirectLogin = true
+            } label: {
+                Text("登录 115")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(Theme.onPrimary)
+                    .frame(maxWidth: .infinity, minHeight: 50)
+                    .background(Theme.primaryAction, in: Capsule())
             }
-            .padding(16)
-            .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
-            .overlay { RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous).strokeBorder(Theme.hairline, lineWidth: 0.5) }
+            .buttonStyle(.pressable(scale: 0.97))
+            .padding(.top, 8)
+            .accessibilityIdentifier("cloud.login")
         }
-        .buttonStyle(.pressable(scale: 0.98))
-        .disabled(connecting)
-        .accessibilityIdentifier("library.account")
+        .padding(.horizontal, 20)
+        .padding(.top, 28)
+        .padding(.bottom, 20)
+        .frame(maxWidth: .infinity)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
+        .overlay { RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous).strokeBorder(Theme.hairline, lineWidth: 0.5) }
     }
 
-    /// 全部文件、传输中心、本机视频：一组简洁的列表，只写标题，右边是数量。
-    private var toolRows: some View {
+    /// 传输中心、本机视频：不用 115 登录
+    private var offlineRows: some View {
         DesignGroup {
-            Button { Task { await open115() } } label: {
-                LibraryActionRow(symbol: AppIcon.allFiles.name, title: "全部文件",
-                                 value: appState.isAuthenticated ? "" : "未登录")
-            }
-            .buttonStyle(.pressable(scale: 0.985))
-            .disabled(connecting)
-            .accessibilityIdentifier("cloud.browse")
-            Divider().padding(.leading, LibraryActionRow.dividerInset)
             Button {
                 // 本机下载和边下边播不需要 115 登录，传输中心直接进；里面的云端离线再按需登录
                 path.append(.page(.transfers))
@@ -169,7 +238,9 @@ struct CloudTab: View {
             .buttonStyle(.pressable(scale: 0.985))
             .accessibilityIdentifier("cloud.transfers")
             Divider().padding(.leading, LibraryActionRow.dividerInset)
-            NavigationLink { LocalVideosView() } label: {
+            Button {
+                path.append(.page(.localVideos))
+            } label: {
                 LibraryActionRow(symbol: AppIcon.device.name, title: "本机视频",
                                  value: localStore.files.isEmpty ? "" : "\(localStore.files.count)")
             }
@@ -193,17 +264,21 @@ struct CloudTab: View {
     private func folderPage(_ crumb: Crumb) -> some View {
         DirectoryView(cid: crumb.cid, trail: trail(to: crumb), onJump: { jump(to: $0) },
                       onOpenDir: { path.append(.folder($0)) }, onPlay: { file, files in
-            let source = PlaybackSource.p115(title: file.name, pickCode: file.pickCode)
-            playing = PlaybackQueue(source: source, items: files.map { .p115(title: $0.name, pickCode: $0.pickCode) })
-        }, management: true, onOpenPage: { path.append(.page($0)) },
-                      initialFiles: previewFiles(in: crumb))
+            play(file, files)
+        }, management: true, onOpenPage: { openPage($0) },
+                      initialFiles: previewFiles(cid: crumb.cid))
         .navigationTitle(crumb.name)
         .toolbar(.visible, for: .navigationBar)
     }
 
-    private func previewFiles(in crumb: Crumb) -> [P115File]? {
+    private func play(_ file: P115File, _ files: [P115File]) {
+        let source = PlaybackSource.p115(title: file.name, pickCode: file.pickCode)
+        playing = PlaybackQueue(source: source, items: files.map { .p115(title: $0.name, pickCode: $0.pickCode) })
+    }
+
+    private func previewFiles(cid: String) -> [P115File]? {
         #if DEBUG
-        return InterfacePreview.cloudFiles(cid: crumb.cid)
+        return InterfacePreview.cloudFiles(cid: cid)
         #else
         return nil
         #endif
@@ -220,6 +295,8 @@ struct CloudTab: View {
             RecycleBinView()
         case .downloads:
             DownloadsView()
+        case .localVideos:
+            LocalVideosView()
         }
     }
 
@@ -231,21 +308,29 @@ struct CloudTab: View {
         }
     }
 
+    /// 根目录就是网盘标签页本身，面包屑的第一级固定是它
+    private static let rootCrumb = Crumb(cid: "0", name: "115 网盘")
+
     /// 从网盘根目录到这一层的路径，用来画面包屑
     private func trail(to crumb: Crumb) -> [Crumb] {
         let crumbs = folderCrumbs
-        guard let index = crumbs.firstIndex(of: crumb) else { return [crumb] }
-        return Array(crumbs.prefix(through: index))
+        guard let index = crumbs.firstIndex(of: crumb) else { return [Self.rootCrumb, crumb] }
+        return [Self.rootCrumb] + Array(crumbs.prefix(through: index))
     }
 
-    /// 回到面包屑里的第 `index` 级文件夹：它上面的页面全部收起
+    /// 回到面包屑里的第 `index` 级：0 是网盘根页（收起全部子页面），其余是导航栈里的文件夹
     private func jump(to index: Int) {
+        guard index > 0 else {
+            path = []
+            return
+        }
+        let folderIndex = index - 1
         var seen = -1
         var target: Int?
         for (position, route) in path.enumerated() {
             if case .folder = route {
                 seen += 1
-                if seen == index {
+                if seen == folderIndex {
                     target = position
                     break
                 }
@@ -255,30 +340,27 @@ struct CloudTab: View {
         path.removeLast(path.count - 1 - target)
     }
 
-    /// 离线任务页的「在网盘中查看」：直接定位到那个文件夹
+    /// 离线任务页的「在网盘中查看」：直接定位到那个文件夹。第一级是根目录，也就是网盘标签页本身
     private func showFolder(_ entries: [Direct115PathEntry]) {
-        guard let first = entries.first else { return }
-        var routes: [CloudRoute] = [.folder(Crumb(cid: first.id, name: "115 网盘"))]
-        for entry in entries.dropFirst() {
-            routes.append(.folder(Crumb(cid: entry.id, name: entry.name)))
-        }
-        path = routes
+        guard !entries.isEmpty else { return }
+        path = entries.dropFirst().map { .folder(Crumb(cid: $0.id, name: $0.name)) }
     }
 
-    /// 打开离线下载这类二级页面；没登录时先去登录
+    /// 打开二级页面；离线下载、回收站要 115 登录，没登录时先去登录
     private func openPage(_ page: ManagementPage) {
-        guard appState.isAuthenticated, appState.directClient() != nil else {
-            showDirectLogin = true
-            return
+        switch page {
+        case .offline, .recycleBin:
+            guard appState.isAuthenticated, appState.directClient() != nil else {
+                showDirectLogin = true
+                return
+            }
+        case .transfers, .downloads, .localVideos:
+            break
         }
         path.append(.page(page))
     }
 
     // MARK: 状态文字
-
-    private var primaryActionTitle: String {
-        appState.isAuthenticated ? "浏览全部文件" : "登录 115"
-    }
 
     private var syncText: String {
         guard appState.isAuthenticated else { return "未连接" }
@@ -299,32 +381,6 @@ struct CloudTab: View {
         return min(max(Double(quota.usedBytes) / Double(quota.totalBytes), 0), 1)
     }
 
-    private func open115() async {
-        guard !connecting else { return }
-        guard let direct = appState.directClient() else { showDirectLogin = true; return }
-        #if DEBUG
-        if InterfacePreview.active {
-            path.append(.folder(Crumb(cid: "0", name: "115 网盘")))
-            return
-        }
-        #endif
-        let sessionID = appState.sessionID
-        let requestID = UUID()
-        openRequestID = requestID
-        connecting = true
-        defer {
-            if openRequestID == requestID { connecting = false }
-        }
-        do {
-            let loadedStatus = try await direct.user()
-            guard !Task.isCancelled, sessionID == appState.sessionID, requestID == openRequestID else { return }
-            accountInfo.record(loadedStatus, for: sessionID)
-            path.append(.folder(Crumb(cid: "0", name: "115 网盘")))
-        } catch {
-            guard !Task.isCancelled, sessionID == appState.sessionID, requestID == openRequestID else { return }
-            connectionError = error.localizedDescription
-        }
-    }
 }
 
 /// 网盘容量条
@@ -344,5 +400,47 @@ private struct QuotaBar: View {
         .frame(height: 6)
         .accessibilityElement()
         .accessibilityLabel("网盘已用 \(Int((ratio * 100).rounded()))%")
+    }
+}
+
+/// 网盘根页的快捷入口：圆形图标、标题，下面一行小字（有下载时显示数量）
+private struct QuickEntryButton: View {
+    let icon: AppIcon
+    let title: String
+    var detail = ""
+    var highlighted = false
+    let identifier: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 5) {
+                Image(systemName: icon.name)
+                    .font(.system(size: 17, weight: Theme.iconWeight))
+                    .foregroundStyle(Theme.textPrimary)
+                    .frame(width: 36, height: 36)
+                    .background(Theme.surfaceRaised, in: Circle())
+                Text(title)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.textPrimary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                // 没有数量时也占一行，四个方块高度一致
+                Text(detail.isEmpty ? " " : detail)
+                    .font(.system(size: 10, weight: highlighted ? .semibold : .regular))
+                    .foregroundStyle(highlighted ? Theme.accent : Theme.textTertiary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            .frame(maxWidth: .infinity, minHeight: 84)
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous)
+                    .strokeBorder(Theme.hairline, lineWidth: 0.5)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.pressable(scale: 0.95))
+        .accessibilityIdentifier(identifier)
     }
 }
