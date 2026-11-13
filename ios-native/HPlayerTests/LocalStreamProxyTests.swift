@@ -317,34 +317,35 @@ final class LocalStreamProxyTests: XCTestCase {
     /// mpv 跳转：旧连接还开着就开新连接。中转先停掉旧连接的下载（115 同一个文件同时只认一两条），
     /// 新连接正常拿到内容；新连接结束后旧连接还没关，就从停下的位置接着下，内容拼起来和原文件一样。
     func testSeekingPausesTheOlderDownloadOfTheSameVideoAndResumesItLater() async throws {
-        let total = 1000
+        let total = 4000
         let full = pattern(total)
         ScriptedUpstream.install([
-            .hold(status: 206, headers: ["Content-Range": "bytes 0-\(total - 1)/\(total)", "Content-Length": "\(total)"], body: Data(full.prefix(100))),
-            .reply(status: 206, headers: ["Content-Range": "bytes 500-\(total - 1)/\(total)", "Content-Length": "\(total - 500)"], body: Data(full.suffix(total - 500))),
-            .reply(status: 206, headers: ["Content-Range": "bytes 100-\(total - 1)/\(total)", "Content-Length": "\(total - 100)"], body: Data(full.suffix(total - 100))),
+            // 带上 Content-Type：没有的话系统要先攒够一段内容猜类型，响应头迟迟不交给中转
+            .hold(status: 206, headers: ["Content-Type": "video/mp4", "Content-Range": "bytes 0-\(total - 1)/\(total)", "Content-Length": "\(total)"], body: Data(full.prefix(1000))),
+            .reply(status: 206, headers: ["Content-Type": "video/mp4", "Content-Range": "bytes 2500-\(total - 1)/\(total)", "Content-Length": "\(total - 2500)"], body: Data(full.suffix(total - 2500))),
+            .reply(status: 206, headers: ["Content-Type": "video/mp4", "Content-Range": "bytes 1000-\(total - 1)/\(total)", "Content-Length": "\(total - 1000)"], body: Data(full.suffix(total - 1000))),
         ])
         let proxy = LocalStreamProxy(protocolClasses: [ScriptedUpstream.self])
         let upstream = try XCTUnwrap(URL(string: "https://example.com/a/video.mp4"))
         let relayed = await proxy.localURL(for: upstream, headers: [:], renew: { upstream })
         let local = try XCTUnwrap(relayed)
 
-        // 旧连接：收到响应头和前 100 字节，连接一直开着
+        // 旧连接：收到响应头和前 1000 字节，连接一直开着
         let older = try openStream(local, range: "bytes=0-\(total - 1)")
         defer { close(older) }
-        var first = try readUntil(older, bodyBytes: 100)
+        var first = try readUntil(older, bodyBytes: 1000)
 
         // 新连接（跳转）
-        let seeked = try fetch(local, range: "bytes=500-\(total - 1)")
+        let seeked = try fetch(local, range: "bytes=2500-\(total - 1)")
         let history = proxy.problemHistoryLines.joined(separator: "\n")
         XCTAssertEqual(seeked.status, 206, history)
-        XCTAssertTrue(seeked.body == full.suffix(total - 500), history)
+        XCTAssertTrue(seeked.body == full.suffix(total - 2500), history)
 
-        // 新连接结束：旧连接从 100 字节接着下完
+        // 新连接结束：旧连接从 1000 字节接着下完
         first.append(try readToEnd(older))
         let body = try XCTUnwrap(first.range(of: Data("\r\n\r\n".utf8)).map { first[$0.upperBound...] })
         XCTAssertTrue(Data(body) == full, "旧连接接上后内容完整；\(proxy.problemHistoryLines.joined(separator: "\n"))")
-        XCTAssertEqual(ScriptedUpstream.receivedRanges(), ["bytes=0-\(total - 1)", "bytes=500-\(total - 1)", "bytes=100-\(total - 1)"])
+        XCTAssertEqual(ScriptedUpstream.receivedRanges(), ["bytes=0-\(total - 1)", "bytes=2500-\(total - 1)", "bytes=1000-\(total - 1)"])
         XCTAssertEqual(ScriptedUpstream.stoppedCount, 1, "The older download is stopped when the seek opens a new one")
     }
 
