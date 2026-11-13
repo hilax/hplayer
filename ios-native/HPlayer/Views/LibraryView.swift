@@ -48,12 +48,10 @@ enum DirectorySheet: Identifiable {
 
 /// 目录页「更多」菜单里能打开的二级页面
 enum ManagementPage: Hashable {
-    /// 传输中心：云端离线、本机下载、边下边播汇总在一页
-    case transfers
     case offline
     case recycleBin
     case downloads
-    /// 本机视频（网盘根页的快捷入口）
+    /// 本机视频（「我的」页入口，含正在下载）
     case localVideos
 }
 
@@ -591,9 +589,9 @@ struct DirectoryView: View {
             }
             Section {
                 Button {
-                    onOpenPage?(.transfers)
+                    onOpenPage?(.offline)
                 } label: {
-                    Label("传输中心", systemImage: AppIcon.cloudDownload.name)
+                    Label("离线下载", systemImage: AppIcon.cloudDownload.name)
                 }
                 Button {
                     onOpenPage?(.recycleBin)

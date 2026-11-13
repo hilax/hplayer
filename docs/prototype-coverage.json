@@ -190,7 +190,7 @@
       "title": "115 · 下载管理",
       "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/DownloadsView.swift",
-      "route": "115 目录 → 更多 → 下载管理",
+      "route": "我的 › 本机视频 › 下载管理",
       "screenshot": "prototype41/downloads-dark.png"
     },
     {
@@ -198,7 +198,7 @@
       "title": "本机视频",
       "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/LocalVideosView.swift",
-      "route": "网盘 → 本机视频",
+      "route": "我的 › 本机视频",
       "screenshot": "prototype41/local-dark.png"
     },
     {
@@ -386,12 +386,12 @@
       "screenshot": "prototype41/magnet-tab-dark.png"
     },
     {
-      "id": "transfers",
-      "title": "传输中心",
+      "id": "magnet-history",
+      "title": "磁力 · 播放记录",
       "state": "implemented",
-      "native_view": "ios-native/HPlayer/Views/TransferCenterView.swift",
-      "route": "网盘 › 传输中心",
-      "screenshot": "prototype41/transfers-dark.png"
+      "native_view": "ios-native/HPlayer/Views/MagnetHistoryView.swift",
+      "route": "磁力 › 右上角播放记录",
+      "screenshot": "prototype41/magnet-history-dark.png"
     },
     {
       "id": "watchlist",

@@ -189,9 +189,9 @@ final class FileModelAndTextTests: XCTestCase {
     }
 
     func testDownloadResultSentencesNameWhatHappened() {
-        XCTAssertEqual(FileOperationText.downloadResult(DownloadEnqueueSummary(added: 2)), "已加入下载 2 个文件")
+        XCTAssertEqual(FileOperationText.downloadResult(DownloadEnqueueSummary(added: 2)), "已加入下载 2 个文件，可在 我的 › 本机视频 查看")
         XCTAssertEqual(FileOperationText.downloadResult(DownloadEnqueueSummary(added: 1, duplicates: 1, folders: 2, unavailable: 1)),
-                       "已加入下载 1 个文件；1 个已在下载列表里；文件夹暂不支持下载，已跳过 2 个；1 个文件没有下载地址")
+                       "已加入下载 1 个文件，可在 我的 › 本机视频 查看；1 个已在下载列表里；文件夹暂不支持下载，已跳过 2 个；1 个文件没有下载地址")
         XCTAssertEqual(FileOperationText.downloadResult(DownloadEnqueueSummary()), "没有可下载的文件")
     }
 
@@ -301,7 +301,7 @@ final class ManagementTextTests: XCTestCase {
     }
 
     func testSavedLineSaysWhereTheFileWent() {
-        XCTAssertEqual(DownloadsText.savedLine(download(.completed, library: true)), "已保存到「本地视频」 · 4.37 GB")
+        XCTAssertEqual(DownloadsText.savedLine(download(.completed, library: true)), "已保存到「本机视频」 · 4.37 GB")
         XCTAssertEqual(DownloadsText.savedLine(download(.completed, total: 0, library: false)), "已保存到 App 的「下载」文件夹")
     }
 }

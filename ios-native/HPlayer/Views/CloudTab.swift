@@ -15,7 +15,6 @@ struct CloudTab: View {
     /// 同一套网盘页面由 HomeView 的公共导航栈呈现；nil 为标签根页。
     var route: CloudRoute? = nil
     @EnvironmentObject private var appState: AppState
-    @EnvironmentObject private var localStore: LocalMediaStore
     @EnvironmentObject private var accountInfo: P115AccountInfoStore
     @EnvironmentObject private var navigation: HomeNavigation
     private var path: [CloudRoute] {
@@ -26,12 +25,6 @@ struct CloudTab: View {
     @State private var showDirectLogin = false
     /// 未登录页的大标题已经滚出屏幕
     @State private var titleAway = false
-
-    @ObservedObject private var downloads = DownloadManager.shared
-
-    private var activeDownloads: Int {
-        downloads.items.filter { $0.state == .downloading || $0.state == .queued }.count
-    }
 
     private var status: P115Status? { appState.isAuthenticated ? accountInfo.status(for: appState.sessionID) : nil }
     private var quota: QuotaResponse? { appState.isAuthenticated ? accountInfo.quota(for: appState.sessionID) : nil }
@@ -140,27 +133,19 @@ struct CloudTab: View {
         .accessibilityIdentifier("library.account")
     }
 
-    /// 传输中心、离线下载、本机视频、回收站：一张卡片里的四格，不再各自描边
+    /// 离线下载、回收站：一张卡片里的两格。本机视频在「我的」，下载进度也在那里看
     private var quickEntries: some View {
         HStack(spacing: 0) {
-            QuickEntryButton(icon: .transfers, title: "传输中心",
-                             detail: activeDownloads == 0 ? "" : "\(activeDownloads) 个下载中",
-                             highlighted: activeDownloads > 0, identifier: "cloud.transfers") {
-                path.append(.page(.transfers))
-            }
             QuickEntryButton(icon: .cloudDownload, title: "离线下载", identifier: "cloud.offline") {
                 openPage(.offline)
             }
-            QuickEntryButton(icon: .device, title: "本机视频",
-                             detail: localStore.files.isEmpty ? "" : "\(localStore.files.count) 个",
-                             identifier: "cloud.local") {
-                path.append(.page(.localVideos))
-            }
+            Rectangle()
+                .fill(Theme.hairline)
+                .frame(width: Theme.Stroke.hairline, height: 20)
             QuickEntryButton(icon: .recycleBin, title: "回收站", identifier: "cloud.recycleBin") {
                 openPage(.recycleBin)
             }
         }
-        .padding(.vertical, Theme.Space.xs)
         .surfaceCard()
     }
 
@@ -173,11 +158,12 @@ struct CloudTab: View {
                     .padding(.horizontal, -Theme.contentInset)
                     .scrolledAway($titleAway)
                 loginCard.reveal(0)
-                VStack(alignment: .leading, spacing: Theme.Space.sm) {
-                    GroupLabel(title: "不用登录也能用")
-                    offlineRows
-                }
-                .reveal(1)
+                Text("本机视频和下载进度在「我的」页；磁力边下边播不需要登录。")
+                    .font(Theme.Typo.meta)
+                    .foregroundStyle(Theme.textTertiary)
+                    .frame(maxWidth: .infinity)
+                    .multilineTextAlignment(.center)
+                    .reveal(1)
             }
             .frame(maxWidth: 620)
             .frame(maxWidth: .infinity)
@@ -221,30 +207,6 @@ struct CloudTab: View {
         .surfaceCard()
     }
 
-    /// 传输中心、本机视频：不用 115 登录。行之间不画分隔线，靠行高分开
-    private var offlineRows: some View {
-        DesignGroup {
-            Button {
-                // 本机下载和边下边播不需要 115 登录，传输中心直接进；里面的云端离线再按需登录
-                path.append(.page(.transfers))
-            } label: {
-                LibraryActionRow(symbol: AppIcon.transfers.name, title: "传输中心",
-                                 value: activeDownloads == 0 ? "" : "\(activeDownloads) 个下载中",
-                                 valueHighlighted: activeDownloads > 0)
-            }
-            .buttonStyle(.pressable(scale: 0.985))
-            .accessibilityIdentifier("cloud.transfers")
-            Button {
-                path.append(.page(.localVideos))
-            } label: {
-                LibraryActionRow(symbol: AppIcon.device.name, title: "本机视频",
-                                 value: localStore.files.isEmpty ? "" : "\(localStore.files.count)")
-            }
-            .buttonStyle(.pressable(scale: 0.985))
-            .accessibilityIdentifier("cloud.local")
-        }
-    }
-
     // MARK: 路径
 
     @ViewBuilder
@@ -283,8 +245,6 @@ struct CloudTab: View {
     @ViewBuilder
     private func managementPage(_ page: ManagementPage) -> some View {
         switch page {
-        case .transfers:
-            TransferCenterView(onOpenPage: { openPage($0) })
         case .offline:
             OfflineTasksView(onShowFolder: { showFolder($0) })
         case .recycleBin:
@@ -350,7 +310,7 @@ struct CloudTab: View {
                 showDirectLogin = true
                 return
             }
-        case .transfers, .downloads, .localVideos:
+        case .downloads, .localVideos:
             break
         }
         path.append(.page(page))
@@ -403,35 +363,26 @@ private struct QuotaBar: View {
 private struct QuickEntryButton: View {
     let icon: AppIcon
     let title: String
-    var detail = ""
-    var highlighted = false
     let identifier: String
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            VStack(spacing: Theme.Space.xs) {
+            HStack(spacing: Theme.Space.sm) {
                 Image(systemName: icon.name)
-                    .font(.scaled(20, weight: Theme.iconWeight))
+                    .font(.scaled(17, weight: Theme.iconWeight))
                     .foregroundStyle(Theme.textPrimary)
-                    .frame(height: 28)
+                    .frame(width: 24)
                 Text(title)
-                    .font(Theme.Typo.caption.weight(.medium))
+                    .font(Theme.Typo.body.weight(.medium))
                     .foregroundStyle(Theme.textPrimary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                // 没有数量时也占一行，四格高度一致
-                Text(detail.isEmpty ? " " : detail)
-                    .font(Theme.Typo.badge.weight(highlighted ? .semibold : .regular).monospacedDigit())
-                    .foregroundStyle(highlighted ? Theme.accent : Theme.textTertiary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
             }
-            .padding(.vertical, Theme.Space.md)
-            .frame(maxWidth: .infinity, minHeight: 76)
+            .frame(maxWidth: .infinity, minHeight: 52)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.pressable(scale: 0.95))
+        .buttonStyle(.pressable(scale: 0.96))
         .accessibilityIdentifier(identifier)
     }
 }

@@ -118,7 +118,7 @@ enum LibraryFileSync {
 enum FileOperationText {
     static func downloadResult(_ summary: DownloadEnqueueSummary) -> String {
         var parts: [String] = []
-        if summary.added > 0 { parts.append("已加入下载 \(summary.added) 个文件") }
+        if summary.added > 0 { parts.append("已加入下载 \(summary.added) 个文件，可在 我的 › 本机视频 查看") }
         if summary.duplicates > 0 { parts.append("\(summary.duplicates) 个已在下载列表里") }
         if summary.folders > 0 { parts.append("文件夹暂不支持下载，已跳过 \(summary.folders) 个") }
         if summary.unavailable > 0 { parts.append("\(summary.unavailable) 个文件没有下载地址") }

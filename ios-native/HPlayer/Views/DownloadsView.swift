@@ -188,7 +188,7 @@ struct DownloadsView: View {
             EmptyStateView(
                 icon: AppIcon.cloudReady.name,
                 title: "还没有下载完成的文件",
-                message: "下载好的视频会保存在「本地视频」里，可以离线观看。"
+                message: "下载好的视频会保存在「本机视频」里，可以离线观看。"
             )
             .frame(height: 360)
             .listRowBackground(Color.clear)
@@ -213,7 +213,7 @@ struct DownloadsView: View {
     }
 
     private var tip: some View {
-        Text("下载的视频保存在 HPlayer 的「本地视频」中，可离线观看；在列表左滑可删除，删除后释放手机空间，不影响网盘里的文件。下载只在 HPlayer 打开时进行，离开后会自动暂停，回来后继续，已经下载的部分不会重来。")
+        Text("下载的视频保存在 HPlayer 的「本机视频」中，可离线观看；在列表左滑可删除，删除后释放手机空间，不影响网盘里的文件。下载只在 HPlayer 打开时进行，离开后会自动暂停，回来后继续，已经下载的部分不会重来。")
             .font(.scaled(12))
             .lineSpacing(3)
             .foregroundStyle(Theme.textTertiary)
@@ -229,104 +229,21 @@ struct DownloadsView: View {
     // MARK: 下载中的卡片
 
     private func activeCard(_ item: DownloadItem) -> some View {
-        let waiting = item.state == .paused || item.state == .failed
-        return VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                fileTile(item)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(item.name)
-                        .font(.scaled(14, weight: .medium))
-                        .foregroundStyle(Theme.textPrimary)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
-                    Text(DownloadsText.subtitle(item))
-                        .font(.scaled(12))
-                        .foregroundStyle(Theme.textTertiary)
-                        .lineLimit(1)
+        DownloadProgressCard(item: item, manager: manager)
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                Button(role: .destructive) {
+                    manager.delete(item.id)
+                } label: {
+                    Label("删除", systemImage: AppIcon.trash.name)
                 }
-                Spacer(minLength: 0)
-                controlButton(item)
             }
-            ThinProgressBar(fraction: item.fraction, paused: waiting)
-                .padding(.top, 8)
-                .padding(.bottom, 8)
-            metaRow(item)
-        }
-        .padding(12)
-        .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
-        .contentShape(Rectangle())
-        .onTapGesture {
-            if waiting { manager.resume(item.id) }
-        }
-        .listRowBackground(Color.clear)
-        .listRowSeparator(.hidden)
-        .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
-        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-            Button(role: .destructive) {
-                manager.delete(item.id)
-            } label: {
-                Label("删除", systemImage: AppIcon.trash.name)
-            }
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("library.downloads.item.\(item.id.uuidString)")
-    }
-
-    private func metaRow(_ item: DownloadItem) -> some View {
-        let tint: Color = item.state == .downloading ? Theme.accent : Theme.textSecondary
-        let rightColor: Color = item.state == .failed ? Theme.danger : Theme.textSecondary
-        return HStack(spacing: 8) {
-            HStack(spacing: 0) {
-                Text(DownloadsText.percent(item))
-                    .fontWeight(.semibold)
-                    .foregroundStyle(tint)
-                Text(DownloadsText.amount(item))
-            }
-            Spacer(minLength: 8)
-            Text(DownloadsText.status(item, speed: manager.speeds[item.id], remaining: manager.remainingSeconds(for: item)))
-                .foregroundStyle(rightColor)
-                .multilineTextAlignment(.trailing)
-        }
-        .font(.scaled(12))
-        .foregroundStyle(Theme.textSecondary)
-        .lineLimit(1)
-        .minimumScaleFactor(0.8)
-    }
-
-    @ViewBuilder
-    private func controlButton(_ item: DownloadItem) -> some View {
-        switch item.state {
-        case .downloading, .queued:
-            circleButton(AppIcon.pause, label: "暂停", tinted: true) { manager.pause(item.id) }
-        case .paused:
-            circleButton(AppIcon.play, label: "继续", tinted: false) { manager.resume(item.id) }
-        case .failed:
-            circleButton(AppIcon.refresh, label: "重试", tinted: false) { manager.resume(item.id) }
-        case .completed:
-            EmptyView()
-        }
-    }
-
-    private func circleButton(_ glyph: AppIcon, label: String, tinted: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: glyph.name)
-                .font(.scaled(14, weight: .semibold))
-                .foregroundStyle(tinted ? Theme.accent : Theme.textPrimary)
-                .frame(width: 34, height: 34)
-                .background(tinted ? Theme.tileTint : Theme.surfaceHigh, in: Circle())
-                .frame(width: 44, height: 44)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.pressable(scale: 0.88))
-        .accessibilityLabel(label)
     }
 
     private func fileTile(_ item: DownloadItem) -> some View {
-        Image(systemName: item.isVideo ? AppIcon.video.name : AppIcon.file.name)
-            .font(.scaled(18, weight: Theme.iconWeight))
-            .foregroundStyle(Theme.textSecondary)
-            .frame(width: 72, height: 44)
-            .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
+        DownloadProgressCard.fileTile(item)
     }
 
     // MARK: 已完成的卡片
@@ -422,6 +339,103 @@ struct DownloadsView: View {
     }
 }
 
+/// 一条正在下载（或暂停、失败）的文件：进度、速度、暂停 / 继续 / 重试。
+/// 「本机视频」页顶部的「正在下载」和下载记录页共用。
+struct DownloadProgressCard: View {
+    let item: DownloadItem
+    @ObservedObject var manager: DownloadManager
+
+    var body: some View {
+        let waiting = item.state == .paused || item.state == .failed
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Self.fileTile(item)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(item.name)
+                        .font(.scaled(14, weight: .medium))
+                        .foregroundStyle(Theme.textPrimary)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                    Text(DownloadsText.subtitle(item))
+                        .font(.scaled(12))
+                        .foregroundStyle(Theme.textTertiary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                controlButton
+            }
+            ThinProgressBar(fraction: item.fraction, paused: waiting)
+                .padding(.vertical, 8)
+            metaRow
+        }
+        .padding(12)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if waiting { manager.resume(item.id) }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("library.downloads.item.\(item.id.uuidString)")
+    }
+
+    private var metaRow: some View {
+        let tint: Color = item.state == .downloading ? Theme.accent : Theme.textSecondary
+        let rightColor: Color = item.state == .failed ? Theme.danger : Theme.textSecondary
+        return HStack(spacing: 8) {
+            HStack(spacing: 0) {
+                Text(DownloadsText.percent(item))
+                    .fontWeight(.semibold)
+                    .foregroundStyle(tint)
+                Text(DownloadsText.amount(item))
+            }
+            Spacer(minLength: 8)
+            Text(DownloadsText.status(item, speed: manager.speeds[item.id], remaining: manager.remainingSeconds(for: item)))
+                .foregroundStyle(rightColor)
+                .multilineTextAlignment(.trailing)
+        }
+        .font(.scaled(12))
+        .foregroundStyle(Theme.textSecondary)
+        .lineLimit(1)
+        .minimumScaleFactor(0.8)
+    }
+
+    @ViewBuilder
+    private var controlButton: some View {
+        switch item.state {
+        case .downloading, .queued:
+            circleButton(AppIcon.pause, label: "暂停", tinted: true) { manager.pause(item.id) }
+        case .paused:
+            circleButton(AppIcon.play, label: "继续", tinted: false) { manager.resume(item.id) }
+        case .failed:
+            circleButton(AppIcon.refresh, label: "重试", tinted: false) { manager.resume(item.id) }
+        case .completed:
+            EmptyView()
+        }
+    }
+
+    private func circleButton(_ glyph: AppIcon, label: String, tinted: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: glyph.name)
+                .font(.scaled(14, weight: .semibold))
+                .foregroundStyle(tinted ? Theme.accent : Theme.textPrimary)
+                .frame(width: 34, height: 34)
+                .background(tinted ? Theme.tileTint : Theme.surfaceHigh, in: Circle())
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.pressable(scale: 0.88))
+        .accessibilityLabel(label)
+    }
+
+    static func fileTile(_ item: DownloadItem) -> some View {
+        Image(systemName: item.isVideo ? AppIcon.video.name : AppIcon.file.name)
+            .font(.scaled(18, weight: Theme.iconWeight))
+            .foregroundStyle(Theme.textSecondary)
+            .frame(width: 72, height: 44)
+            .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
+    }
+}
+
 /// 下载卡片上的文字
 enum DownloadsText {
     /// 「4.37 GB · 网盘 / 电影 · 已暂停」
@@ -471,9 +485,9 @@ enum DownloadsText {
         }
     }
 
-    /// 「已保存到「本地视频」· 7.05 GB」
+    /// 「已保存到「本机视频」· 7.05 GB」
     static func savedLine(_ item: DownloadItem) -> String {
-        let place = item.savedInLibrary ? "已保存到「本地视频」" : "已保存到 App 的「下载」文件夹"
+        let place = item.savedInLibrary ? "已保存到「本机视频」" : "已保存到 App 的「下载」文件夹"
         let size = item.totalBytes > 0 ? " · " + DownloadFormat.bytes(item.totalBytes) : ""
         return place + size
     }

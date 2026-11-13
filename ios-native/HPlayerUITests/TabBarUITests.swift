@@ -25,7 +25,7 @@ final class TabBarUITests: XCTestCase {
 
         let mine = app.tabButton("我的")
         XCTAssertTrue(mine.waitForExistence(timeout: 25))
-        // 3.0：传输中心只在网盘页，「我的」里两层深的路径改用 开源许可 → 许可全文
+        // 3.0：「我的」里两层深的路径用 开源许可 → 许可全文
         let licenses = app.buttons["settings.licenses"]
         XCTAssertTrue(licenses.waitForExistence(timeout: 10))
         for _ in 0..<8 where !licenses.isHittable { app.swipeUp() }
@@ -84,7 +84,7 @@ final class TabBarUITests: XCTestCase {
             ("catalog", "首页", "catalog.series.tt11280740"),
             ("home", "首页", "home.performer."),
             ("magnet-tab", "磁力", "magnet.studio.s1"),
-            ("library", "网盘", "cloud.local"),
+            ("library", "网盘", "cloud.offline"),
             ("settings", "我的", "settings.appearance")
         ] {
             let app = XCUIApplication()

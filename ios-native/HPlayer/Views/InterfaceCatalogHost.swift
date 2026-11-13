@@ -89,10 +89,7 @@ struct InterfaceCatalogHost: View {
                                  initialFolderLabels: fixture.offlineFolders)
             }
         case "watchlist": NavigationStack { AnimeWatchlistView() }
-        case "transfers":
-            NavigationStack {
-                TransferCenterView(onOpenPage: { _ in }, previewTasks: fixture.offlineTasks)
-            }
+        case "magnet-history": NavigationStack { MagnetHistoryView() }
         case "offline-add":
             OfflineAddPreviewHost(tasks: fixture.offlineTasks, folders: fixture.offlineFolders)
         case "downloads":

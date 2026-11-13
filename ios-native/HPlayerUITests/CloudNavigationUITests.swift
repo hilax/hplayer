@@ -9,7 +9,8 @@ final class CloudNavigationUITests: XCTestCase {
         let movies = app.buttons["library.file.100"]
         XCTAssertTrue(movies.waitForExistence(timeout: 25), "Signed in, the Cloud tab lists the root folder directly")
         XCTAssertTrue(app.buttons["library.account"].exists, "The account strip sits above the files")
-        XCTAssertTrue(app.buttons["cloud.transfers"].exists && app.buttons["cloud.local"].exists, "Quick entries stay on the root")
+        XCTAssertTrue(app.buttons["cloud.offline"].exists && app.buttons["cloud.recycleBin"].exists, "Quick entries stay on the root")
+        XCTAssertFalse(app.buttons["cloud.transfers"].exists, "The transfer center is gone")
         XCTAssertFalse(app.buttons["cloud.browse"].exists, "There is no separate browse entry any more")
         XCTAssertTrue(cloud.isHittable && cloud.isSelected)
         attach("CloudNavigation-root")
@@ -47,26 +48,39 @@ final class CloudNavigationUITests: XCTestCase {
         attach("CloudNavigation-returned")
     }
 
-    func testCloudTransferCenterResolvesNestedPagesAndReturnsToCloudRoot() {
+    /// 离线下载从网盘页进，返回后网盘根页和标签栏都回来
+    func testCloudOfflineEntryReturnsToCloudRoot() {
         let app = launchCloud()
         defer { app.terminate() }
         let cloud = app.tabButton("网盘")
-        let transfers = app.buttons["cloud.transfers"]
-        XCTAssertTrue(transfers.waitForExistence(timeout: 25))
-        transfers.tap()
-        let downloads = app.buttons["transfers.downloads"]
-        XCTAssertTrue(downloads.waitForExistence(timeout: 10))
-        XCTAssertFalse(cloud.isHittable)
-        downloads.tap()
-        XCTAssertTrue(app.descendants(matching: .any)["screen.downloads"].firstMatch.waitForExistence(timeout: 5))
+        let offline = app.buttons["cloud.offline"]
+        XCTAssertTrue(offline.waitForExistence(timeout: 25))
+        offline.tap()
+        XCTAssertTrue(app.navigationBars["离线下载"].waitForExistence(timeout: 10))
         XCTAssertFalse(cloud.isHittable)
         app.navigationBars.buttons.element(boundBy: 0).tap()
-        XCTAssertTrue(downloads.isHittable)
-        XCTAssertFalse(cloud.isHittable)
-        app.navigationBars.buttons.element(boundBy: 0).tap()
-        XCTAssertTrue(transfers.isHittable)
+        XCTAssertTrue(offline.waitForExistence(timeout: 5) && offline.isHittable)
         XCTAssertTrue(cloud.isHittable && cloud.isSelected)
-        attach("CloudNavigation-transfer-returned")
+        attach("CloudNavigation-offline-returned")
+    }
+
+    /// 本机视频（含正在下载）在「我的」页
+    func testMineLocalVideosOpensAndReturns() {
+        let app = launchCloud()
+        defer { app.terminate() }
+        let mine = app.tabButton("我的")
+        XCTAssertTrue(mine.waitForExistence(timeout: 25))
+        mine.tap()
+        let local = app.buttons["mine.local"]
+        XCTAssertTrue(local.waitForExistence(timeout: 10))
+        local.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["screen.local"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["本机视频"].exists)
+        XCTAssertFalse(mine.isHittable)
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(local.waitForExistence(timeout: 5) && local.isHittable)
+        XCTAssertTrue(mine.isHittable && mine.isSelected)
+        attach("CloudNavigation-local-returned")
     }
 
     private func launchCloud() -> XCUIApplication {

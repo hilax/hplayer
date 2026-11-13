@@ -240,8 +240,6 @@ struct HomeView: View {
                         switch route {
                         case .watchlist:
                             AnimeWatchlistView()
-                        case .transfers, .page(.transfers):
-                            TransferCenterView(onOpenPage: { navigation.path.append(MineRoute.page($0)) })
                         case .page(.offline):
                             OfflineTasksView()
                         case .page(.downloads):

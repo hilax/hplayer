@@ -57,7 +57,7 @@ final class ScreenCatalogUITests: XCTestCase {
     func test53Catalog() { capture("catalog", expected: "片库") }
     // 2.0 新增页面
     func test54MagnetTab() { capture("magnet-tab", expected: "磁力") }
-    func test55Transfers() { capture("transfers", expected: "传输中心") }
+    func test55MagnetHistory() { capture("magnet-history", expected: "播放记录") }
     func test56Watchlist() { capture("watchlist", expected: "我的追番") }
     // 竖屏播放页改版
     func test57Sleep() { capture("sleep", expected: "定时关闭") }
@@ -157,8 +157,8 @@ final class ScreenCatalogUITests: XCTestCase {
             XCTAssertFalse(bar.staticTexts["首页"].exists)
         }
         if screen == "files-menu" {
-            // 2.0：离线下载和下载管理合并为传输中心
-            for title in ["传输中心", "回收站"] {
+            // 3.0：传输中心拆掉后，目录菜单直接给离线下载和回收站
+            for title in ["离线下载", "回收站"] {
                 XCTAssertTrue(wait { self.shows(title, in: app) }, "Missing menu entry: \(title)")
             }
         }

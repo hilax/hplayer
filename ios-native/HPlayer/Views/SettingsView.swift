@@ -7,11 +7,14 @@ struct SettingsTab: View {
 }
 
 /// 「我的」：账号，然后是播放、弹幕、外观、媒体库、关于。
-/// 追番在动漫频道、观看记录在首页「继续观看」、传输中心在网盘页，这里都不重复。
+/// 账号下面是「本机视频」：手机上的下载进度和离线视频都在那一页。
+/// 追番在动漫频道、观看记录在首页「继续观看」、离线下载和回收站在网盘页，这里都不重复。
 /// 播放和弹幕两组直接读写播放器已有的偏好，下次打开播放器时生效；这里只是界面，不碰播放器内核。
 struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var accountInfo: P115AccountInfoStore
+    @EnvironmentObject private var localStore: LocalMediaStore
+    @ObservedObject private var downloads = DownloadManager.shared
 
     @AppStorage(AppearanceMode.storageKey) private var appearance: AppearanceMode = .system
     @State private var confirmLogout = false
@@ -41,11 +44,12 @@ struct SettingsView: View {
                     .padding(.horizontal, -Theme.contentInset)
                     .scrolledAway($titleAway)
                 profileCard.reveal(0)
-                playbackGroup.reveal(1)
-                danmakuGroup.reveal(2)
-                appearanceGroup.reveal(3)
-                mediaGroup.reveal(4)
-                aboutGroup.reveal(5)
+                localGroup.reveal(1)
+                playbackGroup.reveal(2)
+                danmakuGroup.reveal(3)
+                appearanceGroup.reveal(4)
+                mediaGroup.reveal(5)
+                aboutGroup.reveal(6)
             }
             .frame(maxWidth: 620)
             .frame(maxWidth: .infinity)
@@ -237,6 +241,24 @@ struct SettingsView: View {
             }
             .buttonStyle(.pressable(scale: 0.985))
             .accessibilityIdentifier("settings.appIcon")
+        }
+    }
+
+    /// 正在下载的个数（含排队）；没有下载时显示视频数
+    private var activeDownloads: Int {
+        downloads.items.filter { $0.state == .downloading || $0.state == .queued }.count
+    }
+
+    private var localGroup: some View {
+        SettingsSection(title: "") {
+            NavigationLink { LocalVideosView() } label: {
+                LibraryActionRow(symbol: AppIcon.device.name, title: "本机视频",
+                                 value: activeDownloads > 0 ? "\(activeDownloads) 个下载中"
+                                     : (localStore.files.isEmpty ? "" : "\(localStore.files.count)"),
+                                 valueHighlighted: activeDownloads > 0)
+            }
+            .buttonStyle(.pressable(scale: 0.985))
+            .accessibilityIdentifier("mine.local")
         }
     }
 
@@ -688,6 +710,5 @@ private struct AppearancePreview: View {
 /// 「我的」页里压进导航栈的页面
 enum MineRoute: Hashable {
     case watchlist
-    case transfers
     case page(ManagementPage)
 }

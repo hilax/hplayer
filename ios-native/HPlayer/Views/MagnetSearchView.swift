@@ -152,7 +152,7 @@ struct MagnetSearchView: View {
 
     // MARK: - 头部
 
-    /// 第一行：分类（最新 / 专题 / 女优 / 最热，和首页频道条同一个样子），右边「粘贴链接播放」和「镜像域名」
+    /// 第一行：分类（最新 / 专题 / 女优 / 最热，和首页频道条同一个样子），右边「粘贴链接播放」「播放记录」和「镜像域名」
     private var topRow: some View {
         HStack(spacing: 4) {
             MagnetCategoryTabs(selection: categorySelection)
@@ -166,6 +166,14 @@ struct MagnetSearchView: View {
                 .buttonStyle(.pressable(scale: 0.88))
                 .accessibilityLabel("粘贴磁力链接播放")
                 .accessibilityIdentifier("magnet.linkPlayer")
+                NavigationLink {
+                    MagnetHistoryView()
+                } label: {
+                    topIcon(.history)
+                }
+                .buttonStyle(.pressable(scale: 0.88))
+                .accessibilityLabel("磁力播放记录")
+                .accessibilityIdentifier("magnet.history")
                 settingsButton
             }
         }
