@@ -38,7 +38,6 @@ struct SeriesDetailView: View {
         }
         .background(Theme.pageBackground.ignoresSafeArea())
         .designScreen("detail")
-        .hidesTabBar()
         // 返回和更多用系统导航栏，和应用其他二级页一样（iOS 26 上是液态玻璃圆按钮）；
         // 导航栏底色去掉，背景图一直铺到状态栏下面。
         .navigationTitle("")

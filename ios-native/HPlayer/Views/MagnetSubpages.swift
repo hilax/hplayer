@@ -121,7 +121,6 @@ struct StarMoviesView: View {
         }
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
-        .hidesTabBar()
         .onChange(of: mode) { _ in
             Task { await loadFirstPage() }
         }
@@ -260,7 +259,6 @@ struct StudioMoviesView: View {
         .background(Theme.pageBackground.ignoresSafeArea())
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
-        .hidesTabBar()
         .task {
             guard movies.isEmpty, errorText == nil else { return }
             await loadFirstPage()
@@ -506,7 +504,6 @@ struct MagnetDetailView: View {
         }
         .navigationTitle(item.code)
         .navigationBarTitleDisplayMode(.inline)
-        .hidesTabBar()
         .sheet(item: $playLaunch) { launch in
             NavigationStack { MagnetPlayerView(initialMagnet: launch.value, closesAfterPlayback: true) }
                 .environmentObject(appState)

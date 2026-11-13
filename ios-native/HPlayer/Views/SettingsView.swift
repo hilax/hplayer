@@ -17,10 +17,6 @@ struct SettingsView: View {
     @AppStorage(AppearanceMode.storageKey) private var appearance: AppearanceMode = .system
     @State private var confirmLogout = false
     @State private var showManagement = false
-    /// 「我的」这一栈的路由。追番、传输中心及其子页、动漫详情都走值路由压进同一条 path：
-    /// 之前子页用 navigationDestination(isPresented:)，「我的」页一刷新（例如进详情时追番的「更新」标记被清掉）
-    /// 系统就把刚推进去的详情页弹回来，表现为在追番列表里点了进不去。
-    @State private var path = NavigationPath()
     @AppStorage(DanmakuPrefs.enabled) private var danmakuEnabled = true
     @ObservedObject private var watchlist = AnimeWatchlistStore.shared
     @ObservedObject private var downloads = DownloadManager.shared
@@ -31,7 +27,7 @@ struct SettingsView: View {
     private var error: String { appState.isAuthenticated ? accountInfo.error(for: appState.sessionID) : "" }
 
     var body: some View {
-        NavigationStack(path: $path) {
+        Group {
             VStack(spacing: 0) {
             // 标题栏固定在顶部，内容在它下面滚动
             ScreenTitleBar("我的")
@@ -59,25 +55,6 @@ struct SettingsView: View {
             .background(Theme.pageBackground.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
             .designScreen("settings")
-            .navigationDestination(for: AnimeDetailRoute.self) { route in
-                AnimeDetailView(animeId: route.animeId).id(route.animeId)
-            }
-            .navigationDestination(for: MineRoute.self) { route in
-                switch route {
-                case .watchlist:
-                    AnimeWatchlistView().hidesTabBar()
-                case .transfers:
-                    TransferCenterView(onOpenPage: { path.append(MineRoute.page($0)) }).hidesTabBar()
-                case .page(.offline):
-                    OfflineTasksView().hidesTabBar()
-                case .page(.downloads):
-                    DownloadsView().hidesTabBar()
-                case .page(.recycleBin):
-                    RecycleBinView().hidesTabBar()
-                case .page(.transfers):
-                    TransferCenterView(onOpenPage: { path.append(MineRoute.page($0)) }).hidesTabBar()
-                }
-            }
         }
         .fullScreenCover(isPresented: $showManagement) { LibraryManagementView() }
     }
@@ -127,7 +104,6 @@ struct SettingsView: View {
                 NavigationLink {
                     CookieWebLoginView(onConnected: {})
                         .toolbar(.visible, for: .navigationBar)
-                        .hidesTabBar()
                 } label: {
                     Image(systemName: AppIcon.switchAccount.name)
                         .font(.system(size: 18, weight: Theme.iconWeight))
@@ -270,7 +246,7 @@ struct SettingsView: View {
             .accessibilityIdentifier("mine.manage")
             rowDivider
             NavigationLink {
-                MetadataSourcesView().hidesTabBar()
+                MetadataSourcesView()
             } label: {
                 LibraryActionRow(symbol: AppIcon.metadataSources.name, title: "资料来源")
             }
@@ -281,13 +257,13 @@ struct SettingsView: View {
 
     private var appearanceGroup: some View {
         group("外观") {
-            NavigationLink { AppearanceSettingsView().hidesTabBar() } label: {
+            NavigationLink { AppearanceSettingsView() } label: {
                 LibraryActionRow(symbol: AppIcon.appearance.name, title: "显示方式", value: appearance.title)
             }
             .buttonStyle(.pressable(scale: 0.985))
             .accessibilityIdentifier("settings.appearance")
             rowDivider
-            NavigationLink { AppIconSettingsView().hidesTabBar() } label: {
+            NavigationLink { AppIconSettingsView() } label: {
                 LibraryActionRow(symbol: AppIcon.appIconStyle.name, title: "应用图标")
             }
             .buttonStyle(.pressable(scale: 0.985))
@@ -302,7 +278,6 @@ struct SettingsView: View {
                 NavigationLink {
                     LicensesView()
                         .toolbar(.visible, for: .navigationBar)
-                        .hidesTabBar()
                 } label: {
                     LibraryActionRow(symbol: AppIcon.license.name, title: "开源许可")
                 }

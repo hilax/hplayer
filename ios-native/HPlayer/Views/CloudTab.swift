@@ -12,7 +12,11 @@ struct CloudTab: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var localStore: LocalMediaStore
     @EnvironmentObject private var accountInfo: P115AccountInfoStore
-    @State private var path: [CloudRoute] = []
+    @EnvironmentObject private var navigation: HomeNavigation
+    private var path: [CloudRoute] {
+        get { navigation.cloudRoutes }
+        nonmutating set { navigation.setCloudRoutes(newValue) }
+    }
     @State private var playing: PlaybackQueue?
     @State private var showDirectLogin = false
     @State private var connecting = false
@@ -29,7 +33,7 @@ struct CloudTab: View {
     private var quota: QuotaResponse? { appState.isAuthenticated ? accountInfo.quota(for: appState.sessionID) : nil }
 
     var body: some View {
-        NavigationStack(path: $path) {
+        Group {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     ScreenTitleBar(title: "网盘") {
@@ -158,7 +162,7 @@ struct CloudTab: View {
             .buttonStyle(.pressable(scale: 0.985))
             .accessibilityIdentifier("cloud.transfers")
             Divider().padding(.leading, LibraryActionRow.dividerInset)
-            NavigationLink { LocalVideosView().hidesTabBar() } label: {
+            NavigationLink { LocalVideosView() } label: {
                 LibraryActionRow(symbol: AppIcon.device.name, title: "本机视频",
                                  value: localStore.files.isEmpty ? "" : "\(localStore.files.count)")
             }
@@ -187,20 +191,19 @@ struct CloudTab: View {
         }, management: true, onOpenPage: { path.append(.page($0)) })
         .navigationTitle(crumb.name)
         .toolbar(.visible, for: .navigationBar)
-        .hidesTabBar()
     }
 
     @ViewBuilder
     private func managementPage(_ page: ManagementPage) -> some View {
         switch page {
         case .transfers:
-            TransferCenterView(onOpenPage: { openPage($0) }).hidesTabBar()
+            TransferCenterView(onOpenPage: { openPage($0) })
         case .offline:
-            OfflineTasksView(onShowFolder: { showFolder($0) }).hidesTabBar()
+            OfflineTasksView(onShowFolder: { showFolder($0) })
         case .recycleBin:
-            RecycleBinView().hidesTabBar()
+            RecycleBinView()
         case .downloads:
-            DownloadsView().hidesTabBar()
+            DownloadsView()
         }
     }
 

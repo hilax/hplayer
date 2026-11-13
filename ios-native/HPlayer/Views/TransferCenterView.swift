@@ -72,7 +72,7 @@ struct TransferCenterView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     GroupLabel(title: "磁力边下边播")
                     DesignGroup {
-                        NavigationLink { MagnetPlayerView().hidesTabBar() } label: {
+                        NavigationLink { MagnetPlayerView() } label: {
                             LibraryActionRow(symbol: AppIcon.magnet.name, title: "边下边播",
                                              subtitle: history.items.isEmpty ? "不经过网盘，手机直接用 BT 播放" : "最近播放过 \(history.items.count) 个磁力资源")
                         }

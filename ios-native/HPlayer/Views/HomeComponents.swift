@@ -640,7 +640,6 @@ struct PosterGridScreen<Item: Identifiable, Cell: View>: View {
             .scrollIndicators(.hidden)
         }
         .background(Theme.pageBackground.ignoresSafeArea())
-        // 「全部」网格保留底部标签栏，进出时标签栏不再先消失再冒出来。
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)

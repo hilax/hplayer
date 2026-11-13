@@ -7,6 +7,40 @@ final class TabBarUITests: XCTestCase {
         exerciseTabs(style: "light")
     }
 
+    func testBackButtonReturnsEachTabWithItsNativeBar() {
+        exerciseNavigationReturn(usingGesture: false)
+    }
+
+    func testEdgeSwipeCanCancelAndReturnEachTabWithItsNativeBar() {
+        exerciseNavigationReturn(usingGesture: true)
+    }
+
+    func testNestedMinePageOnlyRevealsTheTabBarAtTheMineRoot() {
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchEnvironment["HPLAYER_DESIGN_SCREEN"] = "settings"
+        app.launch()
+        defer { app.terminate() }
+
+        let mine = app.tabButton("我的")
+        XCTAssertTrue(mine.waitForExistence(timeout: 25))
+        app.buttons["mine.transfers"].tap()
+        let downloads = app.buttons["transfers.downloads"]
+        XCTAssertTrue(downloads.waitForExistence(timeout: 10))
+        downloads.tap()
+        XCTAssertFalse(downloads.isHittable)
+        XCTAssertFalse(mine.isHittable)
+
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(downloads.isHittable, "The first pop returns to the transfer center")
+        XCTAssertFalse(mine.isHittable, "A nested pop must not reveal the root tab bar")
+
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(mine.isHittable && mine.isSelected)
+        XCTAssertTrue(app.buttons["mine.transfers"].isHittable)
+    }
+
     /// 从片库、网盘点搜索再返回：原来的页面应该纹丝不动，不能随键盘弹出 / 收起而回弹。
     func testSearchRoundTripLeavesLibraryAndCloudStill() {
         for (screen, searchID) in [("catalog", "catalog.search"), ("library", "cloud.search")] {
@@ -34,6 +68,62 @@ final class TabBarUITests: XCTestCase {
             let after = search.frame
             XCTAssertEqual(after.minY, before.minY, accuracy: 0.5, "\(screen): the page must not move after returning from search")
             XCTAssertEqual(after.minX, before.minX, accuracy: 0.5)
+        }
+    }
+
+    private func exerciseNavigationReturn(usingGesture: Bool) {
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+        for (screen, title, entryID) in [
+            ("home", "首页", "home.series.tt11280740"),
+            ("catalog", "首页", "catalog.series.tt11280740"),
+            ("magnet-tab", "磁力", "magnet.studio.s1"),
+            ("library", "网盘", "cloud.local"),
+            ("settings", "我的", "settings.appearance")
+        ] {
+            let app = XCUIApplication()
+            app.launchEnvironment["HPLAYER_DESIGN_SCREEN"] = screen
+            app.launch()
+            defer { app.terminate() }
+
+            let tab = app.tabButton(title)
+            XCTAssertTrue(tab.waitForExistence(timeout: 25))
+            if screen == "magnet-tab" {
+                app.buttons["magnet.category.topics"].tap()
+            }
+            let entry = app.buttons[entryID].firstMatch
+            for _ in 0..<8 where !entry.isHittable { app.swipeUp() }
+            XCTAssertTrue(entry.isHittable, "\(title): the secondary-page entry must be visible")
+            let before = entry.frame
+            entry.tap()
+            XCTAssertTrue(app.navigationBars.firstMatch.waitForExistence(timeout: 10))
+            XCTAssertFalse(tab.isHittable, "\(title): secondary pages cover the whole tab root")
+
+            if usingGesture {
+                let edge = app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5))
+                // 慢拖不到一半再停住松手：取消返回，详情页和标签栏显隐都应保持原样。
+                edge.press(forDuration: 0.05,
+                           thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.5)),
+                           withVelocity: .slow, thenHoldForDuration: 0.3)
+                XCTAssertTrue(app.navigationBars.firstMatch.exists)
+                XCTAssertFalse(tab.isHittable, "\(title): cancelling a swipe must keep the tab bar covered")
+
+                edge.press(forDuration: 0.05,
+                           thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)),
+                           withVelocity: .slow, thenHoldForDuration: 0.1)
+            } else {
+                app.navigationBars.buttons.element(boundBy: 0).tap()
+            }
+
+            // 不给胶囊栏另留等待时间：返回操作结束时，内容和系统标签按钮都应可用。
+            XCTAssertTrue(entry.isHittable, "\(title): returning keeps the original page usable")
+            XCTAssertTrue(tab.isHittable && tab.isSelected, "\(title): the native bar returns with its page")
+            XCTAssertEqual(entry.frame.minY, before.minY, accuracy: 1, "\(title): returning preserves the scroll position")
+
+            let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+            screenshot.name = "TabReturn-\(screen)-\(usingGesture ? "swipe" : "button")"
+            screenshot.lifetime = .keepAlways
+            add(screenshot)
         }
     }
 

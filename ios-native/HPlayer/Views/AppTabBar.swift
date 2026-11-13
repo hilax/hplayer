@@ -39,12 +39,22 @@ enum HomeSection: Hashable, CaseIterable {
     }
 }
 
-// MARK: - 标签栏显隐
+// MARK: - 一级页面共用的导航路径
 
-extension View {
-    /// 这个页面显示期间收起系统标签栏；返回一级页面时系统自动升起来（带系统动画）。
-    func hidesTabBar() -> some View {
-        toolbar(.hidden, for: .tabBar)
+/// TabView 是导航栈的根页面：内容和系统标签栏一起进出，不再分别恢复标签栏。
+/// 网盘仍保留有类型的目录路径，供面包屑和「在网盘中查看」使用。
+final class HomeNavigation: ObservableObject {
+    @Published var path = NavigationPath()
+    private var cloudHistory: [CloudRoute] = []
+
+    var cloudRoutes: [CloudRoute] {
+        // 保留完整记录，只按当前深度读取；取消侧滑、恢复原路径时面包屑也能恢复。
+        Array(cloudHistory.prefix(path.count))
+    }
+
+    func setCloudRoutes(_ routes: [CloudRoute]) {
+        cloudHistory = routes
+        path = NavigationPath(routes)
     }
 }
 

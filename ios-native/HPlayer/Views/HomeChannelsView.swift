@@ -2,15 +2,13 @@ import SwiftUI
 
 /// 首页标签：推荐 / 动漫 / 片库 / 短剧四个频道左右滑动切换（PagedHeaderContainer）。
 /// 频道条和搜索框是盖在上面的固定头部：往上滑时频道条淡出，搜索框固定在顶端。
-/// 四个频道共用一条导航栈，详情页从这里推出去，盖住整个频道区（不会在详情页里误滑到别的频道）。
+/// 详情页走 HomeView 的公共导航栈，盖住频道区和底部胶囊栏。
 struct HomeChannelsView: View {
     @Binding var channel: HomeChannel
     @Binding var catalogPreset: CatalogPreset?
     var onSearch: () -> Void
     var onBrowseLibrary: () -> Void
 
-    @EnvironmentObject private var appState: AppState
-    @EnvironmentObject private var librarySnapshots: LibrarySnapshotStore
     /// 头部按钮转给对应频道：推荐的「添加」、片库的「筛选」
     @State private var addRequest = 0
     @State private var filterRequest = 0
@@ -24,7 +22,7 @@ struct HomeChannelsView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        Group {
             PagedHeaderContainer(pages: HomeChannel.allCases, selection: $channel) {
                 HStack(spacing: 4) {
                     HomeChannelBar(selection: $channel)
@@ -68,28 +66,6 @@ struct HomeChannelsView: View {
             }
             .background(Theme.pageBackground.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
-            .navigationDestination(for: AnimeDetailRoute.self) { route in
-                AnimeDetailView(animeId: route.animeId)
-                    .id(route.animeId)
-            }
-            .navigationDestination(for: AnimeBrowseRoute.self) { route in
-                AnimeBrowseView(route: route)
-            }
-            .navigationDestination(for: DramaRoute.self) { route in
-                DramaDetailView(route: route)
-                    .environmentObject(appState)
-                    .hidesTabBar()
-            }
-            .navigationDestination(for: PerformerListRoute.self) { _ in
-                PerformerGridView(groups: librarySnapshots.home.performers)
-            }
-            .navigationDestination(for: PerformerRoute.self) { route in
-                if let group = librarySnapshots.home.performers.first(where: { $0.id == route.id }) {
-                    PerformerCollectionView(group: group).id(route.id)
-                } else {
-                    EmptyStateView(icon: AppIcon.people.name, title: "演员合集已更新", message: "返回后重新进入演员合集。")
-                }
-            }
         }
     }
 

@@ -4,9 +4,7 @@ import SwiftUI
 /// 第 6 阶段会换成智能输入框 + 统一解析面板（115 秒播 / 本机边下边播 / 离线到 115）。
 struct MagnetTab: View {
     var body: some View {
-        NavigationStack {
-            MagnetSearchView(isTabRoot: true)
-        }
-        .designScreen("magnet-tab")
+        MagnetSearchView(isTabRoot: true)
+            .designScreen("magnet-tab")
     }
 }

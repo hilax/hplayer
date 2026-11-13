@@ -159,7 +159,7 @@ struct MagnetSearchView: View {
             Spacer(minLength: 8)
             if isTabRoot {
                 NavigationLink {
-                    MagnetPlayerView().hidesTabBar()
+                    MagnetPlayerView()
                 } label: {
                     topIcon(.link)
                 }

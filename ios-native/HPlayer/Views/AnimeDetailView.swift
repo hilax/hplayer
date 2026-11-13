@@ -70,7 +70,6 @@ struct AnimeDetailView: View {
 
         }
         .designScreen("anime-detail")
-        .hidesTabBar()
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .modifier(TransparentNavigationBar())
