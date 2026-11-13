@@ -78,6 +78,16 @@ final class PlayerWindowController {
 
     var isPresented: Bool { window != nil }
 
+    /// 播放器窗口本身固定深色（这样状态栏文字是白的、系统控件也是深色），
+    /// 竖屏页面的信息区和面板要跟随的是 App 当前的外观，读主窗口实际生效的模式。
+    var appColorScheme: ColorScheme {
+        let scene = window?.windowScene ?? activeScene()
+        let main = hiddenMain ?? mainWindow(in: scene)
+        // 根控制器的外观比窗口更准：SwiftUI 的 preferredColorScheme 设在根控制器上
+        let traits = main?.rootViewController?.traitCollection ?? main?.traitCollection
+        return traits?.userInterfaceStyle == .light ? .light : .dark
+    }
+
     /// 这个标记对应的窗口是不是还开着
     func isShowing(_ token: UUID) -> Bool { window != nil && self.token == token }
 

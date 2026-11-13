@@ -347,18 +347,18 @@
     },
     {
       "id": "playback",
-      "title": "播放设置面板",
+      "title": "竖屏倍速菜单（按钮旁弹出）",
       "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/PlaybackControlsView.swift",
-      "route": "播放器 → 播放设置",
+      "route": "播放器 → 竖屏 → 倍速",
       "screenshot": "prototype41/playback-dark.png"
     },
     {
       "id": "tracks",
-      "title": "字幕与音轨面板",
+      "title": "竖屏字幕与音轨菜单（按钮旁弹出）",
       "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/PlaybackControlsView.swift",
-      "route": "播放器 → 字幕 / 音轨",
+      "route": "播放器 → 竖屏 → 字幕",
       "screenshot": "prototype41/tracks-dark.png"
     },
     {
@@ -371,10 +371,10 @@
     },
     {
       "id": "aspect",
-      "title": "画面比例面板",
+      "title": "竖屏画面比例菜单（按钮旁弹出）",
       "state": "implemented",
       "native_view": "ios-native/HPlayer/Views/PlaybackControlsView.swift",
-      "route": "播放器 → 画面比例",
+      "route": "播放器 → 竖屏 → 画面比例",
       "screenshot": "prototype41/aspect-dark.png"
     },
     {
