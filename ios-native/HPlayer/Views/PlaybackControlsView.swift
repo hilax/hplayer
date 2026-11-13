@@ -1165,6 +1165,26 @@ struct PlaybackControlsView: View {
                 moreRow(.decoder, title: "解码", value: playback.decoding.title, id: "decoding") { openMoreSection(.decoding) }
                 moreRow(.download, title: "提前缓存", value: playback.readahead.title, id: "readahead") { openMoreSection(.readahead) }
                 moreRow(.sleepTimer, title: "定时关闭", value: sleepTimer.title, id: "sleep") { openMoreSection(.sleep) }
+                if playback.pictureInPictureSupported {
+                    HStack(spacing: 10) {
+                        Image(systemName: "pip")
+                            .font(.system(size: 16))
+                            .foregroundStyle(.white.opacity(0.75))
+                            .frame(width: 22)
+                        Text("回桌面自动小窗")
+                            .font(.system(size: 15, weight: .medium))
+                        Spacer(minLength: 12)
+                        Toggle("回桌面自动小窗", isOn: Binding(
+                            get: { playback.autoPictureInPicture },
+                            set: { playback.setAutoPictureInPicture($0) }
+                        ))
+                        .labelsHidden()
+                        .tint(Theme.gold)
+                        .accessibilityIdentifier("playback.autoPip")
+                    }
+                    .padding(.horizontal, 12)
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                }
                 popoverDivider
                 Button {
                     UIPasteboard.general.string = diagnosticsText
@@ -1402,6 +1422,17 @@ struct PlaybackControlsView: View {
             Theme.playerBackground
             PlayerVideoSurface(playback: playback)
                 .allowsHitTesting(false)
+            if playback.pictureInPictureActive {
+                VStack(spacing: 10) {
+                    Image(systemName: "pip")
+                        .font(.system(size: 34, weight: .light))
+                    Text("正在小窗播放")
+                        .font(.system(size: 14, weight: .medium))
+                }
+                .foregroundStyle(.white.opacity(0.6))
+                .allowsHitTesting(false)
+                .accessibilityIdentifier("playback.pipPlaceholder")
+            }
             if let danmaku {
                 DanmakuOverlay(store: danmaku, time: playback.currentTime, playing: playback.playing,
                                rate: Double(playback.effectiveRate))
@@ -1481,8 +1512,14 @@ struct PlaybackControlsView: View {
                 GlassIconButton(systemImage: AppIcon.unlock.name, label: "锁定", diameter: 40, action: lock)
                     .accessibilityIdentifier("playback.lock")
                 Spacer()
-                GlassIconButton(systemImage: AppIcon.screenshot.name, label: "截图", diameter: 40) { takeScreenshot() }
-                    .accessibilityIdentifier("playback.screenshot")
+                VStack(spacing: 14) {
+                    if playback.pictureInPictureSupported {
+                        GlassIconButton(systemImage: pipIconName, label: pipLabel, diameter: 40) { togglePictureInPicture() }
+                            .accessibilityIdentifier("playback.pip")
+                    }
+                    GlassIconButton(systemImage: AppIcon.screenshot.name, label: "截图", diameter: 40) { takeScreenshot() }
+                        .accessibilityIdentifier("playback.screenshot")
+                }
             }
             .padding(.leading, edgeControlInset(safe: insets.leading, width: width))
             .padding(.trailing, edgeControlInset(safe: insets.trailing, width: width))
@@ -1506,6 +1543,10 @@ struct PlaybackControlsView: View {
                 Button(action: closePlayer) { controlIcon(AppIcon.back.name, label: "关闭播放", size: 20) }
                     .accessibilityIdentifier("playback.close")
                 Spacer(minLength: 0)
+                if playback.pictureInPictureSupported {
+                    Button { togglePictureInPicture() } label: { controlIcon(pipIconName, label: pipLabel, size: 19) }
+                        .accessibilityIdentifier("playback.pip")
+                }
                 Button { takeScreenshot() } label: { controlIcon(AppIcon.screenshot.name, label: "截图", size: 19) }
                     .accessibilityIdentifier("playback.screenshot")
                 Button { openSettings(.playback) } label: { controlIcon(AppIcon.more.name, label: "更多设置", size: 19) }
@@ -1937,6 +1978,14 @@ struct PlaybackControlsView: View {
         settingGroup("提前缓存", footer: "开播不用等，边播边往后存；存在手机里，最多 2GB，退出播放后自动清掉。用流量时最多存 1 分钟。") {
             chipRow(ReadaheadLevel.allCases.map { (String($0.rawValue), $0.title) }, selected: String(playback.readahead.rawValue)) { value in
                 if let seconds = Int(value), let option = ReadaheadLevel(rawValue: seconds) { playback.setReadahead(option) }
+            }
+        }
+        if playback.pictureInPictureSupported {
+            settingGroup("小窗播放", footer: "播放中回到桌面时变成小窗继续播；也可以点播放页上的小窗按钮。小窗播放时画面由 CPU 绘制，比平时稍微耗电一点。") {
+                chipRow([("auto", "回桌面自动小窗"), ("manual", "只用按钮")],
+                        selected: playback.autoPictureInPicture ? "auto" : "manual") { value in
+                    playback.setAutoPictureInPicture(value == "auto")
+                }
             }
         }
         settingGroup("定时关闭") {
@@ -2429,6 +2478,12 @@ struct PlaybackControlsView: View {
             sleepTimer = .off
             showNotice("定时关闭：已暂停播放")
         }
+    }
+    private var pipIconName: String { playback.pictureInPictureActive ? "pip.exit" : "pip.enter" }
+    private var pipLabel: String { playback.pictureInPictureActive ? "退出小窗" : "小窗播放" }
+    private func togglePictureInPicture() {
+        revealControls()
+        playback.togglePictureInPicture()
     }
     private func takeScreenshot() {
         revealControls()

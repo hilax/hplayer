@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import Libmpv
 import QuartzCore
@@ -26,6 +27,9 @@ final class MPVEngine {
     }
 
     private(set) var handle: OpaquePointer?
+    /// 小窗播放时的 CPU 出图；平时为空，画面由 gpu-next 画在 Metal 图层上
+    private var softwareOutput: MPVSoftwareOutput?
+    private let outputLock = NSLock()
     private let queue = DispatchQueue(label: "app.hplayer.mpv.events", qos: .userInitiated)
     private let queueIdentity = DispatchSpecificKey<Bool>()
     /// 在主线程调用
@@ -71,6 +75,12 @@ final class MPVEngine {
 
     func destroy() {
         guard let mpv = handle else { return }
+        // 渲染上下文必须在内核销毁之前释放
+        outputLock.lock()
+        let output = softwareOutput
+        softwareOutput = nil
+        outputLock.unlock()
+        output?.shutdown()
         handle = nil
         mpv_set_wakeup_callback(mpv, nil, nil)
         // 最后一个引用可能由 drainEvents 的闭包释放；这时已经在事件队列上。
@@ -142,6 +152,118 @@ final class MPVEngine {
                 mpv_command(handle, $0)
             }
         }
+    }
+
+    // MARK: 小窗播放
+
+    /// 切到 CPU 出图：先建好渲染上下文，再把视频输出换成 libmpv，画面改画进小窗用的图层。
+    /// 退到后台以后不能再用 GPU，所以小窗播放期间不走 gpu-next。
+    /// 换输出要等内核重建视频链，会阻塞几十毫秒：不要在主线程调用。
+    /// 锁只保护 softwareOutput 这个引用，调用内核期间不持有：换输出时内核可能要回主线程（打开 EDR），
+    /// 主线程要是在等这把锁就会卡死。开始和结束都在同一个串行队列上调用，彼此不会交错。
+    @discardableResult
+    func startSoftwareOutput(layer: AVSampleBufferDisplayLayer, hwdec: String, videoSize: CGSize) -> Bool {
+        guard let handle else { return false }
+        outputLock.lock()
+        let existing = softwareOutput
+        outputLock.unlock()
+        if let existing {
+            existing.videoSize = videoSize
+            return true
+        }
+        guard let output = MPVSoftwareOutput(mpv: handle, layer: layer) else { return false }
+        output.videoSize = videoSize
+        outputLock.lock()
+        softwareOutput = output
+        outputLock.unlock()
+        mpv_set_property_string(handle, "vid", "auto")
+        // 硬解码要把帧拷回内存才能交给 CPU 出图
+        mpv_set_property_string(handle, "hwdec", hwdec)
+        guard mpv_set_property_string(handle, "vo", "libmpv") >= 0 else {
+            mpv_set_property_string(handle, "vo", "gpu-next")
+            outputLock.lock()
+            softwareOutput = nil
+            outputLock.unlock()
+            output.shutdown()
+            return false
+        }
+        return true
+    }
+
+    /// 小窗结束：换回 gpu-next。还在后台时先关掉画面只留声音，回到前台时再打开（和平时退到后台一样）
+    func stopSoftwareOutput(hwdec: String, keepVideo: Bool) {
+        guard let handle else { return }
+        outputLock.lock()
+        let output = softwareOutput
+        outputLock.unlock()
+        guard let output else { return }
+        if !keepVideo { mpv_set_property_string(handle, "vid", "no") }
+        mpv_set_property_string(handle, "vo", "gpu-next")
+        mpv_set_property_string(handle, "hwdec", hwdec)
+        outputLock.lock()
+        softwareOutput = nil
+        outputLock.unlock()
+        output.shutdown()
+    }
+
+    var softwareOutputActive: Bool {
+        outputLock.lock()
+        defer { outputLock.unlock() }
+        return softwareOutput != nil
+    }
+
+    func setSoftwareOutput(videoSize: CGSize? = nil, renderSize: CGSize? = nil) {
+        outputLock.lock()
+        let output = softwareOutput
+        outputLock.unlock()
+        if let videoSize { output?.videoSize = videoSize }
+        if let renderSize { output?.renderSize = renderSize }
+    }
+
+    struct RawFrame {
+        let width: Int
+        let height: Int
+        let stride: Int
+        let pixels: Data
+    }
+
+    /// 当前这一帧画面（不含字幕），BGR0 像素，用 CPU 转换，不经过 GPU。
+    /// 4K 视频一帧有三十多 MB：只在需要时偶尔取一次，不要放在主线程。
+    func rawVideoFrame() -> RawFrame? {
+        guard let handle else { return nil }
+        var result = mpv_node()
+        let args = ["screenshot-raw", "video"]
+        var pointers: [UnsafePointer<CChar>?] = args.map { UnsafePointer(strdup($0)) }
+        pointers.append(nil)
+        defer { pointers.forEach { free(UnsafeMutablePointer(mutating: $0)) } }
+        let status = pointers.withUnsafeMutableBufferPointer { mpv_command_ret(handle, $0.baseAddress, &result) }
+        guard status >= 0 else { return nil }
+        defer { mpv_free_node_contents(&result) }
+        guard result.format == MPV_FORMAT_NODE_MAP, let list = result.u.list?.pointee else { return nil }
+        var width = 0, height = 0, stride = 0
+        var format = ""
+        var pixels: Data?
+        for index in 0..<Int(list.num) {
+            guard let rawKey = list.keys[index] else { continue }
+            let key = String(cString: rawKey)
+            let node = list.values[index]
+            switch (key, node.format) {
+            case ("w", MPV_FORMAT_INT64): width = Int(node.u.int64)
+            case ("h", MPV_FORMAT_INT64): height = Int(node.u.int64)
+            case ("stride", MPV_FORMAT_INT64): stride = Int(node.u.int64)
+            case ("format", MPV_FORMAT_STRING):
+                if let text = node.u.string { format = String(cString: text) }
+            case ("data", MPV_FORMAT_BYTE_ARRAY):
+                if let array = node.u.ba?.pointee, let bytes = array.data {
+                    pixels = Data(bytes: bytes, count: array.size)
+                }
+            default:
+                break
+            }
+        }
+        guard format == "bgr0", width > 0, height > 0, stride >= width * 4,
+              let pixels, pixels.count >= stride * height else { return nil }
+        return RawFrame(width: width, height: height, stride: stride, pixels: pixels)
     }
 
     // MARK: 事件

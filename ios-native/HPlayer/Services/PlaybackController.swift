@@ -193,6 +193,16 @@ final class PlaybackController: ObservableObject {
 
     private var engine: MPVEngine?
     private weak var layer: CAMetalLayer?
+
+    /// 正在小窗（画中画）播放
+    @Published private(set) var pictureInPictureActive = false
+    /// 是否自动进小窗：播放中回到桌面时变成小窗继续播
+    @Published private(set) var autoPictureInPicture = PictureInPictureSettings.automatic
+    private var pictureInPicture: PlayerPictureInPicture?
+    /// 这次打开的视频已经往小窗图层里放过一帧画面
+    private var pictureInPictureStillReady = false
+    /// 小窗刚开始、内核还在切换输出的这段时间，也算在小窗里（不要关画面）
+    private var pictureInPictureStarting = false
     private var pendingOpen: (() -> Void)?
     /// 内核正在后台创建
     private var creatingEngine = false
@@ -269,9 +279,21 @@ final class PlaybackController: ObservableObject {
         }
         network.start(queue: DispatchQueue(label: "app.hplayer.network"))
         backgroundObservers = [
+            NotificationCenter.default.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+                // 可能要回到桌面了：把当前画面放进小窗图层，自动进小窗时从当前画面飞出去
+                Task { @MainActor [weak self] in
+                    guard let self, self.autoPictureInPicture, self.playing, self.loaded,
+                          !self.pictureInPictureActive, !self.pictureInPictureStarting else { return }
+                    self.pictureInPicture?.grabStill()
+                }
+            },
             NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
-                // 退到后台时只留声音，回来再打开画面，避免回到前台画面变黑
-                Task { @MainActor [weak self] in self?.engine?.set("vid", "no") }
+                // 退到后台时只留声音，回来再打开画面，避免回到前台画面变黑；小窗播放时画面还要继续
+                Task { @MainActor [weak self] in
+                    guard let self, !self.pictureInPictureActive, !self.pictureInPictureStarting,
+                          self.engine?.softwareOutputActive != true else { return }
+                    self.engine?.set("vid", "no")
+                }
             },
             NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
                 Task { @MainActor [weak self] in self?.engine?.set("vid", "auto") }
@@ -440,6 +462,7 @@ final class PlaybackController: ObservableObject {
         if !preservingPosition {
             playedThisSession = false
             softwareFallbackNoticed = false
+            pictureInPictureStillReady = false
         }
         recoveryTask?.cancel()
         recoveryTask = nil
@@ -489,7 +512,7 @@ final class PlaybackController: ObservableObject {
         // 激活音频会话要和系统音频服务通信，可能阻塞，放到后台做（内核自己打开音频输出时也会再确认一次）
         PlayerAudioSession.activate()
 
-        engine.set("hwdec", decoding == .hardware ? "videotoolbox" : "no")
+        engine.set("hwdec", hwdecOption)
         applyCacheOptions(engine)
         engine.set("hls-bitrate", "max")
         if let ua = customHeaders["User-Agent"] {
@@ -614,6 +637,7 @@ final class PlaybackController: ObservableObject {
     /// This also covers loading/buffering: a pending recovery must not resume audio
     /// while the portrait transition is in progress.
     func pauseForClose() {
+        pictureInPicture?.stop()
         closingPlayback = true
         userPaused = true
         pendingOpen = nil
@@ -789,6 +813,7 @@ final class PlaybackController: ObservableObject {
     }
 
     func stop(detach: Bool = true) {
+        // 换集也会先 stop：小窗不关，下一集接着在小窗里播
         session += 1
         cancelAddressResolution()
         recoveryTask?.cancel()
@@ -909,6 +934,116 @@ final class PlaybackController: ObservableObject {
              refreshURL: urlRefresher, autoRecover: watchdogEnabled, openTimeoutSeconds: openTimeoutSeconds)
     }
 
+    // MARK: 小窗播放
+
+    /// 选的解码方式对应的 mpv 选项。小窗播放时画面由 CPU 出图，硬解码要把帧拷回内存（videotoolbox-copy）
+    private var hwdecOption: String {
+        guard decoding == .hardware else { return "no" }
+        return pictureInPictureActive || pictureInPictureStarting ? "videotoolbox-copy" : "videotoolbox"
+    }
+
+    var pictureInPictureSupported: Bool { PictureInPictureSettings.supported }
+
+    /// 给小窗截引导帧用
+    var engineForPictureInPicture: MPVEngine? { engine }
+
+    /// 播放画面下面垫着的小窗图层准备好了
+    func attachPictureInPicture(layer: AVSampleBufferDisplayLayer) {
+        guard PictureInPictureSettings.supported else { return }
+        if let pictureInPicture, pictureInPicture.layer === layer { return }
+        pictureInPicture?.stop()
+        pictureInPicture = PlayerPictureInPicture(layer: layer, playback: self)
+        pictureInPictureStillReady = false
+        if hasPlayed {
+            pictureInPictureStillReady = true
+            pictureInPicture?.grabStill()
+        }
+    }
+
+    /// 播放页上的小窗按钮
+    func togglePictureInPicture() {
+        guard let pictureInPicture else {
+            notice = "这台设备不支持小窗播放"
+            return
+        }
+        if pictureInPictureActive {
+            pictureInPicture.stop()
+        } else {
+            guard loaded, error.isEmpty else {
+                notice = "视频开始播放后才能开小窗"
+                return
+            }
+            pictureInPicture.start()
+        }
+    }
+
+    func setAutoPictureInPicture(_ enabled: Bool) {
+        autoPictureInPicture = enabled
+        PictureInPictureSettings.automatic = enabled
+        pictureInPicture?.setAutomatic(enabled)
+    }
+
+    /// 小窗马上要出现：把内核换成 CPU 出图，画面送进小窗图层
+    func pictureInPictureWillStart() {
+        pictureInPictureStarting = true
+        guard let engine, let layer = pictureInPicture?.layer else { return }
+        let hwdec = decoding == .hardware ? "videotoolbox-copy" : "no"
+        let size = CGSize(width: Int(videoWidth), height: Int(videoHeight))
+        logEvent("开始小窗播放")
+        PlayerPictureInPicture.engineQueue.async { [weak self] in
+            let switched = engine.startSoftwareOutput(layer: layer, hwdec: hwdec, videoSize: size)
+            Task { @MainActor [weak self] in
+                guard let self, !switched else { return }
+                self.logEvent("小窗：切换到 CPU 出图失败")
+                self.pictureInPicture?.stop()
+            }
+        }
+    }
+
+    func pictureInPictureDidStart() {
+        pictureInPictureStarting = false
+        pictureInPictureActive = true
+    }
+
+    /// 小窗结束。resume 为 true 表示用户点了「回到播放页」，接着播；直接关掉小窗则暂停（和系统播放器一样）
+    func pictureInPictureDidStop(resume: Bool) {
+        let wasActive = pictureInPictureActive || pictureInPictureStarting
+        pictureInPictureStarting = false
+        pictureInPictureActive = false
+        guard wasActive else { return }
+        logEvent(resume ? "小窗回到播放页" : "关闭小窗")
+        if !resume, playing {
+            userPaused = true
+            engine?.set("pause", true)
+            updateFlags()
+        }
+        guard let engine else { return }
+        let hwdec = hwdecOption
+        let keepVideo = UIApplication.shared.applicationState != .background
+        PlayerPictureInPicture.engineQueue.async {
+            engine.stopSoftwareOutput(hwdec: hwdec, keepVideo: keepVideo)
+        }
+        // 下次开小窗前重新放一帧当前画面
+        pictureInPictureStillReady = false
+        if keepVideo {
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 800_000_000)
+                guard let self, !self.pictureInPictureActive, self.loaded else { return }
+                self.pictureInPictureStillReady = true
+                self.pictureInPicture?.grabStill()
+            }
+        }
+    }
+
+    func pictureInPictureRenderSizeChanged(_ size: CGSize) {
+        engine?.setSoftwareOutput(renderSize: size)
+    }
+
+    private func updatePictureInPictureVideoSize() {
+        guard pictureInPictureActive || pictureInPictureStarting else { return }
+        engine?.setSoftwareOutput(videoSize: CGSize(width: Int(videoWidth), height: Int(videoHeight)))
+    }
+
     // MARK: 内核事件
 
     private func handle(_ event: MPVEngine.Event) {
@@ -940,6 +1075,11 @@ final class PlaybackController: ObservableObject {
                 eofDuringSeek = false
             }
             if !statusNote.isEmpty, recoveryTask == nil { statusNote = "" }
+            if !pictureInPictureStillReady, !pictureInPictureActive {
+                // 系统要等小窗图层里有画面才允许开小窗：开播后先放一帧
+                pictureInPictureStillReady = true
+                pictureInPicture?.grabStill()
+            }
         case .endFile(let reason, let message):
             handleEndFile(reason: reason, message: message)
         case .log(let line):
@@ -1040,9 +1180,11 @@ final class PlaybackController: ObservableObject {
             videoHeight = value
             limitBoostForVideo()
             updateBadges()
+            updatePictureInPictureVideoSize()
         case ("video-params/w", .int(let value)):
             videoWidth = value
             limitBoostForVideo()
+            updatePictureInPictureVideoSize()
         case ("video-params/sig-peak", .double(let value)):
             hdr = value > 1
             updateBadges()
@@ -1431,6 +1573,7 @@ struct PlayerVideoSurface: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> PlayerVideoViewController {
         let controller = PlayerVideoViewController()
         playback.attach(layer: controller.metalLayer)
+        playback.attachPictureInPicture(layer: controller.pictureInPictureLayer)
         return controller
     }
 
@@ -1445,6 +1588,13 @@ extension Notification.Name {
 final class PlayerVideoViewController: UIViewController {
     private let canvas = PlayerCanvasView()
     var metalLayer: MPVMetalLayer { canvas.metalLayer }
+    /// 小窗用的图层，垫在画面下面、被画面盖住，平时看不见。系统小窗从它的位置飞出去、回来时也飞回这里
+    let pictureInPictureLayer: AVSampleBufferDisplayLayer = {
+        let layer = AVSampleBufferDisplayLayer()
+        layer.videoGravity = .resizeAspect
+        layer.backgroundColor = UIColor.black.cgColor
+        return layer
+    }()
 
     /// 画面图层固定用横屏尺寸渲染。MPVKit 的 iOS 渲染上下文不会把图层尺寸的变化告诉 mpv，
     /// 转到竖屏后 mpv 还按横屏的大小算画面位置，画面会被挤到左上角、右边被裁掉。
@@ -1458,12 +1608,17 @@ final class PlayerVideoViewController: UIViewController {
         let container = UIView()
         container.backgroundColor = .black
         container.isUserInteractionEnabled = false
+        container.layer.addSublayer(pictureInPictureLayer)
         container.addSubview(canvas)
         view = container
     }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        pictureInPictureLayer.frame = view.bounds
+        CATransaction.commit()
         guard !transitioning else { return }
         applyGeometry(in: view.bounds.size)
     }
