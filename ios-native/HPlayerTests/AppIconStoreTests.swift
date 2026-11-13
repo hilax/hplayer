@@ -1,128 +1,217 @@
+import Combine
 import XCTest
 @testable import HPlayer
 
 @MainActor
 final class AppIconStoreTests: XCTestCase {
-    private final class Clock {
-        var date = Date(timeIntervalSince1970: 1_000_000)
-        func advance(_ seconds: TimeInterval) { date = date.addingTimeInterval(seconds) }
+    private func makeDefaults() -> UserDefaults {
+        let suite = "AppIconStoreTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
+        return defaults
     }
 
     private func makeStore(
+        defaults: UserDefaults? = nil,
         system: @escaping () -> String? = { nil },
-        clock: Clock = Clock(),
-        apply: ((String?, @escaping (Error?) -> Void) -> Void)? = nil,
-        saved: ((String?) -> Void)? = nil
+        supportsIcons: Bool = true,
+        apply: @escaping (String?, @escaping (Error?) -> Void) -> Void = { _, done in done(nil) }
     ) -> AppIconStore {
-        // 用例之间不共享真实偏好，避免上一个用例写入的选择影响下一个用例的初始态。
-        UserDefaults.standard.removeObject(forKey: AppIconStore.choiceKey)
-        return AppIconStore(systemName: system, apply: apply, persist: saved, now: { clock.date })
+        AppIconStore(
+            defaults: defaults ?? makeDefaults(),
+            systemName: system,
+            apply: apply,
+            supportsAlternateIcons: { supportsIcons }
+        )
     }
 
-    /// 回调经 Task @MainActor  hop 回主线程，断言前让主 runloop 转一圈。
-    /// CI 模拟器负载高时 0.15 秒不一定够：转主 runloop，直到这次切换处理完（最多 3 秒）。
-    private func settle(_ store: AppIconStore, timeout: TimeInterval = 3) {
-        let deadline = Date().addingTimeInterval(timeout)
-        repeat {
-            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-        } while store.isChanging && Date() < deadline
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+    private func complete(
+        _ callback: ((Error?) -> Void)?,
+        error: Error? = nil,
+        store: AppIconStore
+    ) async {
+        let finished = expectation(description: "Icon request completed on the main actor")
+        let subscription = store.$isChanging.filter { !$0 }.first().sink { _ in finished.fulfill() }
+        callback?(error)
+        await fulfillment(of: [finished], timeout: 2)
+        withExtendedLifetime(subscription) {}
     }
 
-    func testSelectionMovesImmediatelyWithoutWaitingForSystem() {
+    func testSelectionMovesImmediatelyButPersistsOnlyAfterSuccess() async {
+        let defaults = makeDefaults()
+        var requested: [String?] = []
+        var completion: ((Error?) -> Void)?
+        let store = makeStore(defaults: defaults, apply: { name, done in
+            requested.append(name)
+            completion = done
+        })
+        store.select(.ocean)
+        XCTAssertEqual(store.selected, .ocean)
+        XCTAssertTrue(store.isChanging)
+        XCTAssertEqual(requested, ["AppIconOcean"])
+        XCTAssertEqual(defaults.string(forKey: AppIconStore.choiceKey), "prism",
+                       "An in-flight request must not become the saved choice")
+
+        await complete(completion, store: store)
+        XCTAssertFalse(store.isChanging)
+        XCTAssertEqual(store.notice, .success(.ocean, previous: .prism))
+        XCTAssertEqual(defaults.string(forKey: AppIconStore.choiceKey), "ocean")
+    }
+
+    func testFailureKeepsPreviousConfirmedChoice() async {
+        let defaults = makeDefaults()
+        defaults.set("ocean", forKey: AppIconStore.choiceKey)
+        var completion: ((Error?) -> Void)?
+        let store = makeStore(defaults: defaults, apply: { _, done in completion = done })
+        store.select(.mint)
+        await complete(completion, error: NSError(domain: "test", code: 1,
+                                                 userInfo: [NSLocalizedDescriptionKey: "拒绝"]), store: store)
+        XCTAssertEqual(store.selected, .ocean)
+        XCTAssertEqual(defaults.string(forKey: AppIconStore.choiceKey), "ocean")
+        XCTAssertEqual(store.notice, .failure("拒绝"))
+        XCTAssertEqual(makeStore(defaults: defaults).selected, .ocean)
+    }
+
+    func testPosix35WithoutMatchingSystemIconIsAFailure() async {
+        let defaults = makeDefaults()
+        var completion: ((Error?) -> Void)?
+        let store = makeStore(defaults: defaults, apply: { _, done in completion = done })
+        store.select(.iris)
+        await complete(completion, error: NSError(domain: NSPOSIXErrorDomain, code: 35), store: store)
+        XCTAssertEqual(store.selected, .prism)
+        XCTAssertEqual(defaults.string(forKey: AppIconStore.choiceKey), "prism")
+        guard case .failure = store.notice else { return XCTFail("An unconfirmed error must not report success") }
+    }
+
+    func testPosix35CanSucceedWhenSystemConfirmsRequestedIcon() async {
+        var system: String? = nil
+        var completion: ((Error?) -> Void)?
+        let store = makeStore(system: { system }, apply: { _, done in completion = done })
+        store.select(.iris)
+        system = "AppIconIris"
+        await complete(completion, error: NSError(domain: NSPOSIXErrorDomain, code: 35), store: store)
+        XCTAssertEqual(store.selected, .iris)
+        XCTAssertEqual(store.notice, .success(.iris, previous: .prism))
+    }
+
+    func testConfirmedSelectionSurvivesStaleSystemValuesAndPageRecreation() async {
+        let defaults = makeDefaults()
+        var system: String? = nil
+        var completion: ((Error?) -> Void)?
+        let store = makeStore(defaults: defaults, system: { system }, apply: { _, done in completion = done })
+        store.select(.coral)
+        await complete(completion, store: store)
+
+        // The old two-second guard eventually accepted these stale reads as a new selection.
+        // Reopening settings and relaunching must use the last confirmed choice at any time.
+        for staleName in [nil, "AppIconPrism", "AppIconOcean", "UnknownFutureIcon"] as [String?] {
+            system = staleName
+            XCTAssertEqual(store.selected, .coral)
+            let reopened = makeStore(defaults: defaults, system: { system })
+            XCTAssertEqual(reopened.selected, .coral)
+            XCTAssertEqual(defaults.string(forKey: AppIconStore.choiceKey), "coral")
+        }
+    }
+
+    func testRestoredDefaultIsSavedExplicitlyEvenWhenSystemStillReportsAnAlternate() async {
+        let defaults = makeDefaults()
+        defaults.set("ocean", forKey: AppIconStore.choiceKey)
+        var requested: [String?] = []
+        var completion: ((Error?) -> Void)?
+        let store = makeStore(defaults: defaults, system: { "AppIconOcean" }, apply: { name, done in
+            requested.append(name)
+            completion = done
+        })
+        store.select(.prism)
+        await complete(completion, store: store)
+        XCTAssertEqual(requested, [nil])
+        XCTAssertEqual(defaults.string(forKey: AppIconStore.choiceKey), "prism")
+        XCTAssertEqual(makeStore(defaults: defaults, system: { "AppIconOcean" }).selected, .prism)
+    }
+
+    func testUndoRestoresAndPersistsPreviousIcon() async {
+        let defaults = makeDefaults()
+        var requested: [String?] = []
+        var completion: ((Error?) -> Void)?
+        let store = makeStore(defaults: defaults, apply: { name, done in
+            requested.append(name)
+            completion = done
+        })
+        store.select(.ocean)
+        await complete(completion, store: store)
+        store.undo()
+        await complete(completion, store: store)
+        XCTAssertEqual(store.selected, .prism)
+        XCTAssertEqual(requested, ["AppIconOcean", nil])
+        XCTAssertEqual(defaults.string(forKey: AppIconStore.choiceKey), "prism")
+    }
+
+    func testRequestsAreSerializedWhileChanging() async {
         var requested: [String?] = []
         var completion: ((Error?) -> Void)?
         let store = makeStore(apply: { name, done in
             requested.append(name)
             completion = done
         })
-        XCTAssertEqual(store.selected, .prism)
         store.select(.ocean)
-        XCTAssertEqual(store.selected, .ocean, "勾选必须在点按当帧跟随，不等系统回调")
-        XCTAssertTrue(store.isChanging)
-        XCTAssertEqual(requested, ["AppIconOcean"])
-        completion?(nil)
-        settle(store)
-        XCTAssertFalse(store.isChanging)
-        XCTAssertEqual(store.notice, .success(.ocean, previous: .prism))
-    }
-
-    func testFailureRollsBackToPreviousChoice() {
-        var completion: ((Error?) -> Void)?
-        var saved: [String?] = []
-        let store = makeStore(apply: { _, done in completion = done }, saved: { saved.append($0) })
         store.select(.mint)
-        completion?(NSError(domain: "test", code: 1, userInfo: [NSLocalizedDescriptionKey: "拒绝"]))
-        settle(store)
-        XCTAssertEqual(store.selected, .prism, "失败必须回滚勾选，不能留下桌面与页内不一致")
-        XCTAssertEqual(saved.last ?? nil, nil)
-        XCTAssertEqual(store.notice, .failure("拒绝"))
+        store.select(.prism)
+        store.undo()
+        XCTAssertEqual(requested, ["AppIconOcean"])
+        XCTAssertEqual(store.selected, .ocean)
+        await complete(completion, store: store)
     }
 
-    func testPosix35IsTreatedAsApplied() {
-        var completion: ((Error?) -> Void)?
-        let store = makeStore(apply: { _, done in completion = done })
-        store.select(.iris)
-        completion?(NSError(domain: NSPOSIXErrorDomain, code: 35))
-        settle(store)
-        XCTAssertEqual(store.selected, .iris)
-        XCTAssertEqual(store.notice, .success(.iris, previous: .prism))
+    func testUnsupportedDeviceDoesNotRequestOrPersistAChange() {
+        let defaults = makeDefaults()
+        let store = makeStore(defaults: defaults, supportsIcons: false, apply: { _, _ in
+            XCTFail("Unsupported devices must not request an alternate icon")
+        })
+        store.select(.mint)
+        XCTAssertEqual(store.selected, .prism)
+        XCTAssertFalse(store.isChanging)
+        XCTAssertEqual(defaults.string(forKey: AppIconStore.choiceKey), "prism")
     }
 
-    func testStaleSystemReadCannotClobberFreshSelection() {
-        let clock = Clock()
-        var system: String? = nil
-        var completion: ((Error?) -> Void)?
-        let store = makeStore(system: { system }, clock: clock, apply: { _, done in completion = done })
-        store.select(.coral)
-        completion?(nil)
-        settle(store)
-        // 系统确认弹窗关闭触发回前台校准，但 SpringBoard 仍返回旧值。
-        store.refreshFromSystem()
-        XCTAssertEqual(store.selected, .coral, "settle 期内的旧系统值不得覆盖刚选中的样式")
-        clock.advance(AppIconStore.settleInterval + 1)
-        system = "AppIconCoral"
-        store.refreshFromSystem()
-        XCTAssertEqual(store.selected, .coral, "settle 后系统与选择一致时不做无谓覆盖")
-        system = "AppIconMint"
-        store.refreshFromSystem()
-        XCTAssertEqual(store.selected, .mint, "settle 之后系统真实变化仍要校准")
-    }
-
-    func testUndoRestoresPreviousIcon() {
-        var requested: [String?] = []
-        let store = makeStore(apply: { name, done in
-            requested.append(name)
-            done(nil)
+    func testSelectingCurrentAlternateDoesNotSendAnotherRequest() {
+        let store = makeStore(system: { "AppIconOcean" }, apply: { _, _ in
+            XCTFail("Selecting the active style must not send a duplicate request")
         })
         store.select(.ocean)
-        settle(store)
-        XCTAssertEqual(store.notice, .success(.ocean, previous: .prism))
-        store.undo()
-        settle(store)
-        XCTAssertEqual(store.selected, .prism)
-        XCTAssertEqual(requested, ["AppIconOcean", nil])
+        XCTAssertFalse(store.isChanging)
+        XCTAssertNil(store.notice)
     }
 
-    func testSelectingPrismNormalizesLegacyAlternate() {
+    func testSelectingPrismNormalizesLegacyAlternate() async {
         var requested: [String?] = []
+        var completion: ((Error?) -> Void)?
         let store = makeStore(system: { "AppIconPrism" }, apply: { name, done in
             requested.append(name)
-            done(nil)
+            completion = done
         })
         XCTAssertEqual(store.selected, .prism)
         store.select(.prism)
-        XCTAssertEqual(requested, [nil], "遗留 AppIconPrism 字符串要归一化为 nil")
+        XCTAssertEqual(requested, [nil])
+        await complete(completion, store: store)
     }
 
-    func testLaunchMigratesSystemValueIntoStoredChoice() {
-        let key = AppIconStore.choiceKey
-        let original = UserDefaults.standard.string(forKey: key)
-        UserDefaults.standard.removeObject(forKey: key)
-        defer { UserDefaults.standard.set(original, forKey: key) }
-        var saved: [String?] = []
-        let store = makeStore(system: { "AppIconOcean" }, saved: { saved.append($0) })
-        XCTAssertEqual(store.selected, .ocean, "旧版本没写过偏好时以系统当前值迁移")
-        XCTAssertEqual(saved, ["AppIconOcean"])
+    func testLaunchMigratesLegacySavedSystemNamesToStableChoiceIDs() {
+        for icon in HomeScreenIcon.allCases {
+            let defaults = makeDefaults()
+            defaults.set(icon.alternateName ?? "AppIconPrism", forKey: AppIconStore.choiceKey)
+            let store = makeStore(defaults: defaults)
+            XCTAssertEqual(store.selected, icon)
+            XCTAssertEqual(defaults.string(forKey: AppIconStore.choiceKey), icon.rawValue)
+        }
+    }
+
+    func testFirstLaunchMigratesSystemIconAndInvalidSavedChoiceFallsBackToSystem() {
+        for stored in [nil, "UnknownFutureIcon"] as [String?] {
+            let defaults = makeDefaults()
+            defaults.set(stored, forKey: AppIconStore.choiceKey)
+            let store = makeStore(defaults: defaults, system: { "AppIconOcean" })
+            XCTAssertEqual(store.selected, .ocean)
+            XCTAssertEqual(defaults.string(forKey: AppIconStore.choiceKey), "ocean")
+        }
     }
 }
