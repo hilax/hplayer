@@ -102,6 +102,10 @@ final class HeroPalette: ObservableObject {
     }
 
     @Published private(set) var tints: [String: ArtworkTint] = [:]
+    /// 每张图的小图（160px）：顶部氛围层把它放大、高斯模糊后铺在频道条、搜索框和轮播后面
+    @Published private(set) var images: [String: UIImage] = [:]
+    /// 每张图露出部分的原始平均色（没压暗）：决定模糊层上要压多少暗、往上拉时露出的实色
+    @Published private(set) var averages: [String: ArtworkTint] = [:]
     private var loading: Set<String> = []
     private var failedAt: [String: Date] = [:]
 
@@ -119,11 +123,13 @@ final class HeroPalette: ObservableObject {
             if let failed = failedAt[key], Date().timeIntervalSince(failed) < 60 { continue }
             loading.insert(key)
             Task { @MainActor [weak self] in
-                let tint = await HeroPalette.load(source)
+                let loaded = await HeroPalette.load(source)
                 guard let self else { return }
                 self.loading.remove(key)
-                if let tint {
-                    self.tints[key] = tint
+                if let loaded {
+                    self.images[key] = loaded.image
+                    self.averages[key] = loaded.average
+                    self.tints[key] = loaded.tint
                     self.failedAt[key] = nil
                 } else {
                     self.failedAt[key] = Date()
@@ -132,13 +138,15 @@ final class HeroPalette: ObservableObject {
         }
     }
 
-    private static func load(_ source: Source) async -> ArtworkTint? {
+    private static func load(_ source: Source) async -> (image: UIImage, average: ArtworkTint, tint: ArtworkTint)? {
         for candidate in [source.key, source.fallback] where !candidate.isEmpty {
             guard let url = URL(string: candidate),
                   let image = await ImagePipeline.shared.image(url, maxPixel: ArtworkSize.backdrop, priority: .utility),
                   let cgImage = image.cgImage,
                   let average = ArtworkTint.averageColor(of: cgImage, aspect: source.aspect) else { continue }
-            return ArtworkTint.page(red: average.red, green: average.green, blue: average.blue)
+            return (image,
+                    ArtworkTint(red: average.red, green: average.green, blue: average.blue),
+                    ArtworkTint.page(red: average.red, green: average.green, blue: average.blue))
         }
         return nil
     }
@@ -151,45 +159,163 @@ final class CarouselTintState: ObservableObject {
 
 // MARK: - 首页顶部氛围色
 
-/// 首页顶部的一层氛围色：当前这张轮播图的取色，从屏幕顶端往下渐渐淡进页面底色。
-/// 翻页时颜色用 0.6 秒交叉淡入；深色模式用压暗的封面色，浅色模式用同色相的淡色。
+/// 频道页顶部的氛围层：把当前这张轮播图放大、高斯模糊，铺在状态栏、频道条、搜索框和轮播卡片后面，
+/// 从屏幕顶端往下慢慢淡进页面底色（到卡片下沿前完全淡掉）。
+/// - 不是一个平均色：模糊后的画面保留了封面各处的颜色（左边天空蓝、右边火焰橙这种），卡片两侧露出的就是封面边缘的颜色
+/// - 模糊层上按封面的平均亮度压一层暗，保证上面的白字看得清；深色模式压得更多
+/// - 翻页时新旧两层 0.6 秒交叉淡入
 struct HomeAmbientBackdrop: View {
     @ObservedObject var state: CarouselTintState
     @ObservedObject var palette: HeroPalette
-    /// 顶部这一段（占总高的比例）是实色：往下拉、页面回弹时露出来的仍是氛围色，不是空白
-    var solidTop: CGFloat = 0
+    /// 从屏幕顶端到轮播卡片下沿的高度：模糊画面铺满这一段
+    let heroHeight: CGFloat
+    /// 往屏幕上方多铺的实色高度：下拉回弹时露出来的仍是氛围色
+    let extensionHeight: CGFloat
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        let tint = palette.tint(forKey: state.key)
-        // 换色时新旧两层交叉淡入（渐变本身在旧系统上不会插值）
+        let key = state.key ?? ""
+        let ready = palette.images[key] != nil
         ZStack {
-            LinearGradient(stops: stops(for: tint), startPoint: .top, endPoint: .bottom)
-                .id(tint)
-                .transition(.opacity)
+            if !key.isEmpty {
+                layer(key: key)
+                    .id(key + (ready ? "#ready" : "#pending"))
+                    .transition(.opacity)
+            }
         }
-        .animation(.easeInOut(duration: 0.6), value: tint)
+        .animation(.easeInOut(duration: 0.6), value: key + (ready ? "#ready" : "#pending"))
+        .mask(fade)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
 
-    private func stops(for tint: HeroTint) -> [Gradient.Stop] {
-        let color: Color
-        switch tint {
-        case .plain:
-            return [.init(color: .clear, location: 0), .init(color: .clear, location: 1)]
-        case .pending:
-            color = colorScheme == .dark ? Theme.surfaceRaised : Theme.surfaceHigh
-        case .artwork(let value):
-            color = colorScheme == .dark ? value.color : value.pastel.color
+    private func layer(key: String) -> some View {
+        let image = palette.images[key]
+        let average = palette.averages[key]
+        let base = baseColor(average)
+        return VStack(spacing: 0) {
+            base.frame(height: extensionHeight)
+            ZStack(alignment: .top) {
+                base
+                if let image {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .clipped()
+                        .blur(radius: 34, opaque: true)
+                        .saturation(1.12)
+                    Color.black.opacity(veil(average))
+                    // 和上面那段实色接上，下拉时看不出接缝
+                    LinearGradient(colors: [base, base.opacity(0)], startPoint: .top, endPoint: .bottom)
+                        .frame(height: 48)
+                }
+            }
+            .frame(height: heroHeight)
+            .clipped()
         }
-        let middle = colorScheme == .dark ? 0.45 : 0.55
-        let solid = min(max(solidTop, 0), 0.9)
-        return [
-            .init(color: color, location: 0),
-            .init(color: color, location: solid),
-            .init(color: color.opacity(middle), location: solid + 0.55 * (1 - solid)),
-            .init(color: color.opacity(0), location: 1),
-        ]
+    }
+
+    /// 平均色压暗后的实色（往上拉露出来的部分、图片还没到时的底）
+    private func baseColor(_ average: ArtworkTint?) -> Color {
+        guard let average else {
+            // 还没算好：中性的石墨灰，上面的白字也看得清
+            return colorScheme == .dark ? Color(white: 0.14) : Color(white: 0.42)
+        }
+        let keep = 1 - veil(average)
+        return Color(.sRGB, red: average.red * keep, green: average.green * keep, blue: average.blue * keep, opacity: 1)
+    }
+
+    /// 压暗多少：把封面的平均亮度压到浅色模式约 0.46、深色模式约 0.30 以下（本来就暗的少压一点）
+    private func veil(_ average: ArtworkTint?) -> Double {
+        guard let average else { return 0 }
+        let luma = 0.2126 * average.red + 0.7152 * average.green + 0.0722 * average.blue
+        let target = colorScheme == .dark ? 0.30 : 0.46
+        let floor = colorScheme == .dark ? 0.30 : 0.10
+        guard luma > 0.001 else { return floor }
+        return min(max(1 - target / luma, floor), 0.7)
+    }
+
+    /// 从上往下淡出：上面一段几乎不透明，卡片中部开始明显变淡，卡片下沿前完全淡进页面底色
+    private var fade: some View {
+        let total = max(extensionHeight + heroHeight, 1)
+        func at(_ fraction: CGFloat) -> CGFloat { (extensionHeight + heroHeight * fraction) / total }
+        return LinearGradient(stops: [
+            .init(color: .black, location: 0),
+            .init(color: .black, location: at(0.12)),
+            .init(color: .black.opacity(0.95), location: at(0.25)),
+            .init(color: .black.opacity(0.77), location: at(0.35)),
+            .init(color: .black.opacity(0.58), location: at(0.50)),
+            .init(color: .black.opacity(0.21), location: at(0.67)),
+            .init(color: .black.opacity(0.06), location: at(0.83)),
+            .init(color: .clear, location: at(0.93)),
+            .init(color: .clear, location: 1),
+        ], startPoint: .top, endPoint: .bottom)
+    }
+}
+
+// MARK: - 氛围层上的头部
+
+/// 当前页有轮播氛围层（AmbientHeroSection 往上报）：频道条、搜索框据此换成白字和磨砂搜索框
+struct AmbientHeroPresenceKey: PreferenceKey {
+    static var defaultValue = false
+    static func reduce(value: inout Bool, nextValue: () -> Bool) { value = value || nextValue() }
+}
+
+private struct OnHeroArtworkKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    /// 头部正压在轮播的模糊氛围层上（还没往上滚收起）
+    var onHeroArtwork: Bool {
+        get { self[OnHeroArtworkKey.self] }
+        set { self[OnHeroArtworkKey.self] = newValue }
+    }
+}
+
+/// 头部文字 / 图标：压在氛围层上时是白色，否则用主题文字色
+private struct HeroForeground: ViewModifier {
+    let secondary: Bool
+    @Environment(\.onHeroArtwork) private var onArtwork
+
+    func body(content: Content) -> some View {
+        if onArtwork {
+            content.foregroundStyle(secondary ? Color.white.opacity(0.82) : Color.white)
+        } else {
+            content.foregroundStyle(secondary ? Theme.textSecondary : Theme.textPrimary)
+        }
+    }
+}
+
+/// 搜索框外观：压在氛围层上时是半透明磨砂（透出后面的封面颜色），否则是普通输入框
+private struct HeroFieldChrome: ViewModifier {
+    let focused: Bool
+    @Environment(\.onHeroArtwork) private var onArtwork
+    @Environment(\.colorScheme) private var colorScheme
+
+    func body(content: Content) -> some View {
+        if onArtwork {
+            let shape = RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
+            let material: Material = colorScheme == .dark ? .ultraThinMaterial : .thinMaterial
+            content
+                .background(material, in: shape)
+                .overlay {
+                    shape.strokeBorder(focused ? Theme.accent : Color.white.opacity(0.22),
+                                       lineWidth: focused ? Theme.Stroke.rule : Theme.Stroke.hairline)
+                }
+        } else {
+            content.fieldChrome(focused: focused)
+        }
+    }
+}
+
+extension View {
+    func heroForeground(secondary: Bool = false) -> some View {
+        modifier(HeroForeground(secondary: secondary))
+    }
+
+    func heroFieldChrome(focused: Bool = false) -> some View {
+        modifier(HeroFieldChrome(focused: focused))
     }
 }

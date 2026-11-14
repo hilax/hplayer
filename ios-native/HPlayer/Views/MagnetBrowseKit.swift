@@ -396,7 +396,7 @@ struct MagnetCategoryTabs: View {
                 } label: {
                     Text(category.title)
                         .font(.scaled(selected ? 20 : 16, weight: selected ? .heavy : .medium))
-                        .foregroundStyle(selected ? Theme.textPrimary : Theme.textSecondary)
+                        .heroForeground(secondary: !selected)
                         .frame(height: 40)
                         .overlay(alignment: .bottom) {
                             if selected {
@@ -469,7 +469,7 @@ struct MagnetSearchField: View {
         .padding(.leading, Theme.Space.md + 2)
         .padding(.trailing, text.isEmpty ? 6 : 0)
         .frame(minHeight: 40)
-        .fieldChrome(focused: focused)
+        .heroFieldChrome(focused: focused)
     }
 }
 

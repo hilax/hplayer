@@ -172,7 +172,7 @@ struct MagnetSearchView: View {
     private func topIcon(_ icon: AppIcon) -> some View {
         Image(systemName: icon.name)
             .font(.scaled(19, weight: Theme.iconWeight))
-            .foregroundStyle(Theme.textPrimary)
+            .heroForeground()
             .frame(width: 44, height: 44)
             .contentShape(Rectangle())
     }

@@ -22,6 +22,8 @@ struct PagedHeaderContainer<Page: Hashable, FirstRow: View, SecondRow: View, Con
 
     /// 各页的滚动位置；只有头部订阅，页面本身不随滚动重算
     @State private var scroll = PageScrollState()
+    /// 哪些页顶部有轮播氛围层（页里的 AmbientHeroSection 报上来）
+    @State private var heroPages: Set<Page> = []
 
     init(pages: [Page], selection: Binding<Page>, overlay: AnyView? = nil,
          @ViewBuilder firstRow: @escaping () -> FirstRow,
@@ -58,7 +60,8 @@ struct PagedHeaderContainer<Page: Hashable, FirstRow: View, SecondRow: View, Con
                 }
 
                 PagedHeader(state: scroll, key: overlay == nil ? AnyHashable(selection) : AnyHashable(Self.overlayKey),
-                            safeTop: safeTop, firstRow: firstRow, secondRow: secondRow)
+                            safeTop: safeTop, onArtwork: overlay == nil && heroPages.contains(selection),
+                            firstRow: firstRow, secondRow: secondRow)
             }
             .ignoresSafeArea(edges: .top)
         }
@@ -126,6 +129,9 @@ struct PagedHeaderContainer<Page: Hashable, FirstRow: View, SecondRow: View, Con
         }
         .environment(\.channelPageInsets, insets)
         .environment(\.pageScrollReporter, PageScrollReporter(state: scroll, key: AnyHashable(page)))
+        .onPreferenceChange(AmbientHeroPresenceKey.self) { hasHero in
+            if hasHero { heroPages.insert(page) } else { heroPages.remove(page) }
+        }
     }
 
     /// 不带动画地把横向分页对齐到当前页；等这一轮布局结束再对齐，宽度才是新的
@@ -159,6 +165,8 @@ struct PagedHeader<FirstRow: View, SecondRow: View>: View {
     @ObservedObject var state: PageScrollState
     let key: AnyHashable
     let safeTop: CGFloat
+    /// 当前页顶部有轮播氛围层：没收起时频道条白字、搜索框磨砂
+    var onArtwork = false
     let firstRow: () -> FirstRow
     let secondRow: () -> SecondRow
 
@@ -194,6 +202,8 @@ struct PagedHeader<FirstRow: View, SecondRow: View>: View {
             }
             .padding(.top, safeTop)
             .offset(y: -collapse)
+            .environment(\.onHeroArtwork, onArtwork && progress < 0.6)
+            .animation(.easeInOut(duration: 0.2), value: onArtwork && progress < 0.6)
         }
         .frame(maxWidth: .infinity, alignment: .top)
     }

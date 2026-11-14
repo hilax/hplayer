@@ -31,7 +31,7 @@ struct HomeChannelsView: View {
                         Button { addRequest += 1 } label: {
                             Image(systemName: AppIcon.addCircle.name)
                                 .font(.scaled(20, weight: Theme.iconWeight))
-                                .foregroundStyle(Theme.textPrimary)
+                                .heroForeground()
                                 .frame(width: 44, height: 44)
                                 .contentShape(Rectangle())
                         }

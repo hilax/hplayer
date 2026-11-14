@@ -94,7 +94,7 @@ struct HomeChannelBar: View {
                 } label: {
                     Text(channel.title)
                         .font(.scaled(selected ? 20 : 16, weight: selected ? .heavy : .medium))
-                        .foregroundStyle(selected ? Theme.textPrimary : Theme.textSecondary)
+                        .heroForeground(secondary: !selected)
                         .frame(height: 40)
                         .overlay(alignment: .bottom) {
                             if selected {

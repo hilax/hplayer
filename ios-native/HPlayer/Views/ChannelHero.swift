@@ -66,7 +66,7 @@ struct ChannelHeroSection<Trailing: View, HitArea: View>: View {
     }
 }
 
-/// 顶部的通用骨架：上面是调用方给的几行（频道条、搜索框…），下面是轮播；整块铺当前轮播图的氛围色。
+/// 顶部的通用骨架：上面是调用方给的几行（频道条、搜索框…），下面是轮播；整块铺当前轮播图放大模糊后的氛围层。
 /// 推荐 / 动漫 / 片库用 ChannelHeroSection 包一层；磁力页的顶部（分类条 + 可输入的搜索框）直接用它。
 struct AmbientHeroSection<Top: View, HitArea: View>: View {
     let slides: [HomeSlide]
@@ -114,15 +114,25 @@ struct AmbientHeroSection<Top: View, HitArea: View>: View {
         .padding(.top, safeTop)
         .padding(.bottom, 4)
         .background(alignment: .top) {
+            // 当前轮播图放大模糊后铺在顶部，到卡片下沿前淡进页面底色；
             // 往上多铺一段实色：下拉回弹、下拉刷新时，轮播上方露出来的也是氛围色
-            HomeAmbientBackdrop(state: tint, palette: palette,
-                                solidTop: Self.pullExtension / (Self.pullExtension + safeTop + 440))
-                .frame(height: Self.pullExtension + safeTop + 440)
-                .offset(y: -Self.pullExtension)
+            if hasHero {
+                HomeAmbientBackdrop(state: tint, palette: palette, heroHeight: heroHeight,
+                                    extensionHeight: Self.pullExtension)
+                    .frame(height: Self.pullExtension + heroHeight)
+                    .offset(y: -Self.pullExtension)
+            }
         }
+        // 告诉频道头部：这一页顶部有氛围层，频道条和搜索框换成白字 + 磨砂搜索框
+        .preference(key: AmbientHeroPresenceKey.self, value: hasHero)
         .onAppear { palette.prepare(slides.map(\.palette)) }
         .onChange(of: slides.map(\.id)) { _ in palette.prepare(slides.map(\.palette)) }
     }
+
+    private var hasHero: Bool { !slides.isEmpty || reservesCarousel }
+
+    /// 屏幕顶端到轮播卡片下沿
+    private var heroHeight: CGFloat { safeTop + 6 + cardHeight }
 
     /// 轮播氛围色往屏幕上方多铺的高度（下拉最多能拉出这么多）
     private static var pullExtension: CGFloat { 800 }
@@ -229,7 +239,7 @@ struct ChannelSearchField: View {
                 .accessibilityIdentifier(filterIdentifier)
             }
         }
-        .fieldChrome()
+        .heroFieldChrome()
     }
 }
 
