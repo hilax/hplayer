@@ -1804,7 +1804,7 @@ struct PlaybackControlsView: View {
         .padding(.top, 14)
     }
 
-    /// 菜单开着的那个入口多一块淡琥珀色的底，一眼看出菜单是从哪个按钮出来的
+    /// 菜单开着的那个入口多一块很淡的中性灰底，一眼看出菜单是从哪个按钮出来的（不用主题色）
     private func quickCell<Glyph: View>(_ menu: QuickMenu, _ value: String, _ label: String, id: String, on: Bool = false,
                                         @ViewBuilder glyph: () -> Glyph) -> some View {
         let open = quickMenu == menu
@@ -1813,16 +1813,16 @@ struct PlaybackControlsView: View {
         } label: {
             VStack(spacing: 6) {
                 glyph()
-                    .foregroundStyle(on || open ? Theme.accent : Theme.textPrimary)
+                    .foregroundStyle(on ? Theme.accent : Theme.textPrimary)
                     .frame(height: 22)
                 Text(value)
                     .font(.scaled(12, weight: .semibold))
-                    .foregroundStyle(on || open ? Theme.accentAlt : Theme.textPrimary)
+                    .foregroundStyle(on ? Theme.accentAlt : Theme.textPrimary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
             }
             .frame(maxWidth: .infinity, minHeight: 56)
-            .background(open ? Theme.accent.opacity(0.12) : Color.clear,
+            .background(open ? Color.primary.opacity(0.06) : Color.clear,
                         in: RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous))
             .contentShape(Rectangle())
         }
@@ -2066,9 +2066,9 @@ struct PlaybackControlsView: View {
                     .font(.scaled(12, weight: selected ? .semibold : .medium))
                     .lineLimit(1)
             }
-            .foregroundStyle(selected ? Theme.accentAlt : Color.primary)
+            .foregroundStyle(Color.primary)
             .frame(width: 82, height: 68)
-            .background(selected ? Theme.accent.opacity(0.14) : Color.clear,
+            .background(selected ? Color.primary.opacity(0.08) : Color.clear,
                         in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
             .contentShape(Rectangle())
         }
@@ -2103,28 +2103,28 @@ struct PlaybackControlsView: View {
             .padding(.bottom, 6)
     }
 
-    /// 选项行：选中的用琥珀色字、右边一个勾，再垫一块淡琥珀色的底
+    /// 选项行：和系统菜单（「我的」页里的选择菜单）一样——选中的在左边打一个勾，文字和底色都不变色；
+    /// 按下时垫一块中性灰。不用主题色当选中色。
     private func menuRow<Content: View>(_ label: String, selected: Bool, id: String,
                                         action: @escaping () -> Void,
                                         @ViewBuilder content: () -> Content) -> some View {
         Button(action: action) {
             HStack(spacing: 8) {
+                Image(systemName: AppIcon.check.name)
+                    .font(.scaled(14, weight: .semibold))
+                    .foregroundStyle(Color.primary)
+                    .opacity(selected ? 1 : 0)
+                    .frame(width: 18)
+                    .accessibilityHidden(true)
                 content()
                 Spacer(minLength: 0)
-                if selected {
-                    Image(systemName: AppIcon.check.name)
-                        .font(.scaled(13, weight: .bold))
-                        .foregroundStyle(Theme.accentAlt)
-                        .accessibilityHidden(true)
-                }
             }
-            .padding(.horizontal, 12)
+            .padding(.leading, 8)
+            .padding(.trailing, 12)
             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-            .background(selected ? Theme.accent.opacity(0.14) : Color.clear,
-                        in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(MenuRowButtonStyle())
         .accessibilityLabel(label)
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityIdentifier(id)
@@ -2134,8 +2134,8 @@ struct PlaybackControlsView: View {
     @ViewBuilder
     private func menuTitle(_ title: String, detail: String = "", selected: Bool, stacked: Bool = false) -> some View {
         let titleText = Text(Self.clipped(title, stacked ? 22 : 18))
-            .font(.scaled(15, weight: selected ? .semibold : .regular))
-            .foregroundStyle(selected ? Theme.accentAlt : Color.primary)
+            .font(.scaled(15))
+            .foregroundStyle(Color.primary)
         let detailText = Text(Self.clipped(detail, 24))
             .font(.scaled(12))
             .foregroundStyle(Theme.textSecondary)
@@ -3550,5 +3550,16 @@ private final class ScrubberSlider: UISlider {
             UIBezierPath(roundedRect: CGRect(origin: .zero, size: size), cornerRadius: radius).fill()
         }
         return image.resizableImage(withCapInsets: UIEdgeInsets(top: 0, left: radius, bottom: 0, right: radius), resizingMode: .stretch)
+    }
+}
+
+
+/// 竖屏菜单的选项行：按下时一块中性灰底（和系统菜单一样），松手消失
+private struct MenuRowButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(configuration.isPressed ? Color.primary.opacity(0.08) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous))
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }
