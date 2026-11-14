@@ -24,6 +24,8 @@ struct AnimeDetailView: View {
 
     @State private var playingQueue: PlaybackQueue?
     @Namespace private var routeNamespace
+    @Namespace private var orderNamespace
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private static let scrollSpace = "anime.detail.scroll"
     private let backdropHeight: CGFloat = 260
@@ -347,7 +349,7 @@ struct AnimeDetailView: View {
         }
     }
 
-    /// 正序 / 倒序（展开时才显示）
+    /// 正序 / 倒序（展开时才显示）。选中块在两个选项之间滑过去；下面的选集网格直接换顺序，不做动画。
     private var orderToggle: some View {
         HStack(spacing: 0) {
             orderPill("正序", icon: .sortAscending, selected: !isDescending) { isDescending = false }
@@ -359,8 +361,9 @@ struct AnimeDetailView: View {
 
     private func orderPill(_ title: String, icon: AppIcon, selected: Bool, action: @escaping () -> Void) -> some View {
         Button {
+            guard !selected else { return }
             Haptics.select()
-            withAnimation(Motion.snappy) { action() }
+            withAnimation(reduceMotion ? nil : Motion.snappy) { action() }
         } label: {
             HStack(spacing: 3) {
                 Image(icon: icon)
@@ -371,9 +374,18 @@ struct AnimeDetailView: View {
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
-            .background(selected ? Theme.primaryAction : Color.clear, in: RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
+            .frame(minHeight: 28)
+            .background {
+                if selected {
+                    RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous)
+                        .fill(Theme.primaryAction)
+                        .matchedGeometryEffect(id: "anime.order.selection", in: orderNamespace)
+                }
+            }
+            .contentShape(Rectangle())
         }
-        .buttonStyle(.pressable)
+        .buttonStyle(.pressable(scale: 0.95))
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     /// 「国语 · 更新至 166 集」「共 12 集」

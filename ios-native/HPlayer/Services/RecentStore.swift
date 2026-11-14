@@ -5,7 +5,14 @@ import Foundation
 final class RecentStore: ObservableObject {
     static let shared = RecentStore()
 
-    @Published private(set) var items: [RecentItem] = []
+    @Published private(set) var items: [RecentItem] = [] {
+        didSet { rebuildIndex() }
+    }
+    /// key(of:) → 记录。选集网格每一格都要查进度：以前每格都把 30 条记录挨个算 key（还要解析 URL），
+    /// 一两百集的网格每次重画都要做几千次，切换选集、正序倒序时会卡；现在记录一变就建一次索引。
+    private var byKey: [String: RecentItem] = [:]
+    /// 标题 → 最近一次的记录（动漫单集按标题查）
+    private var byTitle: [String: RecentItem] = [:]
 
     private let defaults: UserDefaults
     private let storageKey = "hplayer.recent"
@@ -14,6 +21,27 @@ final class RecentStore: ObservableObject {
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         load()
+        rebuildIndex()
+    }
+
+    private func rebuildIndex() {
+        var keys: [String: RecentItem] = [:]
+        var titles: [String: RecentItem] = [:]
+        keys.reserveCapacity(items.count)
+        titles.reserveCapacity(items.count)
+        // items 按最近播放排序：同一个 key / 标题只留最前面那条
+        for item in items {
+            let key = Self.key(of: item)
+            if keys[key] == nil { keys[key] = item }
+            if titles[item.title] == nil { titles[item.title] = item }
+        }
+        byKey = keys
+        byTitle = titles
+    }
+
+    /// 按 key(of:) 的格式直接查一条记录（例如「p115|提取码」「file|文件名」）
+    func item(forKey key: String) -> RecentItem? {
+        byKey[key]
     }
 
     /// 开始播放时调用：新建或刷新记录并移到最前面，保留已有的观看位置
@@ -65,20 +93,18 @@ final class RecentStore: ObservableObject {
     }
 
     func position(for source: PlaybackSource) -> Double? {
-        let key = Self.key(for: source)
-        return items.first { Self.key(of: $0) == key }?.position
+        byKey[Self.key(for: source)]?.position
     }
 
     /// 看到的比例（有续播位置时才有），播放页的选集里画成进度条
     func progress(for source: PlaybackSource) -> Double? {
-        let key = Self.key(for: source)
-        return items.first { Self.key(of: $0) == key }?.progress
+        byKey[Self.key(for: source)]?.progress
     }
 
     /// 动漫单集记录。解析出的流地址带时效签名，每次解析都不一样，用 URL 做 key 必然查不到，
     /// 所以按稳定标题「番剧名 第XX集」匹配。items 已按最近播放排序，first 就是最近一次。
     func animeEpisode(title: String) -> RecentItem? {
-        items.first { $0.title == title }
+        byTitle[title]
     }
 
     /// 刚开头或快看完时不记位置，下次从头播放

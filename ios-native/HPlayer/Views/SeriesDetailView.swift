@@ -251,8 +251,8 @@ struct SeriesDetailView: View {
                     episodeCell(episode, index: index, group: group, isCurrent: episode.id == target?.id)
                 }
             }
-            .id(currentSeason)
-            .transition(.opacity)
+            // 换季时网格直接换内容，不做整块淡入淡出（只有上面的季胶囊滑过去）
+            .transaction { $0.animation = nil }
 
             if let target, let line = episodeDetail(target) {
                 Text(line)
@@ -353,8 +353,13 @@ struct SeriesDetailView: View {
         return (first, "播放 \(first.episodeTitle)")
     }
 
+    /// 查索引（115 按提取码、本地文件按文件名），一格一次字典查找
     private func recentEntry(for episode: HomeMediaItem) -> RecentItem? {
-        recents.items.first { matches($0, episode) }
+        if episode.isCloud {
+            guard !episode.media.pickCode.isEmpty else { return nil }
+            return recents.item(forKey: "p115|\(episode.media.pickCode)")
+        }
+        return recents.item(forKey: "file|\(episode.media.name)")
     }
 
     private func matches(_ recent: RecentItem, _ episode: HomeMediaItem) -> Bool {

@@ -2227,11 +2227,12 @@ struct PlaybackControlsView: View {
 
     /// 收起时：一行横排，打开时滚到在看的那一集
     private var episodeStrip: some View {
-        ScrollViewReader { proxy in
+        let currentIndex = currentEpisodeIndex
+        return ScrollViewReader { proxy in
             ScrollView(.horizontal) {
                 LazyHStack(spacing: 8) {
                     ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                        stripCell(item, index: index)
+                        stripCell(item, index: index, currentIndex: currentIndex)
                             .id(item.id)
                     }
                 }
@@ -2264,6 +2265,7 @@ struct PlaybackControlsView: View {
         let ranges = episodeRanges
         let range = ranges.indices.contains(episodeRange) ? ranges[episodeRange] : (ranges.first ?? 0..<0)
         let indices = episodesDescending ? Array(range.reversed()) : Array(range)
+        let currentIndex = currentEpisodeIndex
         return VStack(alignment: .leading, spacing: 12) {
             if ranges.count > 1 {
                 ScrollViewReader { proxy in
@@ -2286,12 +2288,13 @@ struct PlaybackControlsView: View {
                     }
                 }
             }
+            // 换段、正序倒序：格子直接换内容，不再整块换 id 重建再淡入
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 5), spacing: 10) {
                 ForEach(indices, id: \.self) { index in
-                    stripCell(items[index], index: index, fill: true)
+                    stripCell(items[index], index: index, currentIndex: currentIndex, fill: true)
                 }
             }
-            .id("episode-grid-\(episodeRange)-\(episodesDescending)-\(items.count)")
+            .transaction { $0.animation = nil }
             HStack {
                 Text("自动连播")
                     .font(.scaled(14))
@@ -2318,8 +2321,9 @@ struct PlaybackControlsView: View {
 
     private func episodeOrderPill(_ title: String, icon: AppIcon, selected: Bool, action: @escaping () -> Void) -> some View {
         Button {
+            guard !selected else { return }
             Haptics.select()
-            withAnimation(Motion.snappy) { action() }
+            withAnimation(reduceMotion ? nil : Motion.snappy) { action() }
         } label: {
             HStack(spacing: 3) {
                 Image(icon: icon)
@@ -2330,16 +2334,29 @@ struct PlaybackControlsView: View {
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
-            .background(selected ? Theme.primaryAction : Color.clear, in: RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
+            .frame(minHeight: 28)
+            .background {
+                // 选中块在正序 / 倒序之间滑过去
+                if selected {
+                    RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous)
+                        .fill(Theme.primaryAction)
+                        .matchedGeometryEffect(id: "playback.order.selection", in: episodeRangeSpace)
+                }
+            }
+            .contentShape(Rectangle())
         }
-        .buttonStyle(.pressable)
+        .buttonStyle(.pressable(scale: 0.95))
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityIdentifier(title == "倒序" ? "playback.episodes.descending" : "playback.episodes.ascending")
     }
 
     /// fill：网格里撑满格子宽度；横排里是固定 48 宽
-    private func stripCell(_ item: PlaybackListItem, index: Int, fill: Bool = false) -> some View {
-        let currentIndex = items.firstIndex { $0.id == selectedID } ?? 0
+    /// 正在播的是第几集（整排 / 网格只算一次，以前每一格都把列表从头找一遍）
+    private var currentEpisodeIndex: Int {
+        items.firstIndex { $0.id == selectedID } ?? 0
+    }
+
+    private func stripCell(_ item: PlaybackListItem, index: Int, currentIndex: Int, fill: Bool = false) -> some View {
         let current = index == currentIndex
         return Button {
             onSelect(item.id)

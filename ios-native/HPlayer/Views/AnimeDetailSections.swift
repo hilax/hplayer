@@ -56,10 +56,11 @@ struct AnimeEpisodePanel: View {
                 }
             }
 
+            // 换段、正序倒序：格子直接换内容。以前给整块网格换 id，每次都把几十个格子拆掉重建再淡入，切换时会顿一下
             AnimeEpisodeMatrix(episodes: visibleEpisodes, activeEpisode: activeEpisode, progress: progress) { episode in
                 onSelect(episode)
             }
-            .id("range-\(rangeIndex)-\(isDescending)-\(episodes.count)")
+            .transaction { $0.animation = nil }
         }
         .onAppear { rangeIndex = rangeContainingActive() }
         .onChange(of: isDescending) { _ in rangeIndex = rangeContainingActive() }

@@ -81,7 +81,6 @@ struct AnimeEpisodeMatrix: View {
                 cell(ep)
             }
         }
-        .id("anime-episode-grid-\(isDescending ? "desc" : "asc")-\(episodes.count)")
     }
 
     private func cell(_ ep: String) -> some View {

@@ -98,6 +98,7 @@ struct DramaTab: View {
     @StateObject private var feed = DramaFeed()
     @State private var category: DramaCategory = .series
     @Namespace private var pills
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// 内容从哪里开始（频道容器的固定头部盖在上面）
     @Environment(\.channelPageInsets) private var insets
 
@@ -109,7 +110,8 @@ struct DramaTab: View {
                 HStack(spacing: 8) {
                     ForEach(DramaCategory.allCases) { item in
                         SelectionPill(title: item.title, selected: item == category, namespace: pills) {
-                            category = item
+                            // 选中块滑过去；下面的列表直接换，不跟着做动画
+                            withAnimation(reduceMotion ? nil : Motion.snappy) { category = item }
                         }
                         .accessibilityIdentifier("drama.category.\(item.rawValue)")
                     }
@@ -120,6 +122,7 @@ struct DramaTab: View {
                 .padding(.bottom, 10)
 
                 content
+                    .transaction { $0.animation = nil }
             }
             .tracksPageScroll()
         }
