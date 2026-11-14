@@ -271,6 +271,8 @@ struct PlaybackControlsView: View {
     @State private var panKind: PlaybackAdjustment.Kind?
     /// 一次拖动手势是否还在处理中；方向锁定之前 panKind 为空，不能靠它判断。
     @State private var panActive = false
+    /// 这次拖动从屏幕上下边缘起手（系统手势区）
+    @State private var panFromSystemEdge = false
     /// 方向锁定时手指已经走过的位移，后面的调节量从这里开始算，画面不会突然跳一下。
     @State private var panBase = CGPoint.zero
     @State private var lastAdjustment = ""
@@ -1489,7 +1491,8 @@ struct PlaybackControlsView: View {
                     playback.toggle()
                 },
                 onBoost: setBoost,
-                onPan: handlePan
+                onPan: handlePan,
+                onPanStartsAtSystemEdge: { panFromSystemEdge = $0 }
             )
 
             if controlsVisible && !locked {
@@ -2958,6 +2961,14 @@ struct PlaybackControlsView: View {
 
     private func handlePan(_ state: UIGestureRecognizer.State, origin: CGPoint, translation: CGPoint, size: CGSize) {
         if state == .cancelled || state == .failed {
+            // 被系统接走了（下拉控制中心、上滑回桌面等）：已经调了的亮度 / 音量退回到起手前，不留下误调
+            switch panKind {
+            case .volume: applyVolume(adjustmentStartVolume)
+            case .brightness:
+                ScreenBrightness.screen.brightness = CGFloat(adjustmentStartBrightness)
+                brightnessLevel = adjustmentStartBrightness
+            default: break
+            }
             endPanScrub()
             panActive = false
             panKind = nil
@@ -3011,6 +3022,12 @@ struct PlaybackControlsView: View {
                 Self.seekTicker.prepare()
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
             } else {
+                // 从屏幕上下边缘起手的竖滑是系统手势（横屏右上角下拉控制中心、底部上滑回桌面）：
+                // 不调亮度和音量，以前这里会顺手把音量调掉，看起来像音量条自己冒出来
+                if panFromSystemEdge {
+                    panActive = false
+                    return
+                }
                 panKind = origin.x < size.width / 2 ? .brightness : .volume
             }
         }

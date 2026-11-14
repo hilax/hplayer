@@ -19,6 +19,10 @@ final class SystemVolumeController: ObservableObject {
     private var observation: NSKeyValueObservation?
     private var started = false
     private var lastProgrammaticChange = Date.distantPast
+    /// 最近一次由滑动设的目标值：系统会把它取整到音量档位再回报，回报值接近它的都算回声
+    private var lastProgrammaticValue: Double?
+    private var lastRouteChange = Date.distantPast
+    private var routeObserver: NSObjectProtocol?
     private var pendingValue: Double?
 
     init() {
@@ -41,6 +45,10 @@ final class SystemVolumeController: ObservableObject {
         guard started else { return }
         level = volume
         guard observation == nil else { return }
+        // 插拔耳机、连上 / 断开蓝牙时系统会换一个音量值，那不是用户在调，不弹提示
+        routeObserver = NotificationCenter.default.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.lastRouteChange = Date() }
+        }
         // KVO 可能在任意线程回调，切回主线程再更新
         observation = AVAudioSession.sharedInstance().observe(\.outputVolume, options: [.new]) { @Sendable [weak self] _, change in
             guard let value = change.newValue else { return }
@@ -54,6 +62,8 @@ final class SystemVolumeController: ObservableObject {
         started = false
         observation?.invalidate()
         observation = nil
+        if let routeObserver { NotificationCenter.default.removeObserver(routeObserver) }
+        routeObserver = nil
     }
 
     /// 找到了系统音量滑块（模拟器等环境可能没有）
@@ -77,6 +87,7 @@ final class SystemVolumeController: ObservableObject {
         let clamped = min(max(value, 0), 1)
         level = clamped
         lastProgrammaticChange = Date()
+        lastProgrammaticValue = clamped
         apply(clamped)
     }
 
@@ -92,11 +103,19 @@ final class SystemVolumeController: ObservableObject {
         slider.sendActions(for: .valueChanged)
     }
 
+    /// 只有用户按音量键、在控制中心拖动这类「真的在调」才弹音量提示：
+    /// - 自己滑动设的值，系统会取整到音量档位后再回报，可能晚一点到：1.5 秒内、或和设的值差不到一档的，都当回声
+    /// - 插拔耳机、蓝牙切换、系统的耳机音量保护造成的变化：只同步数值，不弹提示
     private func systemVolumeDidChange(_ value: Double) {
         let clamped = min(max(value, 0), 1)
-        // 自己滑动设的音量，系统稍后会回报一次；时间接近或数值几乎一样的都当成回声，不再弹提示
-        let programmatic = Date().timeIntervalSince(lastProgrammaticChange) < 0.8
-        if programmatic || abs(clamped - level) < 0.01 { return }
+        let now = Date()
+        let echo = now.timeIntervalSince(lastProgrammaticChange) < 1.5
+            || (lastProgrammaticValue.map { abs($0 - clamped) < 0.07 } ?? false) && now.timeIntervalSince(lastProgrammaticChange) < 4
+        let routeChanged = now.timeIntervalSince(lastRouteChange) < 2
+        if echo || routeChanged || abs(clamped - level) < 0.01 {
+            level = clamped
+            return
+        }
         level = clamped
         externalChangeCount += 1
     }

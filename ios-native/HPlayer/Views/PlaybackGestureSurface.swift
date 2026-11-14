@@ -7,6 +7,11 @@ struct PlaybackGestureSurface: UIViewRepresentable {
     var onDoubleTap: () -> Void
     var onBoost: (Bool) -> Void
     var onPan: (UIGestureRecognizer.State, CGPoint, CGPoint, CGSize) -> Void
+    /// 这次拖动是从屏幕上下边缘起手的（下拉控制中心 / 通知中心、上滑回桌面的区域）
+    var onPanStartsAtSystemEdge: (Bool) -> Void = { _ in }
+
+    /// 离屏幕上下边缘这么近起手的拖动，多半是系统手势（横屏时右上角下拉控制中心、底部上滑回桌面）
+    static let systemEdgeZone: CGFloat = 44
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -72,6 +77,14 @@ struct PlaybackGestureSurface: UIViewRepresentable {
                 let location = recognizer.location(in: view)
                 panOrigin = CGPoint(x: location.x - translation.x, y: location.y - translation.y)
                 if boostActive { parent.onBoost(false); boostActive = false }
+                // 按整块屏幕算起手点离上下边缘多远（播放画面不一定占满屏幕）
+                if let window = view.window {
+                    let start = view.convert(panOrigin, to: window)
+                    let zone = PlaybackGestureSurface.systemEdgeZone
+                    parent.onPanStartsAtSystemEdge(start.y < zone || start.y > window.bounds.height - zone)
+                } else {
+                    parent.onPanStartsAtSystemEdge(false)
+                }
             }
             parent.onPan(recognizer.state, panOrigin, translation, view.bounds.size)
         }
