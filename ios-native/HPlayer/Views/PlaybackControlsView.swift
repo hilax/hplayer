@@ -3004,13 +3004,16 @@ struct PlaybackControlsView: View {
                 return
             }
             panBase = translation
+            // 偏向快进快退：拇指横滑常带一点斜，和水平夹角 50° 以内都算横滑（以前 45° 一刀切，
+            // 斜一点就变成调亮度 / 音量，看起来像「滑了没反应」）
+            let horizontal = dx >= dy * 0.84
             // 锁定后只留横滑快进快退，竖滑不调亮度和音量，免得躺着看时误碰
-            if locked && dx <= dy {
+            if locked && !horizontal {
                 panActive = false
                 return
             }
-            // 以 45° 为界：更偏横就快进快退，更偏竖就调亮度（左半边）或音量（右半边）
-            if dx > dy {
+            // 更偏横就快进快退，更偏竖就调亮度（左半边）或音量（右半边）
+            if horizontal {
                 guard playback.seekable, playback.duration > 0 else {
                     panActive = false
                     showNotice(playback.duration > 0 ? "视频还在加载，暂时不能拖动进度" : "这个视频不支持拖动进度")

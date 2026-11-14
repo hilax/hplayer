@@ -36,9 +36,22 @@ final class PlayerHostingController: UIHostingController<AnyView> {
     }
     override var shouldAutorotate: Bool { true }
 
+    /// 看视频时底部的横条（回桌面指示条）自动隐藏
+    override var prefersHomeIndicatorAutoHidden: Bool { true }
+
+    /// 横屏时底边先交给播放器：贴着底边起手的横滑能直接快进快退，不会被「上滑回桌面」的系统手势先截走、
+    /// 拖了没反应；要回桌面就在底边连续上滑两次（和系统视频播放器一样）。顶边不推迟，下拉控制中心照常。
+    override var preferredScreenEdgesDeferringSystemGestures: UIRectEdge {
+        view.bounds.width > view.bounds.height ? [.bottom] : []
+    }
+
     override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
         super.viewWillTransition(to: size, with: coordinator)
-        coordinator.animate(alongsideTransition: nil) { [weak self] _ in self?.onRotated?() }
+        coordinator.animate(alongsideTransition: nil) { [weak self] _ in
+            self?.setNeedsUpdateOfScreenEdgesDeferringSystemGestures()
+            self?.setNeedsUpdateOfHomeIndicatorAutoHidden()
+            self?.onRotated?()
+        }
     }
 }
 
