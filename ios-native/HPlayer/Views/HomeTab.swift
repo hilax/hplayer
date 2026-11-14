@@ -456,17 +456,35 @@ struct HomeTab: View {
     private func openEntry(_ entry: ContinueEntry) {
         switch entry.target {
         case .recent(let recent):
-            if let item = entry.libraryItem {
+            // 优先还原当时播放的整份列表（同一个文件夹 / 同一部番 / 同一部剧），选集里能看到上下集
+            if let queue = RecentPlaylistStore.shared.queue(for: recent, localDirectory: localStore.mediaDirectory) {
+                playing = queue
+            } else if let item = entry.libraryItem {
                 let items = HomeLibrary.items(libraryFiles, metadata: metadataStore.metadataByMediaID)
                 playing = HomeLibrary.queue(for: item, in: items)
             } else if let source = recents.source(for: recent, localDirectory: localStore.mediaDirectory) {
-                playing = PlaybackQueue(source: source, items: [source])
+                if case .anime(let ref) = source {
+                    // 更新前的动漫记录没有存列表：现取一次番剧详情，拼出同一条线路的所有集
+                    Task { playing = await Self.animeQueue(for: ref) }
+                } else {
+                    playing = PlaybackQueue(source: source, items: [source])
+                }
             } else {
                 playError = "找不到这个视频，可能已经被删除。"
             }
         case .magnet(let item):
             magnetPlay = MagnetPlaybackRequest(magnet: item.magnet, title: item.name)
         }
+    }
+
+    /// 一集动漫所在线路的全部集数；取不到详情就只放这一集
+    private static func animeQueue(for ref: AnimeEpisodeRef) async -> PlaybackQueue {
+        let single = PlaybackQueue(source: .anime(ref), items: [.anime(ref)])
+        guard let detail = try? await AnimeClient.shared.fetchDetail(id: ref.animeId) else { return single }
+        let routeIndex = detail.parts.firstIndex(where: { $0.play == ref.play }) ?? ref.routeIndex
+        let episodes = detail.episodeRefs(routeIndex: routeIndex)
+        guard let current = episodes.first(where: { $0.part == ref.part }) else { return single }
+        return PlaybackQueue(source: .anime(current), items: episodes.map { .anime($0) })
     }
 
     private func remove(_ entry: ContinueEntry) {

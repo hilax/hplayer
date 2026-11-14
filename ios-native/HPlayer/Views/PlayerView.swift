@@ -133,6 +133,9 @@ struct PlayerView: View {
             try? await Task.sleep(nanoseconds: 700_000_000)
             guard visible, current == source else { return }
             RecentStore.shared.record(source)
+            // 连同这一集所在的整份列表一起记下：从「继续观看」打开时选集里还有上一集、下一集
+            RecentPlaylistStore.shared.remember(playlist, current: source,
+                                                keep: Set(RecentStore.shared.items.map(RecentStore.key(of:))))
         }
     }
 
