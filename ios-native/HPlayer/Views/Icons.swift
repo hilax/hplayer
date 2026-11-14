@@ -26,6 +26,7 @@ enum AppIcon: String, CaseIterable {
     case speed, playlist, decoder, sleepTimer, nowPlaying
     case brightnessLow, brightnessHigh
     case volumeMute, volumeLow, volumeMedium, volumeHigh
+    case battery0, battery25, battery50, battery75, battery100, batteryCharging
     case playback
 
     // MARK: 影视内容
@@ -129,6 +130,12 @@ enum AppIcon: String, CaseIterable {
         case .volumeLow: return "speaker.wave.1.fill"
         case .volumeMedium: return "speaker.wave.2.fill"
         case .volumeHigh: return "speaker.wave.3.fill"
+        case .battery0: return "battery.0"
+        case .battery25: return "battery.25"
+        case .battery50: return "battery.50"
+        case .battery75: return "battery.75"
+        case .battery100: return "battery.100"
+        case .batteryCharging: return "battery.100.bolt"
         case .playback: return "play.rectangle"
 
         case .video: return "film"

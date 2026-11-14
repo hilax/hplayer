@@ -483,6 +483,10 @@ struct PlaybackControlsView: View {
 
             Spacer(minLength: 8)
 
+            // 横屏时系统状态栏隐藏：右上角补一个当前时间和电量
+            PlayerStatusClock()
+                .padding(.trailing, 12)
+
             // 字幕和音轨在底栏右边已经有一个按钮，顶栏不再重复
             // 顶栏只在横屏出现；竖屏的「…」在视频区自己的控制层里
             GlassButtonGroup {
@@ -681,10 +685,12 @@ struct PlaybackControlsView: View {
 
     // MARK: 弹出层
 
-    private static let popoverSpring = Animation.spring(response: 0.42, dampingFraction: 0.8)
+    /// 弹出菜单的节奏照系统菜单（UIMenu）来：快速弹开、带一点点回弹，约 0.3 秒落定；以前 0.42 秒的弹簧显得拖
+    private static let popoverSpring = Animation.spring(response: 0.28, dampingFraction: 0.82)
 
+    /// 收起和系统菜单一样干脆：0.14 秒淡出、略微缩小，不再整个缩回按钮里
     private var popoverCloseAnimation: Animation {
-        reduceMotion ? .easeOut(duration: 0.15) : .easeIn(duration: 0.18)
+        reduceMotion ? .easeOut(duration: 0.12) : .easeOut(duration: 0.14)
     }
 
     private func togglePopover(_ kind: PlayerPopover) {
@@ -715,11 +721,14 @@ struct PlaybackControlsView: View {
         }
     }
 
-    /// 缩放的中心放在按钮上：打开时从按钮里长出来，收起时缩回按钮
+    /// 和系统菜单一样：打开时从按钮的位置弹出来（从 0.6 倍放大到原大），收起时原地淡出并略微缩小
     private func popoverTransition(from rect: CGRect?, in size: CGSize) -> AnyTransition {
         guard !reduceMotion, let rect, size.width > 0, size.height > 0 else { return .opacity }
         let anchor = UnitPoint(x: rect.midX / size.width, y: rect.midY / size.height)
-        return .scale(scale: 0.3, anchor: anchor).combined(with: .opacity)
+        return .asymmetric(
+            insertion: .scale(scale: 0.6, anchor: anchor).combined(with: .opacity),
+            removal: .scale(scale: 0.94, anchor: anchor).combined(with: .opacity)
+        )
     }
 
     /// 弹出层盖在整个横屏控制层上。先铺一层点击区：点弹出层以外的任何地方都收起（选集打开时顺便压暗画面）；
@@ -814,7 +823,7 @@ struct PlaybackControlsView: View {
                             popoverRow(title: quality.title, detail: qualityDetail(quality),
                                        selected: isSelectedQuality(quality)) {
                                 if !isSelectedQuality(quality) { onQuality(quality.id) }
-                                closePopover(after: 0.3)
+                                closePopover(after: 0.12)
                             }
                         }
                     }
@@ -864,7 +873,7 @@ struct PlaybackControlsView: View {
                 ForEach(Array(Self.speedOptions.enumerated()), id: \.offset) { offset, rate in
                     Button {
                         playback.setRate(rate)
-                        closePopover(after: 0.35)
+                        closePopover(after: 0.12)
                     } label: {
                         Text(Self.speedLabel(rate))
                             .font(.scaled(15, weight: .semibold).monospacedDigit())
@@ -1687,7 +1696,9 @@ struct PlaybackControlsView: View {
             // 视频区顶部：状态栏占位 + 上边距 6 + 按钮 42 + 间隙 8
             .padding(.top, insets.top + 6 + 42 + 8)
             .padding(.trailing, 12)
-            .transition(reduceMotion ? .opacity : .scale(scale: 0.3, anchor: .topTrailing).combined(with: .opacity))
+            .transition(reduceMotion ? .opacity : .asymmetric(
+                insertion: .scale(scale: 0.6, anchor: .topTrailing).combined(with: .opacity),
+                removal: .scale(scale: 0.94, anchor: .topTrailing).combined(with: .opacity)))
             .accessibilityElement(children: .contain)
             .accessibilityLabel("定时关闭")
         }
@@ -1936,7 +1947,7 @@ struct PlaybackControlsView: View {
                 ForEach(qualities) { quality in
                     menuRow(quality.title, selected: isSelectedQuality(quality), id: "playback.quality.\(quality.id)") {
                         if !isSelectedQuality(quality) { onQuality(quality.id) }
-                        closeQuickMenu(after: 0.3)
+                        closeQuickMenu(after: 0.12)
                     } content: {
                         menuTitle(quality.title, detail: qualityDetail(quality), selected: isSelectedQuality(quality))
                     }
@@ -1951,7 +1962,7 @@ struct PlaybackControlsView: View {
                 menuRow("\(String(format: "%g", rate))×", selected: abs(playback.rate - rate) < 0.001,
                         id: "playback.speed.\(String(format: "%g", rate))") {
                     playback.setRate(rate)
-                    closeQuickMenu(after: 0.3)
+                    closeQuickMenu(after: 0.12)
                 } content: {
                     menuTitle("\(String(format: "%g", rate))×", selected: abs(playback.rate - rate) < 0.001)
                 }
@@ -2086,7 +2097,7 @@ struct PlaybackControlsView: View {
             ForEach(VideoDecoding.allCases) { option in
                 menuRow(option.title, selected: playback.decoding == option, id: "playback.decoding.\(option.id)") {
                     playback.setDecoding(option)
-                    closeQuickMenu(after: 0.3)
+                    closeQuickMenu(after: 0.12)
                 } content: {
                     menuTitle(option.title, selected: playback.decoding == option)
                 }
@@ -2818,7 +2829,7 @@ struct PlaybackControlsView: View {
         hideTask?.cancel()
         quickMenu = nil
         showList = false
-        withAnimation(reduceMotion ? .easeOut(duration: 0.15) : Self.popoverSpring) { showSleepMenu = true }
+        withAnimation(reduceMotion ? .easeOut(duration: 0.12) : Self.popoverSpring) { showSleepMenu = true }
     }
     private func closeSleepMenu() {
         withAnimation(popoverCloseAnimation) { showSleepMenu = false }
@@ -2831,7 +2842,7 @@ struct PlaybackControlsView: View {
         popoverCloseTask?.cancel()
         showSleepMenu = false
         showList = false
-        withAnimation(reduceMotion ? .easeOut(duration: 0.15) : Self.popoverSpring) { quickMenu = menu }
+        withAnimation(reduceMotion ? .easeOut(duration: 0.12) : Self.popoverSpring) { quickMenu = menu }
     }
     /// 选完一项时可以稍等一下再收，让勾先亮起来
     private func closeQuickMenu(after delay: Double = 0) {
