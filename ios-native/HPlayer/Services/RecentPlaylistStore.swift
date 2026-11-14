@@ -61,7 +61,7 @@ final class RecentPlaylistStore {
         }
     }
 
-    private static var defaultFileURL: URL? {
+    private nonisolated static var defaultFileURL: URL? {
         guard let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return nil }
         return base.appendingPathComponent("HPlayer", isDirectory: true).appendingPathComponent("recent-playlists.json")
     }
