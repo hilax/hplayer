@@ -27,7 +27,7 @@ jobs:
     # Select an installed stable Xcode 26 toolchain on either supported architecture.
     runs-on: ${{ inputs.runner || 'macos-15' }}
     # 公开仓库的构建机速度差异很大（同一套测试 5～15 分钟都出现过），整体留足时间，免得跑到一半被取消
-    timeout-minutes: 85
+    timeout-minutes: 110
     env:
       HPLAYER_TEST_SCOPE: ${{ inputs.test_scope || 'all' }}
     steps:
@@ -180,7 +180,7 @@ jobs:
       - name: Test on iPhone simulator (${{ env.HPLAYER_TEST_SCOPE }})
         id: native-tests
         # 公开仓库的构建机较慢，测试有时要 7～15 分钟
-        timeout-minutes: 60
+        timeout-minutes: 80
         run: |
           test_filters=()
           if [[ "$HPLAYER_TEST_SCOPE" == 'navigation' ]]; then

@@ -52,6 +52,9 @@ final class JavBusSource: MagnetSearchSource, @unchecked Sendable {
     let name = "JavBus"
 
     private let session: URLSession
+    /// 往会话的 Cookie 存储里写年龄验证 Cookie 要串行：同时搜影片和女优（searchAll）时两个请求会一起写，
+    /// 内存里的（ephemeral）Cookie 存储并发写会崩（测试里偶发 segv）。
+    private let cookieLock = NSLock()
 
     init(session: URLSession? = nil) {
         if let session {
@@ -100,6 +103,12 @@ final class JavBusSource: MagnetSearchSource, @unchecked Sendable {
         ]
     }
 
+    private func installCookiesOnce(in storage: HTTPCookieStorage, for url: URL) {
+        cookieLock.lock()
+        defer { cookieLock.unlock() }
+        Self.installCookies(in: storage, for: url)
+    }
+
     private static func installCookies(in storage: HTTPCookieStorage, for url: URL) {
         guard let host = url.host else { return }
         for cookie in requiredCookies {
@@ -121,7 +130,7 @@ final class JavBusSource: MagnetSearchSource, @unchecked Sendable {
         req.setValue(mobileUserAgent, forHTTPHeaderField: "User-Agent")
         req.setValue("zh-CN,zh-Hans;q=0.9,ja;q=0.8,en;q=0.7", forHTTPHeaderField: "Accept-Language")
         if let storage = session.configuration.httpCookieStorage {
-            Self.installCookies(in: storage, for: url)
+            installCookiesOnce(in: storage, for: url)
         } else {
             let header = Self.requiredCookies.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
             req.setValue(header, forHTTPHeaderField: "Cookie")
