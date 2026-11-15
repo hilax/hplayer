@@ -97,3 +97,11 @@ struct MissAVVideoRef: Hashable {
         UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "missav.last_watched.\(videoId)")
     }
 }
+
+extension MissAVVideoCard {
+    /// 轮播用的大图：列表里是缩略图 cover-t.jpg，同目录的 cover-n.jpg 是大图。
+    /// 不是这种地址时原样返回；大图取不到时轮播会退回列表里的小图。
+    var largeCoverURL: String {
+        coverUrl.hasSuffix("cover-t.jpg") ? String(coverUrl.dropLast("cover-t.jpg".count)) + "cover-n.jpg" : coverUrl
+    }
+}

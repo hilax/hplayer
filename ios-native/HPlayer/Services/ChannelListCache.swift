@@ -11,11 +11,21 @@ enum ChannelListCache {
         let items: [Item]
     }
 
-    static func load<Item: Codable>(_ key: String, as _: Item.Type = Item.self) -> [Item]? {
+    /// 刚存的缓存在这段时间内直接当最新的用，不再去网页重新取：
+    /// 两个站的列表都走同一个后台网页排队取，频道首页一屏好几排，每排都重取会把点进详情的请求堵在后面
+    static let freshAge: TimeInterval = 20 * 60
+
+    static func load<Item: Codable>(_ key: String, as type: Item.Type = Item.self) -> [Item]? {
+        loadWithAge(key, as: type)?.items
+    }
+
+    /// 缓存的列表和它存了多久
+    static func loadWithAge<Item: Codable>(_ key: String, as _: Item.Type = Item.self) -> (items: [Item], age: TimeInterval)? {
         guard let url = fileURL(key), let data = try? Data(contentsOf: url),
-              let entry = try? JSONDecoder().decode(Entry<Item>.self, from: data),
-              Date().timeIntervalSince(entry.savedAt) < maxAge, !entry.items.isEmpty else { return nil }
-        return entry.items
+              let entry = try? JSONDecoder().decode(Entry<Item>.self, from: data) else { return nil }
+        let age = Date().timeIntervalSince(entry.savedAt)
+        guard age < maxAge, !entry.items.isEmpty else { return nil }
+        return (entry.items, age)
     }
 
     static func save<Item: Codable>(_ items: [Item], key: String) {

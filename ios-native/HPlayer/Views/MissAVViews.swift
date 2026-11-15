@@ -12,6 +12,9 @@ struct MissAVRoute: Hashable {
 
 @MainActor
 final class MissAVFeed: ObservableObject {
+    /// 频道首页的货架和「全部」列表页共用一份
+    static let shared = MissAVFeed()
+
     struct Shelf {
         var items: [MissAVVideoCard] = []
         var page = 0
@@ -27,12 +30,23 @@ final class MissAVFeed: ObservableObject {
     /// 第一次打开这个分类：先把上次缓存的第一页摆出来，再去取最新的（取到后整页替换）
     func loadFirstIfNeeded(_ category: MissAVCategory) async {
         guard shelf(category).page == 0 else { return }
-        if shelf(category).items.isEmpty, let cached = ChannelListCache.load(Self.cacheKey(category), as: MissAVVideoCard.self) {
+        if shelf(category).items.isEmpty, let cached = ChannelListCache.loadWithAge(Self.cacheKey(category), as: MissAVVideoCard.self) {
             var state = Shelf()
-            state.items = cached
+            state.items = cached.items
+            // 二十分钟内取过的直接当第一页用，不再排队重取；往下翻页时接着取第二页
+            if cached.age < ChannelListCache.freshAge { state.page = 1 }
             shelves[category] = state
+            if state.page == 1 { return }
         }
         await loadMore(category)
+    }
+
+    /// 频道首页下拉刷新：已经打开过的分类都重新取第一页
+    func reloadLoaded() async {
+        let loaded = shelves.keys.filter { !shelf($0).items.isEmpty || shelf($0).page > 0 || !shelf($0).error.isEmpty }
+        for category in MissAVCategory.allCases where loaded.contains(category) {
+            await reload(category)
+        }
     }
 
     /// 下拉刷新：列表先留着，取到新的第一页再整页替换，不会先清空成转圈
@@ -181,57 +195,229 @@ struct MissAVPosterCard: View {
 
 // MARK: - MissAV 频道主页面
 
+/// 某个分类的完整列表（两列网格，滑到底自动翻页）。从频道首页的快捷入口、货架「全部」推进来。
+struct MissAVBrowseRoute: Hashable {
+    let category: MissAVCategory
+}
+
+/// MissAV 频道首页：和动漫频道一样，顶部是今日热门轮播（铺氛围层），下面一排快捷入口，再往下每个分类一排横滑货架，
+/// 货架右边「全部」进这个分类的完整列表。列表都先显示本地缓存，只有前两排一进来就取，其余滑到才取。
 struct MissAVTab: View {
-    @StateObject private var feed = MissAVFeed()
-    @State private var category: MissAVCategory = .todayHot
-    @Namespace private var pills
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @ObservedObject private var feed = MissAVFeed.shared
     @Environment(\.channelPageInsets) private var insets
+
+    /// 轮播用的分类
+    private static let heroCategory: MissAVCategory = .todayHot
+    /// 一进来就取的分类（轮播 + 第一排货架），其余货架滑到可见时再取
+    private static let eagerCategories: [MissAVCategory] = [.todayHot, .new]
+
+    var body: some View {
+        GeometryReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    AmbientHeroSection(slides: HomeSlide.missav(feed.shelf(Self.heroCategory).items), reservesCarousel: true,
+                                       carouselLabel: "今日热门轮播", carouselIdentifier: "missav.bannerPosition",
+                                       safeTop: insets.top, width: proxy.size.width) {
+                        EmptyView()
+                    } hitArea: { slide in
+                        bannerHitArea(slide)
+                    }
+
+                    shortcuts
+                        .padding(.top, 16)
+
+                    shelves(width: proxy.size.width)
+                }
+                .tracksPageScroll()
+            }
+            .pageScrollContainer()
+            .scrollIndicators(.hidden)
+            .ignoresSafeArea(edges: .top)
+            .refreshable { await feed.reloadLoaded() }
+        }
+        .background(Theme.pageBackground.ignoresSafeArea())
+        .designScreen("missav")
+        .task {
+            for category in Self.eagerCategories {
+                await feed.loadFirstIfNeeded(category)
+            }
+        }
+        // 安全验证由 MissAVClient 自己弹在最上层，这里不再绑 sheet
+    }
+
+    // MARK: 轮播与快捷入口
+
+    /// 点轮播进视频详情
+    @ViewBuilder
+    private func bannerHitArea(_ slide: HomeSlide) -> some View {
+        if case .missav(let item) = slide.content {
+            NavigationLink(value: MissAVRoute(id: item.id, title: item.title, cover: item.coverUrl, url: item.url)) {
+                Color.clear.contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(item.title)
+            .accessibilityIdentifier("missav.banner.\(item.id)")
+        }
+    }
+
+    private var shortcuts: some View {
+        HStack(spacing: 4) {
+            shortcut(.todayHot, title: "今日热门",
+                     icon: .hot)
+            shortcut(.new, title: "新片",
+                     icon: .sparkles)
+            shortcut(.chineseSubtitle, title: "中字",
+                     icon: .subtitle)
+            shortcut(.uncensoredLeak, title: "无码",
+                     icon: .unlock)
+        }
+        .padding(.horizontal, 10)
+    }
+
+    private func shortcut(_ category: MissAVCategory, title: String, icon: AppIcon) -> some View {
+        NavigationLink(value: MissAVBrowseRoute(category: category)) {
+            ChannelShortcutLabel(title: title, icon: icon)
+        }
+        .buttonStyle(.pressable(scale: 0.92))
+        .accessibilityIdentifier("missav.shortcut.\(category.id)")
+    }
+
+    // MARK: 货架
+
+    private func shelves(width: CGFloat) -> some View {
+        // 16:9 卡片：一屏露出一张多，看得出能往右滑
+        let cardWidth = min(260, ((width - Theme.contentInset - 24) / 1.7).rounded(.down))
+        // 懒加载：滑到才建这一排，没滑到的分类不会排队去取网页
+        return LazyVStack(alignment: .leading, spacing: Theme.Space.shelf) {
+            ForEach(MissAVCategory.allCases) { category in
+                shelf(category, cardWidth: cardWidth)
+            }
+        }
+        .padding(.horizontal, Theme.contentInset)
+        .padding(.top, 20)
+        .padding(.bottom, 40)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// 单个分类的货架：还没取过就在滑到时取；取失败给出重试入口
+    @ViewBuilder
+    private func shelf(_ category: MissAVCategory, cardWidth: CGFloat) -> some View {
+        let state = feed.shelf(category)
+        let identifier = "missav.shelf.\(category.id)"
+        if !state.items.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                shelfHeader(category, identifier: identifier)
+                ScrollView(.horizontal) {
+                    LazyHStack(alignment: .top, spacing: 12) {
+                        ForEach(Array(state.items.prefix(12).enumerated()), id: \.element.id) { index, item in
+                            NavigationLink(value: MissAVRoute(id: item.id, title: item.title, cover: item.coverUrl, url: item.url)) {
+                                MissAVPosterCard(item: item)
+                                    .frame(width: cardWidth)
+                            }
+                            .buttonStyle(PosterButtonStyle())
+                            .accessibilityIdentifier("missav.poster.\(item.id)")
+                            .reveal(index, id: "\(identifier).\(item.id)")
+                            .shelfCard()
+                        }
+                    }
+                    .shelfContent()
+                    .padding(.vertical, 4)
+                }
+                .shelfScrolling()
+                .padding(.horizontal, -Theme.contentInset)
+                .scrollIndicators(.hidden)
+            }
+        } else if !state.error.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                shelfHeader(category, identifier: identifier)
+                Button {
+                    Task { await feed.reload(category) }
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(icon: .refresh).iconStyle(size: 13, color: Theme.accent)
+                        Text("没有加载出来，点按重试")
+                            .font(.scaled(13))
+                            .foregroundStyle(Theme.textSecondary)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 44)
+                    .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous))
+                }
+                .buttonStyle(.pressable(scale: 0.98))
+            }
+        } else if state.loading || state.page > 0 {
+            if state.page > 0 {
+                // 取到了但这个分类是空的：不占版面
+                EmptyView()
+            } else {
+                shelfSkeleton(category, cardWidth: cardWidth)
+            }
+        } else {
+            shelfSkeleton(category, cardWidth: cardWidth)
+                .onAppear { Task { await feed.loadFirstIfNeeded(category) } }
+        }
+    }
+
+    private func shelfHeader(_ category: MissAVCategory, identifier: String) -> some View {
+        ShelfHeader(title: category.title, identifier: identifier, inset: 0) {
+            NavigationLink(value: MissAVBrowseRoute(category: category)) {
+                ShelfLinkLabel(text: "全部")
+                    .frame(minWidth: 44, minHeight: 44, alignment: .trailing)
+            }
+            .buttonStyle(.pressable(scale: 0.92))
+            .accessibilityIdentifier("\(identifier).all")
+        }
+    }
+
+    private func shelfSkeleton(_ category: MissAVCategory, cardWidth: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ShelfHeader(title: category.title, inset: 0) { EmptyView() }
+                .frame(minHeight: 44, alignment: .leading)
+            ScrollView(.horizontal) {
+                HStack(alignment: .top, spacing: 12) {
+                    ForEach(0..<3, id: \.self) { _ in
+                        ClipCardSkeleton(width: cardWidth)
+                    }
+                }
+                .shelfContent()
+                .padding(.vertical, 4)
+            }
+            .shelfScrolling()
+            .padding(.horizontal, -Theme.contentInset)
+            .scrollIndicators(.hidden)
+            .allowsHitTesting(false)
+        }
+        .accessibilityLabel("正在加载")
+    }
+}
+
+// MARK: - MissAV 分类列表页
+
+struct MissAVBrowseView: View {
+    let route: MissAVBrowseRoute
+    @ObservedObject private var feed = MissAVFeed.shared
 
     private let columns = [
         GridItem(.flexible(), spacing: 12, alignment: .top),
         GridItem(.flexible(), spacing: 12, alignment: .top)
     ]
 
+    private var category: MissAVCategory { route.category }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                categoryBar
-                    .padding(.top, insets.top + 4)
-                    .padding(.bottom, 12)
-
                 content
-                    .transaction { $0.animation = nil }
             }
-            .tracksPageScroll()
+            .padding(.top, 12)
         }
-        .pageScrollContainer()
         .scrollIndicators(.hidden)
-        .ignoresSafeArea(edges: .top)
-        .refreshable {
-            await feed.reload(category)
-        }
+        .refreshable { await feed.reload(category) }
         .background(Theme.pageBackground.ignoresSafeArea())
-        .designScreen("missav")
-        .task(id: category) {
-            await feed.loadFirstIfNeeded(category)
-        }
-    }
-
-    private var categoryBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(MissAVCategory.allCases) { item in
-                    SelectionPill(title: item.title, selected: category == item, namespace: pills) {
-                        withAnimation(reduceMotion ? nil : Motion.snappy) {
-                            category = item
-                        }
-                    }
-                    .accessibilityIdentifier("missav.category.\(item.rawValue)")
-                }
-            }
-            .padding(.horizontal, Theme.contentInset)
-        }
+        .navigationTitle(category.title)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
+        .designScreen("missav-browse")
+        .task { await feed.loadFirstIfNeeded(category) }
     }
 
     @ViewBuilder
@@ -277,16 +463,22 @@ struct MissAVTab: View {
                 }
             }
             .padding(.horizontal, Theme.contentInset)
-            .padding(.bottom, 48)
 
-            if shelf.loading {
-                HStack {
-                    Spacer()
+            Group {
+                if shelf.loading {
                     ProgressView().tint(Theme.textSecondary)
-                    Spacer()
+                } else if !shelf.error.isEmpty {
+                    Button("加载失败，点这里重试") { Task { await feed.loadMore(category) } }
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(Theme.accent)
+                } else if !shelf.hasMore {
+                    Text("已经到底了")
+                        .font(.caption)
+                        .foregroundStyle(Theme.textTertiary)
                 }
-                .padding(.vertical, 16)
             }
+            .frame(maxWidth: .infinity, minHeight: 56)
+            .padding(.bottom, 24)
         }
     }
 }

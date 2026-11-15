@@ -95,3 +95,12 @@ struct JableVideoRef: Hashable {
         UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "jable.last_watched.\(videoId)")
     }
 }
+
+extension JableVideoCard {
+    /// 轮播用的大图：列表里是 320×180 的截图（…/320x180/1.jpg），同一目录下的 preview.jpg 是大图。
+    /// 不是这种地址时原样返回；大图取不到时轮播会退回列表里的小图。
+    var largeCoverURL: String {
+        guard let range = coverUrl.range(of: #"/\d+x\d+/\d+\.jpg"#, options: .regularExpression) else { return coverUrl }
+        return coverUrl.replacingCharacters(in: range, with: "/preview.jpg")
+    }
+}
