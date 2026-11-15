@@ -116,6 +116,9 @@ extension CompactTitleBar where Trailing == EmptyView {
 private struct ScrolledAwayTracker: ViewModifier {
     @Binding var away: Bool
     @State private var restingMaxY: CGFloat?
+    /// 最后一次量到的位置和高度：消失时用来分辨「被列表回收」还是「整页被切走」
+    @State private var lastMaxY: CGFloat?
+    @State private var lastHeight: CGFloat = 0
 
     func body(content: Content) -> some View {
         content
@@ -130,10 +133,17 @@ private struct ScrolledAwayTracker: ViewModifier {
                         .onChange(of: maxY) { update($0, height: proxy.size.height) }
                 }
             }
-            .onDisappear { if !away { away = true } }
+            .onDisappear {
+                // 只有已经往上滚了一截才算被列表回收（滚走了）。切到别的标签、推进二级页时大标题也会消失，
+                // 但它还停在原位：以前一律记成「滚走」，切回来时顶部小标题先冒出来再淡掉。
+                guard !away, let resting = restingMaxY, let last = lastMaxY else { return }
+                if last < resting - lastHeight * 0.5 { away = true }
+            }
     }
 
     private func update(_ maxY: CGFloat, height: CGFloat) {
+        lastMaxY = maxY
+        lastHeight = height
         guard let resting = restingMaxY else { return }
         let next = maxY < resting - height * 0.9
         if next != away { away = next }
