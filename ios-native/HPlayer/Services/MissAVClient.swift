@@ -473,7 +473,8 @@ final class MissAVClient: NSObject, ObservableObject {
             }
         }
         if (!hls) {
-            const m2 = fullScriptText.match(/https?:\\/\\/[^\\s"'<>]+\\.m3u8[^\\s"'<>]*/);
+            // 字符集里排除反斜杠：脚本里的地址常带转义，以前会把末尾的「\」一起截进来
+            const m2 = fullScriptText.match(/https?:\\/\\/[^\\s"'<>\\\\]+\\.m3u8[^\\s"'<>\\\\]*/);
             if (m2) {
                 hls = m2[0];
             }
@@ -494,11 +495,15 @@ final class MissAVClient: NSObject, ObservableObject {
 
         const ogImage = document.querySelector('meta[property="og:image"]')?.content || '';
 
-        const modelEls = document.querySelectorAll('a[href*="/actresses/"]');
-        const models = Array.from(modelEls).map(el => el.textContent.trim()).filter(Boolean);
-
-        const tagEls = document.querySelectorAll('a[href*="/genres/"], a[href*="/tags/"]');
-        const tags = Array.from(tagEls).map(el => el.textContent.trim()).filter(Boolean);
+        // 女优、类型在视频信息区（div.space-y-2 下一行一个 .text-secondary：「女優:」「類型:」…）；
+        // 不能全页找：导航菜单里也有「女優排行」这类 /actresses/ 链接，类型也会重复
+        const infoRows = document.querySelectorAll('.space-y-2 > .text-secondary');
+        const pick = (selector) => {
+            const scoped = Array.from(infoRows).flatMap(row => Array.from(row.querySelectorAll(selector)));
+            return Array.from(new Set(scoped.map(el => el.textContent.trim()).filter(Boolean)));
+        };
+        const models = pick('a[href*="/actresses/"]');
+        const tags = pick('a[href*="/genres/"]');
 
         const related = [];
         const seen = new Set();
