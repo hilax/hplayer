@@ -37,6 +37,10 @@ struct SocialComposer: View {
     @FocusState private var focused: Bool
     /// 已经在收起了：点遮罩和下划同时触发时只收一次
     @State private var closing = false
+    /// 键盘已经弹出来过：之后键盘一收起，输入栏就跟着收起
+    @State private var keyboardSeen = false
+    /// 按键盘「发送」没发成（字数不够等）：系统会先收键盘、马上再弹回来，这一下不算收起
+    @State private var holdOpen = false
     /// 键盘盖住了底下多高（按这一层的坐标算）。播放器在独立窗口里，安全区不一定把键盘算进去，这里自己量
     @State private var keyboardOverlap: CGFloat = 0
 
@@ -89,8 +93,12 @@ struct SocialComposer: View {
                 let overlap = max(0, bottom - end.minY)
                 withAnimation(.easeOut(duration: 0.25)) { keyboardOverlap = overlap }
             }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidShowNotification)) { _ in
+                keyboardSeen = true
+            }
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
                 withAnimation(.easeOut(duration: 0.25)) { keyboardOverlap = 0 }
+                keyboardDidHide()
             }
         }
         .ignoresSafeArea()
@@ -239,7 +247,27 @@ struct SocialComposer: View {
             close()
         } else {
             if trimmed.count < 3 { error = "至少写 3 个字" }
+            keepEditing()
+        }
+    }
+
+    /// 让键盘留着（或弹回来）。按键盘「发送」时系统会先把键盘收掉，这里下一轮再把焦点要回来
+    private func keepEditing() {
+        holdOpen = true
+        DispatchQueue.main.async {
             focused = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { holdOpen = false }
+        }
+    }
+
+    /// 输入栏贴在键盘上，键盘收起（按了键盘上的发送、下划收键盘、切到后台……）它就跟着收起，
+    /// 不留一条孤零零的输入栏在底部。正在发送时先留着：发成功会自己收起，失败了把键盘叫回来显示原因。
+    /// 等一轮再判断：键盘「发送」触发的收起和 onSubmit 谁先谁后不一定
+    private func keyboardDidHide() {
+        guard keyboardSeen else { return }
+        DispatchQueue.main.async {
+            guard !closing, !sending, !holdOpen, !focused else { return }
+            close()
         }
     }
 
@@ -292,6 +320,8 @@ struct SocialComposer: View {
                 }
                 answer = ""
                 if captcha != nil || AnimeSocial.needsCaptcha(error) { loadCaptcha() }
+                // 键盘可能在发送时收起了：叫回来，失败原因显示在输入栏上面，改一改或点空白处收起
+                keepEditing()
             }
         }
     }
