@@ -127,9 +127,10 @@ struct MissAVPosterCard: View {
 
                 // 时长角标
                 if !item.duration.isEmpty {
+                    // 角标底是深色半透明，字固定用白色：以前用主文字色，浅色模式下是深灰，压在深色底上看不清
                     Text(item.duration)
-                        .font(.caption2.weight(.medium).monospacedDigit())
-                        .foregroundStyle(Theme.textPrimary)
+                        .font(.caption2.weight(.semibold).monospacedDigit())
+                        .foregroundStyle(.white)
                         .padding(.horizontal, 5)
                         .padding(.vertical, 2)
                         .background(Color.black.opacity(0.72), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
