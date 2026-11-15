@@ -122,6 +122,8 @@ enum AnimeAccountKind: String, CaseIterable, Identifiable {
     case email, phone
     var id: String { rawValue }
     var title: String { self == .email ? "邮箱" : "手机号" }
+    /// 接口里的 enum 字段：整数，1 = 邮箱，2 = 手机号（传字符串或 0 都返回「参数错误」，实测）
+    var code: Int { self == .email ? 1 : 2 }
 }
 
 /// 图片算术验证码（例：「6 × 9 = ?」）。答案填进 dots 提交。
@@ -165,7 +167,7 @@ final class AnimeAccount: ObservableObject {
 
     // MARK: 验证码
 
-    /// 登录 / 注册前的图形验证码。scene：login、register
+    /// 注册发验证码前的图形验证码。scene：register
     func captcha(scene: String) async throws -> AnimeCaptcha {
         let data = try await AnimeClient.shared.perform("/app/users/captcha", method: "POST", body: ["type": scene])
         return try Self.decodeCaptcha(data)
@@ -193,7 +195,7 @@ final class AnimeAccount: ObservableObject {
 
     private func accountFields(_ kind: AnimeAccountKind, _ account: String) -> [String: Any] {
         let value = account.trimmingCharacters(in: .whitespacesAndNewlines)
-        return ["email": kind == .email ? value : "", "phone": kind == .phone ? value : "", "enum": kind.rawValue]
+        return ["email": kind == .email ? value : "", "phone": kind == .phone ? value : "", "enum": kind.code]
     }
 
     /// 发邮箱 / 短信验证码（注册用），要先答对图形验证码
@@ -213,13 +215,10 @@ final class AnimeAccount: ObservableObject {
         try await AnimeClient.shared.perform("/app/users/register", method: "POST", body: body)
     }
 
-    func signIn(kind: AnimeAccountKind, account: String, password: String, captcha: AnimeCaptcha?, answer: String) async throws {
+    /// 登录只要账号和密码，不用验证码
+    func signIn(kind: AnimeAccountKind, account: String, password: String) async throws {
         var body = accountFields(kind, account)
         body["password"] = password
-        if let captcha {
-            body["uuid"] = captcha.uuid
-            body["dots"] = answer.trimmingCharacters(in: .whitespaces)
-        }
         let data = try await AnimeClient.shared.perform("/app/users/login", method: "POST", body: body)
         guard let json = data as? [String: Any], let token = AnimeJSON.string(json, ["token"]),
               token.split(separator: ".").count == 3 else {

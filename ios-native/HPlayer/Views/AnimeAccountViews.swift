@@ -109,7 +109,7 @@ struct CaptchaField: View {
 
 // MARK: - 登录 / 注册
 
-/// 登录和注册：从底部弹出，顶部切换。登录、注册、发验证码前都要答一道图片算术题。
+/// 登录和注册：从底部弹出，顶部切换。登录只要账号密码；注册时获取邮件 / 短信验证码前要答一道图片算术题。
 /// 账号默认用邮箱，下面一行文字可以换成手机号。
 struct AnimeSignInSheet: View {
     enum Mode: String, CaseIterable, Identifiable {
@@ -159,14 +159,14 @@ struct AnimeSignInSheet: View {
 
                 VStack(alignment: .leading, spacing: Theme.Space.md + 2) {
                     if mode == .signUp {
-                        AccountField(label: "昵称", placeholder: "评论和弹幕里显示的名字", text: $nickname,
+                        AccountField(label: "昵称", placeholder: "不能有数字和特殊符号", text: $nickname,
                                      content: .nickname, identifier: "account.nickname")
                     }
                     AccountField(label: kind.title, placeholder: kind == .email ? "name@example.com" : "11 位手机号",
                                  text: $login, keyboard: kind == .email ? .emailAddress : .phonePad,
                                  content: kind == .email ? .emailAddress : .telephoneNumber, identifier: "account.login")
-                    CaptchaField(captcha: captcha, loading: captchaLoading, answer: $answer) { loadCaptcha() }
                     if mode == .signUp {
+                        CaptchaField(captcha: captcha, loading: captchaLoading, answer: $answer) { loadCaptcha() }
                         AccountField(label: kind == .email ? "邮件验证码" : "短信验证码", placeholder: "收到的验证码",
                                      text: $code, keyboard: .numberPad, content: .oneTimeCode, identifier: "account.code") {
                             Button(action: sendCode) {
@@ -235,11 +235,11 @@ struct AnimeSignInSheet: View {
         .presentationDragIndicator(.visible)
         .designSheet()
         .designScreen("account-sign-in")
-        .task { if captcha == nil { loadCaptcha() } }
-        .onChange(of: mode) { _ in
+        .task { if mode == .signUp && captcha == nil { loadCaptcha() } }
+        .onChange(of: mode) { newMode in
             error = ""
             answer = ""
-            loadCaptcha()
+            if newMode == .signUp { loadCaptcha() }
         }
         .onDisappear { countdownTask?.cancel() }
     }
@@ -255,7 +255,6 @@ struct AnimeSignInSheet: View {
 
     private var canSubmit: Bool {
         guard loginValid, !password.isEmpty else { return false }
-        if captcha != nil && answer.trimmingCharacters(in: .whitespaces).isEmpty { return false }
         if mode == .signUp {
             return password.count >= 6 && !nickname.trimmingCharacters(in: .whitespaces).isEmpty
                 && !code.trimmingCharacters(in: .whitespaces).isEmpty
@@ -266,10 +265,9 @@ struct AnimeSignInSheet: View {
     private func loadCaptcha() {
         captchaLoading = true
         captcha = nil
-        let scene = mode == .signIn ? "login" : "register"
         Task {
             defer { captchaLoading = false }
-            captcha = try? await account.captcha(scene: scene)
+            captcha = try? await account.captcha(scene: "register")
         }
     }
 
@@ -317,8 +315,7 @@ struct AnimeSignInSheet: View {
             do {
                 switch mode {
                 case .signIn:
-                    try await account.signIn(kind: kind, account: trimmedLogin, password: password,
-                                             captcha: captcha, answer: answer)
+                    try await account.signIn(kind: kind, account: trimmedLogin, password: password)
                     dismiss()
                     return
                 case .signUp:
@@ -331,8 +328,10 @@ struct AnimeSignInSheet: View {
             } catch {
                 self.error = error.localizedDescription
                 Haptics.warning()
-                answer = ""
-                loadCaptcha()
+                if mode == .signUp {
+                    answer = ""
+                    loadCaptcha()
+                }
             }
         }
     }
