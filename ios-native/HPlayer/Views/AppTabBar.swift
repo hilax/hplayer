@@ -86,6 +86,8 @@ struct HomeChannelBar: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        // 频道多了一屏放不下：左右滑内容换频道时，频道条跟着把选中的那个滚到看得见的位置
+        ScrollViewReader { reader in
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 18) {
                 ForEach(HomeChannel.allCases) { channel in
@@ -113,8 +115,14 @@ struct HomeChannelBar: View {
                     .buttonStyle(.plain)
                     .accessibilityAddTraits(selected ? .isSelected : [])
                     .accessibilityIdentifier("home.channel.\(channel.rawValue)")
+                    .id(channel)
                 }
             }
+        }
+        .onAppear { reader.scrollTo(selection, anchor: .center) }
+        .onChange(of: selection) { value in
+            withAnimation(reduceMotion ? nil : Motion.snappy) { reader.scrollTo(value, anchor: .center) }
+        }
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("home.channels")

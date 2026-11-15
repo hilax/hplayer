@@ -51,6 +51,8 @@ final class MissAVClient: NSObject, ObservableObject {
     private var extracting = false
     /// 正在显示的安全验证页（盖在当前最上层页面）
     private var challengeController: UIViewController?
+    /// 这个请求第一次看到验证页的时间：先在后台等 CloudflareChallenge.silentWait，让能自动放行的验证自己过
+    private var challengeSeenAt: Date?
     /// 详情短时间缓存：详情页刚解析过，点播放时不用再重新加载一遍网页
     private var detailCache: [String: (detail: MissAVVideoDetail, at: Date)] = [:]
     private static let detailCacheLifetime: TimeInterval = 10 * 60
@@ -182,6 +184,7 @@ final class MissAVClient: NSObject, ObservableObject {
         guard !isProcessing, !queue.isEmpty else { return }
         isProcessing = true
         extracting = false
+        challengeSeenAt = nil
         let task = queue.removeFirst()
         currentTask = task
         armTimeout(for: task.id)
@@ -212,6 +215,7 @@ final class MissAVClient: NSObject, ObservableObject {
         currentTask = nil
         isProcessing = false
         extracting = false
+        challengeSeenAt = nil
 
         task.continuation.resume(with: result)
         processNextTaskIfNeeded()
@@ -220,15 +224,7 @@ final class MissAVClient: NSObject, ObservableObject {
     private func inspectAndHandlePage(afterLoad: Bool = false) {
         guard let task = currentTask, !extracting else { return }
         let id = task.id
-        let checkScript = """
-        (() => {
-            const title = document.title || '';
-            const body = document.body ? document.body.innerText : '';
-            const hasTurnstile = document.querySelector('#challenge-running, #challenge-form, iframe[src*="challenges.cloudflare.com"], .cf-turnstile') !== null;
-            const isChallenge = title.includes("Just a moment") || title.includes("Attention Required") || body.includes("Verify you are human") || hasTurnstile;
-            return isChallenge;
-        })()
-        """
+        let checkScript = CloudflareChallenge.detectionScript
         webView.evaluateJavaScript(checkScript) { [weak self] result, _ in
             guard let self, self.currentTask?.id == id, !self.extracting else { return }
             if (result as? Bool) ?? false {
@@ -269,6 +265,10 @@ final class MissAVClient: NSObject, ObservableObject {
     private func presentChallenge(for id: UUID) {
         startChallengePolling()
         guard challengeController == nil else { return }
+        // 先不弹：轮询会继续检查，过了静默等待还在验证页才弹出来让用户点
+        let seen = challengeSeenAt ?? Date()
+        challengeSeenAt = seen
+        guard Date().timeIntervalSince(seen) >= CloudflareChallenge.silentWait else { return }
         guard let presenter = Self.topViewController() else {
             complete(id, with: .failure(MissAVError.challengeCancelled))
             return
@@ -563,21 +563,18 @@ extension MissAVClient: WKNavigationDelegate {
     }
 
     nonisolated func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        Task { @MainActor in
-            let nsErr = error as NSError
-            if nsErr.code == NSURLErrorCancelled { return }
-            guard let id = self.currentTask?.id else { return }
-            self.complete(id, with: .failure(error))
-        }
+        Task { @MainActor in self.navigationFailed(error) }
     }
 
     nonisolated func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        Task { @MainActor in
-            let nsErr = error as NSError
-            if nsErr.code == NSURLErrorCancelled { return }
-            guard let id = self.currentTask?.id else { return }
-            self.complete(id, with: .failure(error))
-        }
+        Task { @MainActor in self.navigationFailed(error) }
+    }
+
+    private func navigationFailed(_ error: Error) {
+        if (error as NSError).code == NSURLErrorCancelled { return }
+        // 用户在验证页里操作时页面出错：留着验证页让他刷新重试，不直接判失败
+        guard let id = currentTask?.id, challengeController == nil else { return }
+        complete(id, with: .failure(error))
     }
 }
 
@@ -620,6 +617,14 @@ private final class MissAVChallengeViewController: UIViewController, UIAdaptiveP
 
     @objc private func refresh() {
         webView.reload()
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        // 网页还要留给后台继续加载用：从验证页上拿下来，恢复成后台时的大小
+        webView.removeFromSuperview()
+        webView.translatesAutoresizingMaskIntoConstraints = true
+        webView.frame = CGRect(x: 0, y: 0, width: 375, height: 667)
     }
 
     func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {

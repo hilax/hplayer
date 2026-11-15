@@ -51,6 +51,8 @@ final class JableClient: NSObject, ObservableObject {
     private var extracting = false
     /// 正在显示的安全验证页（由 JableClient 自己弹，盖在最上层，播放器窗口里也看得见）
     private var challengeController: UIViewController?
+    /// 这个请求第一次看到验证页的时间：先在后台等 CloudflareChallenge.silentWait，让能自动放行的验证自己过
+    private var challengeSeenAt: Date?
     /// 详情（含播放地址）短时间缓存：详情页刚解析过，点播放时不用再加载一遍网页
     private var detailCache: [String: (detail: JableVideoDetail, at: Date)] = [:]
     private static let detailCacheLifetime: TimeInterval = 10 * 60
@@ -167,6 +169,7 @@ final class JableClient: NSObject, ObservableObject {
         guard !isProcessing, !queue.isEmpty else { return }
         isProcessing = true
         extracting = false
+        challengeSeenAt = nil
         let task = queue.removeFirst()
         currentTask = task
         armTimeout(for: task.id)
@@ -200,6 +203,7 @@ final class JableClient: NSObject, ObservableObject {
         currentTask = nil
         isProcessing = false
         extracting = false
+        challengeSeenAt = nil
 
         task.continuation.resume(with: result)
         processNextTaskIfNeeded()
@@ -210,15 +214,7 @@ final class JableClient: NSObject, ObservableObject {
     private func inspectAndHandlePage(afterLoad: Bool = false) {
         guard let task = currentTask, !extracting else { return }
         let id = task.id
-        let checkScript = """
-        (() => {
-            const title = document.title || '';
-            const body = document.body ? document.body.innerText : '';
-            const hasTurnstile = document.querySelector('#challenge-running, #challenge-form, iframe[src*="challenges.cloudflare.com"], .cf-turnstile') !== null;
-            const isChallenge = title.includes("Just a moment") || title.includes("Attention Required") || body.includes("Verify you are human") || hasTurnstile;
-            return isChallenge;
-        })()
-        """
+        let checkScript = CloudflareChallenge.detectionScript
         webView.evaluateJavaScript(checkScript) { [weak self] result, _ in
             guard let self, self.currentTask?.id == id, !self.extracting else { return }
             if (result as? Bool) ?? false {
@@ -263,6 +259,10 @@ final class JableClient: NSObject, ObservableObject {
     private func presentChallenge(for id: UUID) {
         startChallengePolling()
         guard challengeController == nil else { return }
+        // 先不弹：轮询会继续检查，过了静默等待还在验证页才弹出来让用户点
+        let seen = challengeSeenAt ?? Date()
+        challengeSeenAt = seen
+        guard Date().timeIntervalSince(seen) >= CloudflareChallenge.silentWait else { return }
         guard let presenter = Self.topViewController() else {
             complete(id, with: .failure(JableError.challengeCancelled))
             return
@@ -387,8 +387,10 @@ final class JableClient: NSObject, ObservableObject {
             const durationEl = item.querySelector('.label, .duration');
             const duration = durationEl ? durationEl.textContent.trim() : '';
 
+            // sub-title 里是「眼睛图标 播放数 爱心图标 收藏数」，只取播放数
             const subEl = item.querySelector('.sub-title');
-            const views = subEl ? subEl.textContent.trim() : '';
+            const viewCount = subEl ? (subEl.textContent.trim().split(/\\s+/)[0] || '') : '';
+            const views = /^[0-9.,KkMm万]+$/.test(viewCount) ? viewCount + ' 次观看' : '';
 
             if (title && id) {
                 list.push({
@@ -407,9 +409,10 @@ final class JableClient: NSObject, ObservableObject {
 
     static let detailExtractorScript = """
     (() => {
-        let hls = '';
+        // 页面里的 `var hlsUrl = '…'` 会成为全局变量，先直接读它，不受脚本写法变化影响
+        let hls = (typeof window.hlsUrl === 'string') ? window.hlsUrl : '';
         const scripts = document.getElementsByTagName('script');
-        for (let i = 0; i < scripts.length; i++) {
+        for (let i = 0; i < scripts.length && !hls; i++) {
             const text = scripts[i].textContent || '';
             const match = text.match(/var\\s+hlsUrl\\s*=\\s*['"]([^'"]+)['"]/);
             if (match && match[1]) {
@@ -458,7 +461,8 @@ final class JableClient: NSObject, ObservableObject {
             const dEl = item.querySelector('.label, .duration');
             const d = dEl ? dEl.textContent.trim() : '';
             const vEl = item.querySelector('.sub-title');
-            const v = vEl ? vEl.textContent.trim() : '';
+            const vCount = vEl ? (vEl.textContent.trim().split(/\\s+/)[0] || '') : '';
+            const v = /^[0-9.,KkMm万]+$/.test(vCount) ? vCount + ' 次观看' : '';
 
             if (t && id) {
                 related.push({
