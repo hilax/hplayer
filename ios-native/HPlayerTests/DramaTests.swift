@@ -43,6 +43,48 @@ final class DramaTests: XCTestCase {
         XCTAssertNil(DramaCard(json: ["title": "没有编号"]))
     }
 
+    func testRankItemReadsLooseFields() {
+        let item = DramaRankItem(json: ["rank": "2", "video_id": 7628, "title": "时停手表", "cover": "c",
+                                        "tags": ["都市", 1] as [Any], "cate_name": "短剧",
+                                        "episode_count": 10, "is_finished": true, "metric_label": "热力指数",
+                                        "metric_value": "5938"])
+        XCTAssertEqual(item?.rank, 2)
+        XCTAssertEqual(item?.id, 7628)
+        XCTAssertEqual(item?.tags, ["都市"])
+        XCTAssertEqual(item?.subtitle, "短剧 · 全 10 集")
+        XCTAssertEqual(item?.metricLabel, "热力指数")
+        XCTAssertEqual(item?.metricValue, 5938)
+
+        let updating = DramaRankItem(json: ["video_id": 1, "episode_count": 3])
+        XCTAssertEqual(updating?.rank, 0)
+        XCTAssertEqual(updating?.subtitle, "更新至 3 集")
+        XCTAssertNil(DramaRankItem(json: ["rank": 1, "title": "没有编号"]))
+    }
+
+    /// 榜单只放行能认出是短剧、漫剧的条目；换脸、魔改和认不出分类的都不显示，名次重新连续编号
+    func testRanksKeepOnlySeriesAndAnimated() {
+        func rank(_ id: Int, _ rank: Int, cate: String = "", slug: String = "", title: String = "片名",
+                  tags: [String] = []) -> DramaRankItem {
+            DramaRankItem(json: ["video_id": id, "rank": rank, "cate_name": cate, "cate_slug": slug,
+                                 "title": title, "tags": tags])!
+        }
+        let items = [
+            rank(1, 1, cate: "换脸"),
+            rank(2, 2, cate: "AI短剧"),
+            rank(3, 3, slug: "ai-huanlian"),
+            rank(4, 4, cate: "魔改"),
+            rank(5, 5, slug: "ai-manju"),
+            rank(6, 6),                                   // 认不出分类
+            rank(7, 7, cate: "短剧", tags: ["AI换脸"]),     // 分类像短剧但标签是换脸
+            rank(8, 8, cate: "漫剧", title: "某某魔改版"),
+            rank(9, 9, cate: "漫剧")
+        ]
+        XCTAssertEqual(items.filter(\.isAllowedInApp).map(\.videoId), [2, 5, 9])
+        let ranked = DramaClient.allowedRanks(items.reversed())
+        XCTAssertEqual(ranked.map(\.videoId), [2, 5, 9])
+        XCTAssertEqual(ranked.map(\.rank), [1, 2, 3])
+    }
+
     func testPlayableURLHandlesFieldVariants() {
         let line = "https://example.com"
         XCTAssertEqual(DramaClient.playableURL(in: ["video_url": "https://a.b/x.m3u8?k=1"], line: line)?.absoluteString,

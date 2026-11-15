@@ -92,11 +92,47 @@ final class DramaFeed: ObservableObject {
     }
 }
 
+/// 热播榜：一次取整张榜，不分页；下拉刷新重新取。条目已在 DramaClient 里过滤过（不含换脸、魔改）。
+@MainActor
+final class DramaRankFeed: ObservableObject {
+    @Published private(set) var items: [DramaRankItem] = []
+    @Published private(set) var loading = false
+    @Published private(set) var error = ""
+    @Published private(set) var hasLoaded = false
+
+    func loadIfNeeded() async {
+        guard !hasLoaded else { return }
+        await reload()
+    }
+
+    func reload() async {
+        guard !loading, !InterfacePreview.active else { return }
+        loading = true
+        error = ""
+        do {
+            items = try await DramaClient.shared.hotRanks()
+            hasLoaded = true
+        } catch {
+            if !(error is CancellationError), (error as? URLError)?.code != .cancelled {
+                self.error = error.localizedDescription
+            }
+        }
+        loading = false
+    }
+}
+
 // MARK: - 首页「短剧」频道
 
 struct DramaTab: View {
+    /// 分类胶囊：短剧、漫剧两个内容分类，外加「榜单」
+    private enum Section: Hashable {
+        case category(DramaCategory)
+        case ranks
+    }
+
     @StateObject private var feed = DramaFeed()
-    @State private var category: DramaCategory = .series
+    @StateObject private var rankFeed = DramaRankFeed()
+    @State private var section: Section = .category(.series)
     @Namespace private var pills
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// 内容从哪里开始（频道容器的固定头部盖在上面）
@@ -109,12 +145,16 @@ struct DramaTab: View {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 8) {
                     ForEach(DramaCategory.allCases) { item in
-                        SelectionPill(title: item.title, selected: item == category, namespace: pills) {
+                        SelectionPill(title: item.title, selected: section == .category(item), namespace: pills) {
                             // 选中块滑过去；下面的列表直接换，不跟着做动画
-                            withAnimation(reduceMotion ? nil : Motion.snappy) { category = item }
+                            withAnimation(reduceMotion ? nil : Motion.snappy) { section = .category(item) }
                         }
                         .accessibilityIdentifier("drama.category.\(item.rawValue)")
                     }
+                    SelectionPill(title: "榜单", selected: section == .ranks, namespace: pills) {
+                        withAnimation(reduceMotion ? nil : Motion.snappy) { section = .ranks }
+                    }
+                    .accessibilityIdentifier("drama.category.ranks")
                     Spacer(minLength: 0)
                 }
                 .padding(.horizontal, Theme.contentInset)
@@ -129,14 +169,32 @@ struct DramaTab: View {
         .pageScrollContainer()
         .scrollIndicators(.hidden)
         .ignoresSafeArea(edges: .top)
-        .refreshable { await feed.reload(category) }
+        .refreshable {
+            switch section {
+            case .category(let category): await feed.reload(category)
+            case .ranks: await rankFeed.reload()
+            }
+        }
         .background(Theme.pageBackground.ignoresSafeArea())
         .designScreen("drama")
-        .task(id: category) { await feed.loadFirstIfNeeded(category) }
+        .task(id: section) {
+            switch section {
+            case .category(let category): await feed.loadFirstIfNeeded(category)
+            case .ranks: await rankFeed.loadIfNeeded()
+            }
+        }
     }
 
     @ViewBuilder
     private var content: some View {
+        switch section {
+        case .category(let category): categoryContent(category)
+        case .ranks: ranksContent
+        }
+    }
+
+    @ViewBuilder
+    private func categoryContent(_ category: DramaCategory) -> some View {
         let shelf = feed.shelf(category)
         if shelf.items.isEmpty {
             Group {
@@ -185,6 +243,93 @@ struct DramaTab: View {
             .frame(maxWidth: .infinity, minHeight: 56)
             .padding(.bottom, 24)
         }
+    }
+
+    @ViewBuilder
+    private var ranksContent: some View {
+        if rankFeed.items.isEmpty {
+            Group {
+                if !rankFeed.error.isEmpty {
+                    EmptyStateView(icon: AppIcon.alert.name, title: "榜单没有加载出来", message: rankFeed.error,
+                                   actionTitle: "重新加载") { Task { await rankFeed.reload() } }
+                } else if rankFeed.loading || !rankFeed.hasLoaded {
+                    ProgressView().tint(Theme.textSecondary)
+                } else {
+                    EmptyStateView(icon: AppIcon.hot.name, title: "榜单暂时是空的", message: "稍后再来看看。")
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 360)
+        } else {
+            LazyVStack(spacing: 0) {
+                ForEach(Array(rankFeed.items.enumerated()), id: \.element.id) { index, item in
+                    NavigationLink(value: DramaRoute(id: item.videoId, title: item.title, cover: item.cover)) {
+                        DramaRankRow(item: item)
+                    }
+                    .buttonStyle(PosterButtonStyle())
+                    .accessibilityIdentifier("drama.rank.\(item.videoId)")
+                    .onAppear {
+                        // 提前取后四名的封面
+                        let next = rankFeed.items.dropFirst(index + 1).prefix(4).map(\.cover)
+                        if !InterfacePreview.active { DramaCoverStore.shared.prefetch(Array(next)) }
+                    }
+                }
+            }
+            .padding(.horizontal, Theme.contentInset)
+            .padding(.top, 4)
+            .padding(.bottom, 28)
+        }
+    }
+}
+
+/// 「榜单」一行：名次、封面、片名 / 分类集数 / 热力指数，点进详情（和分类里点海报进的是同一个详情页）。
+private struct DramaRankRow: View {
+    let item: DramaRankItem
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text("\(item.rank)")
+                .font(Font.numeral(20))
+                .foregroundStyle(item.rank <= 3 ? Theme.rating : Theme.textTertiary)
+                .frame(minWidth: 30, alignment: .leading)
+
+            Color.clear
+                .frame(width: 64, height: 96)
+                .overlay { DramaCover(urlString: item.cover, title: item.title) }
+                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text(item.title)
+                    .font(Theme.Typo.row.weight(.medium))
+                    .foregroundStyle(Theme.textPrimary)
+                    .lineLimit(2)
+                if !item.subtitle.isEmpty {
+                    Text(item.subtitle)
+                        .font(Theme.Typo.meta)
+                        .foregroundStyle(Theme.textSecondary)
+                        .lineLimit(1)
+                }
+                if item.metricValue > 0 {
+                    HStack(spacing: 4) {
+                        Image(systemName: AppIcon.hot.name)
+                        Text("\(item.metricLabel) \(compactCount(item.metricValue))")
+                            .monospacedDigit()
+                    }
+                    .font(Theme.Typo.meta)
+                    .foregroundStyle(Theme.rating)
+                }
+            }
+
+            Spacer(minLength: 8)
+
+            Image(systemName: AppIcon.forward.name)
+                .font(Theme.Typo.meta.weight(.semibold))
+                .foregroundStyle(Theme.textMuted)
+                .accessibilityHidden(true)
+        }
+        .padding(.vertical, 10)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("第 \(item.rank) 名，\(item.title)" + (item.subtitle.isEmpty ? "" : "，\(item.subtitle)"))
     }
 }
 

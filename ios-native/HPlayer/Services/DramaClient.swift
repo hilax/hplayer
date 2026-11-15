@@ -20,8 +20,8 @@ enum DramaError: LocalizedError {
 /// 在线短剧的接口。所有业务请求都走同一个入口 `POST /api/edge/request`，
 /// 把真正的 method / path 包在 JSON 里；游客访问，不带签名也不用登录。
 ///
-/// 只接入「AI 短剧」「AI 漫剧」两个分类，并且只按分类拉列表：
-/// 站点的推荐流、榜单和搜索会混入换脸类内容（用真人的脸合成），这部分不接。
+/// 只接入「AI 短剧」「AI 漫剧」两个分类：站点的推荐流、榜单和搜索会混入换脸类内容（用真人的脸合成）。
+/// 推荐流和搜索不接；热播榜接入，但逐条按分类过滤，只留短剧、漫剧（见 `DramaRankItem.isAllowedInApp`）。
 final class DramaClient {
     static let shared = DramaClient()
 
@@ -66,6 +66,34 @@ final class DramaClient {
         return DramaPage(items: items,
                          page: AnimeJSON.int(pagination, ["page"]) ?? page,
                          pages: AnimeJSON.int(pagination, ["pages"]) ?? page)
+    }
+
+    /// 热播榜。接口一次性返回整张榜，不分页。返回前过滤掉换脸、魔改和认不出分类的条目，名次按过滤后重排。
+    func hotRanks() async throws -> [DramaRankItem] {
+        let data = try await request("/api/ranks/hot")
+        let rows: [[String: Any]]
+        if let dict = data as? [String: Any], let items = dict["items"] as? [[String: Any]] {
+            rows = items
+        } else if let items = data as? [[String: Any]] {
+            rows = items
+        } else {
+            throw DramaError.invalidResponse
+        }
+        return Self.allowedRanks(rows.compactMap(DramaRankItem.init(json:)))
+    }
+
+    /// 按原名次排好（没名次的排最后、保持接口顺序），过滤后重新编号 1、2、3…，不留空位
+    static func allowedRanks(_ items: [DramaRankItem]) -> [DramaRankItem] {
+        let ordered = items.enumerated().sorted { a, b in
+            let left = a.element.rank > 0 ? a.element.rank : Int.max
+            let right = b.element.rank > 0 ? b.element.rank : Int.max
+            return left != right ? left < right : a.offset < b.offset
+        }
+        return ordered.map(\.element).filter(\.isAllowedInApp).enumerated().map { index, item in
+            var item = item
+            item.rank = index + 1
+            return item
+        }
     }
 
     func detail(id: Int) async throws -> DramaDetail {

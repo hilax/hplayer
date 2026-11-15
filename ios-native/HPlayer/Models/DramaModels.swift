@@ -53,6 +53,60 @@ struct DramaPage {
     var hasMore: Bool { page < pages }
 }
 
+/// 「榜单」里的一条。接口按热力指数排好序返回，榜单本身不分页。
+struct DramaRankItem: Identifiable, Hashable {
+    /// 名次。过滤掉不显示的条目后会重新编号（见 DramaClient.allowedRanks）
+    var rank: Int
+    let videoId: Int
+    let title: String
+    let cover: String
+    let tags: [String]
+    let categoryName: String
+    /// 分类的英文标识（ai-duanju 这种），接口不一定给
+    let categorySlug: String
+    let episodeCount: Int
+    let isFinished: Bool
+    let metricLabel: String
+    let metricValue: Int
+
+    var id: Int { videoId }
+
+    init?(json: [String: Any]) {
+        guard let videoId = AnimeJSON.int(json, ["video_id", "id"]), videoId > 0 else { return nil }
+        self.videoId = videoId
+        rank = AnimeJSON.int(json, ["rank"]) ?? 0
+        title = AnimeJSON.string(json, ["title"]) ?? "未命名"
+        cover = AnimeJSON.string(json, ["cover"]) ?? ""
+        tags = (json["tags"] as? [Any])?.compactMap { $0 as? String } ?? []
+        categoryName = AnimeJSON.string(json, ["cate_name", "category_name"]) ?? ""
+        categorySlug = AnimeJSON.string(json, ["cate_slug", "category_slug", "cate", "category", "slug"]) ?? ""
+        episodeCount = AnimeJSON.int(json, ["episode_count", "total_episodes"]) ?? 0
+        isFinished = DramaJSON.bool(json["is_finished"])
+        metricLabel = AnimeJSON.string(json, ["metric_label"]) ?? "热度"
+        metricValue = AnimeJSON.int(json, ["metric_value"]) ?? 0
+    }
+
+    /// 「短剧 · 全 20 集」这种副标题，缺字段时只写有的部分。
+    var subtitle: String {
+        var parts: [String] = []
+        if !categoryName.isEmpty { parts.append(categoryName) }
+        if episodeCount > 0 { parts.append(isFinished ? "全 \(episodeCount) 集" : "更新至 \(episodeCount) 集") }
+        return parts.joined(separator: " · ")
+    }
+
+    /// 站点的榜单会混入换脸（用真人的脸合成）和魔改条目。只放行能明确认出是「短剧」「漫剧」的；
+    /// 认不出分类的一律不显示：宁可榜单少几条，也不让换脸内容漏进来。
+    var isAllowedInApp: Bool {
+        let blocked = ["换脸", "魔改", "huanlian", "mogai"]
+        let haystack = ([title, categoryName, categorySlug] + tags).joined(separator: " ").lowercased()
+        if blocked.contains(where: { haystack.contains($0) }) { return false }
+        if DramaCategory(rawValue: categorySlug.lowercased()) != nil { return true }
+        let name = categoryName.replacingOccurrences(of: "AI", with: "", options: .caseInsensitive)
+            .trimmingCharacters(in: .whitespaces)
+        return DramaCategory.allCases.contains { $0.title == name }
+    }
+}
+
 struct DramaEpisode: Identifiable, Hashable {
     let number: Int
     let title: String
