@@ -143,12 +143,6 @@ struct HomeLibraryScanView: View {
         }
         .tint(Theme.textPrimary)
         .designScreen("manage")
-        .confirmationDialog("清空继续观看记录？", isPresented: $confirmClearHistory, titleVisibility: .visible) {
-            Button("清空记录", role: .destructive) {
-                recents.clear(); magnetHistory.removeAll()
-                PlaybackFrameStore.shared.removeAll()
-            }
-        }
         .sheet(isPresented: $pickingFolder) {
             ScanFolderPicker(onSelect: onStartFolder).environmentObject(appState)
         }
@@ -537,6 +531,14 @@ struct HomeLibraryScanView: View {
                 LibraryActionRow(symbol: AppIcon.history.name, title: "清空继续观看", subtitle: "只清除观看进度，不影响影片", showsChevron: false, tone: .danger)
             }
             .buttonStyle(.pressable(scale: 0.985))
+            // 挂在这一行上：确认框从这行弹出，不会挂在整页上变成指向页面中间的气泡
+            .confirmationDialog("清空继续观看记录？", isPresented: $confirmClearHistory, titleVisibility: .visible) {
+                Button("清空记录", role: .destructive) {
+                    recents.clear(); magnetHistory.removeAll()
+                    PlaybackFrameStore.shared.removeAll()
+                }
+                Button("取消", role: .cancel) {}
+            }
         }
     }
 }

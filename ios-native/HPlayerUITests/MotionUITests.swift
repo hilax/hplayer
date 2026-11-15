@@ -66,8 +66,14 @@ final class MotionUITests: XCTestCase {
         app.buttons.matching(NSPredicate(format: "label == %@", "从继续观看移除")).firstMatch.tap()
         XCTAssertTrue(app.staticTexts["2 条记录"].waitForExistence(timeout: 5))
         XCTAssertFalse(more.exists, "Removed records must not return after the transition")
+        // 「…」先弹菜单，菜单里选清空，再在确认框里确认
         app.buttons["历史选项"].tap()
-        app.buttons.matching(NSPredicate(format: "label == %@", "清空记录")).firstMatch.tap()
+        let clearItem = app.buttons.matching(NSPredicate(format: "label == %@", "清空继续观看")).firstMatch
+        XCTAssertTrue(clearItem.waitForExistence(timeout: 5))
+        clearItem.tap()
+        let confirm = app.buttons.matching(NSPredicate(format: "label == %@", "清空记录")).firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5))
+        confirm.tap()
         XCTAssertTrue(app.staticTexts["还没有播放记录"].waitForExistence(timeout: 5))
     }
 }

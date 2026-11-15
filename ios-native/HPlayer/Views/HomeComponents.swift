@@ -520,12 +520,23 @@ struct ContinueHistoryView: View {
         .toolbar(.visible, for: .navigationBar)
         .designScreen("continue")
         .toolbar { ToolbarItem(placement: .topBarTrailing) {
-            Button { confirmClear = true } label: { Image(systemName: AppIcon.more.name) }
-                .accessibilityLabel("历史选项").disabled(entries.isEmpty)
+            // 「…」是菜单，清空放在菜单里；确认框挂在这个按钮上，从按钮弹出。
+            // 以前点「…」直接弹确认框，又挂在整页上，iOS 26 会把它当成指向页面中间的气泡，盖住标题和第一行
+            Menu {
+                Button("清空继续观看", systemImage: AppIcon.trash.name, role: .destructive) { confirmClear = true }
+            } label: {
+                Image(systemName: AppIcon.more.name)
+            }
+            .accessibilityLabel("历史选项")
+            .accessibilityIdentifier("continue.more")
+            .disabled(entries.isEmpty)
+            .confirmationDialog("清空继续观看记录？", isPresented: $confirmClear, titleVisibility: .visible) {
+                Button("清空记录", role: .destructive) { entries.forEach(onRemove) }
+                Button("取消", role: .cancel) {}
+            } message: {
+                Text("只清除观看进度，不影响影片和网盘文件。")
+            }
         } }
-        .confirmationDialog("清空继续观看记录？", isPresented: $confirmClear, titleVisibility: .visible) {
-            Button("清空记录", role: .destructive) { entries.forEach(onRemove) }
-        }
     }
 
     private func historyRow(_ entry: ContinueEntry) -> some View {
