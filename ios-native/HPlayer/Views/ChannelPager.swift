@@ -211,10 +211,13 @@ struct PagedHeader<FirstRow: View, SecondRow: View>: View {
         let scrolled = min(offset / distance, 1)
         let collapse = min(max(state.collapses[key] ?? 0, 0), distance)
         let progress = collapse / distance
+        // 比位移淡得快一点：收到一半时已经看不见，不会压在状态栏的字上
+        let searchOpacity = Double(max(0, 1 - progress * 1.6))
+        let searchScale: CGFloat = 1 - progress * 0.06
         return ZStack(alignment: .top) {
             Theme.pageBackground
                 .frame(height: safeTop + Self.height - collapse)
-                .opacity(scrolled)
+                .opacity(Double(scrolled))
                 .overlay(alignment: .bottom) {
                     Theme.hairline.frame(height: 0.5).opacity(scrolled >= 1 ? 1 : 0)
                 }
@@ -223,9 +226,8 @@ struct PagedHeader<FirstRow: View, SecondRow: View>: View {
             VStack(spacing: Self.spacing) {
                 secondRow()
                     .frame(height: Self.searchHeight)
-                    // 比位移淡得快一点：收到一半时已经看不见，不会压在状态栏的字上
-                    .opacity(1 - min(progress * 1.6, 1))
-                    .scaleEffect(1 - progress * 0.06, anchor: .bottom)
+                    .opacity(searchOpacity)
+                    .scaleEffect(searchScale, anchor: .bottom)
                     .allowsHitTesting(progress < 0.5)
                     .accessibilityHidden(progress >= 1)
                 firstRow()
