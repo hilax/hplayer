@@ -419,8 +419,10 @@ private struct DramaFeedPage: View {
     private var rail: some View {
         VStack(spacing: 22) {
             Spacer()
-            railButton(icon: .playlist, title: "选集", identifier: "drama.feed.episodes", action: onEpisodes)
-            railButton(icon: .speed, title: speedLabel, identifier: "drama.feed.speed", action: onSpeed)
+            railButton(icon: .playlist, title: "选集",
+                       identifier: "drama.feed.episodes", action: onEpisodes)
+            railButton(icon: .speed, title: speedLabel,
+                       identifier: "drama.feed.speed", action: onSpeed)
         }
         .padding(.trailing, 10)
         .padding(.bottom, insets.bottom + 150)
