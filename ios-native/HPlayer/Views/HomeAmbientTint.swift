@@ -242,18 +242,25 @@ struct HomeAmbientBackdrop: View {
         // 下拉撑出来的那段全不透明，淡出的位置仍按轮播卡片算
         let total = max(pull + heroHeight, 1)
         func at(_ fraction: CGFloat) -> CGFloat { (pull + heroHeight * fraction) / total }
-        return LinearGradient(stops: [
-            .init(color: .black, location: 0),
-            .init(color: .black, location: at(0.12)),
-            .init(color: .black.opacity(0.95), location: at(0.25)),
-            .init(color: .black.opacity(0.77), location: at(0.35)),
-            .init(color: .black.opacity(0.58), location: at(0.50)),
-            .init(color: .black.opacity(0.21), location: at(0.67)),
-            .init(color: .black.opacity(0.06), location: at(0.83)),
-            .init(color: .clear, location: at(0.93)),
-            .init(color: .clear, location: 1),
-        ], startPoint: .top, endPoint: .bottom)
+        var stops: [Gradient.Stop] = [Gradient.Stop(color: .black, location: 0)]
+        for point in Self.fadeCurve {
+            stops.append(Gradient.Stop(color: .black.opacity(point.opacity), location: at(point.fraction)))
+        }
+        stops.append(Gradient.Stop(color: .clear, location: 1))
+        return LinearGradient(stops: stops, startPoint: .top, endPoint: .bottom)
     }
+
+    /// 淡出曲线：从轮播高度的 12% 开始、到 93% 淡完，中间按 smootherstep（6t⁵−15t⁴+10t³）走，
+    /// 起止处变化速度都是 0 且全程连续。以前是 8 个节点拼的折线，每个节点处变化速度突变，
+    /// 尤其开始淡出的地方，看起来像一道横线。24 段折线逼近平滑曲线，肉眼看不出拐点。
+    private static let fadeCurve: [(fraction: CGFloat, opacity: Double)] = {
+        let start: CGFloat = 0.12, end: CGFloat = 0.93, steps = 24
+        return (0...steps).map { step in
+            let t = CGFloat(step) / CGFloat(steps)
+            let eased = t * t * t * (t * (t * 6 - 15) + 10)
+            return (start + (end - start) * t, Double(1 - eased))
+        }
+    }()
 }
 
 // MARK: - 氛围层上的头部

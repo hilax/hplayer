@@ -119,8 +119,9 @@ struct AmbientHeroSection<Top: View, HitArea: View>: View {
             // 以前是在上面接一段实色、中间用 48pt 渐变过渡，下拉时能看出纯色、渐变、模糊图三层。
             if hasHero {
                 GeometryReader { proxy in
-                    // 这一块是滚动内容的最上面：平时顶端在 0，下拉多少就往下移多少
-                    let pull = max(0, proxy.frame(in: .named(PageScrollSpace.name)).minY)
+                    // 这一块是滚动内容的最上面，平时顶在屏幕最上沿（全局 y = 0），下拉多少就往下移多少。
+                    // 按屏幕坐标量：滚动视图的坐标原点在状态栏下沿，用它量会一直少一个状态栏高度，顶上留白
+                    let pull = max(0, proxy.frame(in: .global).minY)
                     HomeAmbientBackdrop(state: tint, palette: palette, heroHeight: heroHeight, pull: pull)
                         .frame(height: heroHeight + pull)
                         .offset(y: -pull)
