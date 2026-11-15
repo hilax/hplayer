@@ -62,6 +62,8 @@ struct HomeChannelsView: View {
                     CatalogTab(onSearch: onSearch, preset: $catalogPreset, filterRequest: filterRequest)
                 case .drama:
                     DramaTab()
+                case .jable:
+                    JableTab()
                 }
             }
             .background(Theme.pageBackground.ignoresSafeArea())
@@ -77,6 +79,7 @@ struct HomeChannelsView: View {
         case .anime: return "搜索动漫"
         case .library: return "搜索片库"
         case .drama: return "搜索片库、动漫、网盘"
+        case .jable: return "搜索片库、动漫、网盘"
         }
     }
 
@@ -87,6 +90,7 @@ struct HomeChannelsView: View {
         case .anime: return "anime.search"
         case .library: return "catalog.search"
         case .drama: return "drama.search"
+        case .jable: return "jable.search"
         }
     }
 
@@ -95,7 +99,7 @@ struct HomeChannelsView: View {
         switch channel {
         case .recommend: return { withAnimation(Motion.smooth) { channel = .library } }
         case .library: return { filterRequest += 1 }
-        case .anime, .drama: return nil
+        case .anime, .drama, .jable: return nil
         }
     }
 }

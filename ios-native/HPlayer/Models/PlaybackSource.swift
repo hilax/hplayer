@@ -17,6 +17,8 @@ enum PlaybackSource: Identifiable, Hashable {
     case anime(AnimeEpisodeRef)
     /// 在线短剧的一集，同样是打开时才现取地址。
     case drama(DramaEpisodeRef)
+    /// Jable 视频，打开时现取播放地址与请求头。
+    case jable(JableVideoRef)
 
     var id: String {
         switch self {
@@ -30,6 +32,8 @@ enum PlaybackSource: Identifiable, Hashable {
             return ref.id
         case .drama(let ref):
             return ref.id
+        case .jable(let ref):
+            return ref.id
         }
     }
 
@@ -42,6 +46,8 @@ enum PlaybackSource: Identifiable, Hashable {
         case .anime(let ref):
             return ref.episodeTitle
         case .drama(let ref):
+            return ref.episodeTitle
+        case .jable(let ref):
             return ref.episodeTitle
         }
     }
@@ -84,6 +90,10 @@ struct RecentItem: Codable, Identifiable, Hashable {
     /// 短剧记录存的是占位地址（hpdrama://video/编号/集数），打开时还原成集数引用再现取播放地址。
     var dramaRef: DramaEpisodeRef? { DramaEpisodeRef(recordURL: url, title: title) }
     var isDrama: Bool { url.hasPrefix(DramaEpisodeRef.scheme + "://") }
+
+    /// Jable 记录存的是占位地址（hpjable://video/编号），打开时还原成视频引用再现取播放地址。
+    var jableRef: JableVideoRef? { JableVideoRef(recordURL: url, title: title) }
+    var isJable: Bool { url.hasPrefix(JableVideoRef.scheme + "://") }
 
     /// 看过的比例，没有记录时为空
     var progress: Double? {

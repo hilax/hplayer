@@ -103,10 +103,22 @@ final class ImagePipeline: @unchecked Sendable {
     /// 预取队列最多留这么多张，滑得很快时最早排进去、已经用不上的那些会被取消。
     static let aheadLimit = 36
 
+    static func defaultImageHeaders(for url: URL) -> [String: String] {
+        if let host = url.host?.lowercased(),
+           host.contains("jable.tv") || host.contains("mushroomtrack.com") || host.contains("mushroomtrack") {
+            return [
+                "Referer": "https://jable.tv/",
+                "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
+                "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8"
+            ]
+        }
+        return JavBusSource.imageHeaders(for: url)
+    }
+
     init(
         directory: URL? = ImageDiskStore.defaultDirectory,
         session: URLSession? = nil,
-        headers: @escaping @Sendable (URL) -> [String: String] = { JavBusSource.imageHeaders(for: $0) }
+        headers: @escaping @Sendable (URL) -> [String: String] = { ImagePipeline.defaultImageHeaders(for: $0) }
     ) {
         self.headers = headers
         let configuration: URLSessionConfiguration

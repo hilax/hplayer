@@ -60,10 +60,10 @@ final class HomeNavigation: ObservableObject {
 
 // MARK: - 首页频道
 
-/// 首页顶部的频道：推荐（混合精选与货架）、片库（115 + 本地，四行筛选海报墙）、动漫（在线番剧）。
+/// 首页顶部的频道：推荐（混合精选与货架）、片库（115 + 本地，四行筛选海报墙）、动漫（在线番剧）、短剧、Jable。
 enum HomeChannel: String, Hashable, CaseIterable, Identifiable {
-    /// 顺序就是频道条从左到右：推荐、动漫、片库、短剧
-    case recommend, anime, library, drama
+    /// 顺序就是频道条从左到右：推荐、动漫、片库、短剧、Jable
+    case recommend, anime, library, drama, jable
 
     var id: String { rawValue }
 
@@ -73,6 +73,7 @@ enum HomeChannel: String, Hashable, CaseIterable, Identifiable {
         case .library: return "片库"
         case .anime: return "动漫"
         case .drama: return "短剧"
+        case .jable: return "Jable"
         }
     }
 }
