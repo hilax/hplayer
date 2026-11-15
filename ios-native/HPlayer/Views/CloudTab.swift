@@ -4,6 +4,8 @@ import SwiftUI
 enum CloudRoute: Hashable {
     case folder(Crumb)
     case page(ManagementPage)
+    /// 115 账号：点账号条推进来的整页（切换账号、刷新登录状态、退出 115）
+    case account
 }
 
 /// 网盘：登录了 115 就直接是根目录的文件，顶上是账号条和快捷入口（传输中心、离线下载、本机视频、回收站）；
@@ -21,7 +23,6 @@ struct CloudTab: View {
     }
     @State private var playing: PlaybackQueue?
     @State private var showDirectLogin = false
-    @State private var showAccount = false
     @State private var confirmLogout = false
     /// 未登录页的大标题已经滚出屏幕
     @State private var titleAway = false
@@ -49,7 +50,6 @@ struct CloudTab: View {
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { showDirectLogin = false } } }
             }
         }
-        .sheet(isPresented: $showAccount) { accountSheet }
         .onChange(of: appState.sessionID) { _ in
             path = []; playing = nil
         }
@@ -89,9 +89,9 @@ struct CloudTab: View {
             .accessibilityHidden(true)
     }
 
-    /// 账号、连接状态和容量缩成一条；点它打开账号面板（切换账号、刷新、退出）
+    /// 账号、连接状态和容量缩成一条；点它推进 115 账号页（切换账号、刷新、退出）
     private var accountStrip: some View {
-        Button { showAccount = true } label: {
+        Button { path.append(.account) } label: {
             VStack(alignment: .leading, spacing: Theme.Space.md) {
                 HStack(spacing: Theme.Space.md) {
                     monogram(size: 36)
@@ -153,18 +153,65 @@ struct CloudTab: View {
         .surfaceCard()
     }
 
-    // MARK: 账号面板
+    // MARK: 账号页
 
-    /// 115 账号：头像、名字、容量；切换账号（重新扫码 / Cookie 登录）、刷新登录状态、退出 115
-    private var accountSheet: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.lg) {
-            HStack {
-                Text("115 账号")
-                    .font(Theme.Typo.detailTitle)
-                    .foregroundStyle(Theme.textPrimary)
-                Spacer()
-                SheetCloseButton()
+    /// 115 账号：头像、名字、容量；切换账号（重新扫码 / Cookie 登录）、刷新登录状态、退出 115。
+    /// 点网盘页的账号条推进来；退出或换了账号后 sessionID 变化，导航栈会回到网盘根页。
+    private var accountPage: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: Theme.Space.xl) {
+                accountSummary
+                SettingsSection(title: "") {
+                    Button {
+                        showDirectLogin = true
+                    } label: {
+                        LibraryActionRow(symbol: AppIcon.switchAccount.name, title: "切换账号", value: "重新登录")
+                    }
+                    .buttonStyle(.pressable(scale: 0.985))
+                    .accessibilityIdentifier("cloud.account.switch")
+                    RowDivider()
+                    Button {
+                        Task { await accountInfo.refreshIfNeeded(session: appState.sessionID, client: appState.directClient()) }
+                    } label: {
+                        LibraryActionRow(symbol: AppIcon.refresh.name, title: "刷新登录状态",
+                                         value: accountInfo.isLoading(for: appState.sessionID) ? "检查中" : "", showsChevron: false)
+                    }
+                    .buttonStyle(.pressable(scale: 0.985))
+                    .accessibilityIdentifier("cloud.account.refresh")
+                }
+                VStack(alignment: .leading, spacing: Theme.Space.sm) {
+                    Button("退出 115 登录") { confirmLogout = true }
+                        .buttonStyle(ActionButtonStyle(kind: .secondaryDestructive, minHeight: 46))
+                        .accessibilityIdentifier("cloud.account.logout")
+                        .confirmationDialog("退出后将断开 115 网盘连接", isPresented: $confirmLogout, titleVisibility: .visible) {
+                            Button("退出 115", role: .destructive) { appState.logout() }
+                                .accessibilityIdentifier("cloud.account.confirmLogout")
+                            Button("取消", role: .cancel) {}
+                        }
+                    Text("退出后网盘和「115 播放」不能用；本机视频、磁力播放和 HPlayer 账号不受影响。")
+                        .font(Theme.Typo.caption)
+                        .foregroundStyle(Theme.textTertiary)
+                        .lineSpacing(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, Theme.Space.xs)
+                }
             }
+            .frame(maxWidth: 620)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, Theme.contentInset)
+            .padding(.vertical, Theme.Space.lg)
+        }
+        .scrollIndicators(.hidden)
+        .background(Theme.pageBackground.ignoresSafeArea())
+        .navigationTitle("115 账号")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
+        .designScreen("cloud-account")
+    }
+
+    /// 账号页顶上：头像、名字、连接状态和容量
+    private var accountSummary: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.md) {
             HStack(spacing: Theme.Space.md) {
                 monogram(size: 52)
                 VStack(alignment: .leading, spacing: 3) {
@@ -174,59 +221,29 @@ struct CloudTab: View {
                         .lineLimit(1)
                     HStack(spacing: 6) {
                         Circle().fill(statusColor).frame(width: 6, height: 6)
-                        Text(quota.map { "\(syncText) · 已用 \($0.usedText) / 共 \($0.totalText)" } ?? syncText)
-                            .monospacedDigit()
+                        Text("115 网盘 · \(syncText)")
                     }
                     .font(Theme.Typo.meta)
                     .foregroundStyle(Theme.textSecondary)
                 }
+                Spacer(minLength: 0)
             }
-            VStack(spacing: 0) {
-                Button {
-                    showAccount = false
-                    // 等面板收起再弹登录页，两个 sheet 不能同时出现
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { showDirectLogin = true }
-                } label: {
-                    LibraryActionRow(symbol: AppIcon.switchAccount.name, title: "切换账号", value: "重新登录")
-                }
-                .buttonStyle(.pressable(scale: 0.985))
-                .accessibilityIdentifier("cloud.account.switch")
-                RowDivider()
-                Button {
-                    Task { await accountInfo.refreshIfNeeded(session: appState.sessionID, client: appState.directClient()) }
-                } label: {
-                    LibraryActionRow(symbol: AppIcon.refresh.name, title: "刷新登录状态",
-                                     value: accountInfo.isLoading(for: appState.sessionID) ? "检查中" : "", showsChevron: false)
-                }
-                .buttonStyle(.pressable(scale: 0.985))
-                .accessibilityIdentifier("cloud.account.refresh")
-            }
-            .background(Theme.pageBackground, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
-            Button("退出 115 登录") { confirmLogout = true }
-                .buttonStyle(ActionButtonStyle(kind: .secondaryDestructive, minHeight: 46))
-                .accessibilityIdentifier("cloud.account.logout")
-                .confirmationDialog("退出后将断开 115 网盘连接", isPresented: $confirmLogout, titleVisibility: .visible) {
-                    Button("退出 115", role: .destructive) {
-                        showAccount = false
-                        appState.logout()
+            if let quota {
+                VStack(spacing: 6) {
+                    QuotaBar(ratio: quotaRatio(quota))
+                    HStack {
+                        Text("已用 \(quota.usedText)")
+                        Spacer()
+                        Text("共 \(quota.totalText)")
                     }
-                    .accessibilityIdentifier("cloud.account.confirmLogout")
-                    Button("取消", role: .cancel) {}
+                    .font(Theme.Typo.caption.monospacedDigit())
+                    .foregroundStyle(Theme.textSecondary)
                 }
-            Text("退出后网盘和「115 播放」不能用；本机视频、磁力播放和 HPlayer 账号不受影响。")
-                .font(Theme.Typo.caption)
-                .foregroundStyle(Theme.textTertiary)
-                .fixedSize(horizontal: false, vertical: true)
+            }
         }
-        .padding(.horizontal, Theme.Space.page)
-        .padding(.top, Theme.Space.xl)
-        .padding(.bottom, Theme.Space.lg)
-        .frame(maxHeight: .infinity, alignment: .top)
-        .background(Theme.surface.ignoresSafeArea())
-        .presentationDetents([.medium])
-        .presentationDragIndicator(.visible)
-        .designSheet()
-        .designScreen("cloud-account")
+        .padding(Theme.Space.lg)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .surfaceCard()
     }
 
     // MARK: 未登录
@@ -296,6 +313,8 @@ struct CloudTab: View {
             folderPage(crumb)
         case .page(let page):
             managementPage(page)
+        case .account:
+            accountPage
         }
     }
 
