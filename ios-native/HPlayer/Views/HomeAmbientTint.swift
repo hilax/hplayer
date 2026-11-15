@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import CoreImage
 
 // MARK: - 封面取色
 
@@ -102,7 +103,8 @@ final class HeroPalette: ObservableObject {
     }
 
     @Published private(set) var tints: [String: ArtworkTint] = [:]
-    /// 每张图的小图（160px）：顶部氛围层把它放大、高斯模糊后铺在频道条、搜索框和轮播后面
+    /// 每张图的氛围图：160px 小图在后台先按图片比例重度模糊好（见 AmbientImaging），
+    /// 顶部氛围层直接平滑放大铺在频道条、搜索框和轮播后面，显示时不再实时模糊
     @Published private(set) var images: [String: UIImage] = [:]
     /// 每张图露出部分的原始平均色（没压暗）：决定模糊层上要压多少暗、往上拉时露出的实色
     @Published private(set) var averages: [String: ArtworkTint] = [:]
@@ -144,7 +146,7 @@ final class HeroPalette: ObservableObject {
                   let image = await ImagePipeline.shared.image(url, maxPixel: ArtworkSize.backdrop, priority: .utility),
                   let cgImage = image.cgImage,
                   let average = ArtworkTint.averageColor(of: cgImage, aspect: source.aspect) else { continue }
-            return (image,
+            return (AmbientImaging.softened(cgImage) ?? image,
                     ArtworkTint(red: average.red, green: average.green, blue: average.blue),
                     ArtworkTint.page(red: average.red, green: average.green, blue: average.blue))
         }
@@ -198,12 +200,15 @@ struct HomeAmbientBackdrop: View {
         return ZStack(alignment: .top) {
             base
             if let image {
+                // 已经在后台模糊好（AmbientImaging）：只做平滑放大，不再叠实时模糊。
+                // 以前是把 160px 小图放大后再叠 34pt 模糊，模糊相对画面太弱，封面里横向的明暗结构
+                // 放大后会留成一道「分线」，下拉撑高时更明显；而且撑高时每一帧都要重新模糊
                 Image(uiImage: image)
                     .resizable()
+                    .interpolation(.high)
                     .scaledToFill()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .clipped()
-                    .blur(radius: 34, opaque: true)
                     .saturation(1.12)
                 Color.black.opacity(veil(average))
             }
@@ -314,5 +319,27 @@ extension View {
 
     func heroFieldChrome(focused: Bool = false) -> some View {
         modifier(HeroFieldChrome(focused: focused))
+    }
+}
+
+// MARK: - 氛围图预处理
+
+/// 顶部氛围层用的图：在后台对 160px 小图做一次重度高斯模糊（半径按图片尺寸算），
+/// 只留下大块的颜色过渡、不留画面结构，放大多少倍都不会出现线条。
+enum AmbientImaging {
+    private static let context = CIContext(options: [.cacheIntermediates: false])
+
+    /// 模糊强度：长边的 7%（160px 的图约 11px，铺满屏幕宽时相当于 70pt 左右）
+    static let blurFraction: CGFloat = 0.07
+
+    static func softened(_ cgImage: CGImage) -> UIImage? {
+        let input = CIImage(cgImage: cgImage)
+        let extent = input.extent
+        guard extent.width > 0, extent.height > 0 else { return nil }
+        let sigma = max(extent.width, extent.height) * blurFraction
+        // 先把边缘像素往外延伸再模糊、最后裁回原尺寸：四周不会被模糊拖暗
+        let blurred = input.clampedToExtent().applyingGaussianBlur(sigma: sigma).cropped(to: extent)
+        guard let output = context.createCGImage(blurred, from: extent) else { return nil }
+        return UIImage(cgImage: output)
     }
 }
