@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// 首页标签：推荐 / 动漫 / 片库 / 短剧四个频道左右滑动切换（PagedHeaderContainer）。
-/// 频道条和搜索框是盖在上面的固定头部：往上滑时频道条淡出，搜索框固定在顶端。
+/// 搜索框和频道条是盖在上面的固定头部（搜索框在上、频道条在下，PagedHeaderLayout.searchFirst）：
+/// 往上滑时搜索框跟着手指收起、频道条钉在状态栏下面，频道条右侧淡入放大镜；往下滑一点搜索框就回来。
 /// 详情页走 HomeView 的公共导航栈，盖住频道区和底部胶囊栏。
 struct HomeChannelsView: View {
     @Binding var channel: HomeChannel
@@ -23,7 +24,7 @@ struct HomeChannelsView: View {
 
     var body: some View {
         Group {
-            PagedHeaderContainer(pages: HomeChannel.allCases, selection: $channel) {
+            PagedHeaderContainer(pages: HomeChannel.allCases, selection: $channel, layout: .searchFirst) {
                 HStack(spacing: 4) {
                     HomeChannelBar(selection: $channel)
                     Spacer(minLength: 8)
@@ -40,6 +41,8 @@ struct HomeChannelsView: View {
                         .accessibilityIdentifier("home.sources")
                         .transition(.opacity)
                     }
+                    // 搜索框收起后，搜索入口挪到频道条最右边
+                    CollapsedSearchButton(identifier: searchIdentifier + ".collapsed", action: onSearch)
                 }
                 .padding(.leading, Theme.contentInset)
                 .padding(.trailing, 6)
@@ -97,5 +100,30 @@ struct HomeChannelsView: View {
         case .library: return { filterRequest += 1 }
         case .anime, .drama: return nil
         }
+    }
+}
+
+/// 头部搜索框收起后出现在频道条右侧的放大镜：跟着收起程度淡入，点了和点搜索框一样。
+/// 一直占着位置，频道条不会因为它出现、消失而左右挪动。
+private struct CollapsedSearchButton: View {
+    @Environment(\.pagedHeaderCollapse) private var progress
+    let identifier: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: AppIcon.search.name)
+                .font(.scaled(19, weight: Theme.iconWeight))
+                .heroForeground()
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.pressable(scale: 0.88))
+        .opacity(progress)
+        .scaleEffect(0.8 + 0.2 * progress)
+        .allowsHitTesting(progress > 0.5)
+        .accessibilityHidden(progress < 0.5)
+        .accessibilityLabel("搜索")
+        .accessibilityIdentifier(identifier)
     }
 }

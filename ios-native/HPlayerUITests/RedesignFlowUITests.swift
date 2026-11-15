@@ -35,34 +35,52 @@ final class RedesignFlowUITests: XCTestCase {
         }
     }
 
-    /// 首页头部：搜索框紧贴在轮播上方；上滑后频道条收起、搜索框固定在顶端；左右滑换频道。
+    /// 首页头部：搜索框在上、频道条在下，轮播紧贴在频道条下方；上滑后搜索框收起、频道条钉在顶端、
+    /// 右侧出现放大镜；不回到顶部，往下滑一下搜索框就回来；左右滑换频道。
     func testHomeHeaderPinsSearchAndPagesSwipe() throws {
         let app = launch("home")
         defer { app.terminate() }
         let search = app.descendants(matching: .any)["home.search"].firstMatch
         let play = app.buttons["home.heroPlay"].firstMatch
         let channel = app.descendants(matching: .any)["home.channel.recommend"].firstMatch
+        let collapsedSearch = app.buttons["home.search.collapsed"].firstMatch
         XCTAssertTrue(search.waitForExistence(timeout: 25))
         XCTAssertTrue(play.waitForExistence(timeout: 10))
         Thread.sleep(forTimeInterval: 1)
         let restSearch = search.frame
-        let gap = play.frame.minY - restSearch.maxY
-        XCTAssertGreaterThanOrEqual(gap, 0, "The carousel must not slide under the search bar")
-        XCTAssertLessThanOrEqual(gap, 30, "The carousel starts right below the search bar (gap \(gap))")
+        let restChannel = channel.frame
+        let restPlay = play.frame
+        XCTAssertLessThan(restSearch.maxY, restChannel.minY + 1, "The search bar sits above the channel row")
+        let gap = play.frame.minY - restChannel.maxY
+        XCTAssertGreaterThanOrEqual(gap, 0, "The carousel must not slide under the channel row")
+        XCTAssertLessThanOrEqual(gap, 30, "The carousel starts right below the channel row (gap \(gap))")
         XCTAssertTrue(channel.isHittable)
+        XCTAssertFalse(collapsedSearch.isHittable, "No magnifier while the search bar is showing")
 
         let low = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8))
         let high = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
         low.press(forDuration: 0.05, thenDragTo: high, withVelocity: .slow, thenHoldForDuration: 0.3)
+        low.press(forDuration: 0.05, thenDragTo: high, withVelocity: .slow, thenHoldForDuration: 0.3)
         Thread.sleep(forTimeInterval: 1)
-        let pinned = search.frame
-        XCTAssertLessThan(pinned.minY, restSearch.minY - 40, "The search bar moves up into the channel row's place")
-        XCTAssertGreaterThan(pinned.minY, 20, "The search bar stays below the status bar")
-        XCTAssertFalse(channel.isHittable, "The channel row is hidden once the header collapses")
+        let pinned = channel.frame
+        XCTAssertLessThan(pinned.minY, restChannel.minY - 40, "The channel row moves up into the search bar's place")
+        XCTAssertGreaterThan(pinned.minY, 20, "The channel row stays below the status bar")
+        XCTAssertTrue(channel.isHittable, "The channel row stays pinned")
+        XCTAssertFalse(search.isHittable, "The search bar is hidden once the header collapses")
+        XCTAssertTrue(collapsedSearch.isHittable, "A magnifier replaces the search bar")
         let pinnedShot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         pinnedShot.name = "Home header pinned"
         pinnedShot.lifetime = .keepAlways
         add(pinnedShot)
+
+        // 只往下滑一小段（还没回到顶部）：搜索框就回来
+        let mid = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        let lower = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.62))
+        mid.press(forDuration: 0.05, thenDragTo: lower, withVelocity: .slow, thenHoldForDuration: 0.3)
+        Thread.sleep(forTimeInterval: 1)
+        XCTAssertTrue(search.isHittable, "Scrolling down a little brings the search bar back")
+        XCTAssertLessThan(play.frame.minY, restPlay.minY - 100, "Still scrolled, not back at the top")
+        XCTAssertEqual(channel.frame.minY, restChannel.minY, accuracy: 2, "The header is back to its full layout")
 
         high.press(forDuration: 0.05, thenDragTo: low, withVelocity: .fast, thenHoldForDuration: 0.1)
         high.press(forDuration: 0.05, thenDragTo: low, withVelocity: .fast, thenHoldForDuration: 0.1)
