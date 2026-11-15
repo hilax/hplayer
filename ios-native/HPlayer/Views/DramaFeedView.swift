@@ -38,7 +38,7 @@ struct DramaFeedView: View {
                 ZStack {
                     Color.black
                     if size.width > size.height, let player = model.current {
-                        DramaLandscapeView(player: player, title: title(model.index),
+                        DramaLandscapeView(player: player, title: title(model.index), speed: model.speed,
                                            onExit: { setFullscreen(false) })
                     } else {
                         pager(size: size, insets: insets)
@@ -748,12 +748,26 @@ final class DramaPagerController: UIViewController, UIScrollViewDelegate, UIGest
 
 // MARK: - 横屏全屏
 
+/// 横屏全屏：点按显示 / 收起控制栏，双击暂停 / 播放，长按 2 倍速，左右滑动快进快退（松手才跳转）。
+/// 手势用主播放器同一个系统手势层（PlaybackGestureSurface）：长按松手一定会回调，长按后接着滑也能转成快进快退。
 private struct DramaLandscapeView: View {
     @ObservedObject var player: DramaEpisodePlayer
     let title: String
+    /// 用户选的倍速：长按 2 倍速松手后回到它
+    let speed: Float
     let onExit: () -> Void
     @State private var controlsVisible = true
     @State private var hideTask: Task<Void, Never>?
+    @State private var boosting = false
+    /// 左右滑动快进快退：起手时的播放位置和预览目标（松手才跳转）
+    @State private var seekStart: Double?
+    @State private var seekTarget: Double?
+    /// 这次拖动的方向还没定 / 已定为横滑 / 竖滑（竖滑不做事）
+    @State private var panDirection: PanDirection?
+
+    private enum PanDirection { case horizontal, vertical }
+    /// 走够这么远才定方向，和主播放器一致
+    private static let panLockDistance: CGFloat = 14
 
     var body: some View {
         ZStack {
@@ -762,8 +776,38 @@ private struct DramaLandscapeView: View {
                 .ignoresSafeArea()
                 .allowsHitTesting(false)
 
-            if player.isBuffering || player.state == .loading {
+            PlaybackGestureSurface(
+                status: accessibilityStatus,
+                onTap: {
+                    withAnimation(.easeOut(duration: 0.2)) { controlsVisible.toggle() }
+                    scheduleHide()
+                },
+                onDoubleTap: {
+                    Haptics.tap()
+                    player.togglePlay()
+                },
+                onBoost: setBoost,
+                onPan: handlePan
+            )
+            .ignoresSafeArea()
+
+            if (player.isBuffering || player.state == .loading) && seekTarget == nil {
                 ProgressView().tint(.white).controlSize(.large)
+                    .allowsHitTesting(false)
+            }
+
+            if let seekTarget, let seekStart {
+                seekHUD(target: seekTarget, from: seekStart)
+                    .transition(.opacity)
+                    .allowsHitTesting(false)
+            }
+
+            if boosting {
+                boostPill
+                    .frame(maxHeight: .infinity, alignment: .top)
+                    .padding(.top, 20)
+                    .transition(.opacity)
+                    .allowsHitTesting(false)
             }
 
             if controlsVisible {
@@ -771,13 +815,117 @@ private struct DramaLandscapeView: View {
                     .transition(.opacity)
             }
         }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            withAnimation(.easeOut(duration: 0.2)) { controlsVisible.toggle() }
-            scheduleHide()
-        }
         .onAppear(perform: scheduleHide)
+        .onDisappear { if boosting { setBoost(false) } }
         .statusBarHidden(true)
+    }
+
+    private var accessibilityStatus: String {
+        guard player.duration > 0 else { return "" }
+        let position = "已播放 \(DramaFeedPage.time(player.currentTime))，共 \(DramaFeedPage.time(player.duration))"
+        return player.isPlaying ? position : "已暂停，\(position)"
+    }
+
+    // MARK: 长按 2 倍速
+
+    private func setBoost(_ on: Bool) {
+        if on {
+            guard !boosting, player.isPlaying else { return }
+            Haptics.tap()
+            withAnimation(.easeOut(duration: 0.15)) {
+                boosting = true
+                controlsVisible = false
+            }
+            player.setRate(2)
+        } else {
+            guard boosting else { return }
+            withAnimation(.easeOut(duration: 0.15)) { boosting = false }
+            player.setRate(speed)
+        }
+    }
+
+    private var boostPill: some View {
+        HStack(spacing: 6) {
+            Image(systemName: AppIcon.speed.name)
+            Text("2× 快进中")
+        }
+        .font(.scaled(13, weight: .semibold))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 14)
+        .frame(height: 32)
+        .background(.black.opacity(Theme.Opacity.strong), in: Capsule())
+    }
+
+    // MARK: 左右滑动快进快退
+
+    private func handlePan(_ state: UIGestureRecognizer.State, origin: CGPoint, translation: CGPoint, size: CGSize) {
+        switch state {
+        case .cancelled, .failed:
+            // 被系统接走了（下拉控制中心等）：不跳转
+            endSeek(commit: false)
+            return
+        default: break
+        }
+        if panDirection == nil {
+            let dx = abs(translation.x), dy = abs(translation.y)
+            guard max(dx, dy) >= Self.panLockDistance else {
+                if state == .ended { endSeek(commit: false) }
+                return
+            }
+            // 和主播放器一样偏向快进快退：和水平夹角 50° 以内都算横滑
+            panDirection = dx >= dy * 0.84 ? .horizontal : .vertical
+            if panDirection == .horizontal {
+                guard player.duration > 0, player.state == .ready else {
+                    panDirection = .vertical
+                    return
+                }
+                seekStart = player.currentTime
+                withAnimation(.easeOut(duration: 0.15)) { controlsVisible = false }
+            }
+        }
+        guard panDirection == .horizontal, let start = seekStart, size.width > 0 else {
+            if state == .ended { endSeek(commit: false) }
+            return
+        }
+        // 滑满一屏宽能跳的时长：最多 9 分钟；滑过头也只停在结尾前 5 秒
+        let range = min(540, max(90, player.duration * 0.6))
+        let ceiling = max(start, player.duration - 5)
+        let target = min(max(start + Double(translation.x / size.width) * range, 0), max(0, ceiling))
+        seekTarget = target
+        if state == .ended { endSeek(commit: true) }
+    }
+
+    private func endSeek(commit: Bool) {
+        if commit, let seekTarget { player.seek(to: seekTarget) }
+        withAnimation(.easeOut(duration: 0.2)) {
+            seekTarget = nil
+            seekStart = nil
+        }
+        panDirection = nil
+    }
+
+    private func seekHUD(target: Double, from start: Double) -> some View {
+        let delta = (target - start).rounded()
+        let fraction = player.duration > 0 ? min(max(target / player.duration, 0), 1) : 0
+        return VStack(spacing: 8) {
+            Text("\(delta >= 0 ? "快进" : "快退") \(delta >= 0 ? "+" : "-")\(DramaFeedPage.time(abs(delta)))")
+                .font(.scaled(15, weight: .semibold).monospacedDigit())
+            Text("\(DramaFeedPage.time(target)) / \(DramaFeedPage.time(player.duration))")
+                .font(.scaled(13, weight: .medium).monospacedDigit())
+                .foregroundStyle(Theme.textSecondaryOnArtwork)
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(.white.opacity(Theme.Opacity.soft))
+                    Capsule().fill(.white).frame(width: proxy.size.width * fraction)
+                }
+            }
+            .frame(width: 180, height: 4)
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 14)
+        .background(.black.opacity(Theme.Opacity.strong), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .accessibilityElement(children: .combine)
     }
 
     private var controls: some View {
