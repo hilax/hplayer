@@ -292,6 +292,9 @@ struct PlaybackControlsView: View {
     @State private var closeFade = false
     @State private var infoTab: PlayerInfoTab = .intro
     @State private var showDanmakuSettings = false
+    /// 正在写的弹幕 / 评论：输入栏盖在整页上，贴着键盘
+    @State private var composer: SocialComposerTarget?
+    @State private var showSignIn = false
     @AppStorage("player.autoPlayNext") private var autoPlayNext = true
 
     /// 竖屏时顶部小窗播放器的高度（不含状态栏）
@@ -390,6 +393,18 @@ struct PlaybackControlsView: View {
             .ignoresSafeArea()
         }
         .background(SystemVolumeHost(controller: systemVolume).frame(width: 1, height: 1).allowsHitTesting(false))
+        .overlay {
+            if let composer {
+                SocialComposer(target: composer, danmaku: danmaku, currentTime: { playback.currentTime },
+                               scheme: isLandscapeWindow ? .dark : appScheme) {
+                    self.composer = nil
+                    revealControls()
+                }
+                .transition(.opacity)
+            }
+        }
+        .animation(reduceMotion ? nil : Motion.smooth, value: composer)
+        .animeSignInSheet(isPresented: $showSignIn)
         .designScreen("player")
         .statusBarHidden(isLandscapeWindow)
         .defersSystemGestures(on: isLandscapeWindow ? .all : [])
@@ -618,6 +633,9 @@ struct PlaybackControlsView: View {
                     .playerAnchor(.popover(.speed))
                     if let danmaku {
                         PlayerDanmakuButton(store: danmaku)
+                        if landscape {
+                            DanmakuInputPill(compact: Self.narrowLandscape, action: composeDanmaku)
+                        }
                     }
                 }
                 // 图标四周有留白，往外挪一点，让图标本身和左边的时间文字对齐
@@ -1751,9 +1769,12 @@ struct PlaybackControlsView: View {
     private func infoPage(bottomInset: CGFloat) -> some View {
         if let commentsVid {
             VStack(spacing: 0) {
-                PlayerInfoTabBar(selection: $infoTab, danmaku: danmaku) { showDanmakuSettings = true }
+                PlayerInfoTabBar(selection: $infoTab, danmaku: danmaku, onComposeDanmaku: composeDanmaku) {
+                    showDanmakuSettings = true
+                }
                 if infoTab == .comments {
-                    AnimeCommentsView(vid: commentsVid, bottomInset: bottomInset)
+                    AnimeCommentsView(vid: commentsVid, bottomInset: bottomInset,
+                                      onCompose: { composer = .comment(vid: commentsVid, replyTo: $0) })
                         .transition(.opacity)
                 } else {
                     introPage(bottomInset: bottomInset)
@@ -2897,6 +2918,18 @@ struct PlaybackControlsView: View {
         guard value.isFinite && value >= 0 else { return "00:00" }
         return PlaybackController.clock(value)
     }
+    /// 发弹幕：没登录先弹登录面板
+    private func composeDanmaku() {
+        guard AnimeAccount.shared.isSignedIn else { showSignIn = true; return }
+        popover = nil
+        composer = .danmaku
+    }
+
+    /// iPhone SE 这类窄屏横过来，倍速旁边放不下输入框，只放一个图标
+    private static var narrowLandscape: Bool {
+        max(UIScreen.main.bounds.width, UIScreen.main.bounds.height) < 800
+    }
+
     private func revealControls() {
         if InterfacePreview.active { controlsVisible = true; return }
         if !controlsVisible {
@@ -2919,7 +2952,7 @@ struct PlaybackControlsView: View {
                 guard !Task.isCancelled, controlsVisible else { return }
                 // VoiceOver 用户要逐个摸按钮，控制栏自动收起会让按钮在手指下消失；开着 VoiceOver 时一直显示，
                 // 想收起可以点一下画面。
-                let busy = showList || quickMenu != nil || showSleepMenu || popover != nil || dragging || boosting
+                let busy = showList || quickMenu != nil || showSleepMenu || popover != nil || dragging || boosting || composer != nil
                     || adjustment != nil || playback.buffering || UIAccessibility.isVoiceOverRunning
                 idle = busy ? 0 : idle + step
                 if idle >= 5_000_000_000 {

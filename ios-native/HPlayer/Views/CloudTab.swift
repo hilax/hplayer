@@ -10,8 +10,6 @@ enum CloudRoute: Hashable {
 /// 没登录时是登录引导，传输中心和本机视频不用登录也能用。「我的」页和这里共用同一个 115 登录。
 struct CloudTab: View {
     var onSearch: () -> Void = {}
-    /// 点账号条：去「我的」页看账号详情
-    var onOpenAccount: () -> Void = {}
     /// 同一套网盘页面由 HomeView 的公共导航栈呈现；nil 为标签根页。
     var route: CloudRoute? = nil
     @EnvironmentObject private var appState: AppState
@@ -23,6 +21,8 @@ struct CloudTab: View {
     }
     @State private var playing: PlaybackQueue?
     @State private var showDirectLogin = false
+    @State private var showAccount = false
+    @State private var confirmLogout = false
     /// 未登录页的大标题已经滚出屏幕
     @State private var titleAway = false
 
@@ -49,6 +49,7 @@ struct CloudTab: View {
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { showDirectLogin = false } } }
             }
         }
+        .sheet(isPresented: $showAccount) { accountSheet }
         .onChange(of: appState.sessionID) { _ in
             path = []; playing = nil
         }
@@ -88,9 +89,9 @@ struct CloudTab: View {
             .accessibilityHidden(true)
     }
 
-    /// 账号、连接状态和容量缩成一条；点它去「我的」页看账号详情
+    /// 账号、连接状态和容量缩成一条；点它打开账号面板（切换账号、刷新、退出）
     private var accountStrip: some View {
-        Button(action: onOpenAccount) {
+        Button { showAccount = true } label: {
             VStack(alignment: .leading, spacing: Theme.Space.md) {
                 HStack(spacing: Theme.Space.md) {
                     monogram(size: 36)
@@ -107,6 +108,9 @@ struct CloudTab: View {
                         .foregroundStyle(Theme.textSecondary)
                     }
                     Spacer(minLength: Theme.Space.xs)
+                    Text("账号")
+                        .font(Theme.Typo.meta)
+                        .foregroundStyle(Theme.textSecondary)
                     Image(systemName: AppIcon.forward.name)
                         .font(.footnote.weight(.semibold))
                         .foregroundStyle(Theme.textMuted)
@@ -149,6 +153,82 @@ struct CloudTab: View {
         .surfaceCard()
     }
 
+    // MARK: 账号面板
+
+    /// 115 账号：头像、名字、容量；切换账号（重新扫码 / Cookie 登录）、刷新登录状态、退出 115
+    private var accountSheet: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.lg) {
+            HStack {
+                Text("115 账号")
+                    .font(Theme.Typo.detailTitle)
+                    .foregroundStyle(Theme.textPrimary)
+                Spacer()
+                SheetCloseButton()
+            }
+            HStack(spacing: Theme.Space.md) {
+                monogram(size: 52)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(status?.userName ?? "115 网盘")
+                        .font(Theme.Typo.headline)
+                        .foregroundStyle(Theme.textPrimary)
+                        .lineLimit(1)
+                    HStack(spacing: 6) {
+                        Circle().fill(statusColor).frame(width: 6, height: 6)
+                        Text(quota.map { "\(syncText) · 已用 \($0.usedText) / 共 \($0.totalText)" } ?? syncText)
+                            .monospacedDigit()
+                    }
+                    .font(Theme.Typo.meta)
+                    .foregroundStyle(Theme.textSecondary)
+                }
+            }
+            VStack(spacing: 0) {
+                Button {
+                    showAccount = false
+                    // 等面板收起再弹登录页，两个 sheet 不能同时出现
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { showDirectLogin = true }
+                } label: {
+                    LibraryActionRow(symbol: AppIcon.switchAccount.name, title: "切换账号", value: "重新登录")
+                }
+                .buttonStyle(.pressable(scale: 0.985))
+                .accessibilityIdentifier("cloud.account.switch")
+                RowDivider()
+                Button {
+                    Task { await accountInfo.refreshIfNeeded(session: appState.sessionID, client: appState.directClient()) }
+                } label: {
+                    LibraryActionRow(symbol: AppIcon.refresh.name, title: "刷新登录状态",
+                                     value: accountInfo.isLoading(for: appState.sessionID) ? "检查中" : "", showsChevron: false)
+                }
+                .buttonStyle(.pressable(scale: 0.985))
+                .accessibilityIdentifier("cloud.account.refresh")
+            }
+            .background(Theme.pageBackground, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
+            Button("退出 115 登录") { confirmLogout = true }
+                .buttonStyle(ActionButtonStyle(kind: .secondaryDestructive, minHeight: 46))
+                .accessibilityIdentifier("cloud.account.logout")
+                .confirmationDialog("退出后将断开 115 网盘连接", isPresented: $confirmLogout, titleVisibility: .visible) {
+                    Button("退出 115", role: .destructive) {
+                        showAccount = false
+                        appState.logout()
+                    }
+                    .accessibilityIdentifier("cloud.account.confirmLogout")
+                    Button("取消", role: .cancel) {}
+                }
+            Text("退出后网盘和「115 播放」不能用；本机视频、磁力播放和 HPlayer 账号不受影响。")
+                .font(Theme.Typo.caption)
+                .foregroundStyle(Theme.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, Theme.Space.page)
+        .padding(.top, Theme.Space.xl)
+        .padding(.bottom, Theme.Space.lg)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(Theme.surface.ignoresSafeArea())
+        .presentationDetents([.medium])
+        .presentationDragIndicator(.visible)
+        .designSheet()
+        .designScreen("cloud-account")
+    }
+
     // MARK: 未登录
 
     private var signedOutPage: some View {
@@ -187,7 +267,7 @@ struct CloudTab: View {
                 Text("登录 115，文件直接显示在这里")
                     .font(Theme.Typo.headline)
                     .foregroundStyle(Theme.textPrimary)
-                Text("「我的」和这里用的是同一个账号，在哪边登录都可以。")
+                Text("115 的登录、切换和退出都在这一页。")
                     .font(Theme.Typo.meta)
                     .foregroundStyle(Theme.textSecondary)
                     .lineSpacing(2)

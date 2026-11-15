@@ -48,6 +48,8 @@ enum AppIcon: String, CaseIterable {
     case transfers, danmaku, metadataSources, appIconStyle, license, version, allFiles
     /// 「我的」里的播放设置
     case autoPlayNext, pictureInPicture, readahead, danmakuStyle
+    /// 「我的」里的 HPlayer 账号：消息、任务、签到、金币、点赞、发送
+    case bell, checkIn, coin, likeFill, send, textStyle, mail, phone, eye
 
     /// 线框款（默认）或本来就只有一种样子的图标。
     var name: String {
@@ -200,6 +202,15 @@ enum AppIcon: String, CaseIterable {
         case .license: return "doc.plaintext"
         case .version: return "number.circle"
         case .allFiles: return "folder"
+        case .bell: return "bell"
+        case .checkIn: return "calendar.badge.checkmark"
+        case .coin: return "yensign.circle"
+        case .likeFill: return "hand.thumbsup.fill"
+        case .send: return "paperplane"
+        case .textStyle: return "textformat"
+        case .mail: return "envelope"
+        case .phone: return "iphone"
+        case .eye: return "eye"
         }
     }
 

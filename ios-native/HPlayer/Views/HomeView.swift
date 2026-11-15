@@ -365,7 +365,7 @@ struct HomeView: View {
         case .magnet:
             MagnetTab()
         case .cloud:
-            CloudTab(onSearch: { openSearch() }, onOpenAccount: { selection = .mine })
+            CloudTab(onSearch: { openSearch() })
         case .mine:
             SettingsView()
         case .search:

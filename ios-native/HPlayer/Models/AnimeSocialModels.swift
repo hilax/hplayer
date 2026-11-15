@@ -10,12 +10,15 @@ struct AnimeDanmaku: Identifiable, Hashable {
     let text: String
     /// ARGB；nil = 默认白色
     let color: UInt32?
+    /// 自己刚发的：画面上带一圈琥珀描边
+    var mine = false
 
-    init(id: String, time: Double, text: String, color: UInt32?) {
+    init(id: String, time: Double, text: String, color: UInt32?, mine: Bool = false) {
         self.id = id
         self.time = time
         self.text = text
         self.color = color
+        self.mine = mine
     }
 
     init?(json: [String: Any]) {
@@ -67,6 +70,32 @@ struct AnimeComment: Identifiable, Hashable {
     let vip: Bool
     /// 身份标签，例如「管理员」
     let role: String
+    /// 接口里的数字 id（点赞、回复用）
+    let numericID: Int
+    /// 我是否赞过
+    let liked: Bool
+    /// 置顶、热评里带的前几条回复
+    let preview: [AnimeComment]
+    /// 这条是回复谁的
+    let replyTo: String
+
+    /// 自己刚发出去的评论（接口不回完整记录，先在本地显示）
+    init(localID: Int, userName: String, content: String, replyTo: String) {
+        id = "local-\(localID)-\(UUID().uuidString)"
+        self.userName = userName
+        self.content = content
+        time = "刚刚"
+        likes = 0
+        replies = 0
+        pinned = false
+        hot = false
+        vip = false
+        role = ""
+        numericID = localID
+        liked = false
+        preview = []
+        self.replyTo = replyTo
+    }
 
     init?(json: [String: Any], kind: AnimeCommentKind) {
         let user = json["user"] as? [String: Any] ?? json["users"] as? [String: Any] ?? [:]
@@ -84,6 +113,11 @@ struct AnimeComment: Identifiable, Hashable {
         hot = kind == .hot
         vip = DramaJSON.bool(json["isvip"])
         role = AnimeJSON.string(((json["roles"] as? [[String: Any]]) ?? []).first ?? [:], ["group_name"]) ?? ""
+        numericID = AnimeJSON.int(json, ["id", "cid", "comment_id"]) ?? 0
+        liked = DramaJSON.bool(json["islike"])
+        preview = ((json["children"] as? [[String: Any]]) ?? []).prefix(3).compactMap { AnimeComment(json: $0, kind: .list) }
+        // 顶层评论 last_id 为 0；回复里 last_name 是被回复的人
+        replyTo = (AnimeJSON.int(json, ["last_id"]) ?? 0) > 0 ? (AnimeJSON.string(json, ["last_name"]) ?? "") : ""
     }
 
     static func list(from data: Any, kind: AnimeCommentKind) -> [AnimeComment] {

@@ -6,19 +6,21 @@ struct SettingsTab: View {
     }
 }
 
-/// 「我的」：账号，然后是播放、弹幕、外观、媒体库、关于。
-/// 账号下面是「本机视频」：手机上的下载进度和离线视频都在那一页。
-/// 追番在动漫频道、观看记录在首页「继续观看」、离线下载和回收站在网盘页，这里都不重复。
+/// 「我的」：HPlayer 账号（评论、弹幕、点赞、签到任务、消息），然后是追番、本机视频和各项设置。
+/// 115 网盘的登录、切换、退出都在「网盘」页，这里不放。
 /// 播放和弹幕两组直接读写播放器已有的偏好，下次打开播放器时生效；这里只是界面，不碰播放器内核。
 struct SettingsView: View {
-    @EnvironmentObject private var appState: AppState
-    @EnvironmentObject private var accountInfo: P115AccountInfoStore
     @EnvironmentObject private var localStore: LocalMediaStore
     @ObservedObject private var downloads = DownloadManager.shared
+    @ObservedObject private var account = AnimeAccount.shared
+    @ObservedObject private var watchlist = AnimeWatchlistStore.shared
 
     @AppStorage(AppearanceMode.storageKey) private var appearance: AppearanceMode = .system
-    @State private var confirmLogout = false
     @State private var titleAway = false
+    @State private var signInMode: AnimeSignInSheet.Mode?
+    @State private var confirmSignOut = false
+    @State private var signing = false
+    @State private var showDiagnostics = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     // 播放偏好：和播放页用的是同一组键
@@ -33,23 +35,20 @@ struct SettingsView: View {
     @AppStorage(DanmakuPrefs.area) private var danmakuArea = 0.5
     @AppStorage(DanmakuPrefs.opacity) private var danmakuOpacity = 0.9
 
-    private var status: P115Status? { appState.isAuthenticated ? accountInfo.status(for: appState.sessionID) : nil }
-    private var loadingStatus: Bool { appState.isAuthenticated && accountInfo.isLoading(for: appState.sessionID) }
-    private var error: String { appState.isAuthenticated ? accountInfo.error(for: appState.sessionID) : "" }
-
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Space.xl) {
-                ScreenTitleBar("我的")
+                ScreenTitleBar(title: "我的") { messagesButton }
                     .padding(.horizontal, -Theme.contentInset)
                     .scrolledAway($titleAway)
-                profileCard.reveal(0)
-                localGroup.reveal(1)
+                accountCard.reveal(0)
+                activityGroup.reveal(1)
                 playbackGroup.reveal(2)
                 danmakuGroup.reveal(3)
                 appearanceGroup.reveal(4)
                 mediaGroup.reveal(5)
                 aboutGroup.reveal(6)
+                if account.isSignedIn { signOutRow.reveal(7) }
             }
             .frame(maxWidth: 620)
             .frame(maxWidth: .infinity)
@@ -62,6 +61,10 @@ struct SettingsView: View {
         .overlay(alignment: .top) { CompactTitleBar(title: "我的", visible: titleAway) }
         .toolbar(.hidden, for: .navigationBar)
         .designScreen("settings")
+        .refreshable { await account.refresh() }
+        .task { await account.refreshIfNeeded() }
+        .sheet(item: $signInMode) { mode in AnimeSignInSheet(startWith: mode) }
+        .navigationDestination(isPresented: $showDiagnostics) { AnimeDiagnosticsView() }
         // 播放页里也能改这几项：回到这一页时重新读一遍
         .onAppear(perform: reloadPlayerPreferences)
         .onChange(of: decoding) { VideoDecoding.saved = $0 }
@@ -79,100 +82,235 @@ struct SettingsView: View {
 
     // MARK: 账号
 
+    /// 标题右边的铃铛：有未读消息时右上角一个琥珀小点
+    @ViewBuilder
+    private var messagesButton: some View {
+        if account.isSignedIn {
+            NavigationLink { AnimeMessagesView() } label: {
+                Image(icon: .bell)
+                    .font(.scaled(20, weight: Theme.iconWeight))
+                    .foregroundStyle(Theme.textPrimary)
+                    .frame(width: 44, height: 44)
+                    .overlay(alignment: .topTrailing) {
+                        if account.totalUnread > 0 {
+                            Circle().fill(Theme.accent).frame(width: 8, height: 8).offset(x: -10, y: 10)
+                        }
+                    }
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.pressable(scale: 0.9))
+            .accessibilityLabel(account.totalUnread > 0 ? "消息通知，\(account.totalUnread) 条未读" : "消息通知")
+            .accessibilityIdentifier("mine.messagesBell")
+        }
+    }
+
     private var avatarLetter: String? {
-        guard appState.isAuthenticated, let name = status?.userName, let first = name.first else { return nil }
+        guard let first = account.user?.displayName.first else { return nil }
         return String(first)
     }
 
-    /// 头像：中性底 + 名字首字，不描彩边
-    private var avatar: some View {
+    private func avatar(size: CGFloat) -> some View {
         ZStack {
             Circle().fill(Theme.surfaceHigh)
             if let letter = avatarLetter {
                 Text(letter)
-                    .font(.scaled(22, weight: .semibold))
+                    .font(.scaled(size * 0.4, weight: .semibold))
                     .foregroundStyle(Theme.textPrimary)
                     .transition(.opacity)
             } else {
-                Image(systemName: AppIcon.mine.name)
-                    .font(.scaled(22, weight: Theme.iconWeight))
+                Image(icon: .mine)
+                    .font(.scaled(size * 0.42, weight: Theme.iconWeight))
                     .foregroundStyle(Theme.textSecondary)
-                    .transition(.opacity)
             }
         }
-        .frame(width: 52, height: 52)
+        .frame(width: size, height: size)
         .animation(Motion.smooth, value: avatarLetter)
         .accessibilityHidden(true)
     }
 
-    /// 账号身份：名字、连接状态、切换和退出。容量只在「网盘」页显示，这里不重复。
-    private var profileCard: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: Theme.Space.md) {
-                avatar
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(status?.userName ?? "115 网盘")
+    @ViewBuilder
+    private var accountCard: some View {
+        if account.isSignedIn {
+            signedInCard
+        } else {
+            signedOutCard
+        }
+    }
+
+    /// 没登录：一句说明 + 登录 / 注册两个按钮
+    private var signedOutCard: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.lg) {
+            HStack(spacing: Theme.Space.md + 2) {
+                avatar(size: 56)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("登录 HPlayer 账号")
                         .font(Theme.Typo.headline)
                         .foregroundStyle(Theme.textPrimary)
-                        .lineLimit(1)
-                    HStack(spacing: 6) {
-                        Circle().fill(accountState.color).frame(width: 6, height: 6)
-                        Text(accountState.text).lineLimit(1)
-                    }
-                    .font(Theme.Typo.caption)
-                    .foregroundStyle(Theme.textSecondary)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                if loadingStatus && status == nil { ProgressView().controlSize(.small) }
-                NavigationLink {
-                    CookieWebLoginView(onConnected: {})
-                        .toolbar(.visible, for: .navigationBar)
-                } label: {
-                    Image(systemName: AppIcon.switchAccount.name)
-                        .font(.scaled(18, weight: Theme.iconWeight))
+                    Text("评论、弹幕、点赞和签到领金币都要先登录")
+                        .font(Theme.Typo.meta)
                         .foregroundStyle(Theme.textSecondary)
-                        .frame(width: 44, height: 44).contentShape(Rectangle())
-                }
-                .buttonStyle(.pressable(scale: 0.9))
-                .accessibilityLabel(appState.isAuthenticated ? "重新登录 115" : "登录 115")
-                .accessibilityIdentifier("settings.account.login")
-                if appState.isAuthenticated {
-                    Button { confirmLogout = true } label: {
-                        Image(systemName: AppIcon.logout.name)
-                            .font(.scaled(18, weight: Theme.iconWeight))
-                            .foregroundStyle(Theme.textSecondary)
-                            .frame(width: 44, height: 44).contentShape(Rectangle())
-                    }
-                    .buttonStyle(.pressable(scale: 0.9))
-                    .accessibilityLabel("退出 115")
-                    .accessibilityIdentifier("settings.account.logout")
-                    // 弹窗挂在按钮自己身上，才会从按钮处弹出；挂在整个页面上会被当成锚在页面底部
-                    .confirmationDialog("退出后将断开 115 网盘连接", isPresented: $confirmLogout, titleVisibility: .visible) {
-                        Button("退出 115", role: .destructive) { appState.logout() }
-                            .accessibilityIdentifier("settings.account.confirmLogout")
-                        Button("取消", role: .cancel) {}
-                    }
-                    .transition(.opacity)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            .padding(.vertical, Theme.Space.md)
-            .padding(.leading, Theme.Space.lg)
-            .padding(.trailing, Theme.Space.xs)
-
-            if !error.isEmpty {
-                Label(error, systemImage: AppIcon.alert.name)
-                    .font(Theme.Typo.caption)
-                    .foregroundStyle(Theme.warning)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, Theme.Space.lg)
-                    .padding(.bottom, Theme.Space.md)
-                    .transition(.opacity)
+            if !account.lastError.isEmpty {
+                DesignNotice(symbol: AppIcon.alert.name, text: account.lastError, warning: true)
+            }
+            HStack(spacing: Theme.Space.md) {
+                Button("登录") { signInMode = .signIn }
+                    .buttonStyle(PrimaryActionStyle())
+                    .accessibilityIdentifier("mine.account.signIn")
+                Button("注册") { signInMode = .signUp }
+                    .buttonStyle(SecondaryActionStyle())
+                    .accessibilityIdentifier("mine.account.signUp")
             }
         }
+        .padding(Theme.Space.lg)
         .frame(maxWidth: .infinity, alignment: .leading)
         .surfaceCard()
-        .animation(reduceMotion ? nil : Motion.snappy, value: appState.isAuthenticated)
-        .animation(reduceMotion ? nil : Motion.smooth, value: error)
+    }
+
+    /// 已登录：头像、名字，一排数字（金币 / 连续签到 / 未读消息），下面今天的签到
+    private var signedInCard: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.lg) {
+            HStack(spacing: Theme.Space.md + 2) {
+                avatar(size: 60)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(account.user?.displayName ?? "正在读取账号")
+                        .font(.display(20))
+                        .foregroundStyle(Theme.textPrimary)
+                        .lineLimit(1)
+                    if let user = account.user, user.isVip {
+                        TagBadge(text: "VIP", style: .accent)
+                    } else if account.loadingUser && account.user == nil {
+                        ProgressView().controlSize(.small)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            HStack(spacing: 0) {
+                stat("\(account.user?.coin ?? 0)", "金币")
+                stat("\(account.user?.signDays ?? 0)", "连续签到")
+                stat("\(account.totalUnread)", "未读消息")
+            }
+            .padding(.top, Theme.Space.md)
+            .overlay(alignment: .top) { Theme.rule.frame(height: Theme.Stroke.hairline) }
+            signStrip
+        }
+        .padding(Theme.Space.lg)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .surfaceCard()
+        .animation(reduceMotion ? nil : Motion.smooth, value: account.user)
+    }
+
+    private func stat(_ value: String, _ title: String) -> some View {
+        VStack(spacing: 2) {
+            Text(value)
+                .font(.display(22))
+                .monospacedDigit()
+                .foregroundStyle(Theme.textPrimary)
+                .rollingNumber()
+            Text(title)
+                .font(Theme.Typo.meta)
+                .foregroundStyle(Theme.textTertiary)
+        }
+        .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var signStrip: some View {
+        HStack(spacing: Theme.Space.md) {
+            Image(icon: .checkIn)
+                .font(.scaled(18, weight: Theme.iconWeight))
+                .foregroundStyle(account.signedToday ? Theme.textTertiary : Theme.accent)
+            Text(account.signedToday ? "今天已签到" : "今天还没签到")
+                .font(Theme.Typo.row)
+                .foregroundStyle(Theme.textPrimary)
+            Spacer(minLength: Theme.Space.sm)
+            if !account.signedToday {
+                Button {
+                    signing = true
+                    Task {
+                        defer { signing = false }
+                        do { try await account.signToday() } catch { account.lastError = error.localizedDescription }
+                    }
+                } label: {
+                    Text(signing ? "签到中" : "签到 +\(account.signCoin)")
+                        .font(Theme.Typo.meta.weight(.semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(Theme.onPrimary)
+                        .padding(.horizontal, 14)
+                        .frame(height: 32)
+                        .background(Theme.primaryAction, in: Capsule())
+                }
+                .buttonStyle(.pressable(scale: 0.95))
+                .disabled(signing)
+                .accessibilityIdentifier("mine.signToday")
+            }
+        }
+        .padding(.leading, Theme.Space.md + 2)
+        .padding(.trailing, Theme.Space.sm)
+        .frame(minHeight: 48)
+        .background(Theme.tileTint, in: RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous))
+    }
+
+    /// 正在下载的个数（含排队）；没有下载时显示视频数
+    private var activeDownloads: Int {
+        downloads.items.filter { $0.state == .downloading || $0.state == .queued }.count
+    }
+
+    /// 任务中心、消息通知（登录后才有）、追番收藏、本机视频
+    private var activityGroup: some View {
+        SettingsSection(title: "") {
+            if account.isSignedIn {
+                NavigationLink { AnimeTasksView() } label: {
+                    LibraryActionRow(symbol: AppIcon.checklist.name, title: "任务中心",
+                                     value: account.signedToday ? "\(account.user?.coin ?? 0) 金币" : "可签到",
+                                     valueHighlighted: !account.signedToday)
+                }
+                .buttonStyle(.pressable(scale: 0.985))
+                .accessibilityIdentifier("mine.tasks")
+                NavigationLink { AnimeMessagesView() } label: {
+                    LibraryActionRow(symbol: AppIcon.bell.name, title: "消息通知",
+                                     value: account.totalUnread > 0 ? "\(account.totalUnread)" : "",
+                                     valueHighlighted: account.totalUnread > 0)
+                }
+                .buttonStyle(.pressable(scale: 0.985))
+                .accessibilityIdentifier("mine.messages")
+            }
+            NavigationLink { AnimeWatchlistView() } label: {
+                LibraryActionRow(symbol: AppIcon.heart.name, title: "追番收藏",
+                                 value: watchlist.items.isEmpty ? "" : "\(watchlist.items.count)")
+            }
+            .buttonStyle(.pressable(scale: 0.985))
+            .accessibilityIdentifier("mine.watchlist")
+            NavigationLink { LocalVideosView() } label: {
+                LibraryActionRow(symbol: AppIcon.device.name, title: "本机视频",
+                                 value: activeDownloads > 0 ? "\(activeDownloads) 个下载中"
+                                     : (localStore.files.isEmpty ? "" : "\(localStore.files.count)"),
+                                 valueHighlighted: activeDownloads > 0)
+            }
+            .buttonStyle(.pressable(scale: 0.985))
+            .accessibilityIdentifier("mine.local")
+        }
+    }
+
+    private var signOutRow: some View {
+        Button { confirmSignOut = true } label: {
+            Text("退出登录")
+                .font(Theme.Typo.row.weight(.medium))
+                .foregroundStyle(Theme.danger)
+                .frame(maxWidth: .infinity, minHeight: 52)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.pressable(scale: 0.985))
+        .surfaceCard()
+        .accessibilityIdentifier("mine.account.signOut")
+        .confirmationDialog("退出 HPlayer 账号？", isPresented: $confirmSignOut, titleVisibility: .visible) {
+            Button("退出登录", role: .destructive) { Task { await account.signOut() } }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("退出后不能发评论和弹幕；115 网盘不受影响。")
+        }
     }
 
     // MARK: 播放
@@ -282,7 +420,13 @@ struct SettingsView: View {
 
     private var aboutGroup: some View {
         SettingsSection(title: "关于") {
+            // 长按版本号进入接口诊断：登录后对一下账号接口的真实返回
             LibraryActionRow(symbol: AppIcon.version.name, title: "版本", value: appVersion, showsChevron: false)
+                .contentShape(Rectangle())
+                .onLongPressGesture(minimumDuration: 0.8) {
+                    Haptics.success()
+                    showDiagnostics = true
+                }
             NavigationLink {
                 LicensesView()
                     .toolbar(.visible, for: .navigationBar)
@@ -292,17 +436,6 @@ struct SettingsView: View {
             .buttonStyle(.pressable(scale: 0.985))
             .accessibilityIdentifier("settings.licenses")
         }
-    }
-
-    private var accountState: (text: String, color: Color) {
-        let idle = Theme.textMuted
-        guard appState.isAuthenticated else { return ("尚未登录 115", idle) }
-        if loadingStatus && status == nil { return ("检查中", idle) }
-        if !error.isEmpty { return ("连接状态待确认", Theme.warning) }
-        guard let status else { return ("已登录", idle) }
-        if !status.configured { return (status.message ?? "等待授权", Theme.warning) }
-        if status.error != nil { return (status.message ?? "Cookie 可能已失效", Theme.warning) }
-        return ("已连接", Theme.success)
     }
 
     private var appVersion: String {

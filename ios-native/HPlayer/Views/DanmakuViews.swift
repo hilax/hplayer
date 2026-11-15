@@ -50,6 +50,12 @@ struct DanmakuOverlay: View {
             let width = text.measure(in: CGSize(width: 2000, height: laneHeight)).width
             guard x + Double(width) > 0 else { continue }
             let shadow = context.resolve(Text(entry.item.text).font(font).foregroundColor(.black.opacity(Theme.Opacity.heavy)))
+            if entry.item.mine {
+                // 自己发的那条：一圈琥珀描边
+                let box = CGRect(x: x - 6, y: Double(y) - Double(laneHeight) / 2 + 2, width: Double(width) + 12,
+                                 height: Double(laneHeight) - 4)
+                context.stroke(Path(roundedRect: box, cornerRadius: 4), with: .color(Theme.danmakuMine), lineWidth: 1)
+            }
             context.draw(shadow, at: CGPoint(x: x + 1, y: Double(y) + 1), anchor: .leading)
             context.draw(text, at: CGPoint(x: x, y: Double(y)), anchor: .leading)
         }
@@ -195,6 +201,7 @@ enum PlayerInfoTab: String, CaseIterable, Identifiable {
 struct PlayerInfoTabBar: View {
     @Binding var selection: PlayerInfoTab
     var danmaku: DanmakuStore?
+    var onComposeDanmaku: () -> Void = {}
     var onDanmakuSettings: () -> Void = {}
     @Namespace private var underline
 
@@ -229,7 +236,7 @@ struct PlayerInfoTabBar: View {
             }
             Spacer(minLength: 0)
             if let danmaku {
-                DanmakuTabControls(store: danmaku, onSettings: onDanmakuSettings)
+                DanmakuTabControls(store: danmaku, onCompose: onComposeDanmaku, onSettings: onDanmakuSettings)
             }
         }
         .padding(.horizontal, 16)
@@ -241,10 +248,25 @@ struct PlayerInfoTabBar: View {
 
 private struct DanmakuTabControls: View {
     @ObservedObject var store: DanmakuStore
+    let onCompose: () -> Void
     let onSettings: () -> Void
 
     var body: some View {
         HStack(spacing: 4) {
+            Button(action: onCompose) {
+                Text("发弹幕…")
+                    .font(.scaled(13))
+                    .foregroundStyle(Theme.textTertiary)
+                    .lineLimit(1)
+                    .padding(.horizontal, 12)
+                    .frame(height: 30)
+                    .background(Theme.inputFill, in: Capsule())
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.pressable(scale: 0.96))
+            .accessibilityLabel("发弹幕")
+            .accessibilityIdentifier("player.danmaku.compose")
             Button {
                 Haptics.tap()
                 store.enabled.toggle()
@@ -276,6 +298,8 @@ private struct DanmakuTabControls: View {
 struct AnimeCommentsView: View {
     let vid: Int
     var bottomInset: CGFloat = 0
+    /// 点「说点什么…」或某条的「回复」：宿主在避让键盘的那一层弹出输入栏（见 SocialComposer）
+    var onCompose: ((AnimeComment?) -> Void)? = nil
 
     private enum Sort: String, CaseIterable, Identifiable {
         case hot, latest
@@ -283,10 +307,13 @@ struct AnimeCommentsView: View {
         var title: String { self == .hot ? "最热" : "最新" }
     }
 
+    @ObservedObject private var account = AnimeAccount.shared
     @State private var sort: Sort = .hot
     @State private var pinned: [AnimeComment] = []
     @State private var hot: [AnimeComment] = []
     @State private var latest: [AnimeComment] = []
+    /// 自己刚发的，排在最前面
+    @State private var mine: [AnimeComment] = []
     @State private var page = 0
     @State private var exhausted = false
     @State private var loading = false
@@ -294,26 +321,99 @@ struct AnimeCommentsView: View {
     @State private var error = ""
     @State private var unsupported = false
     @State private var loadedVid: Int?
+    @State private var showSignIn = false
+    @State private var notice = ""
 
     private var visible: [AnimeComment] {
         let body = sort == .hot ? (hot.isEmpty ? latest : hot) : latest
         let pinnedIDs = Set(pinned.map(\.id))
-        return pinned + body.filter { !pinnedIDs.contains($0.id) }
+        return mine + pinned + body.filter { !pinnedIDs.contains($0.id) }
     }
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                header
-                content
+        VStack(spacing: 0) {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    header
+                    content
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 28)
             }
-            .padding(.horizontal, 16)
-            .padding(.bottom, bottomInset + 28)
+            .scrollIndicators(.hidden)
+            if onCompose != nil { composeStub }
         }
-        .scrollIndicators(.hidden)
+        .overlay(alignment: .top) {
+            if !notice.isEmpty {
+                Text(notice)
+                    .font(Theme.Typo.meta)
+                    .foregroundStyle(Theme.textPrimary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .floatingSurface(cornerRadius: 999)
+                    .padding(.top, 8)
+                    .transition(.opacity)
+            }
+        }
+        .animation(Motion.smooth, value: notice)
         .task(id: vid) { await loadFirst() }
+        .onReceive(NotificationCenter.default.publisher(for: .animeCommentPosted)) { note in
+            guard (note.userInfo?["vid"] as? Int) == vid, let comment = note.userInfo?["comment"] as? AnimeComment else { return }
+            mine.insert(comment, at: 0)
+        }
+        .animeSignInSheet(isPresented: $showSignIn)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("player.comments")
+    }
+
+    /// 底部的「说点什么…」：点了才弹出真正的输入栏（键盘上方）
+    private var composeStub: some View {
+        Button { compose(nil) } label: {
+            HStack(spacing: Theme.Space.sm) {
+                Text(account.isSignedIn ? "说点什么…" : "登录后参与评论")
+                    .font(Theme.Typo.row)
+                    .foregroundStyle(Theme.textTertiary)
+                Spacer()
+                Image(icon: .send)
+                    .font(.scaled(16, weight: Theme.iconWeight))
+                    .foregroundStyle(Theme.textMuted)
+            }
+            .padding(.horizontal, 14)
+            .frame(height: 40)
+            .background(Theme.inputFill, in: Capsule())
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.pressable(scale: 0.98))
+        .padding(.horizontal, 16)
+        .padding(.top, 10)
+        .padding(.bottom, max(bottomInset, 10))
+        .background(Theme.surface.ignoresSafeArea(edges: .bottom))
+        .overlay(alignment: .top) { Theme.rule.frame(height: Theme.Stroke.hairline) }
+        .accessibilityIdentifier("player.comments.compose")
+    }
+
+    private func compose(_ reply: AnimeComment?) {
+        guard account.isSignedIn else { showSignIn = true; return }
+        onCompose?(reply)
+    }
+
+    private func like(_ comment: AnimeComment) {
+        guard account.isSignedIn else { showSignIn = true; return }
+        Task {
+            do {
+                try await AnimeLikeStore.shared.toggle(comment, vid: vid)
+            } catch {
+                show(error.localizedDescription)
+            }
+        }
+    }
+
+    private func show(_ text: String) {
+        notice = text
+        Task {
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            if notice == text { notice = "" }
+        }
     }
 
     private var header: some View {
@@ -358,7 +458,8 @@ struct AnimeCommentsView: View {
             stateMessage
         } else {
             ForEach(visible) { comment in
-                AnimeCommentRow(comment: comment)
+                AnimeCommentRow(comment: comment, onReply: onCompose == nil ? nil : { compose($0) },
+                                onLike: { like($0) })
                     .onAppear {
                         if sort == .latest, comment.id == latest.last?.id { Task { await loadMore() } }
                     }
@@ -400,7 +501,7 @@ struct AnimeCommentsView: View {
     private var stateDetail: String {
         if !error.isEmpty { return error }
         if unsupported { return "接口返回了评论，但字段和预期不一致，后续版本会适配" }
-        return "发表评论功能即将开放"
+        return onCompose == nil ? "来抢第一条评论吧" : "点下面的输入框，来抢第一条评论"
     }
 
     @ViewBuilder
@@ -424,7 +525,7 @@ struct AnimeCommentsView: View {
     private func loadFirst(force: Bool = false) async {
         guard force || loadedVid != vid else { return }
         loadedVid = vid
-        pinned = []; hot = []; latest = []; page = 0; exhausted = false; error = ""; unsupported = false
+        pinned = []; hot = []; latest = []; mine = []; page = 0; exhausted = false; error = ""; unsupported = false
         guard !InterfacePreview.active else { exhausted = true; return }
         loading = true
         defer { loading = false }
@@ -462,59 +563,118 @@ struct AnimeCommentsView: View {
     }
 }
 
+/// 一条评论：头像、名字和标签、正文；置顶和热评带前几条回复；下面「回复」和点赞。
 struct AnimeCommentRow: View {
     let comment: AnimeComment
+    var onReply: ((AnimeComment) -> Void)? = nil
+    var onLike: ((AnimeComment) -> Void)? = nil
+    @ObservedObject private var likes = AnimeLikeStore.shared
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             Text(String(comment.userName.prefix(1)))
                 .font(.scaled(13, weight: .bold))
-                .foregroundStyle(.white)
+                .foregroundStyle(Theme.textSecondary)
                 .frame(width: 32, height: 32)
-                .background(Circle().fill(avatarColor))
+                .background(Circle().fill(Theme.surfaceHigh))
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 6) {
                     Text(comment.userName)
                         .font(.scaled(13, weight: .semibold))
                         .foregroundStyle(Theme.textSecondary)
                         .lineLimit(1)
-                    if !comment.role.isEmpty { badge(comment.role, color: Theme.info) }
+                    if !comment.role.isEmpty { badge(comment.role, color: Theme.textSecondary) }
                     if comment.pinned { badge("置顶", color: Theme.accent) }
                     if comment.hot { badge("热评", color: Theme.rating) }
                     Spacer(minLength: 0)
-                    if !comment.time.isEmpty {
-                        Text(comment.time)
-                            .font(.scaled(11).monospacedDigit())
-                            .foregroundStyle(Theme.textTertiary)
+                }
+                Group {
+                    if comment.replyTo.isEmpty {
+                        Text(comment.content)
+                    } else {
+                        Text("回复 ").foregroundColor(Theme.textTertiary)
+                            + Text(comment.replyTo).foregroundColor(Theme.textSecondary)
+                            + Text("：\(comment.content)")
                     }
                 }
-                Text(comment.content)
-                    .font(.scaled(15))
-                    .foregroundStyle(Theme.textPrimary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
-                HStack(spacing: 16) {
-                    Label("\(comment.likes)", systemImage: AppIcon.like.name)
-                    if comment.replies > 0 {
-                        Label("\(comment.replies) 条回复", systemImage: AppIcon.comment.name)
-                    }
+                .font(.scaled(15))
+                .foregroundStyle(Theme.textPrimary)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+                if !comment.preview.isEmpty {
+                    repliesPreview
                 }
-                .font(.scaled(12))
-                .foregroundStyle(Theme.textTertiary)
-                .labelStyle(.titleAndIcon)
+                actions
             }
         }
         .padding(.vertical, 12)
-        .overlay(alignment: .bottom) {
-            Theme.hairline.frame(height: 0.5).padding(.leading, 42)
-        }
-        .accessibilityElement(children: .combine)
     }
 
-    private var avatarColor: Color {
-        let colors = Theme.prismColors
-        let hash = comment.userName.unicodeScalars.reduce(0) { ($0 &* 31 &+ Int($1.value)) & 0xFFFF }
-        return colors[hash % colors.count].opacity(0.85)
+    private var repliesPreview: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(comment.preview) { reply in
+                (Text(reply.userName).foregroundColor(Theme.textPrimary).fontWeight(.semibold)
+                    + Text("：\(reply.content)").foregroundColor(Theme.textSecondary))
+                    .font(.scaled(13))
+                    .lineLimit(2)
+            }
+            if comment.replies > comment.preview.count {
+                Text("共 \(comment.replies) 条回复")
+                    .font(.scaled(12, weight: .medium))
+                    .foregroundStyle(Theme.textTertiary)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.tileTint, in: RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous))
+    }
+
+    private var actions: some View {
+        let liked = likes.liked(comment)
+        let count = likes.count(comment)
+        return HStack(spacing: 16) {
+            if !comment.time.isEmpty {
+                Text(comment.time)
+                    .font(.scaled(12).monospacedDigit())
+                    .foregroundStyle(Theme.textTertiary)
+            }
+            if let onReply, comment.numericID > 0 {
+                Button("回复") { onReply(comment) }
+                    .font(.scaled(12, weight: .medium))
+                    .foregroundStyle(Theme.textSecondary)
+                    .frame(minHeight: 32)
+                    .accessibilityIdentifier("comment.reply.\(comment.id)")
+            } else if comment.replies > 0 && comment.preview.isEmpty {
+                Text("\(comment.replies) 条回复")
+                    .font(.scaled(12))
+                    .foregroundStyle(Theme.textTertiary)
+            }
+            Spacer(minLength: 0)
+            if let onLike, comment.numericID > 0 {
+                Button { onLike(comment) } label: {
+                    HStack(spacing: 4) {
+                        Image(icon: liked ? .likeFill : .like)
+                        Text(compactCount(count)).monospacedDigit()
+                    }
+                    .font(.scaled(13, weight: liked ? .semibold : .regular))
+                    .foregroundStyle(liked ? Theme.textPrimary : Theme.textTertiary)
+                    .padding(.horizontal, 6)
+                    .frame(minWidth: 44, minHeight: 32)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .bounceSymbol(on: liked)
+                .accessibilityLabel(liked ? "取消点赞，\(count) 个赞" : "点赞，\(count) 个赞")
+                .accessibilityIdentifier("comment.like.\(comment.id)")
+            } else {
+                Label(compactCount(count), systemImage: AppIcon.like.name)
+                    .font(.scaled(12))
+                    .foregroundStyle(Theme.textTertiary)
+                    .labelStyle(.titleAndIcon)
+            }
+        }
     }
 
     private func badge(_ text: String, color: Color) -> some View {
@@ -528,6 +688,38 @@ struct AnimeCommentRow: View {
 }
 
 // MARK: - 横屏控制条上的弹幕开关
+
+/// 横屏底栏倍速旁边的小输入框「发弹幕…」。点它弹出贴着键盘的输入栏；窄屏只放一个图标。
+struct DanmakuInputPill: View {
+    var compact = false
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Group {
+                if compact {
+                    Image(icon: .send)
+                        .font(.scaled(17, weight: Theme.iconWeight))
+                        .frame(width: 44, height: 44)
+                } else {
+                    Text("发弹幕…")
+                        .font(.scaled(13))
+                        .foregroundStyle(Color.white.opacity(Theme.Opacity.heavy))
+                        .padding(.horizontal, 12)
+                        .frame(width: 124, height: 32, alignment: .leading)
+                        .background(Color.white.opacity(Theme.Opacity.faint), in: Capsule())
+                        .overlay { Capsule().strokeBorder(Color.white.opacity(Theme.Opacity.soft), lineWidth: 0.5) }
+                        .frame(height: 44)
+                        .padding(.leading, 2)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.pressable(scale: 0.96))
+        .accessibilityLabel("发弹幕")
+        .accessibilityIdentifier("playback.danmaku.compose")
+    }
+}
 
 struct PlayerDanmakuButton: View {
     @ObservedObject var store: DanmakuStore

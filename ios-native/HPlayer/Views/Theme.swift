@@ -214,6 +214,8 @@ enum Theme {
 
     static let playerBackground = Color(uiColor: UIColor(hex: 0x000000))
     static let playerSurface = Color(uiColor: UIColor(hex: 0x141416))
+    /// 自己发的弹幕外面那圈描边：画面上永远是深色，固定用深色模式的琥珀
+    static let danmakuMine = Color(uiColor: UIColor(hex: 0xE6A54B))
 
     // MARK: 间距（4pt 网格，偏紧凑）
 

@@ -17,6 +17,10 @@ enum DanmakuPrefs {
     static let baseSpeed: CGFloat = 140
     /// 排轨道时预留的轨道数；画面放不下的轨道直接不显示（弹幕太密时自然丢一部分）。
     static let laneSlots = 24
+    /// 发弹幕可选的颜色（ARGB）：白色 + 棱镜五色（全应用只有弹幕取色用棱镜色）
+    static let sendColors: [UInt32] = [0xFFFFFFFF, 0xFFFF5C7A, 0xFFFFB224, 0xFF46C27D, 0xFF3DA5F4, 0xFF8E6CF6]
+    /// 上次发弹幕选的颜色
+    static let sendColor = "danmaku.sendColor"
 }
 
 /// 一条排好轨道的弹幕
@@ -86,6 +90,33 @@ final class DanmakuStore: ObservableObject {
     func clock(at date: Date, playing: Bool, rate: Double) -> Double {
         guard playing else { return anchorTime }
         return anchorTime + min(max(date.timeIntervalSince(anchorDate), 0), 1.5) * rate
+    }
+
+    /// 能不能发弹幕（只有在线动漫的分集才有）
+    var canSend: Bool { ref != nil }
+
+    /// 发一条弹幕（`POST /app/danmu/`）。content 和拉取时一样是 JSON 字符串：{"color": ARGB, "content": 文本}。
+    /// 发成功后马上插到当前时间点，带「自己发的」描边。
+    func send(text: String, color: UInt32, at time: Double, captcha: AnimeCaptcha?, answer: String) async throws {
+        guard let ref else { throw AnimeClientError.emptyData }
+        let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let inner = try JSONSerialization.data(withJSONObject: ["color": Int(color), "content": cleaned])
+        let point = max(0, Int(time * 1000))
+        var body: [String: Any] = ["vid": ref.animeId, "play": ref.play, "part": ref.part,
+                                   "content": String(decoding: inner, as: UTF8.self), "time_point": point]
+        if let captcha {
+            body["uuid"] = captcha.uuid
+            body["dots"] = answer.trimmingCharacters(in: .whitespaces)
+        }
+        let data = try await AnimeClient.shared.perform("/app/danmu/", method: "POST", body: body)
+        let id = (data as? [String: Any]).flatMap { AnimeJSON.string($0, ["id"]) } ?? "mine-\(UUID().uuidString)"
+        guard self.ref == ref else { return }
+        // 稍微往后放一点，发完回到画面上正好从右边进来
+        let item = AnimeDanmaku(id: id, time: time + 0.3, text: cleaned, color: color, mine: true)
+        items[item.id] = item
+        loadedCount = items.count
+        if !enabled { enabled = true }
+        relayout()
     }
 
     /// 速度设置改了要重新排轨道

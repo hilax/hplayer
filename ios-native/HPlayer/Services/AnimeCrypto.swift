@@ -151,6 +151,46 @@ final class AnimeCrypto {
         return decrypted
     }
 
+    // MARK: - 请求体混合加密（apiEncrypt）
+
+    /// 服务端通信公钥 send_key（RSA-2048，SPKI）。只用来加密请求体里的随机密钥。
+    private static let sendKeySPKI = """
+    MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAq+BSQiNSojdRQf5Ie9VC
+    +jmlCkHbE93ei0Tl2AtaBSOxovTR3o8KCQtJF4FBwpC3k6UYJAdIq6nXA+zfJv0p
+    tF9Ow6TQUjGytLUX5S0NNyOADGV07eIuBtA6j+l6vZ+T1iikeEkSjZkrhmpm1yh/
+    PTA8VaDSN1EOS3NWZWk56LKofvET12n88mJgBpWwyqD6iImzwLdwWHbWtk7xSI2+
+    zENffzP6LJk5PApYQtIXaR1nCJ/TCXgbqWRFjXpT9kiaID4cvqMT7WnBxX1zSlj0
+    e0PYMOEWxt6fioo/ksnWoyAK8hpbgHgDuPe6mqEvLPR8tAPMhDP46+yEOLNwexzr
+    9wIDAQAB
+    """
+
+    private static let sendKey: SecKey? = {
+        let clean = Self.sendKeySPKI.components(separatedBy: .whitespacesAndNewlines).joined()
+        guard var der = Data(base64Encoded: clean) else { return nil }
+        // SecKeyCreateWithData 要 PKCS#1 的 RSAPublicKey：去掉 SPKI 外壳（2048 位公钥固定 24 字节头）
+        if der.count > 24, der[der.startIndex] == 0x30, der[der.startIndex + 4] == 0x30 {
+            der = der.dropFirst(24)
+        }
+        let attributes: [CFString: Any] = [
+            kSecAttrKeyType: kSecAttrKeyTypeRSA,
+            kSecAttrKeyClass: kSecAttrKeyClassPublic,
+        ]
+        return SecKeyCreateWithData(Data(der) as CFData, attributes as CFDictionary, nil)
+    }()
+
+    /// 写接口的请求体：base64(RSA(send_key, randomKey)) + "." + base64(AES-128-CBC(JSON, randomKey, reverse(randomKey)))
+    func encryptRequest(_ json: Data) throws -> String {
+        let alphabet = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789")
+        let randomKey = String((0..<16).map { _ in alphabet.randomElement()! })
+        guard let key = Self.sendKey,
+              let keyCipher = SecKeyCreateEncryptedData(key, .rsaEncryptionPKCS1, Data(randomKey.utf8) as CFData, nil) as Data?,
+              let payload = Self.aes128CbcEncrypt(data: json, key: Data(randomKey.utf8),
+                                                  iv: Data(String(randomKey.reversed()).utf8)) else {
+            throw AnimeCryptoError.encryptionFailed
+        }
+        return keyCipher.base64EncodedString() + "." + payload.base64EncodedString()
+    }
+
     // MARK: - 混合解密 API 响应 (Hybrid Decrypt)
 
     func decryptAPIResponse(_ body: String) throws -> String {

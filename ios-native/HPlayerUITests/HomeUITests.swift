@@ -21,30 +21,24 @@ final class HomeUITests: XCTestCase {
         },
                       "The shared account and capacity should load once")
 
+        // 115 账号只在网盘页：切到「我的」再回来，不会重新请求账号和容量
         settings.tap()
-        XCTAssertTrue(app.staticTexts["测试账号 1"].waitForExistence(timeout: 5))
-        XCTAssertFalse(app.staticTexts["检查中"].exists)
+        Thread.sleep(forTimeInterval: 1.2)
         library.tap()
         XCTAssertTrue(wait {
             (account.label.contains("测试账号 1") || app.staticTexts["测试账号 1"].exists) &&
             (account.label.contains("1 GB") || app.staticTexts["已使用 1 GB"].exists)
-        })
-        XCTAssertFalse(app.staticTexts["检查中"].exists)
-        settings.tap()
-        Thread.sleep(forTimeInterval: 1.2)
-        XCTAssertTrue(app.staticTexts["测试账号 1"].exists, "Switching tabs should not start another account request")
+        }, "Switching tabs should not start another account request")
         XCTAssertFalse(app.staticTexts["测试账号 2"].exists)
-        library.tap()
-        XCTAssertTrue(account.label.contains("1 GB") || app.staticTexts["已使用 1 GB"].exists,
-                      "Switching tabs should not repeat the capacity request")
-        XCTAssertFalse(account.label.contains("2 GB"))
-        settings.tap()
+        XCTAssertFalse(account.label.contains("2 GB"), "Switching tabs should not repeat the capacity request")
+        XCTAssertFalse(app.staticTexts["检查中"].exists)
 
-        app.buttons["settings.account.logout"].tap()
-        app.buttons.matching(identifier: "settings.account.confirmLogout").firstMatch.tap()
-        XCTAssertTrue(app.staticTexts["尚未登录 115"].waitForExistence(timeout: 5))
-        XCTAssertFalse(app.staticTexts["测试账号 1"].exists, "Signing out must hide the previous account")
-        library.tap()
+        // 退出 115：点账号条打开账号面板
+        account.tap()
+        let logout = app.buttons["cloud.account.logout"]
+        XCTAssertTrue(logout.waitForExistence(timeout: 5))
+        logout.tap()
+        app.buttons.matching(identifier: "cloud.account.confirmLogout").firstMatch.tap()
         // 退出后网盘页换成登录引导，账号条随之消失
         XCTAssertTrue(app.buttons["cloud.login"].waitForExistence(timeout: 5), "Signed out, the Cloud tab shows the login card")
         XCTAssertFalse(account.exists, "The account strip disappears after signing out")

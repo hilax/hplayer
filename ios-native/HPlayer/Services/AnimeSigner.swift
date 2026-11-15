@@ -25,17 +25,59 @@ final class AnimeSigner {
     /// （不带时服务端判定需要就会重新下发）。
     var token: String {
         tokenLock.lock(); defer { tokenLock.unlock() }
+        // 登录后的令牌优先：评论、弹幕、任务这些都认登录令牌
+        if let user = loadedUserToken() { return user }
         if let issued = defaults.string(forKey: Self.tokenKey), !Self.isExpired(issued) { return issued }
         if defaults.bool(forKey: Self.bundledRejectedKey) || Self.isExpired(Self.bundledToken) { return "" }
         return Self.bundledToken
     }
 
-    /// 收到响应头里的 `new-token` 时调用。
+    /// 收到响应头里的 `new-token` 时调用。登录状态下服务端续签的令牌换掉登录令牌，否则存成游客令牌。
     func adoptIssuedToken(_ value: String?) {
         guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty,
               value.split(separator: ".").count == 3 else { return }
         tokenLock.lock(); defer { tokenLock.unlock() }
-        defaults.set(value, forKey: Self.tokenKey)
+        if loadedUserToken() != nil {
+            storeUserToken(value)
+        } else {
+            defaults.set(value, forKey: Self.tokenKey)
+        }
+    }
+
+    // MARK: 登录令牌（存钥匙串）
+
+    private static let userTokenKey = "anime.user_token"
+    /// nil = 还没读过钥匙串；.some(nil) = 读过、没有登录
+    private var userTokenCache: String??
+
+    /// 调用方已经持有 tokenLock
+    private func loadedUserToken() -> String? {
+        if let cached = userTokenCache { return cached }
+        let stored = Keychain.load(Self.userTokenKey)
+        userTokenCache = .some(stored)
+        return stored
+    }
+
+    /// 调用方已经持有 tokenLock
+    private func storeUserToken(_ value: String?) {
+        if let value {
+            Keychain.save(value, for: Self.userTokenKey)
+        } else {
+            Keychain.delete(Self.userTokenKey)
+        }
+        userTokenCache = .some(value)
+    }
+
+    /// 有没有登录令牌（HPlayer 账号是否已登录）
+    var hasUserToken: Bool {
+        tokenLock.lock(); defer { tokenLock.unlock() }
+        return loadedUserToken() != nil
+    }
+
+    /// 登录成功存令牌；退出或令牌失效时传 nil
+    func setUserToken(_ value: String?) {
+        tokenLock.lock(); defer { tokenLock.unlock() }
+        storeUserToken(value)
     }
 
     private static let bundledRejectedKey = "anime.bundled_token_rejected"
@@ -43,6 +85,12 @@ final class AnimeSigner {
     /// 服务端说令牌失效时调用：丢掉存下的令牌，下一次请求重新领。
     func discardIssuedToken() {
         tokenLock.lock(); defer { tokenLock.unlock() }
+        if loadedUserToken() != nil {
+            // 被拒的是登录令牌：登录过期，回到游客状态
+            storeUserToken(nil)
+            DispatchQueue.main.async { NotificationCenter.default.post(name: .animeSessionExpired, object: nil) }
+            return
+        }
         if defaults.string(forKey: Self.tokenKey) == nil {
             // 被拒的是内置令牌：以后不再用它
             defaults.set(true, forKey: Self.bundledRejectedKey)
@@ -109,4 +157,9 @@ final class AnimeSigner {
 
         return headerFields
     }
+}
+
+extension Notification.Name {
+    /// 登录令牌被服务端拒绝（过期或在别处退出）
+    static let animeSessionExpired = Notification.Name("anime.sessionExpired")
 }

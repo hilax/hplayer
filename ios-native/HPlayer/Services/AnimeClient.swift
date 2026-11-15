@@ -10,10 +10,18 @@ enum AnimeClientError: LocalizedError {
         switch self {
         case .invalidURL: return "无效的请求地址"
         case .networkError(let msg): return "网络请求失败: \(msg)"
-        case .serverError(let code, let msg): return "接口返回错误 (\(code)): \(msg)"
+        case .serverError(let code, let msg): return msg.isEmpty ? "接口返回错误（\(code)）" : msg
         case .emptyData: return "接口返回数据为空"
         }
     }
+}
+
+/// 接口外壳：业务码、说明、data，以及解密后的原文（诊断页用）
+struct AnimeEnvelope {
+    let code: Int
+    let message: String
+    let data: Any
+    let raw: String
 }
 
 final class AnimeClient {
@@ -90,6 +98,55 @@ final class AnimeClient {
             throw AnimeClientError.serverError(code: code, message: object["message"] as? String ?? "")
         }
         return object["data"] ?? NSNull()
+    }
+
+    // MARK: - 账号、评论、弹幕这些写接口
+
+    /// 先用一个轻量 GET 把可用节点选出来并锁定。选路会把同一个请求在几个节点上各发一次，
+    /// 写接口（登录、发弹幕、发评论）不能这样发，所以写之前保证已经锁定了节点。
+    private func ensureRoute() async {
+        if await AnimeEndpointCache.shared.target(for: host) != nil { return }
+        _ = try? await requestJSON(path: "/app/task/sign_rule")
+    }
+
+    /// 发一个请求并原样返回外壳（code / message / data），业务码交给调用方判断。
+    /// `body` 不为 nil 时按 send_key 混合加密后提交（API 文档 §8.4）。
+    func call(_ path: String, method: String = "GET", body: [String: Any]? = nil) async throws -> AnimeEnvelope {
+        if method != "GET" { await ensureRoute() }
+        var payload: Data?
+        if let body {
+            let json = try JSONSerialization.data(withJSONObject: body)
+            payload = Data(try AnimeCrypto.shared.encryptRequest(json).utf8)
+        }
+        let transport = AnimeTransport(host: host, fallbackIPs: fallbackIPs)
+        let result = try await transport.send(path: path, method: method,
+                                              headers: AnimeSigner.shared.headers(), body: payload)
+        guard let rawString = String(data: result.data, encoding: .utf8) else {
+            throw AnimeClientError.networkError("无法解析服务器响应内容")
+        }
+        let plain = try AnimeCrypto.shared.decryptAPIResponse(rawString)
+        guard let jsonData = plain.data(using: .utf8),
+              let object = try JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
+            throw AnimeClientError.networkError("解密后数据编码异常")
+        }
+        let envelope = AnimeEnvelope(code: (object["code"] as? Int) ?? Int("\(object["code"] ?? "")") ?? 0,
+                                     message: object["message"] as? String ?? "",
+                                     data: object["data"] ?? NSNull(), raw: plain)
+        // 带着登录令牌却被告知未登录 / 登录失效：登录过期了
+        if (envelope.code == 50008 || envelope.code == 50014), AnimeSigner.shared.hasUserToken {
+            AnimeSigner.shared.discardIssuedToken()
+        }
+        return envelope
+    }
+
+    /// 同 call，但只接受成功（20000），其余抛出带服务端说明的错误
+    @discardableResult
+    func perform(_ path: String, method: String = "GET", body: [String: Any]? = nil) async throws -> Any {
+        let envelope = try await call(path, method: method, body: body)
+        guard envelope.code == 20000 else {
+            throw AnimeClientError.serverError(code: envelope.code, message: envelope.message)
+        }
+        return envelope.data
     }
 
     // MARK: - 业务接口方法

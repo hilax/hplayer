@@ -105,6 +105,32 @@ final class AnimeSecurityTests: XCTestCase {
         XCTAssertNil(signer.headers()["x-token"])
     }
 
+    func testRequestBodyIsHybridEncryptedWithSendKey() throws {
+        let payload = try AnimeCrypto.shared.encryptRequest(Data("{}".utf8))
+        let parts = payload.components(separatedBy: ".")
+        XCTAssertEqual(parts.count, 2)
+        XCTAssertEqual(Data(base64Encoded: parts[0])?.count, 256, "RSA-2048 加密的随机密钥")
+        XCTAssertEqual(Data(base64Encoded: parts[1])?.count, 16, "不足一块的明文补齐成一块 AES")
+        XCTAssertEqual(payload.count, 369, "和原 App 抓包里短请求体的 content-length 一致")
+    }
+
+    func testAccountModelsReadRealFields() {
+        let user = AnimeUser(json: ["id": 2817982, "user_name": "Hilax", "email": "a@b.c", "coin": 690, "signnum": 2,
+                                    "isvip": false, "pic_url": "http://6666.com/resource/img/icon/x.jpg"])
+        XCTAssertEqual(user.displayName, "Hilax")
+        XCTAssertEqual(user.coin, 690)
+        XCTAssertEqual(user.signDays, 2)
+        XCTAssertEqual(user.avatarURL, "", "占位域名的头像当作没有")
+        let task = AnimeTask(json: ["id": 1, "title": "签到", "action": "sign", "coin": 30, "num": 1])
+        XCTAssertEqual(task?.isSign, true)
+        XCTAssertEqual(task?.coin, 30)
+        let reply = AnimeComment(json: ["id": 897906, "uname": "可乐", "comments": "正文", "last_id": 264121,
+                                        "last_name": "老佛爷", "islike": true], kind: .list)
+        XCTAssertEqual(reply?.replyTo, "老佛爷")
+        XCTAssertEqual(reply?.liked, true)
+        XCTAssertEqual(reply?.numericID, 897906)
+    }
+
     func testCommentReadsRealFieldNames() {
         let json: [String: Any] = ["id": 264121, "uname": "用户", "comments": "正文", "hits": 621, "istop": 1,
                                    "isvip": true, "children_total": 135, "created_at": "2026-09-02T13:00:36+08:00",
