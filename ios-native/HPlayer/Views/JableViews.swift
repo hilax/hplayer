@@ -49,7 +49,8 @@ final class JableFeed: ObservableObject {
             let filtered = fresh.filter { !known.contains($0.id) }
             updated.items += filtered
             updated.page = nextPage
-            updated.hasMore = !fresh.isEmpty
+            // 按去重后的算：站点翻过最后一页时会重复返回最后一页，全是已有的就当到底了
+            updated.hasMore = !filtered.isEmpty
             updated.loading = false
             shelves[category] = updated
         } catch {
@@ -159,7 +160,6 @@ struct JablePosterCard: View {
 
 struct JableTab: View {
     @StateObject private var feed = JableFeed()
-    @ObservedObject private var client = JableClient.shared
     @State private var category: JableCategory = .latest
     @Namespace private var pills
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -193,9 +193,7 @@ struct JableTab: View {
         .task(id: category) {
             await feed.loadFirstIfNeeded(category)
         }
-        .sheet(item: $client.activeChallenge) { challenge in
-            JableChallengeSheet(challenge: challenge)
-        }
+        // 安全验证由 JableClient 自己弹在最上层，这里不再绑 sheet
     }
 
     private var categoryBar: some View {
@@ -275,7 +273,6 @@ struct JableTab: View {
 
 struct JableDetailView: View {
     let route: JableRoute
-    @ObservedObject private var client = JableClient.shared
     @ObservedObject private var recents = RecentStore.shared
 
     @State private var detail: JableVideoDetail?
@@ -309,9 +306,6 @@ struct JableDetailView: View {
         .toolbar(.visible, for: .navigationBar)
         .designScreen("jable-detail")
         .task { await load() }
-        .sheet(item: $client.activeChallenge) { challenge in
-            JableChallengeSheet(challenge: challenge)
-        }
         .playerWindow(item: $playingQueue) { queue in
             PlayerView(source: queue.source, playlist: queue.items)
         }
@@ -512,54 +506,6 @@ struct JableDetailView: View {
     }
 }
 
-// MARK: - Cloudflare 验证弹窗
-
-struct JableChallengeSheet: View {
-    let challenge: JableChallenge
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        NavigationStack {
-            ZStack {
-                Theme.pageBackground.ignoresSafeArea()
-                JableWebViewContainer(webView: challenge.webView)
-                    .ignoresSafeArea(edges: .bottom)
-            }
-            .navigationTitle("安全验证")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("取消") {
-                        challenge.onDismiss()
-                        dismiss()
-                    }
-                    .foregroundStyle(Theme.textSecondary)
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        challenge.webView.reload()
-                    } label: {
-                        Image(systemName: AppIcon.refresh.name)
-                            .foregroundStyle(Theme.accent)
-                    }
-                }
-            }
-        }
-        .presentationDetents([.medium, .large])
-        .presentationDragIndicator(.visible)
-    }
-}
-
-struct JableWebViewContainer: UIViewRepresentable {
-    let webView: WKWebView
-
-    func makeUIView(context: Context) -> WKWebView {
-        webView
-    }
-
-    func updateUIView(_ uiView: WKWebView, context: Context) {}
-}
-
 // MARK: - 流式标签布局
 
 private struct FlowLayout: Layout {
@@ -570,6 +516,7 @@ private struct FlowLayout: Layout {
         var currentX: CGFloat = 0
         var currentY: CGFloat = 0
         var maxHeight: CGFloat = 0
+        var widest: CGFloat = 0
 
         for subview in subviews {
             let size = subview.sizeThatFits(.unspecified)
@@ -580,9 +527,11 @@ private struct FlowLayout: Layout {
             }
             maxHeight = max(maxHeight, size.height)
             currentX += size.width + spacing
+            widest = max(widest, currentX - spacing)
         }
 
-        return CGSize(width: width, height: currentY + maxHeight)
+        // 没给宽度时按实际最宽的一行算，不返回无限宽
+        return CGSize(width: proposal.width ?? widest, height: currentY + maxHeight)
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
