@@ -53,6 +53,8 @@ final class JableClient: NSObject, ObservableObject {
     private var challengeController: UIViewController?
     /// 这个请求第一次看到验证页的时间：先在后台等 CloudflareChallenge.silentWait，让能自动放行的验证自己过
     private var challengeSeenAt: Date?
+    /// 当前请求开始加载的时间：导航开始得比它早的页面是上一个请求的，不拿它的数据
+    private var currentStartedAt = Date()
     /// 详情（含播放地址）短时间缓存：详情页刚解析过，点播放时不用再加载一遍网页
     private var detailCache: [String: (detail: JableVideoDetail, at: Date)] = [:]
     private static let detailCacheLifetime: TimeInterval = 10 * 60
@@ -74,6 +76,10 @@ final class JableClient: NSObject, ObservableObject {
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = .all
         config.websiteDataStore = WKWebsiteDataStore.default()
+        // 页面骨架就绪就提取、不下载图片视频字体（见 BackgroundWebPage）
+        config.userContentController.addUserScript(BackgroundWebPage.domReadyScript)
+        config.userContentController.add(self, name: BackgroundWebPage.domReadyHandler)
+        BackgroundWebPage.installResourceBlocking(on: config.userContentController)
 
         webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 375, height: 667), configuration: config)
         webView.customUserAgent = Self.userAgent
@@ -173,6 +179,7 @@ final class JableClient: NSObject, ObservableObject {
         let task = queue.removeFirst()
         currentTask = task
         armTimeout(for: task.id)
+        currentStartedAt = Date()
 
         var request = URLRequest(url: task.url, cachePolicy: .useProtocolCachePolicy, timeoutInterval: 25)
         request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
@@ -214,10 +221,12 @@ final class JableClient: NSObject, ObservableObject {
     private func inspectAndHandlePage(afterLoad: Bool = false) {
         guard let task = currentTask, !extracting else { return }
         let id = task.id
-        let checkScript = CloudflareChallenge.detectionScript
-        webView.evaluateJavaScript(checkScript) { [weak self] result, _ in
+        let startedAt = currentStartedAt
+        webView.evaluateJavaScript(BackgroundWebPage.stateScript) { [weak self] result, _ in
             guard let self, self.currentTask?.id == id, !self.extracting else { return }
-            if (result as? Bool) ?? false {
+            // 现在页面骨架一就绪就提取，上一个请求的页面回调可能晚到：导航比这次请求还早的不处理
+            guard BackgroundWebPage.isCurrentPage(result, startedAt: startedAt) else { return }
+            if BackgroundWebPage.isChallenge(result) {
                 self.presentChallenge(for: id)
                 return
             }
@@ -569,5 +578,14 @@ final class JableChallengeViewController: UIViewController, UIAdaptivePresentati
     /// 下拉关掉验证页 = 取消
     func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
         onCancel()
+    }
+}
+
+// MARK: - 页面骨架就绪
+
+extension JableClient: WKScriptMessageHandler {
+    /// DOMContentLoaded：列表和播放地址已经在页面里了，马上提取，不等图片、广告加载完
+    nonisolated func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        Task { @MainActor in self.inspectAndHandlePage(afterLoad: true) }
     }
 }

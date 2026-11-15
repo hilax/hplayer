@@ -24,15 +24,28 @@ final class JableFeed: ObservableObject {
 
     func shelf(_ category: JableCategory) -> Shelf { shelves[category] ?? Shelf() }
 
+    /// 第一次打开这个分类：先把上次缓存的第一页摆出来，再去取最新的（取到后整页替换）
     func loadFirstIfNeeded(_ category: JableCategory) async {
         guard shelf(category).page == 0 else { return }
+        if shelf(category).items.isEmpty, let cached = ChannelListCache.load(Self.cacheKey(category), as: JableVideoCard.self) {
+            var state = Shelf()
+            state.items = cached
+            shelves[category] = state
+        }
         await loadMore(category)
     }
 
+    /// 下拉刷新：列表先留着，取到新的第一页再整页替换，不会先清空成转圈
     func reload(_ category: JableCategory) async {
-        shelves[category] = Shelf()
+        var state = shelf(category)
+        state.page = 0
+        state.hasMore = true
+        state.error = ""
+        shelves[category] = state
         await loadMore(category)
     }
+
+    private static func cacheKey(_ category: JableCategory) -> String { "jable." + category.rawValue }
 
     func loadMore(_ category: JableCategory) async {
         var state = shelf(category)
@@ -45,6 +58,16 @@ final class JableFeed: ObservableObject {
             let nextPage = state.page + 1
             let fresh = try await JableClient.shared.list(category: category, page: nextPage)
             var updated = shelf(category)
+            if nextPage == 1 {
+                // 第一页：整页替换（顶掉缓存里旧的那一页），并存成新的缓存
+                updated.items = fresh
+                updated.page = 1
+                updated.hasMore = !fresh.isEmpty
+                updated.loading = false
+                shelves[category] = updated
+                ChannelListCache.save(fresh, key: Self.cacheKey(category))
+                return
+            }
             let known = Set(updated.items.map(\.id))
             let filtered = fresh.filter { !known.contains($0.id) }
             updated.items += filtered
