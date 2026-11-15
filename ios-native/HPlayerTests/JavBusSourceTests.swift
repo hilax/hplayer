@@ -486,10 +486,12 @@ final class JavBusSourceTests: XCTestCase {
         XCTAssertEqual(MagnetCategory.allCases.map(\.title), ["最新", "专题", "女优", "最热"])
     }
 
-    func testTopicsAreTheFiveStudiosWithSitePaths() {
-        XCTAssertEqual(MagnetStudio.allCases.map(\.title), ["S1", "MOODYZ", "IdeaPocket", "SOD", "PRESTIGE"])
+    func testTopicsAreTheTenStudiosWithSitePaths() {
+        XCTAssertEqual(MagnetStudio.allCases.map(\.title), ["S1", "MOODYZ", "IdeaPocket", "SOD", "PRESTIGE",
+                                                             "Attackers", "E-BODY", "kawaii*", "FALENO", "KMP"])
         XCTAssertEqual(MagnetStudio.allCases.map(\.javbusPath),
-                       ["studio/7q", "studio/4v", "studio/1", "studio/ca", "studio/75"])
+                       ["studio/7q", "studio/4v", "studio/1", "studio/ca", "studio/75",
+                        "studio/17", "studio/lu", "studio/ej", "studio/3k6", "studio/67"])
         XCTAssertTrue(MagnetStudio.allCases.allSatisfy { !$0.monogram.isEmpty && !$0.codeHint.isEmpty })
     }
 

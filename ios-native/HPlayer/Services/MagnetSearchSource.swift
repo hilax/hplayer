@@ -19,7 +19,7 @@ enum MagnetCategory: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-/// 专题：JavBus 上的五家主流片商。`javbusPath` 是站点的片商页地址（用真实页面核对过，
+/// 专题：JavBus 上的十家主流片商。`javbusPath` 是站点的片商页地址（用真实页面核对过，
 /// 比用番号前缀去搜更完整：同一片商的各个系列都在里面）。
 enum MagnetStudio: String, CaseIterable, Identifiable, Sendable {
     case s1
@@ -27,6 +27,11 @@ enum MagnetStudio: String, CaseIterable, Identifiable, Sendable {
     case ideaPocket
     case sod
     case prestige
+    case attackers
+    case eBody
+    case kawaii
+    case faleno
+    case kmp
 
     var id: String { rawValue }
 
@@ -37,6 +42,11 @@ enum MagnetStudio: String, CaseIterable, Identifiable, Sendable {
         case .ideaPocket: return "IdeaPocket"
         case .sod: return "SOD"
         case .prestige: return "PRESTIGE"
+        case .attackers: return "Attackers"
+        case .eBody: return "E-BODY"
+        case .kawaii: return "kawaii*"
+        case .faleno: return "FALENO"
+        case .kmp: return "KMP"
         }
     }
 
@@ -48,6 +58,11 @@ enum MagnetStudio: String, CaseIterable, Identifiable, Sendable {
         case .ideaPocket: return "IP"
         case .sod: return "SOD"
         case .prestige: return "P"
+        case .attackers: return "ATK"
+        case .eBody: return "EB"
+        case .kawaii: return "K*"
+        case .faleno: return "F"
+        case .kmp: return "KMP"
         }
     }
 
@@ -59,6 +74,12 @@ enum MagnetStudio: String, CaseIterable, Identifiable, Sendable {
         case .ideaPocket: return "studio/1"
         case .sod: return "studio/ca"
         case .prestige: return "studio/75"
+        // 下面五家用站点上的影片页核对过（ADN / EBWH / CAWD / FSDSS / MKMP 的片商链接）
+        case .attackers: return "studio/17"
+        case .eBody: return "studio/lu"
+        case .kawaii: return "studio/ej"
+        case .faleno: return "studio/3k6"
+        case .kmp: return "studio/67"
         }
     }
 
@@ -70,6 +91,11 @@ enum MagnetStudio: String, CaseIterable, Identifiable, Sendable {
         case .ideaPocket: return "IPZZ · IPX · IPBZ"
         case .sod: return "STARS · START · SDAB"
         case .prestige: return "ABF · ABW · ABP"
+        case .attackers: return "ATID · ADN · SAME"
+        case .eBody: return "EBWH · EBOD · EYAN"
+        case .kawaii: return "CAWD · CAWB · KAVR"
+        case .faleno: return "FSDSS · FNS · FCDSS"
+        case .kmp: return "MKMP · VRKM · UMSO"
         }
     }
 }

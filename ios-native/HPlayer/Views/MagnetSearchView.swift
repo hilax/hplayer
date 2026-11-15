@@ -352,7 +352,7 @@ struct MagnetSearchView: View {
         }
     }
 
-    /// 专题：五家片商，点进去看这家的作品。
+    /// 专题：十家片商，点进去看这家的作品。
     private var topicsContent: some View {
         VStack(alignment: .leading, spacing: 12) {
             MagnetSectionHeader(title: "按片商浏览")
