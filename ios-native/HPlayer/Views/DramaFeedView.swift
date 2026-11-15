@@ -18,9 +18,9 @@ struct DramaFeedView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    @State private var drag: CGFloat = 0
-    @State private var axis: Axis?
     @State private var scrubbing = false
+    /// 长按 2 倍速中（长按由滚动视图上的系统长按识别：按住期间不会翻页，松手一定能收到）
+    @State private var boosting = false
     @State private var showEpisodes = false
     @State private var edgeHint: String?
 
@@ -70,13 +70,16 @@ struct DramaFeedView: View {
 
     // MARK: 翻页
 
+    /// 原生分页滚动（UIScrollView），和抖音一样：跟手、按甩动速度翻页、翻页途中能接住再甩、首尾系统回弹。
+    /// 整页（画面、选集 / 倍速、剧名、进度条）一起移动；只建当前集和前后各一集。
     private func pager(size: CGSize, insets: EdgeInsets) -> some View {
-        ZStack {
-            ForEach(visiblePositions, id: \.self) { position in
-                if let player = model.player(at: position), let episode = model.episode(at: position) {
-                    let offset = CGFloat(position - model.index) * size.height + drag
-                    // 整页（画面、选集 / 倍速、剧名、进度条）跟着手指一起走，下一集贴着从底下顶上来。
-                    // 离开屏幕中间越远，页上的文字和按钮越淡，视线自然落到正在进来的那一集上。
+        DramaFeedPager(
+            count: model.count,
+            index: model.index,
+            scrollEnabled: !scrubbing,
+            page: { position, fade in
+                guard let player = model.player(at: position), let episode = model.episode(at: position) else { return nil }
+                return AnyView(
                     DramaFeedPage(
                         player: player,
                         detail: model.detail,
@@ -85,8 +88,9 @@ struct DramaFeedView: View {
                         size: size,
                         insets: insets,
                         isActive: position == model.index,
-                        chromeOpacity: Self.chromeOpacity(offset: offset, height: size.height),
+                        fade: fade,
                         speedLabel: speedLabel,
+                        boosting: boosting && position == model.index,
                         scrubbing: $scrubbing,
                         onEpisodes: {
                             model.pauseCurrent()
@@ -95,18 +99,35 @@ struct DramaFeedView: View {
                         onSpeed: cycleSpeed,
                         onFullscreen: { setFullscreen(true) }
                     )
-                    .offset(y: offset)
-                    .transition(.identity)
                     .accessibilityHidden(position != model.index)
-                }
-            }
-        }
+                    .accessibilityAction(named: "下一集") { go(to: model.index + 1) }
+                    .accessibilityAction(named: "上一集") { go(to: model.index - 1) }
+                    .ignoresSafeArea()
+                )
+            },
+            onLand: { position in
+                guard position != model.index else { return }
+                model.show(position)
+            },
+            onEdge: { atEnd in hint(atEnd ? "已经是最后一集了" : "已经是第一集了") },
+            onHold: setBoost
+        )
         .frame(width: size.width, height: size.height)
-        .clipped()
-        // 和单击、长按、进度条拖动同时识别：只认竖直方向的拖动
-        .simultaneousGesture(pagingGesture(height: size.height))
-        .accessibilityAction(named: "下一集") { go(to: model.index + 1) }
-        .accessibilityAction(named: "上一集") { go(to: model.index - 1) }
+    }
+
+    /// 长按 2 倍速，松手回到之前选的倍速（选了 1.5× 就回 1.5×）
+    private func setBoost(_ on: Bool) {
+        guard let player = model.current else { return }
+        if on {
+            guard !boosting, player.isPlaying else { return }
+            Haptics.tap()
+            withAnimation(.easeOut(duration: 0.15)) { boosting = true }
+            player.setRate(2)
+        } else {
+            guard boosting else { return }
+            withAnimation(.easeOut(duration: 0.15)) { boosting = false }
+            player.setRate(model.speed)
+        }
     }
 
     /// 页上文字和按钮的透明度：在屏幕正中是 1，移开半屏左右淡到 0.25
@@ -116,59 +137,12 @@ struct DramaFeedView: View {
         return Double(1 - min(distance * 1.5, 0.75))
     }
 
-    private var visiblePositions: [Int] {
-        [model.index - 1, model.index, model.index + 1].filter { $0 >= 0 && $0 < model.count }
-    }
-
-    private func pagingGesture(height: CGFloat) -> some Gesture {
-        DragGesture(minimumDistance: 12)
-            .onChanged { value in
-                guard !scrubbing else { return }
-                if axis == nil {
-                    axis = abs(value.translation.height) > abs(value.translation.width) ? .vertical : .horizontal
-                }
-                guard axis == .vertical else { return }
-                var offset = value.translation.height
-                // 第一集再往下拉、最后一集再往上推：只拉动一点（橡皮筋），提示到头了
-                let atStart = model.index == 0 && offset > 0
-                let atEnd = model.index == model.count - 1 && offset < 0
-                if atStart || atEnd { offset *= 0.25 }
-                drag = offset
-            }
-            .onEnded { value in
-                defer { axis = nil }
-                guard axis == .vertical, !scrubbing else {
-                    withAnimation(pageAnimation) { drag = 0 }
-                    return
-                }
-                let moved = value.translation.height
-                let predicted = value.predictedEndTranslation.height
-                // 拖过 15% 屏高，或者轻轻一甩（按速度预测能走到 30% 屏高）就翻页，和抖音的手感接近
-                let threshold = height * 0.15
-                var target = model.index
-                if moved < -threshold || predicted < -height * 0.3 {
-                    target += 1
-                } else if moved > threshold || predicted > height * 0.3 {
-                    target -= 1
-                }
-                if target >= model.count { hint("已经是最后一集了") }
-                if target < 0 { hint("已经是第一集了") }
-                go(to: target)
-            }
-    }
-
-    /// 松手后吸附到位：临界阻尼弹簧，快速减速、不过冲回弹（抖音的翻页也不会弹一下）
-    private var pageAnimation: Animation {
-        reduceMotion ? .easeOut(duration: 0.2) : .spring(response: 0.3, dampingFraction: 1)
-    }
-
-    /// 翻页不震动：连续刷的时候每页一震会很吵
+    /// 代码触发的翻页（播完自动下一集、读屏的上一集 / 下一集）：改当前集，滚动视图自己滑过去。
+    /// 翻页不震动：连续刷的时候每页一震会很吵。
     private func go(to target: Int) {
-        let valid = min(max(0, target), model.count - 1)
-        withAnimation(pageAnimation) {
-            if valid != model.index { model.show(valid) }
-            drag = 0
-        }
+        if target >= model.count { hint("已经是最后一集了"); return }
+        if target < 0 { hint("已经是第一集了"); return }
+        if target != model.index { model.show(target) }
     }
 
     private func hint(_ text: String) {
@@ -221,6 +195,8 @@ struct DramaFeedView: View {
                     .allowsHitTesting(false)
             }
         }
+        // 撑满整屏、内容靠上：返回键和剧名固定在顶部
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     private var speedLabel: String {
@@ -272,15 +248,17 @@ private struct DramaFeedPage: View {
     let size: CGSize
     let insets: EdgeInsets
     let isActive: Bool
-    /// 翻页途中页上文字和按钮的透明度（画面本身不变淡）
-    var chromeOpacity: Double = 1
+    /// 翻页途中页上文字和按钮的透明度（画面本身不变淡），由滚动视图逐帧更新。
+    /// 页面本身不观察它，只有 DramaFadeLayer 观察，滚动时只重画那一层。
+    let fade: DramaPageFade
     let speedLabel: String
+    /// 这一页正在长按 2 倍速（状态在 DramaFeedView）
+    let boosting: Bool
     @Binding var scrubbing: Bool
     let onEpisodes: () -> Void
     let onSpeed: () -> Void
     let onFullscreen: () -> Void
 
-    @State private var boosting = false
     @State private var scrubValue: Double?
     @State private var expanded = false
 
@@ -316,14 +294,13 @@ private struct DramaFeedPage: View {
 
             statusLayer
 
-            Group {
+            DramaFadeLayer(fade: fade) {
                 if !player.isPortraitVideo, player.state == .ready {
                     fullscreenButton
                 }
                 info
                 rail
             }
-            .opacity(chromeOpacity)
         }
         .frame(width: size.width, height: size.height)
         .contentShape(Rectangle())
@@ -332,15 +309,7 @@ private struct DramaFeedPage: View {
             Haptics.tap()
             player.togglePlay()
         }
-        // 长按 2 倍速，松手恢复（抖音同款）
-        .simultaneousGesture(
-            LongPressGesture(minimumDuration: 0.4, maximumDistance: 12)
-                .onEnded { _ in startBoost() }
-        )
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 0)
-                .onEnded { _ in stopBoost() }
-        )
+        // 长按 2 倍速的识别在 DramaPagerController（系统长按手势，和翻页互斥）
         .overlay(alignment: .top) {
             if boosting {
                 HStack(spacing: 6) {
@@ -532,18 +501,248 @@ private struct DramaFeedPage: View {
         let total = Int(seconds.rounded(.down))
         return String(format: "%02d:%02d", total / 60, total % 60)
     }
+}
 
-    private func startBoost() {
-        guard isActive, player.isPlaying else { return }
-        Haptics.tap()
-        withAnimation(.easeOut(duration: 0.15)) { boosting = true }
-        player.setRate(2)
+// MARK: - 原生分页滚动
+
+/// 一页上文字和按钮的透明度。滚动时逐帧改它，只有套了 `.opacity(fade.opacity)` 的那一层重画，
+/// 视频画面和封面不跟着重算。
+@MainActor
+final class DramaPageFade: ObservableObject {
+    @Published var opacity: Double = 1
+}
+
+/// 只负责按 DramaPageFade 调透明度；里面的内容由外层页面建好传进来，透明度变化时不重算
+private struct DramaFadeLayer<Content: View>: View {
+    @ObservedObject var fade: DramaPageFade
+    let content: Content
+
+    init(fade: DramaPageFade, @ViewBuilder content: () -> Content) {
+        self.fade = fade
+        self.content = content()
     }
 
-    private func stopBoost() {
-        guard boosting else { return }
-        withAnimation(.easeOut(duration: 0.15)) { boosting = false }
-        player.setRate(1)
+    var body: some View {
+        ZStack { content }.opacity(fade.opacity)
+    }
+}
+
+/// 竖屏短剧的翻页容器：系统 UIScrollView 分页。
+/// - 只给当前集和前后各一集建页面（每页一个 UIHostingController，放在它那一集的绝对位置上）。
+/// - 松手时按系统预测的落点决定翻到哪一集，马上通知 `onLand`，下一集在减速收尾时就开始播放。
+/// - 首尾用系统回弹；拉过头一点时 `onEdge` 提示「已经是第一 / 最后一集」。
+/// - 当前集被外部改了（自动下一集、选集面板、读屏）时，相邻的集滑过去，跳得远就直接定位。
+struct DramaFeedPager: UIViewControllerRepresentable {
+    let count: Int
+    let index: Int
+    let scrollEnabled: Bool
+    let page: @MainActor (Int, DramaPageFade) -> AnyView?
+    let onLand: @MainActor (Int) -> Void
+    let onEdge: @MainActor (Bool) -> Void
+    /// 长按开始（true）/ 松手或被取消（false）
+    var onHold: @MainActor (Bool) -> Void = { _ in }
+
+    func makeUIViewController(context: Context) -> DramaPagerController {
+        let controller = DramaPagerController()
+        controller.currentIndex = index
+        return controller
+    }
+
+    func updateUIViewController(_ controller: DramaPagerController, context: Context) {
+        controller.makePage = page
+        controller.onLand = onLand
+        controller.onEdge = onEdge
+        controller.onHold = onHold
+        controller.scrollView.isScrollEnabled = scrollEnabled
+        controller.apply(count: count, index: index)
+    }
+}
+
+@MainActor
+final class DramaPagerController: UIViewController, UIScrollViewDelegate, UIGestureRecognizerDelegate {
+    let scrollView = UIScrollView()
+    var currentIndex = 0
+    var makePage: @MainActor (Int, DramaPageFade) -> AnyView? = { _, _ in nil }
+    var onLand: @MainActor (Int) -> Void = { _ in }
+    var onEdge: @MainActor (Bool) -> Void = { _ in }
+    var onHold: @MainActor (Bool) -> Void = { _ in }
+
+    private var count = 0
+    private var hosts: [Int: UIHostingController<AnyView>] = [:]
+    private var fades: [Int: DramaPageFade] = [:]
+    private var laidOutSize: CGSize = .zero
+    /// 这次拖动已经提示过到头了，同一次拖动不重复提示
+    private var edgeHinted = false
+
+    private var pageHeight: CGFloat { scrollView.bounds.height }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .black
+        overrideUserInterfaceStyle = .dark
+        scrollView.isPagingEnabled = true
+        scrollView.alwaysBounceVertical = true
+        scrollView.showsVerticalScrollIndicator = false
+        scrollView.showsHorizontalScrollIndicator = false
+        scrollView.contentInsetAdjustmentBehavior = .never
+        scrollView.scrollsToTop = false
+        // 手指一放上去，页面里的点按、长按、进度条就能立刻收到；开始滑动时系统再把它们取消
+        scrollView.delaysContentTouches = false
+        scrollView.backgroundColor = .black
+        scrollView.delegate = self
+        view.addSubview(scrollView)
+
+        // 长按 2 倍速：系统长按手势和滚动的拖动互斥——按住期间不会翻页，松手（或被打断）一定会回调
+        let hold = UILongPressGestureRecognizer(target: self, action: #selector(handleHold(_:)))
+        hold.minimumPressDuration = 0.4
+        hold.allowableMovement = 12
+        hold.delegate = self
+        scrollView.addGestureRecognizer(hold)
+    }
+
+    @objc private func handleHold(_ recognizer: UILongPressGestureRecognizer) {
+        switch recognizer.state {
+        case .began: onHold(true)
+        case .ended, .cancelled, .failed: onHold(false)
+        default: break
+        }
+    }
+
+    /// 拖进度条时、正在滑动或减速收尾时不触发长按
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard gestureRecognizer is UILongPressGestureRecognizer else { return true }
+        return scrollView.isScrollEnabled && !scrollView.isDragging && !scrollView.isDecelerating
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        guard view.bounds.size != laidOutSize, view.bounds.height > 0 else { return }
+        laidOutSize = view.bounds.size
+        scrollView.frame = view.bounds
+        scrollView.contentSize = CGSize(width: view.bounds.width, height: view.bounds.height * CGFloat(count))
+        scrollView.contentOffset = CGPoint(x: 0, y: CGFloat(currentIndex) * pageHeight)
+        layoutPages()
+        updateFades()
+    }
+
+    /// SwiftUI 每次刷新都会调：同步集数、当前集，并重建 / 更新前后三页
+    func apply(count: Int, index: Int) {
+        self.count = count
+        if pageHeight > 0 {
+            scrollView.contentSize = CGSize(width: scrollView.bounds.width, height: pageHeight * CGFloat(count))
+        }
+        if index != currentIndex {
+            let distance = abs(index - currentIndex)
+            currentIndex = index
+            // 用户正在拖或者正在减速：落点就是这一集（onLand 已经通知过），别打断系统的滚动
+            if pageHeight > 0, !scrollView.isDragging, !scrollView.isDecelerating {
+                let target = CGPoint(x: 0, y: CGFloat(index) * pageHeight)
+                let animated = distance == 1 && !UIAccessibility.isReduceMotionEnabled && view.window != nil
+                scrollView.setContentOffset(target, animated: animated)
+            }
+        }
+        syncPages()
+        updateFades()
+    }
+
+    // MARK: 页面
+
+    private var window: ClosedRange<Int> {
+        max(0, currentIndex - 1)...max(0, min(count - 1, currentIndex + 1))
+    }
+
+    private func syncPages() {
+        let wanted = count > 0 ? Set(window) : []
+        for (position, host) in hosts where !wanted.contains(position) {
+            host.willMove(toParent: nil)
+            host.view.removeFromSuperview()
+            host.removeFromParent()
+            hosts[position] = nil
+            fades[position] = nil
+        }
+        for position in wanted.sorted() {
+            let fade = fades[position] ?? DramaPageFade()
+            fades[position] = fade
+            guard let content = makePage(position, fade) else { continue }
+            if let host = hosts[position] {
+                host.rootView = content
+            } else {
+                let host = UIHostingController(rootView: content)
+                host.view.backgroundColor = .clear
+                if #available(iOS 16.4, *) { host.safeAreaRegions = [] }
+                addChild(host)
+                scrollView.addSubview(host.view)
+                host.didMove(toParent: self)
+                hosts[position] = host
+            }
+        }
+        layoutPages()
+    }
+
+    private func layoutPages() {
+        let size = scrollView.bounds.size
+        guard size.height > 0 else { return }
+        for (position, host) in hosts {
+            host.view.frame = CGRect(x: 0, y: CGFloat(position) * size.height, width: size.width, height: size.height)
+        }
+    }
+
+    /// 离开屏幕中间越远，页上的文字和按钮越淡；只在变化明显时才发布，减少重画
+    private func updateFades() {
+        let height = pageHeight
+        guard height > 0 else { return }
+        let top = scrollView.contentOffset.y
+        for (position, fade) in fades {
+            let value = DramaFeedView.chromeOpacity(offset: CGFloat(position) * height - top, height: height)
+            if abs(fade.opacity - value) > 0.01 || (value == 1 && fade.opacity != 1) { fade.opacity = value }
+        }
+    }
+
+    // MARK: 滚动
+
+    func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        updateFades()
+        guard scrollView.isDragging, !edgeHinted, pageHeight > 0 else { return }
+        let overscroll = pageHeight * 0.06
+        let maxOffset = max(0, scrollView.contentSize.height - pageHeight)
+        if scrollView.contentOffset.y < -overscroll {
+            edgeHinted = true
+            onEdge(false)
+        } else if scrollView.contentOffset.y > maxOffset + overscroll {
+            edgeHinted = true
+            onEdge(true)
+        }
+    }
+
+    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+        edgeHinted = false
+    }
+
+    /// 松手：系统已经按甩动速度算好落在哪一页，立刻切过去，下一集在收尾的这一小段里就开始播
+    func scrollViewWillEndDragging(_ scrollView: UIScrollView, withVelocity velocity: CGPoint,
+                                   targetContentOffset: UnsafeMutablePointer<CGPoint>) {
+        guard pageHeight > 0 else { return }
+        land(on: Int((targetContentOffset.pointee.y / pageHeight).rounded()))
+    }
+
+    func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { settle() }
+    func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) { settle() }
+    func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+        if !decelerate { settle() }
+    }
+
+    /// 停稳后按实际位置再对一次（读屏的三指滚动不经过拖动回调）
+    private func settle() {
+        guard pageHeight > 0 else { return }
+        land(on: Int((scrollView.contentOffset.y / pageHeight).rounded()))
+        updateFades()
+    }
+
+    private func land(on position: Int) {
+        let clamped = min(max(0, position), max(0, count - 1))
+        guard clamped != currentIndex else { return }
+        currentIndex = clamped
+        onLand(clamped)
     }
 }
 

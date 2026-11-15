@@ -167,9 +167,20 @@ final class DramaEpisodePlayer: ObservableObject {
             finished = false
             player.seek(to: .zero)
         }
-        RecentStore.shared.record(source)
-        ref.rememberAsLastWatched()
         player.playImmediately(atRate: rate)
+        recordWhenSettled()
+    }
+
+    /// 记播放历史会让首页「继续观看」重新排一遍；翻页时这一步正赶上滚动收尾，
+    /// 晚 0.6 秒再记，免得和翻页动画抢主线程。期间又翻走了（暂停了）就不记。
+    private func recordWhenSettled() {
+        let source = source
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            guard let self, self.wantsPlay else { return }
+            RecentStore.shared.record(source)
+            self.ref.rememberAsLastWatched()
+        }
     }
 
     func pause() {
