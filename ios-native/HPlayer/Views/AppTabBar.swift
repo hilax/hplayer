@@ -60,10 +60,10 @@ final class HomeNavigation: ObservableObject {
 
 // MARK: - 首页频道
 
-/// 首页顶部的频道：推荐（混合精选与货架）、片库（115 + 本地，四行筛选海报墙）、动漫（在线番剧）、短剧、Jable。
+/// 首页顶部的频道：推荐（混合精选与货架）、片库（115 + 本地，四行筛选海报墙）、动漫（在线番剧）、短剧、Jable、MissAV。
 enum HomeChannel: String, Hashable, CaseIterable, Identifiable {
-    /// 顺序就是频道条从左到右：推荐、动漫、片库、短剧、Jable
-    case recommend, anime, library, drama, jable
+    /// 顺序就是频道条从左到右：推荐、动漫、片库、短剧、Jable、MissAV
+    case recommend, anime, library, drama, jable, missav
 
     var id: String { rawValue }
 
@@ -74,6 +74,7 @@ enum HomeChannel: String, Hashable, CaseIterable, Identifiable {
         case .anime: return "动漫"
         case .drama: return "短剧"
         case .jable: return "Jable"
+        case .missav: return "MissAV"
         }
     }
 }
@@ -85,32 +86,34 @@ struct HomeChannelBar: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        HStack(spacing: 18) {
-            ForEach(HomeChannel.allCases) { channel in
-                let selected = channel == selection
-                Button {
-                    guard !selected else { return }
-                    Haptics.select()
-                    withAnimation(reduceMotion ? nil : Motion.snappy) { selection = channel }
-                } label: {
-                    Text(channel.title)
-                        .font(.scaled(selected ? 20 : 16, weight: selected ? .heavy : .medium))
-                        .heroForeground(secondary: !selected)
-                        .frame(height: 40)
-                        .overlay(alignment: .bottom) {
-                            if selected {
-                                Capsule()
-                                    .fill(Theme.prismGradient)
-                                    .frame(width: 18, height: 3)
-                                    .matchedGeometryEffect(id: "home.channel.underline", in: underline)
-                                    .offset(y: -1)
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 18) {
+                ForEach(HomeChannel.allCases) { channel in
+                    let selected = channel == selection
+                    Button {
+                        guard !selected else { return }
+                        Haptics.select()
+                        withAnimation(reduceMotion ? nil : Motion.snappy) { selection = channel }
+                    } label: {
+                        Text(channel.title)
+                            .font(.scaled(selected ? 20 : 16, weight: selected ? .heavy : .medium))
+                            .heroForeground(secondary: !selected)
+                            .frame(height: 40)
+                            .overlay(alignment: .bottom) {
+                                if selected {
+                                    Capsule()
+                                        .fill(Theme.prismGradient)
+                                        .frame(width: 18, height: 3)
+                                        .matchedGeometryEffect(id: "home.channel.underline", in: underline)
+                                        .offset(y: -1)
+                                }
                             }
-                        }
-                        .contentShape(Rectangle())
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(selected ? .isSelected : [])
+                    .accessibilityIdentifier("home.channel.\(channel.rawValue)")
                 }
-                .buttonStyle(.plain)
-                .accessibilityAddTraits(selected ? .isSelected : [])
-                .accessibilityIdentifier("home.channel.\(channel.rawValue)")
             }
         }
         .accessibilityElement(children: .contain)

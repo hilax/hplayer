@@ -19,6 +19,8 @@ enum PlaybackSource: Identifiable, Hashable {
     case drama(DramaEpisodeRef)
     /// Jable 视频，打开时现取播放地址与请求头。
     case jable(JableVideoRef)
+    /// MissAV 视频，打开时现取播放地址与请求头。
+    case missav(MissAVVideoRef)
 
     var id: String {
         switch self {
@@ -34,6 +36,8 @@ enum PlaybackSource: Identifiable, Hashable {
             return ref.id
         case .jable(let ref):
             return ref.id
+        case .missav(let ref):
+            return ref.id
         }
     }
 
@@ -48,6 +52,8 @@ enum PlaybackSource: Identifiable, Hashable {
         case .drama(let ref):
             return ref.episodeTitle
         case .jable(let ref):
+            return ref.episodeTitle
+        case .missav(let ref):
             return ref.episodeTitle
         }
     }
@@ -94,6 +100,10 @@ struct RecentItem: Codable, Identifiable, Hashable {
     /// Jable 记录存的是占位地址（hpjable://video/编号），打开时还原成视频引用再现取播放地址。
     var jableRef: JableVideoRef? { JableVideoRef(recordURL: url, title: title) }
     var isJable: Bool { url.hasPrefix(JableVideoRef.scheme + "://") }
+
+    /// MissAV 记录存的是占位地址（hpmissav://video/编号），打开时还原成视频引用再现取播放地址。
+    var missavRef: MissAVVideoRef? { MissAVVideoRef(recordURL: url, title: title) }
+    var isMissAV: Bool { url.hasPrefix(MissAVVideoRef.scheme + "://") }
 
     /// 看过的比例，没有记录时为空
     var progress: Double? {

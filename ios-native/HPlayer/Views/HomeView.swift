@@ -236,6 +236,9 @@ struct HomeView: View {
                     .navigationDestination(for: JableRoute.self) { route in
                         JableDetailView(route: route)
                     }
+                    .navigationDestination(for: MissAVRoute.self) { route in
+                        MissAVDetailView(route: route)
+                    }
                     // 程序化路径的目标注册在整个 TabView 的外层，网盘根页退场后仍可解析。
                     .navigationDestination(for: CloudRoute.self) { route in
                         CloudTab(route: route)

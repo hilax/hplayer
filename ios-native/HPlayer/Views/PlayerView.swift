@@ -100,6 +100,7 @@ struct PlayerView: View {
         if case .anime = current { return "正在解析播放地址…" }
         if case .drama = current { return "正在获取播放地址…" }
         if case .jable = current { return "正在解析 Jable 视频…" }
+        if case .missav = current { return "正在解析 MissAV 视频…" }
         return "正在准备播放…"
     }
 
@@ -122,7 +123,7 @@ struct PlayerView: View {
             } else {
                 return [PlaybackChoice(id: "online-default", title: "1080P 高清")]
             }
-        case .direct, .drama, .jable:
+        case .direct, .drama, .jable, .missav:
             return []
         }
     }
@@ -190,6 +191,12 @@ struct PlayerView: View {
                 guard isCurrentRequest(request, source: source, session: session), !Task.isCancelled else { return }
                 guard await openAfterReveal(request, source: source, session: session) else { return }
                 playback.open(jablePlayback.url, customHeaders: jablePlayback.headers, startTime: resume)
+            case .missav(let ref):
+                ref.rememberAsLastWatched()
+                let missavPlayback = try await MissAVClient.shared.resolvePlayback(videoId: ref.videoId)
+                guard isCurrentRequest(request, source: source, session: session), !Task.isCancelled else { return }
+                guard await openAfterReveal(request, source: source, session: session) else { return }
+                playback.open(missavPlayback.url, customHeaders: missavPlayback.headers, startTime: resume)
             case .p115(_, let pickCode):
                 do {
                     guard let client = appState.directClient() else { throw APIError.server("请先登录 115") }

@@ -19,6 +19,7 @@ final class RecentPlaylistStore {
         case anime(AnimeEpisodeRef)
         case drama(videoId: Int, seriesName: String, episode: Int)
         case jable(videoId: String, title: String, coverUrl: String)
+        case missav(videoId: String, title: String, coverUrl: String)
 
         init?(_ source: PlaybackSource) {
             switch source {
@@ -27,6 +28,7 @@ final class RecentPlaylistStore {
             case .anime(let ref): self = .anime(ref)
             case .drama(let ref): self = .drama(videoId: ref.videoId, seriesName: ref.seriesName, episode: ref.episode)
             case .jable(let ref): self = .jable(videoId: ref.videoId, title: ref.title, coverUrl: ref.coverUrl)
+            case .missav(let ref): self = .missav(videoId: ref.videoId, title: ref.title, coverUrl: ref.coverUrl)
             case .online: return nil
             }
         }
@@ -40,6 +42,8 @@ final class RecentPlaylistStore {
                 return .drama(DramaEpisodeRef(videoId: videoId, seriesName: seriesName, episode: episode))
             case .jable(let videoId, let title, let coverUrl):
                 return .jable(JableVideoRef(videoId: videoId, title: title, coverUrl: coverUrl))
+            case .missav(let videoId, let title, let coverUrl):
+                return .missav(MissAVVideoRef(videoId: videoId, title: title, coverUrl: coverUrl))
             }
         }
     }

@@ -104,13 +104,21 @@ final class ImagePipeline: @unchecked Sendable {
     static let aheadLimit = 36
 
     static func defaultImageHeaders(for url: URL) -> [String: String] {
-        if let host = url.host?.lowercased(),
-           host.contains("jable.tv") || host.contains("mushroomtrack.com") || host.contains("mushroomtrack") {
-            return [
-                "Referer": "https://jable.tv/",
-                "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
-                "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8"
-            ]
+        if let host = url.host?.lowercased() {
+            if host.contains("jable.tv") || host.contains("mushroomtrack.com") || host.contains("mushroomtrack") {
+                return [
+                    "Referer": "https://jable.tv/",
+                    "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
+                    "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8"
+                ]
+            }
+            if host.contains("missav") || host.contains("surrit.com") || host.contains("sixyik.com") || host.contains("eightyik.com") {
+                return [
+                    "Referer": "https://missav.ws/",
+                    "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
+                    "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8"
+                ]
+            }
         }
         return JavBusSource.imageHeaders(for: url)
     }

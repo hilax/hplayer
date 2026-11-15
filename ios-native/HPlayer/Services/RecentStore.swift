@@ -80,6 +80,9 @@ final class RecentStore: ObservableObject {
         case .jable(let ref):
             updated.url = ref.recordURL
             updated.pickCode = nil
+        case .missav(let ref):
+            updated.url = ref.recordURL
+            updated.pickCode = nil
         }
         // 认领来的旧记录 id 相同但 key 不同，两个条件都要清，否则会留下重复的一条。
         items.removeAll { Self.key(of: $0) == key || $0.id == updated.id }
@@ -147,6 +150,9 @@ final class RecentStore: ObservableObject {
         if let ref = item.jableRef {
             return .jable(ref)
         }
+        if let ref = item.missavRef {
+            return .missav(ref)
+        }
         guard let url = URL(string: item.url) else { return nil }
         if item.isAnime {
             return .online(title: item.title, url: url, headers: ["User-Agent": ""])
@@ -197,6 +203,8 @@ final class RecentStore: ObservableObject {
             return "url|\(ref.recordURL)"
         case .jable(let ref):
             return "url|\(ref.recordURL)"
+        case .missav(let ref):
+            return "url|\(ref.recordURL)"
         case .direct(_, let url), .online(_, let url, _, _, _):
             return url.isFileURL ? "file|\(url.lastPathComponent)" : "url|\(url.absoluteString)"
         }
@@ -205,6 +213,7 @@ final class RecentStore: ObservableObject {
     static func key(of item: RecentItem) -> String {
         if let ref = item.animeRef { return ref.id }
         if let ref = item.jableRef { return "url|\(ref.recordURL)" }
+        if let ref = item.missavRef { return "url|\(ref.recordURL)" }
         if let pickCode = item.pickCode, !pickCode.isEmpty { return "p115|\(pickCode)" }
         guard let url = URL(string: item.url) else { return "url|\(item.url)" }
         return url.isFileURL ? "file|\(url.lastPathComponent)" : "url|\(url.absoluteString)"
