@@ -213,6 +213,7 @@ private enum SleepTimer: Equatable, Identifiable {
 /// 横竖屏共享的播放器控制层，视频画面由 mpv 绘制。
 struct PlaybackControlsView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
     @Environment(\.colorScheme) private var hostScheme
     @ObservedObject var playback: PlaybackController
     let title: String
@@ -420,6 +421,10 @@ struct PlaybackControlsView: View {
             playback.setBoost(false)
             systemVolume.stop()
             if brightnessAdjusted, let originalBrightness { ScreenBrightness.screen.brightness = originalBrightness }
+        }
+        // 播放中途打开 VoiceOver：把已经收起的控制栏拿出来，否则只剩一块「播放画面」可以摸到
+        .onChange(of: voiceOverEnabled) { enabled in
+            if enabled { revealControls() }
         }
         .onChange(of: systemVolume.externalChangeCount) { _ in
             showSystemVolumeChange()
@@ -2912,8 +2917,10 @@ struct PlaybackControlsView: View {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: step)
                 guard !Task.isCancelled, controlsVisible else { return }
+                // VoiceOver 用户要逐个摸按钮，控制栏自动收起会让按钮在手指下消失；开着 VoiceOver 时一直显示，
+                // 想收起可以点一下画面。
                 let busy = showList || quickMenu != nil || showSleepMenu || popover != nil || dragging || boosting
-                    || adjustment != nil || playback.buffering
+                    || adjustment != nil || playback.buffering || UIAccessibility.isVoiceOverRunning
                 idle = busy ? 0 : idle + step
                 if idle >= 5_000_000_000 {
                     withAnimation(reduceMotion ? nil : .easeOut(duration: 0.25)) { controlsVisible = false }
@@ -2922,7 +2929,24 @@ struct PlaybackControlsView: View {
             }
         }
     }
+    /// 播放画面的无障碍值。界面测试靠一串内部参数检查手势效果；
+    /// 正式使用时 VoiceOver 会把它读出来，所以只在界面测试里给参数，平时只读播放进度。
     private var gestureStatus: String {
+        if Self.exposesDiagnosticStatus { return diagnosticStatus }
+        guard playback.duration > 0 else { return loading ? loadingText : "" }
+        let position = "已播放 \(timeText(playback.currentTime))，共 \(timeText(playback.duration))"
+        return playback.playing ? position : "已暂停，\(position)"
+    }
+
+    private static var exposesDiagnosticStatus: Bool {
+        #if DEBUG
+        return isUITest
+        #else
+        return false
+        #endif
+    }
+
+    private var diagnosticStatus: String {
         "\(lastAdjustment); brightness=\(String(format: "%.3f", brightnessLevel)); volume=\(String(format: "%.3f", systemVolume.level)); time=\(String(format: "%.3f", playback.engineTime)); rate=\(String(format: "%g", playback.effectiveRate)); avsync=\(String(format: "%.3f", playback.avSync ?? .nan)); boostAVSyncPeak=\(String(format: "%.3f", playback.boostAVSyncPeak ?? .nan)); buffering=\(playback.buffering ? 1 : 0); note=\(playback.statusNote); error=\(playback.error)"
     }
 

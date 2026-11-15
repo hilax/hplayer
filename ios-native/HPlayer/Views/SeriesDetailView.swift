@@ -17,6 +17,8 @@ struct SeriesDetailView: View {
     @State private var matching: MatchRequest?
     @State private var season: Int?
     @State private var overviewExpanded = false
+    /// 长按菜单里点了移除 / 删除、等待确认的那一集
+    @State private var pendingRemoval: HomeMediaItem?
     @Namespace private var seasonNamespace
 
     private static let scrollSpace = "series.scroll"
@@ -60,6 +62,22 @@ struct SeriesDetailView: View {
         .playerWindow(item: $playing) { queue in
             PlayerView(source: queue.source, playlist: queue.items)
                 .environmentObject(appState)
+        }
+        // 本地文件删了就找不回来，网盘的这集也会从首页消失：都先确认，措辞和影片选项面板一致
+        .confirmationDialog(
+            pendingRemoval?.isCloud == true ? "从首页移除这一集？" : "删除这个本机文件？",
+            isPresented: Binding(get: { pendingRemoval != nil }, set: { if !$0 { pendingRemoval = nil } }),
+            titleVisibility: .visible,
+            presenting: pendingRemoval
+        ) { episode in
+            Button(episode.isCloud ? "移除" : "删除", role: .destructive) {
+                remove(episode)
+                pendingRemoval = nil
+            }
+            .accessibilityIdentifier("series.confirmRemove")
+            Button("取消", role: .cancel) { pendingRemoval = nil }
+        } message: { episode in
+            Text(episode.isCloud ? "保留网盘中的原始文件" : "导入到 HPlayer 的副本会被删除，无法恢复")
         }
         .sheet(item: $matching) { request in
             MetadataMatchView(file: request.file, current: request.current, onMatch: { metadata in
@@ -318,7 +336,7 @@ struct SeriesDetailView: View {
             Button("播放", systemImage: AppIcon.play.name) { play(episode, in: group) }
             Button("匹配封面", systemImage: AppIcon.poster.name) { matching = MatchRequest(item: episode) }
             Button(episode.isCloud ? "从媒体库移除" : "删除本地文件", systemImage: AppIcon.trash.name, role: .destructive) {
-                remove(episode)
+                pendingRemoval = episode
             }
         }
     }
