@@ -114,13 +114,18 @@ struct AmbientHeroSection<Top: View, HitArea: View>: View {
         .padding(.top, safeTop)
         .padding(.bottom, 4)
         .background(alignment: .top) {
-            // 当前轮播图放大模糊后铺在顶部，到卡片下沿前淡进页面底色；
-            // 往上多铺一段实色：下拉回弹、下拉刷新时，轮播上方露出来的也是氛围色
+            // 当前轮播图放大模糊后铺在顶部，到卡片下沿前淡进页面底色。
+            // 下拉时模糊画面本身往上撑高（同一张图连续放大），一直盖到屏幕顶端：
+            // 以前是在上面接一段实色、中间用 48pt 渐变过渡，下拉时能看出纯色、渐变、模糊图三层。
             if hasHero {
-                HomeAmbientBackdrop(state: tint, palette: palette, heroHeight: heroHeight,
-                                    extensionHeight: Self.pullExtension)
-                    .frame(height: Self.pullExtension + heroHeight)
-                    .offset(y: -Self.pullExtension)
+                GeometryReader { proxy in
+                    // 这一块是滚动内容的最上面：平时顶端在 0，下拉多少就往下移多少
+                    let pull = max(0, proxy.frame(in: .named(PageScrollSpace.name)).minY)
+                    HomeAmbientBackdrop(state: tint, palette: palette, heroHeight: heroHeight, pull: pull)
+                        .frame(height: heroHeight + pull)
+                        .offset(y: -pull)
+                }
+                .frame(height: heroHeight)
             }
         }
         // 告诉频道头部：这一页顶部有氛围层，频道条和搜索框换成白字 + 磨砂搜索框
@@ -133,9 +138,6 @@ struct AmbientHeroSection<Top: View, HitArea: View>: View {
 
     /// 屏幕顶端到轮播卡片下沿
     private var heroHeight: CGFloat { safeTop + 6 + cardHeight }
-
-    /// 轮播氛围色往屏幕上方多铺的高度（下拉最多能拉出这么多）
-    private static var pullExtension: CGFloat { 800 }
 
     private var cardHeight: CGFloat {
         (max(width - Theme.contentInset * 2, 1) * 9 / 16).rounded()

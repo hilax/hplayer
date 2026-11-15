@@ -263,7 +263,9 @@ extension View {
     @ViewBuilder
     func pageScrollContainer() -> some View {
         if #available(iOS 18.0, *) {
+            // 坐标系也起上：轮播氛围层要量下拉了多少（见 AmbientHeroSection）
             modifier(PageScrollGeometryTracker())
+                .coordinateSpace(name: PageScrollSpace.name)
         } else {
             coordinateSpace(name: PageScrollSpace.name)
         }

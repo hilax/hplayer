@@ -169,8 +169,8 @@ struct HomeAmbientBackdrop: View {
     @ObservedObject var palette: HeroPalette
     /// 从屏幕顶端到轮播卡片下沿的高度：模糊画面铺满这一段
     let heroHeight: CGFloat
-    /// 往屏幕上方多铺的实色高度：下拉回弹时露出来的仍是氛围色
-    let extensionHeight: CGFloat
+    /// 下拉了多少：模糊画面跟着往上撑高这么多，盖住轮播上方露出来的部分
+    var pull: CGFloat = 0
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -193,27 +193,23 @@ struct HomeAmbientBackdrop: View {
         let image = palette.images[key]
         let average = palette.averages[key]
         let base = baseColor(average)
-        return VStack(spacing: 0) {
-            base.frame(height: extensionHeight)
-            ZStack(alignment: .top) {
-                base
-                if let image {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFill()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .clipped()
-                        .blur(radius: 34, opaque: true)
-                        .saturation(1.12)
-                    Color.black.opacity(veil(average))
-                    // 和上面那段实色接上，下拉时看不出接缝
-                    LinearGradient(colors: [base, base.opacity(0)], startPoint: .top, endPoint: .bottom)
-                        .frame(height: 48)
-                }
+        // 整块（含下拉撑出来的部分）是同一张模糊图，没有另接的实色段，所以没有接缝；
+        // 实色只垫在最底下，图片还没到时显示
+        return ZStack(alignment: .top) {
+            base
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
+                    .blur(radius: 34, opaque: true)
+                    .saturation(1.12)
+                Color.black.opacity(veil(average))
             }
-            .frame(height: heroHeight)
-            .clipped()
         }
+        .frame(height: heroHeight + pull)
+        .clipped()
     }
 
     /// 平均色压暗后的实色（往上拉露出来的部分、图片还没到时的底）
@@ -238,8 +234,9 @@ struct HomeAmbientBackdrop: View {
 
     /// 从上往下淡出：上面一段几乎不透明，卡片中部开始明显变淡，卡片下沿前完全淡进页面底色
     private var fade: some View {
-        let total = max(extensionHeight + heroHeight, 1)
-        func at(_ fraction: CGFloat) -> CGFloat { (extensionHeight + heroHeight * fraction) / total }
+        // 下拉撑出来的那段全不透明，淡出的位置仍按轮播卡片算
+        let total = max(pull + heroHeight, 1)
+        func at(_ fraction: CGFloat) -> CGFloat { (pull + heroHeight * fraction) / total }
         return LinearGradient(stops: [
             .init(color: .black, location: 0),
             .init(color: .black, location: at(0.12)),
