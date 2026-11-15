@@ -35,6 +35,8 @@ struct SocialComposer: View {
     @State private var captchaLoading = false
     @State private var answer = ""
     @FocusState private var focused: Bool
+    /// 已经在收起了：点遮罩和下划同时触发时只收一次
+    @State private var closing = false
     /// 键盘盖住了底下多高（按这一层的坐标算）。播放器在独立窗口里，安全区不一定把键盘算进去，这里自己量
     @State private var keyboardOverlap: CGFloat = 0
 
@@ -65,8 +67,15 @@ struct SocialComposer: View {
         GeometryReader { proxy in
             let insets = proxy.safeAreaInsets
             ZStack(alignment: .bottom) {
+                // 点一下或往下一划都收起；contentShape 保证整块遮罩都接得到手势
                 Color.black.opacity(Theme.Opacity.soft)
+                    .contentShape(Rectangle())
                     .onTapGesture(perform: close)
+                    .simultaneousGesture(
+                        DragGesture(minimumDistance: 12).onEnded { value in
+                            if value.translation.height > 24 { close() }
+                        }
+                    )
                     .accessibilityLabel("收起输入框")
                     .accessibilityAddTraits(.isButton)
                 bar(insets: EdgeInsets(top: insets.top, leading: insets.leading,
@@ -122,11 +131,10 @@ struct SocialComposer: View {
                     .accessibilityIdentifier("composer.style")
                 }
                 HStack(alignment: .bottom, spacing: 6) {
-                    TextField(placeholder, text: $text, axis: .vertical)
-                        .lineLimit(isDanmaku ? 1...1 : 1...4)
+                    textField
                         .focused($focused)
                         .submitLabel(.send)
-                        .onSubmit { if canSend { send() } }
+                        .onSubmit(submit)
                         .font(Theme.Typo.row)
                         .foregroundStyle(Theme.textPrimary)
                         .tint(Theme.accent)
@@ -206,9 +214,43 @@ struct SocialComposer: View {
 
     private static let colorNames = ["白色", "粉色", "橙色", "绿色", "蓝色", "紫色"]
 
+    /// 弹幕只有一行：用单行输入框，键盘上的「发送」才是真的发送（多行输入框按回车只会插一个换行，
+    /// 一行高的框里看起来就是字没了、框也收不掉）。评论可以写几行，回车同样当发送，见下面的 onChange。
+    @ViewBuilder
+    private var textField: some View {
+        if isDanmaku {
+            TextField(placeholder, text: $text)
+        } else {
+            TextField(placeholder, text: $text, axis: .vertical)
+                .lineLimit(1...4)
+                .onChange(of: text) { value in
+                    guard value.contains("\n") else { return }
+                    text = value.replacingOccurrences(of: "\n", with: "")
+                    submit()
+                }
+        }
+    }
+
+    /// 键盘上的「发送」：能发就发；什么都没写就收起；字数不够提示一下，键盘留着继续写
+    private func submit() {
+        if canSend {
+            send()
+        } else if trimmed.isEmpty {
+            close()
+        } else {
+            if trimmed.count < 3 { error = "至少写 3 个字" }
+            focused = true
+        }
+    }
+
     private func close() {
+        guard !closing else { return }
+        closing = true
         focused = false
-        onClose()
+        // 先让键盘真正收起，下一轮再拿掉这一层。输入框还在焦点上就被整层移除时，
+        // 键盘可能留在屏幕上、没有任何东西能再收起它（横屏播放器在独立窗口里尤其容易遇到）
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        DispatchQueue.main.async { onClose() }
     }
 
     private func loadCaptcha() {
