@@ -35,6 +35,8 @@ struct SocialComposer: View {
     @State private var captchaLoading = false
     @State private var answer = ""
     @FocusState private var focused: Bool
+    /// 键盘盖住了底下多高（按这一层的坐标算）。播放器在独立窗口里，安全区不一定把键盘算进去，这里自己量
+    @State private var keyboardOverlap: CGFloat = 0
 
     private var isDanmaku: Bool { target == .danmaku }
     private var limit: Int { isDanmaku ? 50 : 300 }
@@ -61,14 +63,26 @@ struct SocialComposer: View {
     var body: some View {
         // 自己读安全区（含键盘）：播放器在独立窗口里、外层又铺满了整块屏幕，不能指望宿主替它避让键盘
         GeometryReader { proxy in
+            let insets = proxy.safeAreaInsets
             ZStack(alignment: .bottom) {
                 Color.black.opacity(Theme.Opacity.soft)
                     .onTapGesture(perform: close)
                     .accessibilityLabel("收起输入框")
                     .accessibilityAddTraits(.isButton)
-                bar(insets: proxy.safeAreaInsets)
+                bar(insets: EdgeInsets(top: insets.top, leading: insets.leading,
+                                       bottom: max(insets.bottom, keyboardOverlap), trailing: insets.trailing))
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
+                guard let end = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
+                // 键盘的位置是屏幕坐标；这一层铺满整个窗口，用自己在屏幕上的下沿减去键盘上沿就是被盖住的高度
+                let bottom = proxy.frame(in: .global).maxY
+                let overlap = max(0, bottom - end.minY)
+                withAnimation(.easeOut(duration: 0.25)) { keyboardOverlap = overlap }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+                withAnimation(.easeOut(duration: 0.25)) { keyboardOverlap = 0 }
+            }
         }
         .ignoresSafeArea()
         .modifier(ComposerScheme(scheme: scheme))

@@ -25,10 +25,14 @@ final class TabBarUITests: XCTestCase {
 
         let mine = app.tabButton("我的")
         XCTAssertTrue(mine.waitForExistence(timeout: 25))
-        // 3.0：「我的」里两层深的路径用 开源许可 → 许可全文
+        // 「我的」里三层深的路径：关于 → 开源许可 → 许可全文
+        let about = app.buttons["settings.about"]
+        XCTAssertTrue(about.waitForExistence(timeout: 10))
+        for _ in 0..<8 where !about.isHittable { app.swipeUp() }
+        about.tap()
         let licenses = app.buttons["settings.licenses"]
         XCTAssertTrue(licenses.waitForExistence(timeout: 10))
-        for _ in 0..<8 where !licenses.isHittable { app.swipeUp() }
+        XCTAssertFalse(mine.isHittable)
         licenses.tap()
         let mpv = app.buttons["settings.license.MPVKit-LICENSE"]
         XCTAssertTrue(mpv.waitForExistence(timeout: 10))
@@ -42,8 +46,12 @@ final class TabBarUITests: XCTestCase {
         XCTAssertFalse(mine.isHittable, "A nested pop must not reveal the root tab bar")
 
         app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(licenses.waitForExistence(timeout: 5) && licenses.isHittable, "The second pop returns to About")
+        XCTAssertFalse(mine.isHittable, "A nested pop must not reveal the root tab bar")
+
+        app.navigationBars.buttons.element(boundBy: 0).tap()
         XCTAssertTrue(mine.isHittable && mine.isSelected)
-        XCTAssertTrue(licenses.waitForExistence(timeout: 5) && licenses.isHittable)
+        XCTAssertTrue(about.waitForExistence(timeout: 5) && about.isHittable)
     }
 
     /// 从片库、网盘点搜索再返回：原来的页面应该纹丝不动，不能随键盘弹出 / 收起而回弹。

@@ -60,8 +60,13 @@ struct AnimeTask: Identifiable, Equatable {
         action = AnimeJSON.string(json, ["action"]) ?? ""
         total = AnimeJSON.int(json, ["num", "max", "total", "limit"])
         done = AnimeJSON.int(json, ["finish_num", "finished_num", "done", "count", "progress", "user_num"])
-        let flag = json["isfinish"] ?? json["is_finish"] ?? json["finished"] ?? json["is_sign"] ?? json["issign"] ?? json["complete"]
-        if let flag {
+        // 完成标记的字段名没有文档：常见写法都认一遍（isfinish、is_complete、today_finish…）
+        let flagKey = json.keys.first { key in
+            let lower = key.lowercased()
+            return ["finish", "complete", "issign", "is_sign", "signed", "is_done", "isdone"].contains { lower.contains($0) }
+        }
+        let flag = flagKey.flatMap { json[$0] }
+        if let flag, !(flag is [Any]), !(flag is [String: Any]) {
             finished = DramaJSON.bool(flag)
         } else if let done, let total, total > 0 {
             finished = done >= total
@@ -162,8 +167,28 @@ final class AnimeAccount: ObservableObject {
 
     var totalUnread: Int { unread.values.reduce(0, +) }
 
-    /// 今天的签到任务完成了没有
-    var signedToday: Bool { tasks.first(where: \.isSign)?.finished ?? false }
+    /// 今天的签到任务完成了没有：任务列表说完成了，或者本机记着今天签过（签到成功 / 服务端说已经签过）
+    var signedToday: Bool {
+        (tasks.first(where: \.isSign)?.finished ?? false) || signedDay == Self.today()
+    }
+
+    /// 本机记的最近一次签到日期（按账号分开记）
+    @Published private var signedDay: String = ""
+
+    private var signedDayKey: String { "anime.signedDay.\(user?.id ?? 0)" }
+
+    private static func today() -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = TimeZone(identifier: "Asia/Shanghai")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: Date())
+    }
+
+    private func rememberSignedToday() {
+        signedDay = Self.today()
+        UserDefaults.standard.set(signedDay, forKey: signedDayKey)
+    }
 
     // MARK: 验证码
 
@@ -243,6 +268,7 @@ final class AnimeAccount: ObservableObject {
         user = nil
         tasks = []
         unread = [:]
+        signedDay = ""
         lastError = message
     }
 
@@ -267,7 +293,10 @@ final class AnimeAccount: ObservableObject {
     private func loadUser() async {
         do {
             let data = try await AnimeClient.shared.perform("/app/users/info")
-            if let json = data as? [String: Any] { user = AnimeUser(json: json) }
+            if let json = data as? [String: Any] {
+                user = AnimeUser(json: json)
+                signedDay = UserDefaults.standard.string(forKey: signedDayKey) ?? ""
+            }
         } catch {
             if isSignedIn { lastError = error.localizedDescription }
         }
@@ -308,10 +337,16 @@ final class AnimeAccount: ObservableObject {
         return result.filter { $0.value > 0 }
     }
 
-    /// 每日签到
+    /// 每日签到。服务端回「任务已被完成」说明今天已经签过：当成签到成功，不再提示错误
     func signToday() async throws {
-        try await AnimeClient.shared.perform("/app/task/sign", method: "POST", body: [:])
-        Haptics.success()
+        do {
+            try await AnimeClient.shared.perform("/app/task/sign", method: "POST", body: [:])
+            Haptics.success()
+        } catch {
+            let text = error.localizedDescription
+            guard text.contains("已被完成") || text.contains("已签到") || text.contains("已经签到") else { throw error }
+        }
+        rememberSignedToday()
         await refresh()
     }
 

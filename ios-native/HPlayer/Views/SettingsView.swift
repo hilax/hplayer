@@ -20,15 +20,7 @@ struct SettingsView: View {
     @State private var signInMode: AnimeSignInSheet.Mode?
     @State private var confirmSignOut = false
     @State private var signing = false
-    @State private var showDiagnostics = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    // 播放偏好：和播放页用的是同一组键
-    @AppStorage("player.autoPlayNext") private var autoPlayNext = true
-    @State private var decoding = VideoDecoding.saved
-    @State private var readahead = ReadaheadLevel.saved
-    @State private var subtitleStyle = SubtitleStyle.saved
-    @State private var autoPictureInPicture = PictureInPictureSettings.automatic
 
     // 弹幕偏好：和播放页的弹幕设置是同一组键
     @AppStorage(DanmakuPrefs.enabled) private var danmakuEnabled = true
@@ -43,12 +35,8 @@ struct SettingsView: View {
                     .scrolledAway($titleAway)
                 accountCard.reveal(0)
                 activityGroup.reveal(1)
-                playbackGroup.reveal(2)
-                danmakuGroup.reveal(3)
-                appearanceGroup.reveal(4)
-                mediaGroup.reveal(5)
-                aboutGroup.reveal(6)
-                if account.isSignedIn { signOutRow.reveal(7) }
+                settingsGroup.reveal(2)
+                if account.isSignedIn { signOutRow.reveal(3) }
             }
             .frame(maxWidth: 620)
             .frame(maxWidth: .infinity)
@@ -64,20 +52,6 @@ struct SettingsView: View {
         .refreshable { await account.refresh() }
         .task { await account.refreshIfNeeded() }
         .sheet(item: $signInMode) { mode in AnimeSignInSheet(startWith: mode) }
-        .navigationDestination(isPresented: $showDiagnostics) { AnimeDiagnosticsView() }
-        // 播放页里也能改这几项：回到这一页时重新读一遍
-        .onAppear(perform: reloadPlayerPreferences)
-        .onChange(of: decoding) { VideoDecoding.saved = $0 }
-        .onChange(of: readahead) { ReadaheadLevel.saved = $0 }
-        .onChange(of: subtitleStyle) { SubtitleStyle.saved = $0 }
-        .onChange(of: autoPictureInPicture) { PictureInPictureSettings.automatic = $0 }
-    }
-
-    private func reloadPlayerPreferences() {
-        decoding = VideoDecoding.saved
-        readahead = ReadaheadLevel.saved
-        subtitleStyle = SubtitleStyle.saved
-        autoPictureInPicture = PictureInPictureSettings.automatic
     }
 
     // MARK: 账号
@@ -313,10 +287,56 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: 播放
+    // MARK: 设置
 
-    private var playbackGroup: some View {
-        SettingsSection(title: "播放", footnote: "从下一次打开播放器开始生效。播放时也可以在播放页的「更多」里临时调整。") {
+    /// 设置收成一组：播放、弹幕、外观、媒体库管理、关于，各自推进二级页
+    private var settingsGroup: some View {
+        SettingsSection(title: "设置") {
+            NavigationLink { PlaybackSettingsView() } label: {
+                LibraryActionRow(symbol: AppIcon.playback.name, title: "播放")
+            }
+            .buttonStyle(.pressable(scale: 0.985))
+            .accessibilityIdentifier("mine.playback")
+            NavigationLink { DanmakuStyleView() } label: {
+                LibraryActionRow(symbol: AppIcon.danmaku.name, title: "弹幕",
+                                 value: danmakuEnabled ? DanmakuStyleView.summary(area: danmakuArea, opacity: danmakuOpacity) : "已关闭")
+            }
+            .buttonStyle(.pressable(scale: 0.985))
+            .accessibilityIdentifier("mine.danmaku.style")
+            NavigationLink { AppearanceSettingsView() } label: {
+                LibraryActionRow(symbol: AppIcon.appearance.name, title: "外观", value: appearance.title)
+            }
+            .buttonStyle(.pressable(scale: 0.985))
+            .accessibilityIdentifier("settings.appearance")
+            // 和其他二级页面一样从右侧推入，用系统返回键；资料来源在媒体库管理里
+            NavigationLink { LibraryManagementView(pushed: true) } label: {
+                LibraryActionRow(symbol: AppIcon.folderSettings.name, title: "媒体库管理")
+            }
+            .buttonStyle(.pressable(scale: 0.985))
+            .accessibilityIdentifier("mine.manage")
+            NavigationLink { AboutView() } label: {
+                LibraryActionRow(symbol: AppIcon.info.name, title: "关于", value: AboutView.shortVersion)
+            }
+            .buttonStyle(.pressable(scale: 0.985))
+            .accessibilityIdentifier("settings.about")
+        }
+    }
+}
+
+// MARK: - 播放设置
+
+/// 「我的 › 播放」：自动连播、自动小窗、字幕样式、边播边存、解码方式。和播放页用的是同一组偏好。
+struct PlaybackSettingsView: View {
+    @AppStorage("player.autoPlayNext") private var autoPlayNext = true
+    @State private var decoding = VideoDecoding.saved
+    @State private var readahead = ReadaheadLevel.saved
+    @State private var subtitleStyle = SubtitleStyle.saved
+    @State private var autoPictureInPicture = PictureInPictureSettings.automatic
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: Theme.Space.xl) {
+        SettingsSection(title: "", footnote: "从下一次打开播放器开始生效。播放时也可以在播放页的「更多」里临时调整。") {
             SettingRow(icon: .autoPlayNext, title: "自动连播") {
                 Toggle("自动连播", isOn: $autoPlayNext)
                     .labelsHidden()
@@ -344,80 +364,75 @@ struct SettingsView: View {
                                    title: \.title, identifier: "mine.playback.decoding")
             }
         }
-    }
-
-    // MARK: 弹幕
-
-    /// 弹幕：开关在这里；样式（区域、不透明度、字号、速度）放进单独一页，带实时预览。
-    private var danmakuGroup: some View {
-        SettingsSection(title: "弹幕") {
-            SettingRow(icon: .danmaku, title: "显示弹幕") {
-                Toggle("显示弹幕", isOn: $danmakuEnabled)
-                    .labelsHidden()
-                    .tint(Theme.accentFill)
-                    .accessibilityIdentifier("mine.danmaku")
             }
-            NavigationLink { DanmakuStyleView() } label: {
-                LibraryActionRow(symbol: AppIcon.danmakuStyle.name, title: "弹幕样式", value: DanmakuStyleView.summary(area: danmakuArea, opacity: danmakuOpacity))
-            }
-            .buttonStyle(.pressable(scale: 0.985))
-            .accessibilityIdentifier("mine.danmaku.style")
+            .frame(maxWidth: 620)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, Theme.contentInset)
+            .padding(.vertical, Theme.Space.lg)
         }
-    }
-
-    // MARK: 外观、媒体库、关于
-
-    private var appearanceGroup: some View {
-        SettingsSection(title: "外观") {
-            NavigationLink { AppearanceSettingsView() } label: {
-                LibraryActionRow(symbol: AppIcon.appearance.name, title: "显示方式", value: appearance.title)
-            }
-            .buttonStyle(.pressable(scale: 0.985))
-            .accessibilityIdentifier("settings.appearance")
-            NavigationLink { AppIconSettingsView() } label: {
-                LibraryActionRow(symbol: AppIcon.appIconStyle.name, title: "应用图标")
-            }
-            .buttonStyle(.pressable(scale: 0.985))
-            .accessibilityIdentifier("settings.appIcon")
+        .scrollIndicators(.hidden)
+        .background(Theme.pageBackground.ignoresSafeArea())
+        .navigationTitle("播放")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
+        .designScreen("playback-settings")
+        // 播放页里也能改这几项：回到这一页时重新读一遍
+        .onAppear {
+            decoding = VideoDecoding.saved
+            readahead = ReadaheadLevel.saved
+            subtitleStyle = SubtitleStyle.saved
+            autoPictureInPicture = PictureInPictureSettings.automatic
         }
+        .onChange(of: decoding) { VideoDecoding.saved = $0 }
+        .onChange(of: readahead) { ReadaheadLevel.saved = $0 }
+        .onChange(of: subtitleStyle) { SubtitleStyle.saved = $0 }
+        .onChange(of: autoPictureInPicture) { PictureInPictureSettings.automatic = $0 }
+    }
+}
+
+// MARK: - 关于
+
+/// 「我的 › 关于」：版本（长按进接口诊断）、开源许可
+struct AboutView: View {
+    @State private var showDiagnostics = false
+
+    static var shortVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
     }
 
-    private var mediaGroup: some View {
-        SettingsSection(title: "媒体库") {
-            // 和其他二级页面一样从右侧推入，用系统返回键
-            NavigationLink { LibraryManagementView(pushed: true) } label: {
-                LibraryActionRow(symbol: AppIcon.folderSettings.name, title: "媒体库管理")
-            }
-            .buttonStyle(.pressable(scale: 0.985))
-            .accessibilityIdentifier("mine.manage")
-            NavigationLink {
-                MetadataSourcesView()
-            } label: {
-                LibraryActionRow(symbol: AppIcon.metadataSources.name, title: "资料来源")
-            }
-            .buttonStyle(.pressable(scale: 0.985))
-            .accessibilityIdentifier("mine.sources")
-        }
-    }
-
-    private var aboutGroup: some View {
-        SettingsSection(title: "关于") {
-            // 长按版本号进入接口诊断：登录后对一下账号接口的真实返回
-            LibraryActionRow(symbol: AppIcon.version.name, title: "版本", value: appVersion, showsChevron: false)
-                .contentShape(Rectangle())
-                .onLongPressGesture(minimumDuration: 0.8) {
-                    Haptics.success()
-                    showDiagnostics = true
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: Theme.Space.xl) {
+                SettingsSection(title: "") {
+                    // 长按版本号进入接口诊断：登录后对一下账号接口的真实返回
+                    LibraryActionRow(symbol: AppIcon.version.name, title: "版本", value: appVersion, showsChevron: false)
+                        .contentShape(Rectangle())
+                        .onLongPressGesture(minimumDuration: 0.8) {
+                            Haptics.success()
+                            showDiagnostics = true
+                        }
+                    NavigationLink {
+                        LicensesView()
+                            .toolbar(.visible, for: .navigationBar)
+                    } label: {
+                        LibraryActionRow(symbol: AppIcon.license.name, title: "开源许可")
+                    }
+                    .buttonStyle(.pressable(scale: 0.985))
+                    .accessibilityIdentifier("settings.licenses")
                 }
-            NavigationLink {
-                LicensesView()
-                    .toolbar(.visible, for: .navigationBar)
-            } label: {
-                LibraryActionRow(symbol: AppIcon.license.name, title: "开源许可")
             }
-            .buttonStyle(.pressable(scale: 0.985))
-            .accessibilityIdentifier("settings.licenses")
+            .frame(maxWidth: 620)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, Theme.contentInset)
+            .padding(.vertical, Theme.Space.lg)
         }
+        .scrollIndicators(.hidden)
+        .background(Theme.pageBackground.ignoresSafeArea())
+        .navigationTitle("关于")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
+        .navigationDestination(isPresented: $showDiagnostics) { AnimeDiagnosticsView() }
+        .designScreen("about")
     }
 
     private var appVersion: String {
@@ -474,10 +489,18 @@ struct DanmakuStyleView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Space.xl) {
+                SettingsSection(title: "") {
+                    SettingRow(icon: .danmaku, title: "显示弹幕") {
+                        Toggle("显示弹幕", isOn: $enabled)
+                            .labelsHidden()
+                            .tint(Theme.accentFill)
+                            .accessibilityIdentifier("mine.danmaku")
+                    }
+                }
                 VStack(alignment: .leading, spacing: Theme.Space.sm) {
                     DanmakuPreview(area: area, opacity: opacity, scale: scale, enabled: enabled)
                     if !enabled {
-                        Text("弹幕已关闭，预览里不显示。可以在「我的」里打开。")
+                        Text("弹幕已关闭，预览里不显示。打开上面的开关即可。")
                             .font(Theme.Typo.caption)
                             .foregroundStyle(Theme.textTertiary)
                             .padding(.horizontal, Theme.Space.xs)
@@ -512,7 +535,7 @@ struct DanmakuStyleView: View {
         }
         .scrollIndicators(.hidden)
         .background(Theme.pageBackground.ignoresSafeArea())
-        .navigationTitle("弹幕样式")
+        .navigationTitle("弹幕")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
         .designScreen("danmaku-style")
@@ -611,6 +634,13 @@ struct AppearanceSettingsView: View {
                     AppearancePicker(selection: $appearance)
                         .padding(.horizontal, Theme.Space.lg)
                         .padding(.vertical, Theme.Space.page)
+                }
+                SettingsSection(title: "") {
+                    NavigationLink { AppIconSettingsView() } label: {
+                        LibraryActionRow(symbol: AppIcon.appIconStyle.name, title: "应用图标")
+                    }
+                    .buttonStyle(.pressable(scale: 0.985))
+                    .accessibilityIdentifier("settings.appIcon")
                 }
             }
             .frame(maxWidth: 620).frame(maxWidth: .infinity)

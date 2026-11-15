@@ -134,7 +134,6 @@ final class SettingsUITests: XCTestCase {
 
         let appearance = app.buttons["settings.appearance"]
         XCTAssertTrue(appearance.waitForExistence(timeout: 10))
-        // 3.0 起「我的」多了播放、弹幕两组，外观在第一屏下面一点
         for _ in 0..<6 where !appearance.isHittable { app.swipeUp() }
         let settingsShot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         settingsShot.name = "Settings - redesign"
@@ -153,8 +152,11 @@ final class SettingsUITests: XCTestCase {
         XCTAssertTrue(wait { system.isSelected }, "System appearance should become selected")
 
         app.navigationBars.buttons.element(boundBy: 0).tap()
+        let about = app.buttons["settings.about"]
+        for _ in 0..<8 where !about.isHittable { app.swipeUp() }
+        XCTAssertTrue(about.waitForExistence(timeout: 5))
+        about.tap()
         let licenses = app.buttons["settings.licenses"]
-        for _ in 0..<8 where !licenses.isHittable { app.swipeUp() }
         XCTAssertTrue(licenses.waitForExistence(timeout: 5))
         XCTAssertTrue(licenses.isHittable)
         licenses.tap()
@@ -177,10 +179,17 @@ final class SettingsUITests: XCTestCase {
     }
 
     private func openIconSettings(in app: XCUIApplication) {
-        let settings = app.tabButton("我的")
-        XCTAssertTrue(settings.waitForExistence(timeout: 20))
-        settings.tap()
         let iconSettings = app.buttons["settings.appIcon"]
+        // 应用图标在「我的 › 外观」里；已经停在外观页（从图标页返回一层）时直接点
+        if !iconSettings.waitForExistence(timeout: 2) {
+            let settings = app.tabButton("我的")
+            XCTAssertTrue(settings.waitForExistence(timeout: 20))
+            settings.tap()
+            let appearance = app.buttons["settings.appearance"]
+            for _ in 0..<6 where !appearance.isHittable { app.swipeUp() }
+            XCTAssertTrue(appearance.waitForExistence(timeout: 10))
+            appearance.tap()
+        }
         for _ in 0..<6 where !iconSettings.isHittable { app.swipeUp() }
         XCTAssertTrue(iconSettings.waitForExistence(timeout: 10))
         iconSettings.tap()
