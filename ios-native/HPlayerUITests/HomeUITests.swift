@@ -33,7 +33,7 @@ final class HomeUITests: XCTestCase {
         XCTAssertFalse(account.label.contains("2 GB"), "Switching tabs should not repeat the capacity request")
         XCTAssertFalse(app.staticTexts["检查中"].exists)
 
-        // 退出 115：点账号条打开账号面板
+        // 退出 115：点账号条推进 115 账号页
         account.tap()
         let logout = app.buttons["cloud.account.logout"]
         XCTAssertTrue(logout.waitForExistence(timeout: 5))
@@ -41,8 +41,9 @@ final class HomeUITests: XCTestCase {
         app.buttons.matching(identifier: "cloud.account.confirmLogout").firstMatch.tap()
         // 退出后网盘页换成登录引导，账号条随之消失
         XCTAssertTrue(app.buttons["cloud.login"].waitForExistence(timeout: 5), "Signed out, the Cloud tab shows the login card")
-        XCTAssertFalse(account.exists, "The account strip disappears after signing out")
-        XCTAssertFalse(app.staticTexts["测试账号 1"].exists)
+        // 账号页随导航栈退回根页，等退场动画走完再判断
+        XCTAssertTrue(wait { !account.exists && !app.staticTexts["测试账号 1"].exists },
+                      "The account strip and account page disappear after signing out")
     }
 
     func testPosterLibraryAndManualMatching() {
