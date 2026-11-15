@@ -74,6 +74,9 @@ struct DramaFeedView: View {
         ZStack {
             ForEach(visiblePositions, id: \.self) { position in
                 if let player = model.player(at: position), let episode = model.episode(at: position) {
+                    let offset = CGFloat(position - model.index) * size.height + drag
+                    // 整页（画面、选集 / 倍速、剧名、进度条）跟着手指一起走，下一集贴着从底下顶上来。
+                    // 离开屏幕中间越远，页上的文字和按钮越淡，视线自然落到正在进来的那一集上。
                     DramaFeedPage(
                         player: player,
                         detail: model.detail,
@@ -82,10 +85,17 @@ struct DramaFeedView: View {
                         size: size,
                         insets: insets,
                         isActive: position == model.index,
+                        chromeOpacity: Self.chromeOpacity(offset: offset, height: size.height),
+                        speedLabel: speedLabel,
                         scrubbing: $scrubbing,
+                        onEpisodes: {
+                            model.pauseCurrent()
+                            showEpisodes = true
+                        },
+                        onSpeed: cycleSpeed,
                         onFullscreen: { setFullscreen(true) }
                     )
-                    .offset(y: CGFloat(position - model.index) * size.height + drag)
+                    .offset(y: offset)
                     .transition(.identity)
                     .accessibilityHidden(position != model.index)
                 }
@@ -97,6 +107,13 @@ struct DramaFeedView: View {
         .simultaneousGesture(pagingGesture(height: size.height))
         .accessibilityAction(named: "下一集") { go(to: model.index + 1) }
         .accessibilityAction(named: "上一集") { go(to: model.index - 1) }
+    }
+
+    /// 页上文字和按钮的透明度：在屏幕正中是 1，移开半屏左右淡到 0.25
+    static func chromeOpacity(offset: CGFloat, height: CGFloat) -> Double {
+        guard height > 0 else { return 1 }
+        let distance = min(abs(offset) / height, 1)
+        return Double(1 - min(distance * 1.5, 0.75))
     }
 
     private var visiblePositions: [Int] {
@@ -126,11 +143,12 @@ struct DramaFeedView: View {
                 }
                 let moved = value.translation.height
                 let predicted = value.predictedEndTranslation.height
-                let threshold = height * 0.16
+                // 拖过 15% 屏高，或者轻轻一甩（按速度预测能走到 30% 屏高）就翻页，和抖音的手感接近
+                let threshold = height * 0.15
                 var target = model.index
-                if moved < -threshold || predicted < -height * 0.45 {
+                if moved < -threshold || predicted < -height * 0.3 {
                     target += 1
-                } else if moved > threshold || predicted > height * 0.45 {
+                } else if moved > threshold || predicted > height * 0.3 {
                     target -= 1
                 }
                 if target >= model.count { hint("已经是最后一集了") }
@@ -139,13 +157,14 @@ struct DramaFeedView: View {
             }
     }
 
+    /// 松手后吸附到位：临界阻尼弹簧，快速减速、不过冲回弹（抖音的翻页也不会弹一下）
     private var pageAnimation: Animation {
-        reduceMotion ? .easeOut(duration: 0.2) : .spring(response: 0.36, dampingFraction: 0.9)
+        reduceMotion ? .easeOut(duration: 0.2) : .spring(response: 0.3, dampingFraction: 1)
     }
 
+    /// 翻页不震动：连续刷的时候每页一震会很吵
     private func go(to target: Int) {
         let valid = min(max(0, target), model.count - 1)
-        if valid != model.index { Haptics.select() }
         withAnimation(pageAnimation) {
             if valid != model.index { model.show(valid) }
             drag = 0
@@ -160,7 +179,8 @@ struct DramaFeedView: View {
         }
     }
 
-    // MARK: 固定在屏幕上的按钮（不随翻页移动）
+    // MARK: 固定在屏幕上的部分（不随翻页移动）：返回、剧名、到头提示
+    // 选集和倍速属于每一集的页面，在 DramaFeedPage 里，跟着翻页一起走。
 
     private func chrome(insets: EdgeInsets) -> some View {
         ZStack(alignment: .top) {
@@ -189,20 +209,6 @@ struct DramaFeedView: View {
             .padding(.top, insets.top + 2)
             .padding(.horizontal, 6)
 
-            VStack(spacing: 22) {
-                Spacer()
-                railButton(icon: .playlist, title: "选集",
-                           identifier: "drama.feed.episodes") {
-                    model.pauseCurrent()
-                    showEpisodes = true
-                }
-                railButton(icon: .speed, title: speedLabel,
-                           identifier: "drama.feed.speed") { cycleSpeed() }
-            }
-            .frame(maxWidth: .infinity, alignment: .trailing)
-            .padding(.trailing, 10)
-            .padding(.bottom, insets.bottom + 150)
-
             if let edgeHint {
                 Text(edgeHint)
                     .font(.scaled(13, weight: .semibold))
@@ -215,24 +221,6 @@ struct DramaFeedView: View {
                     .allowsHitTesting(false)
             }
         }
-    }
-
-    private func railButton(icon: AppIcon, title: String, identifier: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            VStack(spacing: 4) {
-                Image(systemName: icon.name)
-                    .font(.scaled(24, weight: .semibold))
-                Text(title)
-                    .font(.scaled(11, weight: .semibold).monospacedDigit())
-            }
-            .foregroundStyle(.white)
-            .shadow(color: .black.opacity(Theme.Opacity.medium), radius: 4)
-            .frame(width: 56, height: 56)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.pressable(scale: 0.88))
-        .accessibilityLabel(title)
-        .accessibilityIdentifier(identifier)
     }
 
     private var speedLabel: String {
@@ -284,7 +272,12 @@ private struct DramaFeedPage: View {
     let size: CGSize
     let insets: EdgeInsets
     let isActive: Bool
+    /// 翻页途中页上文字和按钮的透明度（画面本身不变淡）
+    var chromeOpacity: Double = 1
+    let speedLabel: String
     @Binding var scrubbing: Bool
+    let onEpisodes: () -> Void
+    let onSpeed: () -> Void
     let onFullscreen: () -> Void
 
     @State private var boosting = false
@@ -323,11 +316,14 @@ private struct DramaFeedPage: View {
 
             statusLayer
 
-            if !player.isPortraitVideo, player.state == .ready {
-                fullscreenButton
+            Group {
+                if !player.isPortraitVideo, player.state == .ready {
+                    fullscreenButton
+                }
+                info
+                rail
             }
-
-            info
+            .opacity(chromeOpacity)
         }
         .frame(width: size.width, height: size.height)
         .contentShape(Rectangle())
@@ -416,6 +412,40 @@ private struct DramaFeedPage: View {
         .buttonStyle(.pressable(scale: 0.94))
         .offset(y: videoHeight / 2 + 34)
         .accessibilityIdentifier("drama.feed.fullscreen")
+    }
+
+    // MARK: 右侧：选集、倍速（属于这一页，翻页时一起移动）
+
+    private var rail: some View {
+        VStack(spacing: 22) {
+            Spacer()
+            railButton(icon: .playlist, title: "选集", identifier: "drama.feed.episodes", action: onEpisodes)
+            railButton(icon: .speed, title: speedLabel, identifier: "drama.feed.speed", action: onSpeed)
+        }
+        .padding(.trailing, 10)
+        .padding(.bottom, insets.bottom + 150)
+        .frame(width: size.width, height: size.height, alignment: .bottomTrailing)
+    }
+
+    private func railButton(icon: AppIcon, title: String, identifier: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Image(systemName: icon.name)
+                    .font(.scaled(24, weight: .semibold))
+                Text(title)
+                    .font(.scaled(11, weight: .semibold).monospacedDigit())
+            }
+            .foregroundStyle(.white)
+            .shadow(color: .black.opacity(Theme.Opacity.medium), radius: 4)
+            .frame(width: 56, height: 56)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.pressable(scale: 0.88))
+        // 只有正中这一页的按钮能点，翻页途中露出来的半页不响应。
+        // 不用 .disabled：按压样式会把不可用按钮压暗，翻到位时按钮会突然变亮。
+        .allowsHitTesting(isActive)
+        .accessibilityLabel(title)
+        .accessibilityIdentifier(identifier)
     }
 
     // MARK: 底部：剧名、简介、进度
