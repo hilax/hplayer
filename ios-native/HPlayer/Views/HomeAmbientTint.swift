@@ -178,7 +178,7 @@ struct HomeAmbientBackdrop: View {
     var body: some View {
         let key = state.key ?? ""
         let ready = palette.images[key] != nil
-        ZStack {
+        let layers = ZStack {
             if !key.isEmpty {
                 layer(key: key)
                     .id(key + (ready ? "#ready" : "#pending"))
@@ -186,9 +186,20 @@ struct HomeAmbientBackdrop: View {
             }
         }
         .animation(.easeInOut(duration: 0.6), value: key + (ready ? "#ready" : "#pending"))
-        .mask(fade)
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
+
+        layers
+            .mask(fade)
+            // 顶上再接一份上下镜像（紧贴着，接缝两边是同一行像素，颜色完全连续）。
+            // 下拉距离是量出来的，总比手指慢一帧：拉得快时模糊层还没撑上来，以前露出的是一截页面底色，
+            // 现在露出的是镜像过来的模糊画面。画面本来就重度模糊，看不出是镜像
+            .overlay(alignment: .top) {
+                layers
+                    .scaleEffect(x: 1, y: -1)
+                    .frame(height: heroHeight + pull)
+                    .offset(y: -(heroHeight + pull))
+            }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 
     private func layer(key: String) -> some View {
