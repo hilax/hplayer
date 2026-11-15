@@ -9,9 +9,6 @@ import Combine
 ///   搜索框滑到屏幕顶端后固定住，下面的内容继续往上滚；固定后头部铺上页面底色；
 /// - 每一页自己的滚动位置各记各的，换页时头部按那一页的位置显示。
 ///
-/// 首页用 `.searchFirst` 布局（见 PagedHeaderLayout）：搜索框在上、频道条在下，往上滑搜索框收起、
-/// 频道条钉在顶端，往下滑一点搜索框就回来。磁力页仍是默认布局。
-///
 /// 每一页要做两件事：内容最上面留出 `channelPageInsets.top` 的空白（头部盖在这里），
 /// 给滚动内容加 `.tracksPageScroll()` 把滚动位置报上来。
 struct PagedHeaderContainer<Page: Hashable, FirstRow: View, SecondRow: View, Content: View>: View {
@@ -22,7 +19,6 @@ struct PagedHeaderContainer<Page: Hashable, FirstRow: View, SecondRow: View, Con
     let content: (Page) -> Content
     /// 盖在分页上面、头部下面的内容（例如磁力页搜索结果）；有它时不显示分页
     var overlay: AnyView?
-    var layout: PagedHeaderLayout = .categoriesFirst
 
     /// 各页的滚动位置；只有头部订阅，页面本身不随滚动重算
     @State private var scroll = PageScrollState()
@@ -30,14 +26,12 @@ struct PagedHeaderContainer<Page: Hashable, FirstRow: View, SecondRow: View, Con
     @State private var heroPages: Set<Page> = []
 
     init(pages: [Page], selection: Binding<Page>, overlay: AnyView? = nil,
-         layout: PagedHeaderLayout = .categoriesFirst,
          @ViewBuilder firstRow: @escaping () -> FirstRow,
          @ViewBuilder secondRow: @escaping () -> SecondRow,
          @ViewBuilder content: @escaping (Page) -> Content) {
         self.pages = pages
         _selection = selection
         self.overlay = overlay
-        self.layout = layout
         self.firstRow = firstRow
         self.secondRow = secondRow
         self.content = content
@@ -67,7 +61,7 @@ struct PagedHeaderContainer<Page: Hashable, FirstRow: View, SecondRow: View, Con
 
                 PagedHeader(state: scroll, key: overlay == nil ? AnyHashable(selection) : AnyHashable(Self.overlayKey),
                             safeTop: safeTop, onArtwork: overlay == nil && heroPages.contains(selection),
-                            layout: layout, firstRow: firstRow, secondRow: secondRow)
+                            firstRow: firstRow, secondRow: secondRow)
             }
             .ignoresSafeArea(edges: .top)
         }
@@ -166,23 +160,13 @@ struct PagedHeaderContainer<Page: Hashable, FirstRow: View, SecondRow: View, Con
     }
 }
 
-/// 头部两行怎么排、怎么收
-enum PagedHeaderLayout {
-    /// 分类条在上、搜索框在下：滚动 0～54pt 时整体上移、分类条淡出；之后搜索框固定在顶端（磁力页）
-    case categoriesFirst
-    /// 搜索框在上、分类条在下（首页，和 B 站首页一样）：往上滑搜索框跟着手指收起、分类条钉在状态栏下面；
-    /// 往下滑一点（不用回到顶部）搜索框就跟着手指回来；停在半路时吸附到全收或全开
-    case searchFirst
-}
-
-/// 头部：分类条 + 搜索框，按 PagedHeaderLayout 排列和收起。
+/// 头部：分类条 + 搜索框。滚动 0～54pt 时整体上移、第一行淡出；之后搜索框固定在顶端。
 struct PagedHeader<FirstRow: View, SecondRow: View>: View {
     @ObservedObject var state: PageScrollState
     let key: AnyHashable
     let safeTop: CGFloat
     /// 当前页顶部有轮播氛围层：没收起时频道条白字、搜索框磨砂
     var onArtwork = false
-    var layout: PagedHeaderLayout = .categoriesFirst
     let firstRow: () -> FirstRow
     let secondRow: () -> SecondRow
 
@@ -193,60 +177,12 @@ struct PagedHeader<FirstRow: View, SecondRow: View>: View {
     static var height: CGFloat { rowHeight + spacing + searchHeight + 10 }
     /// 收起的距离：第一行和它下面的间距
     static var collapseDistance: CGFloat { rowHeight + spacing }
-    /// searchFirst 布局里搜索框上面留的空（总高和默认布局一样，内容的上边距不用变）
-    static var searchTopPadding: CGFloat { PagedHeaderLimits.quickReturnDistance - searchHeight - spacing }
 
     var body: some View {
-        switch layout {
-        case .categoriesFirst: categoriesFirstBody
-        case .searchFirst: searchFirstBody
-        }
-    }
-
-    /// 搜索框在上：收起量按滚动方向累加（PageScrollState.collapses），不是按离顶部多远
-    private var searchFirstBody: some View {
-        let distance = PagedHeaderLimits.quickReturnDistance
-        let offset = max(0, state.offsets[key] ?? 0)
-        // 底色按内容滚上来多少铺：搜索框中途回来时下面已经有内容，底色要在
-        let scrolled = min(offset / distance, 1)
-        let collapse = min(max(state.collapses[key] ?? 0, 0), distance)
-        let progress = collapse / distance
-        // 比位移淡得快一点：收到一半时已经看不见，不会压在状态栏的字上
-        let searchOpacity = Double(max(0, 1 - progress * 1.6))
-        let searchScale: CGFloat = 1 - progress * 0.06
-        return ZStack(alignment: .top) {
-            Theme.pageBackground
-                .frame(height: safeTop + Self.height - collapse)
-                .opacity(Double(scrolled))
-                .overlay(alignment: .bottom) {
-                    Theme.hairline.frame(height: 0.5).opacity(scrolled >= 1 ? 1 : 0)
-                }
-                .allowsHitTesting(false)
-
-            VStack(spacing: Self.spacing) {
-                secondRow()
-                    .frame(height: Self.searchHeight)
-                    .opacity(searchOpacity)
-                    .scaleEffect(searchScale, anchor: .bottom)
-                    .allowsHitTesting(progress < 0.5)
-                    .accessibilityHidden(progress >= 1)
-                firstRow()
-                    .frame(height: Self.rowHeight)
-            }
-            .padding(.top, safeTop + Self.searchTopPadding)
-            .offset(y: -collapse)
-            .environment(\.pagedHeaderCollapse, progress)
-            .environment(\.onHeroArtwork, onArtwork && scrolled < 0.6)
-            .animation(.easeInOut(duration: 0.2), value: onArtwork && scrolled < 0.6)
-        }
-        .frame(maxWidth: .infinity, alignment: .top)
-    }
-
-    private var categoriesFirstBody: some View {
         let offset = max(0, state.offsets[key] ?? 0)
         let collapse = min(offset, Self.collapseDistance)
         let progress = collapse / Self.collapseDistance
-        return ZStack(alignment: .top) {
+        ZStack(alignment: .top) {
             // 收起后头部铺上页面底色，下面滚上来的内容不会从搜索框后面透出来
             Theme.pageBackground
                 .frame(height: safeTop + Self.height - collapse)
@@ -276,41 +212,6 @@ struct PagedHeader<FirstRow: View, SecondRow: View>: View {
 /// 各页的滚动距离（向上滚为正）
 final class PageScrollState: ObservableObject {
     @Published var offsets: [AnyHashable: CGFloat] = [:]
-    /// searchFirst 布局：各页搜索框收起了多少（0～quickReturnDistance）。按滚动方向累加：
-    /// 往上滑加、往下滑减，所以不用回到顶部、往下滑一点就展开。只有变化时才发布，
-    /// 一直往同一个方向滚长列表时（已经全收或全开）头部不跟着每帧重算
-    @Published var collapses: [AnyHashable: CGFloat] = [:]
-    /// 上一次报上来的完整滚动距离（不发布）
-    private var lastOffsets: [AnyHashable: CGFloat] = [:]
-    private var snapTask: Task<Void, Never>?
-
-    func trackQuickReturn(key: AnyHashable, offset: CGFloat) {
-        let distance = PagedHeaderLimits.quickReturnDistance
-        let last = lastOffsets[key] ?? offset
-        lastOffsets[key] = offset
-        let old = collapses[key] ?? 0
-        var value: CGFloat
-        if offset <= 0 {
-            value = 0  // 在顶部或下拉回弹：全开
-        } else {
-            // 跟着这一帧的位移走，但收起量不超过已经滚上去的距离（靠近顶部时不会提前收）
-            value = min(max(old + (offset - last), 0), distance, offset)
-        }
-        if value != old, abs(value - old) > 0.5 || value == 0 || value == distance {
-            collapses[key] = value
-        }
-        // 停在半路：一会儿没再滚就吸附到全收或全开
-        snapTask?.cancel()
-        guard value > 0, value < distance else { return }
-        snapTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 160_000_000)
-            guard let self, !Task.isCancelled, let current = self.collapses[key],
-                  current > 0, current < distance else { return }
-            let scrolled = self.lastOffsets[key] ?? 0
-            let target: CGFloat = current > distance / 2 && scrolled >= distance ? distance : 0
-            withAnimation(.easeOut(duration: 0.2)) { self.collapses[key] = target }
-        }
-    }
 }
 
 struct PageScrollReporter {
@@ -318,7 +219,6 @@ struct PageScrollReporter {
     let key: AnyHashable
 
     func report(_ offset: CGFloat) {
-        state.trackQuickReturn(key: key, offset: offset)
         // 收起只看前 60pt，再往下的变化不发布，滚长列表时头部不跟着每帧重算
         let clamped = min(max(offset, -1), PagedHeaderLimits.trackLimit)
         let old = state.offsets[key] ?? 0
@@ -329,13 +229,6 @@ struct PageScrollReporter {
 
 enum PagedHeaderLimits {
     static let trackLimit: CGFloat = 60
-    /// searchFirst 布局里搜索框收起的距离：搜索框上方留白 + 搜索框 + 下面的间距（分类条刚好顶到状态栏下）
-    static let quickReturnDistance: CGFloat = 52
-}
-
-/// searchFirst 布局里搜索框收起了多少（0 全开 ～ 1 全收）。分类条那一行用它淡入收起后的放大镜
-private struct PagedHeaderCollapseKey: EnvironmentKey {
-    static let defaultValue: CGFloat = 0
 }
 
 /// 分页内容的上边距：safeTop 是状态栏高度，top 是内容要从哪里开始（头部下沿）
@@ -361,11 +254,6 @@ extension EnvironmentValues {
     var pageScrollReporter: PageScrollReporter? {
         get { self[PageScrollReporterKey.self] }
         set { self[PageScrollReporterKey.self] = newValue }
-    }
-
-    var pagedHeaderCollapse: CGFloat {
-        get { self[PagedHeaderCollapseKey.self] }
-        set { self[PagedHeaderCollapseKey.self] = newValue }
     }
 }
 
