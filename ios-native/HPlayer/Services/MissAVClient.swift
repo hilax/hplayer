@@ -473,7 +473,7 @@ final class MissAVClient: NSObject, ObservableObject {
             }
         }
         if (!hls) {
-            // 字符集里排除反斜杠：脚本里的地址常带转义，以前会把末尾的「\」一起截进来
+            // 字符集里排除反斜杠：脚本里的地址常带转义，以前会把末尾的反斜杠一起截进来
             const m2 = fullScriptText.match(/https?:\\/\\/[^\\s"'<>\\\\]+\\.m3u8[^\\s"'<>\\\\]*/);
             if (m2) {
                 hls = m2[0];
