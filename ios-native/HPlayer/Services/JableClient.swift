@@ -437,11 +437,19 @@ final class JableClient: NSObject, ObservableObject {
 
         const ogImage = document.querySelector('meta[property="og:image"]')?.content || '';
 
-        const modelEls = document.querySelectorAll('.models-list a, .header-info a[href*="/models/"], .header-left a[href*="/models/"]');
-        const models = Array.from(modelEls).map(el => el.textContent.trim()).filter(Boolean);
+        // 女优：.video-info .models 里每个 a.model 是一个头像，没有头像图时只显示名字第一个字，
+        // 完整名字在 data-original-title（悬浮提示）里
+        const modelEls = document.querySelectorAll('.video-info .models a.model, .models a.model');
+        const models = Array.from(new Set(Array.from(modelEls).map(el => {
+            const tip = el.querySelector('[data-original-title]');
+            const img = el.querySelector('img');
+            return ((tip && tip.getAttribute('data-original-title')) || el.getAttribute('title')
+                || (img && (img.getAttribute('title') || img.alt)) || el.textContent || '').trim();
+        }).filter(Boolean)));
 
-        const tagEls = document.querySelectorAll('.tags-list a, .header-info a[href*="/tags/"], .header-left a[href*="/tags/"]');
-        const tags = Array.from(tagEls).map(el => el.textContent.trim()).filter(Boolean);
+        // 标签：视频信息区 h5.tags 里的分类（中文字幕、角色劇情…）和标签；不要导航菜单里的「按主題」
+        const tagEls = document.querySelectorAll('.video-info h5.tags a, .video-info .tags a');
+        const tags = Array.from(new Set(Array.from(tagEls).map(el => el.textContent.trim()).filter(Boolean)));
 
         const related = [];
         const relatedItems = document.querySelectorAll('.video-img-box');

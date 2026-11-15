@@ -24,5 +24,6 @@ enum CloudflareChallenge {
 
     /// 检测到验证页后先在后台等这么久：很多验证是非交互式的，浏览器内核里跑几秒会自己放行，
     /// 这期间不打扰用户；过了这段时间还在验证页，才弹出来让用户自己点
-    static let silentWait: TimeInterval = 6
+    /// Jable、MissAV 的视频页每次都要手动点，等太久只是让用户干等，所以只留 3 秒
+    static let silentWait: TimeInterval = 3
 }

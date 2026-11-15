@@ -371,7 +371,8 @@ final class MissAVClient: NSObject, ObservableObject {
     (() => {
         const list = [];
         const seen = new Set();
-        const cards = document.querySelectorAll('div.thumbnail, div[class*="thumbnail"], .grid > div');
+        // 只认视频卡片（div.thumbnail）。以前还匹配 `.grid > div`，会把页脚「联系我们」这类链接当成视频
+        const cards = document.querySelectorAll('div.thumbnail');
         const reserved = new Set(['genres', 'actresses', 'makers', 'tags', 'login', 'register', 'vip', 'search', 'dm', 'new', 'release', 'today-hot', 'weekly-hot', 'monthly-hot', 'chinese-subtitle', 'uncensored-leak']);
 
         for (let i = 0; i < cards.length; i++) {
@@ -385,7 +386,8 @@ final class MissAVClient: NSObject, ObservableObject {
                 const clean = h.replace(/\\/$/, '');
                 const parts = clean.split('/');
                 const last = parts[parts.length - 1] || '';
-                if (last && !reserved.has(last.toLowerCase()) && !h.includes('/genres/') && !h.includes('/actresses/') && !h.includes('/makers/')) {
+                // 番号形如 pppe-454、fc2-ppv-1234567、xxx-123-uncensored-leak：带连字符和数字
+                if (last && /-/.test(last) && /\\d/.test(last) && !reserved.has(last.toLowerCase()) && !h.includes('/genres/') && !h.includes('/actresses/') && !h.includes('/makers/')) {
                     videoHref = clean;
                     videoId = last;
                     break;
@@ -500,7 +502,7 @@ final class MissAVClient: NSObject, ObservableObject {
 
         const related = [];
         const seen = new Set();
-        const relatedItems = document.querySelectorAll('div.thumbnail, div[class*="thumbnail"], .grid > div');
+        const relatedItems = document.querySelectorAll('div.thumbnail');
         const reserved = new Set(['genres', 'actresses', 'makers', 'tags', 'login', 'register', 'vip', 'search', 'dm', 'new', 'release', 'today-hot', 'weekly-hot', 'monthly-hot', 'chinese-subtitle', 'uncensored-leak']);
 
         for (let i = 0; i < relatedItems.length; i++) {
@@ -513,7 +515,7 @@ final class MissAVClient: NSObject, ObservableObject {
                 const clean = h.replace(/\\/$/, '');
                 const parts = clean.split('/');
                 const last = parts[parts.length - 1] || '';
-                if (last && !reserved.has(last.toLowerCase()) && !h.includes('/genres/') && !h.includes('/actresses/')) {
+                if (last && /-/.test(last) && /\\d/.test(last) && !reserved.has(last.toLowerCase()) && !h.includes('/genres/') && !h.includes('/actresses/')) {
                     rHref = clean;
                     rId = last;
                     break;
