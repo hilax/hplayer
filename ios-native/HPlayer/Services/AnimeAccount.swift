@@ -326,7 +326,7 @@ final class AnimeAccount: ObservableObject {
     }
 
     /// 接口里的头像地址是占位域名（6666.com），换不出真实地址时当作没有头像
-    static func usableImageURL(_ raw: String) -> String {
+    nonisolated static func usableImageURL(_ raw: String) -> String {
         guard let url = URL(string: raw), let host = url.host, !host.contains("6666.com") else { return "" }
         return raw
     }

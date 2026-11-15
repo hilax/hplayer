@@ -165,7 +165,7 @@ final class AnimeCrypto {
     """
 
     private static let sendKey: SecKey? = {
-        let clean = Self.sendKeySPKI.components(separatedBy: .whitespacesAndNewlines).joined()
+        let clean = AnimeCrypto.sendKeySPKI.components(separatedBy: .whitespacesAndNewlines).joined()
         guard var der = Data(base64Encoded: clean) else { return nil }
         // SecKeyCreateWithData 要 PKCS#1 的 RSAPublicKey：去掉 SPKI 外壳（2048 位公钥固定 24 字节头）
         if der.count > 24, der[der.startIndex] == 0x30, der[der.startIndex + 4] == 0x30 {

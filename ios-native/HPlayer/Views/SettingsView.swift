@@ -382,24 +382,6 @@ struct SettingsView: View {
         }
     }
 
-    /// 正在下载的个数（含排队）；没有下载时显示视频数
-    private var activeDownloads: Int {
-        downloads.items.filter { $0.state == .downloading || $0.state == .queued }.count
-    }
-
-    private var localGroup: some View {
-        SettingsSection(title: "") {
-            NavigationLink { LocalVideosView() } label: {
-                LibraryActionRow(symbol: AppIcon.device.name, title: "本机视频",
-                                 value: activeDownloads > 0 ? "\(activeDownloads) 个下载中"
-                                     : (localStore.files.isEmpty ? "" : "\(localStore.files.count)"),
-                                 valueHighlighted: activeDownloads > 0)
-            }
-            .buttonStyle(.pressable(scale: 0.985))
-            .accessibilityIdentifier("mine.local")
-        }
-    }
-
     private var mediaGroup: some View {
         SettingsSection(title: "媒体库") {
             // 和其他二级页面一样从右侧推入，用系统返回键
