@@ -2755,8 +2755,7 @@ struct PlaybackControlsView: View {
                 case .seek:
                     PlayerSeekHUD(time: timeText(adjustment.targetTime ?? 0),
                                   delta: "\(adjustment.title) \(adjustment.valueText)",
-                                  progress: playback.duration > 0 ? adjustment.progress : nil,
-                                  total: playback.duration > 0 ? "共 \(timeText(playback.duration))" : nil)
+                                  progress: playback.duration > 0 ? adjustment.progress : nil)
                         .frame(maxWidth: width)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                         .padding(.top, insets.top + Self.hudTopInset)
