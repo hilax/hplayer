@@ -386,6 +386,7 @@ struct PlaybackControlsView: View {
                     quickMenu = nil
                     // 竖屏的选集抽屉在横屏不显示，转过去时收起，免得挡住手势
                     if isLandscape { showList = false }
+                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
                 }
                 // 控制栏收起时弹出层跟着收起，不会留一个看不见的弹出层挡住自动隐藏
                 .onChange(of: controlsVisible) { if !$0 { popover = nil; showSleepMenu = false } }
@@ -400,10 +401,8 @@ struct PlaybackControlsView: View {
                     self.composer = nil
                     revealControls()
                 }
-                .transition(.opacity)
             }
         }
-        .animation(reduceMotion ? nil : Motion.smooth, value: composer)
         .animeSignInSheet(isPresented: $showSignIn)
         .designScreen("player")
         .statusBarHidden(isLandscapeWindow)
@@ -1773,8 +1772,7 @@ struct PlaybackControlsView: View {
                     showDanmakuSettings = true
                 }
                 if infoTab == .comments {
-                    AnimeCommentsView(vid: commentsVid, bottomInset: bottomInset,
-                                      onCompose: { composer = .comment(vid: commentsVid, replyTo: $0) })
+                    AnimeCommentsView(vid: commentsVid, bottomInset: bottomInset)
                         .transition(.opacity)
                 } else {
                     introPage(bottomInset: bottomInset)

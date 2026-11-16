@@ -80,17 +80,9 @@ struct AnimeEpisodePanel: View {
 struct AnimeCommentsPage: View {
     let vid: Int
     let title: String
-    @State private var composer: SocialComposerTarget?
 
     var body: some View {
-        AnimeCommentsView(vid: vid, onCompose: { composer = .comment(vid: vid, replyTo: $0) })
-            .overlay {
-                if let composer {
-                    SocialComposer(target: composer) { self.composer = nil }
-                        .transition(.opacity)
-                }
-            }
-            .animation(Motion.smooth, value: composer)
+        AnimeCommentsView(vid: vid)
             .background(Theme.pageBackground.ignoresSafeArea())
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)

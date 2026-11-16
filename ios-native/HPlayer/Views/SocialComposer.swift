@@ -14,74 +14,145 @@ enum SocialComposerTarget: Identifiable, Equatable {
     }
 }
 
-/// 跟踪输入层对应键盘的弹起与收起，保证键盘一旦收起输入栏也随之关闭，
-/// 同时保护「发送中」以及「字数不足 / 发送失败叫回键盘」等短暂过渡，避免误关或漏关。
+/// 解析自系统键盘通知的时长与曲线。iOS 键盘私有 curve == 7 为过阻尼弹簧，
+/// 用相同参数才能让输入框贴着键盘同步推起和落下，不会慢半拍。
+struct KeyboardMotion: Equatable {
+    let duration: Double
+    let curve: Int?
+
+    static let `default` = KeyboardMotion(duration: 0.25, curve: 7)
+
+    var animation: Animation? {
+        guard duration > 0 else { return nil }
+        if curve == nil || curve == 7 {
+            return .interpolatingSpring(mass: 3, stiffness: 1000, damping: 500)
+        }
+        switch curve {
+        case 0: return .easeInOut(duration: duration)
+        case 1: return .easeIn(duration: duration)
+        case 2: return .easeOut(duration: duration)
+        case 3: return .linear(duration: duration)
+        default: return .interpolatingSpring(mass: 3, stiffness: 1000, damping: 500)
+        }
+    }
+}
+
+/// 跟踪输入栏对应的键盘位置与显示状态：
+/// - 弹幕浮层（autoCloseOnHide = true）：键盘一收起就跟着滑下并关闭，同时保护「发送中」与「失败叫回键盘」过渡。
+/// - 评论常驻底栏（autoCloseOnHide = false）：键盘弹出同步顶起底栏，键盘收起同步退回页面底部并通知清理临时状态。
 @MainActor
 final class SocialComposerKeyboardTracker: ObservableObject {
     @Published private(set) var overlap: CGFloat = 0
     @Published private(set) var isSending = false
+    @Published private(set) var isDismissing = false
+    @Published private(set) var hideCount = 0
     private(set) var keyboardSeen = false
     private(set) var keyboardVisible = false
     private(set) var isClosing = false
 
+    let autoCloseOnHide: Bool
     var onAutoClose: (() -> Void)?
+    var onFinishDismiss: (() -> Void)?
+    var onKeyboardHidden: (() -> Void)?
 
     /// 记录出现过的最大软键盘高度，用于兜底识别只发 frame 归零、未发 willHide 的场景，
     /// 同时避开仅 ~44pt 的外接硬件键盘快捷栏。
     private var maxOverlapSeen: CGFloat = 0
+    private var keyboardDidHideSinceShow = false
     private var isHoldingOpen = false
     private var pendingHide = false
     private var holdGeneration = 0
     private var hideCheckTask: Task<Void, Never>?
     private var holdExpiryTask: Task<Void, Never>?
+    private var dismissFinishTask: Task<Void, Never>?
 
     private let hideConfirmDelayNs: UInt64
     private let frameHideConfirmDelayNs: UInt64
     private let holdOpenDurationNs: UInt64
+    private let dismissFinishTimeoutNs: UInt64
 
     init(
+        autoCloseOnHide: Bool = true,
         hideConfirmDelayNs: UInt64 = 80_000_000,
         frameHideConfirmDelayNs: UInt64 = 160_000_000,
-        holdOpenDurationNs: UInt64 = 600_000_000
+        holdOpenDurationNs: UInt64 = 600_000_000,
+        dismissFinishTimeoutNs: UInt64 = 280_000_000
     ) {
+        self.autoCloseOnHide = autoCloseOnHide
         self.hideConfirmDelayNs = hideConfirmDelayNs
         self.frameHideConfirmDelayNs = frameHideConfirmDelayNs
         self.holdOpenDurationNs = holdOpenDurationNs
+        self.dismissFinishTimeoutNs = dismissFinishTimeoutNs
     }
 
-    func handleKeyboardWillShow(endFrame: CGRect? = nil, containerBottom: CGFloat? = nil, duration: Double = 0.25) {
+    static func geometry(from note: Notification) -> (frame: CGRect?, motion: KeyboardMotion) {
+        let frame = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect
+        let rawDuration = note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double
+        let duration = max(0, rawDuration ?? 0.25)
+        let curve = note.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? Int
+        return (frame, KeyboardMotion(duration: duration, curve: curve))
+    }
+
+    func handleKeyboardWillShow(
+        endFrame: CGRect? = nil,
+        containerBottom: CGFloat? = nil,
+        motion: KeyboardMotion = .default
+    ) {
         keyboardSeen = true
         keyboardVisible = true
+        keyboardDidHideSinceShow = false
         pendingHide = false
         hideCheckTask?.cancel()
         hideCheckTask = nil
         if let endFrame, let containerBottom {
             let next = max(0, containerBottom - endFrame.minY)
             maxOverlapSeen = max(maxOverlapSeen, next)
-            setOverlap(next, duration: duration)
+            setOverlap(next, motion: motion)
         }
+    }
+
+    func handleKeyboardWillShow(endFrame: CGRect? = nil, containerBottom: CGFloat? = nil, duration: Double) {
+        handleKeyboardWillShow(
+            endFrame: endFrame,
+            containerBottom: containerBottom,
+            motion: KeyboardMotion(duration: duration, curve: nil)
+        )
     }
 
     func handleKeyboardDidShow() {
         keyboardSeen = true
         keyboardVisible = true
+        keyboardDidHideSinceShow = false
         pendingHide = false
         hideCheckTask?.cancel()
         hideCheckTask = nil
         clearHoldOpen()
     }
 
-    func handleKeyboardWillChangeFrame(endFrame: CGRect, containerBottom: CGFloat, duration: Double = 0.25) {
-        handleKeyboardOverlapChanged(max(0, containerBottom - endFrame.minY), duration: duration)
+    func handleKeyboardWillChangeFrame(
+        endFrame: CGRect,
+        containerBottom: CGFloat,
+        motion: KeyboardMotion = .default
+    ) {
+        handleKeyboardOverlapChanged(max(0, containerBottom - endFrame.minY), motion: motion)
     }
 
-    func handleKeyboardOverlapChanged(_ next: CGFloat, duration: Double = 0.25) {
+    func handleKeyboardWillChangeFrame(endFrame: CGRect, containerBottom: CGFloat, duration: Double) {
+        handleKeyboardWillChangeFrame(
+            endFrame: endFrame,
+            containerBottom: containerBottom,
+            motion: KeyboardMotion(duration: duration, curve: nil)
+        )
+    }
+
+    func handleKeyboardOverlapChanged(_ next: CGFloat, motion: KeyboardMotion = .default) {
         let clamped = max(0, next)
-        setOverlap(clamped, duration: duration)
+        setOverlap(clamped, motion: motion)
         if clamped > 0 {
             maxOverlapSeen = max(maxOverlapSeen, clamped)
             keyboardSeen = true
             keyboardVisible = true
+            keyboardDidHideSinceShow = false
             pendingHide = false
             hideCheckTask?.cancel()
             hideCheckTask = nil
@@ -92,20 +163,33 @@ final class SocialComposerKeyboardTracker: ObservableObject {
         }
     }
 
-    func handleKeyboardWillHide(duration: Double = 0.25) {
+    func handleKeyboardOverlapChanged(_ next: CGFloat, duration: Double) {
+        handleKeyboardOverlapChanged(next, motion: KeyboardMotion(duration: duration, curve: nil))
+    }
+
+    func handleKeyboardWillHide(motion: KeyboardMotion = .default) {
         keyboardVisible = false
-        setOverlap(0, duration: duration)
+        setOverlap(0, motion: motion)
         guard keyboardSeen else { return }
         pendingHide = true
         scheduleHideCheck(delayNs: hideConfirmDelayNs)
     }
 
+    func handleKeyboardWillHide(duration: Double) {
+        handleKeyboardWillHide(motion: KeyboardMotion(duration: duration, curve: nil))
+    }
+
     func handleKeyboardDidHide() {
         keyboardVisible = false
+        keyboardDidHideSinceShow = true
         overlap = 0
+        if isDismissing {
+            finishDismissIfNeeded()
+            return
+        }
         guard keyboardSeen else { return }
         pendingHide = true
-        triggerCloseIfNeeded()
+        triggerHideResolutionIfNeeded()
     }
 
     func beginSending() {
@@ -115,11 +199,11 @@ final class SocialComposerKeyboardTracker: ObservableObject {
     func endSending(succeeded: Bool) {
         isSending = false
         if succeeded {
-            _ = beginClosing()
+            if autoCloseOnHide { _ = beginClosing() }
             return
         }
         if !isHoldingOpen {
-            triggerCloseIfNeeded()
+            triggerHideResolutionIfNeeded()
         }
     }
 
@@ -135,8 +219,8 @@ final class SocialComposerKeyboardTracker: ObservableObject {
             try? await Task.sleep(nanoseconds: self?.holdOpenDurationNs ?? 600_000_000)
             guard let self, !Task.isCancelled, self.holdGeneration == generation else { return }
             self.isHoldingOpen = false
-            // 若在保护期内用户主动收起了键盘且未再弹回，保护期一结束就顺势收起输入栏
-            self.triggerCloseIfNeeded()
+            // 若在保护期内用户主动收起了键盘且未再弹回，保护期一结束就顺势完成收起
+            self.triggerHideResolutionIfNeeded()
         }
     }
 
@@ -145,21 +229,35 @@ final class SocialComposerKeyboardTracker: ObservableObject {
         isClosing = true
         pendingHide = false
         isHoldingOpen = false
-        cancel()
+        cancelPendingChecks()
+        if autoCloseOnHide && keyboardSeen && !keyboardDidHideSinceShow {
+            isDismissing = true
+            dismissFinishTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: self?.dismissFinishTimeoutNs ?? 280_000_000)
+                guard let self, !Task.isCancelled else { return }
+                self.finishDismissIfNeeded()
+            }
+        }
         return true
     }
 
     func cancel() {
+        cancelPendingChecks()
+        dismissFinishTask?.cancel()
+        dismissFinishTask = nil
+    }
+
+    private func cancelPendingChecks() {
         hideCheckTask?.cancel()
         hideCheckTask = nil
         holdExpiryTask?.cancel()
         holdExpiryTask = nil
     }
 
-    private func setOverlap(_ value: CGFloat, duration: Double) {
+    private func setOverlap(_ value: CGFloat, motion: KeyboardMotion) {
         guard abs(overlap - value) > 0.5 else { return }
-        if duration > 0 {
-            withAnimation(.easeOut(duration: duration)) { overlap = value }
+        if let animation = motion.animation {
+            withAnimation(animation) { overlap = value }
         } else {
             overlap = value
         }
@@ -177,55 +275,115 @@ final class SocialComposerKeyboardTracker: ObservableObject {
         hideCheckTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: delayNs)
             guard let self, !Task.isCancelled else { return }
-            self.triggerCloseIfNeeded()
+            self.triggerHideResolutionIfNeeded()
         }
     }
 
-    private func triggerCloseIfNeeded() {
+    private func finishDismissIfNeeded() {
+        guard isDismissing else { return }
+        isDismissing = false
+        dismissFinishTask?.cancel()
+        dismissFinishTask = nil
+        onFinishDismiss?()
+    }
+
+    private func triggerHideResolutionIfNeeded() {
         guard pendingHide,
               keyboardSeen,
               !isClosing,
               !isSending,
               !isHoldingOpen,
-              !keyboardVisible,
-              beginClosing() else { return }
-        onAutoClose?()
+              !keyboardVisible else { return }
+        if autoCloseOnHide {
+            guard beginClosing() else { return }
+            onAutoClose?()
+        } else {
+            pendingHide = false
+            hideCount += 1
+            onKeyboardHidden?()
+        }
     }
 }
 
-/// 盖在页面上的输入层：半透明遮罩（点一下收起）+ 贴在键盘上方的一条输入栏。
-/// 弹幕多一个「Aa」：点开选颜色。发得太频繁时服务端要验证码，输入栏上面会多一行算术题。
-/// 宿主要把它放在会避让键盘的容器里（外层不要 ignoresSafeArea），键盘弹起时输入栏才会跟着上去。
-struct SocialComposer: View {
+/// 给视图绑定系统键盘通知到 `SocialComposerKeyboardTracker`。
+private struct KeyboardTrackingModifier: ViewModifier {
+    @ObservedObject var tracker: SocialComposerKeyboardTracker
+    let containerBottom: CGFloat
+
+    func body(content: Content) -> some View {
+        content
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { note in
+                let info = SocialComposerKeyboardTracker.geometry(from: note)
+                tracker.handleKeyboardWillShow(endFrame: info.frame,
+                                               containerBottom: containerBottom,
+                                               motion: info.motion)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidShowNotification)) { _ in
+                tracker.handleKeyboardDidShow()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
+                let info = SocialComposerKeyboardTracker.geometry(from: note)
+                guard let end = info.frame else { return }
+                // 键盘位置是屏幕坐标；用容器下沿减去键盘上沿即可算出被盖住的精确高度
+                tracker.handleKeyboardWillChangeFrame(endFrame: end,
+                                                      containerBottom: containerBottom,
+                                                      motion: info.motion)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { note in
+                let info = SocialComposerKeyboardTracker.geometry(from: note)
+                tracker.handleKeyboardWillHide(motion: info.motion)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidHideNotification)) { _ in
+                tracker.handleKeyboardDidHide()
+            }
+    }
+}
+
+extension View {
+    func trackKeyboard(_ tracker: SocialComposerKeyboardTracker, containerBottom: CGFloat) -> some View {
+        modifier(KeyboardTrackingModifier(tracker: tracker, containerBottom: containerBottom))
+    }
+}
+
+/// 弹幕和评论共用的输入条：胶囊输入框、字数提示、弹幕颜色选择、回复提示、验证码和发送按钮。
+struct SocialInputBar: View {
     let target: SocialComposerTarget
-    var danmaku: DanmakuStore?
-    /// 发弹幕时读当前播放进度
+    var danmaku: DanmakuStore? = nil
     var currentTime: () -> Double = { 0 }
-    /// 播放器窗口固定深色，竖屏浅色模式下要显式给浅色；nil 跟随环境
-    var scheme: ColorScheme? = nil
-    let onClose: () -> Void
+    @ObservedObject var tracker: SocialComposerKeyboardTracker
+    @Binding var text: String
+    var focused: FocusState<Bool>.Binding
+    var requiresSignIn = false
+    var onRequireSignIn: () -> Void = {}
+    var onCancelReply: (() -> Void)? = nil
+    var onDidSend: () -> Void = {}
+    var onEmptySubmit: () -> Void = {}
 
     @ObservedObject private var account = AnimeAccount.shared
     @AppStorage(DanmakuPrefs.sendColor) private var colorIndex = 0
-    @StateObject private var tracker = SocialComposerKeyboardTracker()
-    @State private var text = ""
     @State private var error = ""
     @State private var showStyle = false
     @State private var captcha: AnimeCaptcha?
     @State private var captchaLoading = false
     @State private var answer = ""
-    @FocusState private var focused: Bool
 
     private var isDanmaku: Bool { target == .danmaku }
     private var limit: Int { isDanmaku ? 50 : 300 }
     private var trimmed: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    private var replyUserName: String? {
+        if case .comment(_, let reply) = target { return reply?.userName }
+        return nil
+    }
+
     /// 服务端要求评论、弹幕都至少 3 个字
     private var canSend: Bool {
-        trimmed.count >= 3 && trimmed.count <= limit && !tracker.isSending
+        !requiresSignIn && trimmed.count >= 3 && trimmed.count <= limit && !tracker.isSending
             && (captcha == nil || !answer.trimmingCharacters(in: .whitespaces).isEmpty)
     }
 
     private var placeholder: String {
+        if requiresSignIn { return "登录后参与评论" }
         switch target {
         case .danmaku: return "发个弹幕见证当下"
         case .comment(_, let reply):
@@ -239,68 +397,29 @@ struct SocialComposer: View {
     }
 
     var body: some View {
-        // 自己读安全区（含键盘）：播放器在独立窗口里、外层又铺满了整块屏幕，不能指望宿主替它避让键盘
-        GeometryReader { proxy in
-            let insets = proxy.safeAreaInsets
-            ZStack(alignment: .bottom) {
-                // 点一下或往下一划都收起；contentShape 保证整块遮罩都接得到手势
-                Color.black.opacity(Theme.Opacity.soft)
-                    .contentShape(Rectangle())
-                    .onTapGesture(perform: close)
-                    .simultaneousGesture(
-                        DragGesture(minimumDistance: 12).onEnded { value in
-                            if value.translation.height > 24 { close() }
-                        }
-                    )
-                    .accessibilityLabel("收起输入框")
-                    .accessibilityAddTraits(.isButton)
-                bar(insets: EdgeInsets(top: insets.top, leading: insets.leading,
-                                       bottom: max(insets.bottom, tracker.overlap), trailing: insets.trailing))
-            }
-            .frame(width: proxy.size.width, height: proxy.size.height)
-            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { note in
-                let info = Self.keyboardGeometry(from: note)
-                tracker.handleKeyboardWillShow(endFrame: info.frame,
-                                               containerBottom: proxy.frame(in: .global).maxY,
-                                               duration: info.duration)
-            }
-            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidShowNotification)) { _ in
-                tracker.handleKeyboardDidShow()
-            }
-            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
-                let info = Self.keyboardGeometry(from: note)
-                guard let end = info.frame else { return }
-                // 键盘的位置是屏幕坐标；这一层铺满整个窗口，用自己在屏幕上的下沿减去键盘上沿就是被盖住的高度
-                tracker.handleKeyboardWillChangeFrame(endFrame: end,
-                                                      containerBottom: proxy.frame(in: .global).maxY,
-                                                      duration: info.duration)
-            }
-            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { note in
-                let info = Self.keyboardGeometry(from: note)
-                tracker.handleKeyboardWillHide(duration: info.duration)
-            }
-            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidHideNotification)) { _ in
-                tracker.handleKeyboardDidHide()
-            }
-        }
-        .ignoresSafeArea()
-        .modifier(ComposerScheme(scheme: scheme))
-        .onAppear {
-            tracker.onAutoClose = { performClose() }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                guard !tracker.isClosing else { return }
-                focused = true
-            }
-        }
-        .onDisappear {
-            tracker.onAutoClose = nil
-            tracker.cancel()
-        }
-    }
-
-    private func bar(insets: EdgeInsets) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             if isDanmaku && showStyle { colorRow.transition(.opacity) }
+            if let replyUserName {
+                HStack(spacing: 6) {
+                    Text("回复 \(replyUserName)")
+                        .font(Theme.Typo.caption)
+                        .foregroundStyle(Theme.textSecondary)
+                        .lineLimit(1)
+                    Spacer()
+                    if let onCancelReply {
+                        Button(action: onCancelReply) {
+                            Image(icon: .close)
+                                .font(.scaled(11, weight: .semibold))
+                                .foregroundStyle(Theme.textTertiary)
+                                .frame(width: 24, height: 24)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("取消回复")
+                    }
+                }
+                .transition(.opacity)
+            }
             if captcha != nil || captchaLoading {
                 CaptchaField(captcha: captcha, loading: captchaLoading, answer: $answer, onRefresh: loadCaptcha,
                              identifier: "composer.captcha")
@@ -330,7 +449,8 @@ struct SocialComposer: View {
                 }
                 HStack(alignment: .bottom, spacing: 6) {
                     textField
-                        .focused($focused)
+                        .disabled(requiresSignIn)
+                        .focused(focused)
                         .submitLabel(.send)
                         .onSubmit(submit)
                         .font(Theme.Typo.row)
@@ -350,7 +470,8 @@ struct SocialComposer: View {
                 .background(Theme.inputFill, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                 .overlay {
                     RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .strokeBorder(focused ? Theme.accent : Theme.hairline, lineWidth: focused ? 1 : Theme.Stroke.hairline)
+                        .strokeBorder(focused.wrappedValue ? Theme.accent : Theme.hairline,
+                                      lineWidth: focused.wrappedValue ? 1 : Theme.Stroke.hairline)
                 }
                 Button(action: send) {
                     Group {
@@ -369,18 +490,31 @@ struct SocialComposer: View {
                 .disabled(!canSend)
                 .accessibilityIdentifier("composer.send")
             }
+            .overlay {
+                if requiresSignIn {
+                    Button(action: onRequireSignIn) {
+                        Color.clear.contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("登录后参与评论")
+                    .accessibilityIdentifier("player.comments.compose")
+                }
+            }
         }
         .padding(.horizontal, Theme.contentInset)
         .padding(.vertical, 10)
         .frame(maxWidth: 720)
         .frame(maxWidth: .infinity)
-        .padding(.leading, insets.leading)
-        .padding(.trailing, insets.trailing)
-        .padding(.bottom, insets.bottom)
-        .background(Theme.surface)
-        .overlay(alignment: .top) { Theme.rule.frame(height: Theme.Stroke.hairline) }
         .animation(Motion.smooth, value: error)
         .animation(Motion.smooth, value: captcha)
+        .onChange(of: target.id) { _ in error = "" }
+        .onChange(of: tracker.hideCount) { _ in
+            error = ""
+            if trimmed.isEmpty {
+                captcha = nil
+                answer = ""
+            }
+        }
     }
 
     private var colorRow: some View {
@@ -412,13 +546,6 @@ struct SocialComposer: View {
 
     private static let colorNames = ["白色", "粉色", "橙色", "绿色", "蓝色", "紫色"]
 
-    private static func keyboardGeometry(from note: Notification) -> (frame: CGRect?, duration: Double) {
-        let frame = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect
-        let rawDuration = note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double
-        let duration = max(0, rawDuration ?? 0.25)
-        return (frame, duration)
-    }
-
     /// 弹幕只有一行：用单行输入框，键盘上的「发送」才是真的发送（多行输入框按回车只会插一个换行，
     /// 一行高的框里看起来就是字没了、框也收不掉）。评论可以写几行，回车同样当发送，见下面的 onChange。
     @ViewBuilder
@@ -441,7 +568,7 @@ struct SocialComposer: View {
         if canSend {
             send()
         } else if trimmed.isEmpty {
-            close()
+            onEmptySubmit()
         } else {
             if trimmed.count < 3 { error = "至少写 3 个字" }
             keepEditing(forceHold: isDanmaku || !tracker.keyboardVisible)
@@ -453,31 +580,18 @@ struct SocialComposer: View {
         if forceHold { tracker.beginHoldOpen() }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
             guard !tracker.isClosing else { return }
-            guard !tracker.keyboardVisible || !focused else { return }
-            if focused {
+            guard !tracker.keyboardVisible || !focused.wrappedValue else { return }
+            if focused.wrappedValue {
                 // 系统刚收起键盘时 @FocusState 可能仍滞留在 true，先清再置才能真正重新拉起键盘
-                focused = false
+                focused.wrappedValue = false
                 DispatchQueue.main.async {
                     guard !tracker.isClosing else { return }
-                    focused = true
+                    focused.wrappedValue = true
                 }
             } else {
-                focused = true
+                focused.wrappedValue = true
             }
         }
-    }
-
-    private func close() {
-        guard tracker.beginClosing() else { return }
-        performClose()
-    }
-
-    private func performClose() {
-        focused = false
-        // 先让键盘真正收起，下一轮再拿掉这一层。输入框还在焦点上就被整层移除时，
-        // 键盘可能留在屏幕上、没有任何东西能再收起它（横屏播放器在独立窗口里尤其容易遇到）
-        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-        DispatchQueue.main.async { onClose() }
     }
 
     private func loadCaptcha() {
@@ -511,7 +625,9 @@ struct SocialComposer: View {
                 succeeded = true
                 Haptics.success()
                 text = ""
-                close()
+                captcha = nil
+                answer = ""
+                onDidSend()
             } catch {
                 Haptics.warning()
                 if AnimeSocial.needsCaptcha(error) && captcha == nil {
@@ -524,6 +640,102 @@ struct SocialComposer: View {
                 // 键盘可能在发送时收起了：叫回来，失败原因显示在输入栏上面，改一改或点空白处收起
                 keepEditing(forceHold: !tracker.keyboardVisible)
             }
+        }
+    }
+}
+
+/// 盖在页面上的输入层（用于竖屏/横屏发弹幕）：半透明遮罩 + 贴着键盘同步推起和滑落的输入栏。
+struct SocialComposer: View {
+    let target: SocialComposerTarget
+    var danmaku: DanmakuStore? = nil
+    /// 发弹幕时读当前播放进度
+    var currentTime: () -> Double = { 0 }
+    /// 播放器窗口固定深色，竖屏浅色模式下要显式给浅色；nil 跟随环境
+    var scheme: ColorScheme? = nil
+    let onClose: () -> Void
+
+    @StateObject private var tracker = SocialComposerKeyboardTracker(autoCloseOnHide: true)
+    @State private var text = ""
+    @State private var maskShown = false
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        // 自己读安全区（含键盘）：播放器在独立窗口里、外层又铺满了整块屏幕，不能指望宿主替它避让键盘
+        GeometryReader { proxy in
+            let insets = proxy.safeAreaInsets
+            let bottomPad = max(insets.bottom, tracker.overlap)
+            ZStack(alignment: .bottom) {
+                // 遮罩随开启柔和变暗，关闭退场时立即放开点击并同步淡出
+                Color.black.opacity(maskShown && !tracker.isDismissing ? Theme.Opacity.soft : 0)
+                    .contentShape(Rectangle())
+                    .onTapGesture(perform: close)
+                    .simultaneousGesture(
+                        DragGesture(minimumDistance: 12).onEnded { value in
+                            if value.translation.height > 24 { close() }
+                        }
+                    )
+                    .animation(.easeOut(duration: 0.18), value: maskShown)
+                    .animation(.easeOut(duration: 0.2), value: tracker.isDismissing)
+                    .accessibilityLabel("收起输入框")
+                    .accessibilityAddTraits(.isButton)
+
+                VStack(spacing: 0) {
+                    SocialInputBar(
+                        target: target,
+                        danmaku: danmaku,
+                        currentTime: currentTime,
+                        tracker: tracker,
+                        text: $text,
+                        focused: $focused,
+                        onDidSend: close,
+                        onEmptySubmit: close
+                    )
+                    .padding(.leading, insets.leading)
+                    .padding(.trailing, insets.trailing)
+                    Color.clear.frame(height: bottomPad)
+                }
+                .background(Theme.surface)
+                .overlay(alignment: .top) { Theme.rule.frame(height: Theme.Stroke.hairline) }
+                .offset(y: tracker.isDismissing ? 32 : 0)
+                .opacity(tracker.isDismissing ? 0 : 1)
+                .animation(.easeOut(duration: 0.2), value: tracker.isDismissing)
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height)
+            .trackKeyboard(tracker, containerBottom: proxy.frame(in: .global).maxY)
+        }
+        .ignoresSafeArea()
+        .allowsHitTesting(!tracker.isDismissing)
+        .accessibilityHidden(tracker.isDismissing)
+        .modifier(ComposerScheme(scheme: scheme))
+        .onAppear {
+            tracker.onAutoClose = { performClose() }
+            tracker.onFinishDismiss = { DispatchQueue.main.async { onClose() } }
+            focused = true
+            DispatchQueue.main.async {
+                guard !tracker.isClosing else { return }
+                if !focused { focused = true }
+            }
+            withAnimation(.easeOut(duration: 0.18)) { maskShown = true }
+        }
+        .onDisappear {
+            tracker.onAutoClose = nil
+            tracker.onFinishDismiss = nil
+            tracker.cancel()
+        }
+    }
+
+    private func close() {
+        guard tracker.beginClosing() else { return }
+        performClose()
+    }
+
+    private func performClose() {
+        focused = false
+        // 先让键盘真正收起，再拿掉这一层。输入框还在焦点上就被整层移除时，
+        // 键盘可能留在屏幕上、没有任何东西能再收起它（横屏播放器在独立窗口里尤其容易遇到）
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        if !tracker.isDismissing {
+            DispatchQueue.main.async { onClose() }
         }
     }
 }

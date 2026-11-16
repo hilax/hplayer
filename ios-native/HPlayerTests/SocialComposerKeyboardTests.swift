@@ -18,7 +18,8 @@ final class SocialComposerKeyboardTests: XCTestCase {
         let tracker = SocialComposerKeyboardTracker(
             hideConfirmDelayNs: 20_000_000,
             frameHideConfirmDelayNs: 40_000_000,
-            holdOpenDurationNs: 120_000_000
+            holdOpenDurationNs: 120_000_000,
+            dismissFinishTimeoutNs: 80_000_000
         )
         var closeCount = 0
         tracker.onAutoClose = { closeCount += 1 }
@@ -51,7 +52,8 @@ final class SocialComposerKeyboardTests: XCTestCase {
         let tracker = SocialComposerKeyboardTracker(
             hideConfirmDelayNs: 20_000_000,
             frameHideConfirmDelayNs: 40_000_000,
-            holdOpenDurationNs: 120_000_000
+            holdOpenDurationNs: 120_000_000,
+            dismissFinishTimeoutNs: 80_000_000
         )
         var closeCount = 0
         tracker.onAutoClose = { closeCount += 1 }
@@ -72,7 +74,8 @@ final class SocialComposerKeyboardTests: XCTestCase {
         let tracker = SocialComposerKeyboardTracker(
             hideConfirmDelayNs: 40_000_000,
             frameHideConfirmDelayNs: 80_000_000,
-            holdOpenDurationNs: 120_000_000
+            holdOpenDurationNs: 120_000_000,
+            dismissFinishTimeoutNs: 80_000_000
         )
         var closeCount = 0
         tracker.onAutoClose = { closeCount += 1 }
@@ -102,7 +105,8 @@ final class SocialComposerKeyboardTests: XCTestCase {
         let tracker = SocialComposerKeyboardTracker(
             hideConfirmDelayNs: 20_000_000,
             frameHideConfirmDelayNs: 40_000_000,
-            holdOpenDurationNs: 120_000_000
+            holdOpenDurationNs: 120_000_000,
+            dismissFinishTimeoutNs: 80_000_000
         )
         var closeCount = 0
         tracker.onAutoClose = { closeCount += 1 }
@@ -144,7 +148,8 @@ final class SocialComposerKeyboardTests: XCTestCase {
         let tracker = SocialComposerKeyboardTracker(
             hideConfirmDelayNs: 20_000_000,
             frameHideConfirmDelayNs: 40_000_000,
-            holdOpenDurationNs: 80_000_000
+            holdOpenDurationNs: 80_000_000,
+            dismissFinishTimeoutNs: 80_000_000
         )
         var closeCount = 0
         tracker.onAutoClose = { closeCount += 1 }
@@ -170,7 +175,8 @@ final class SocialComposerKeyboardTests: XCTestCase {
         let tracker = SocialComposerKeyboardTracker(
             hideConfirmDelayNs: 20_000_000,
             frameHideConfirmDelayNs: 40_000_000,
-            holdOpenDurationNs: 120_000_000
+            holdOpenDurationNs: 120_000_000,
+            dismissFinishTimeoutNs: 80_000_000
         )
         var closeCount = 0
         tracker.onAutoClose = { closeCount += 1 }
@@ -186,11 +192,43 @@ final class SocialComposerKeyboardTests: XCTestCase {
         XCTAssertEqual(closeCount, 1)
     }
 
+    func testSoftKeyboardDismissSlidesDownUntilDidHideThenFinishes() async {
+        let tracker = SocialComposerKeyboardTracker(
+            hideConfirmDelayNs: 20_000_000,
+            frameHideConfirmDelayNs: 40_000_000,
+            holdOpenDurationNs: 120_000_000,
+            dismissFinishTimeoutNs: 200_000_000
+        )
+        var finished = 0
+        tracker.onFinishDismiss = { finished += 1 }
+
+        tracker.handleKeyboardWillShow(
+            endFrame: CGRect(x: 0, y: 550, width: 393, height: 302),
+            containerBottom: 852,
+            duration: 0
+        )
+        tracker.handleKeyboardDidShow()
+
+        // 软键盘开着时点击遮罩关闭：先进入退场动画态（overlap 降为 0），收到 didHide 时立刻完成卸载
+        XCTAssertTrue(tracker.beginClosing())
+        XCTAssertTrue(tracker.isDismissing)
+        XCTAssertEqual(finished, 0)
+
+        tracker.handleKeyboardWillHide(duration: 0)
+        XCTAssertEqual(tracker.overlap, 0)
+        XCTAssertEqual(finished, 0)
+
+        tracker.handleKeyboardDidHide()
+        XCTAssertEqual(finished, 1)
+        XCTAssertFalse(tracker.isDismissing)
+    }
+
     func testSoftKeyboardFrameCollapseToZeroClosesEvenWithoutWillHide() async {
         let tracker = SocialComposerKeyboardTracker(
             hideConfirmDelayNs: 20_000_000,
             frameHideConfirmDelayNs: 40_000_000,
-            holdOpenDurationNs: 120_000_000
+            holdOpenDurationNs: 120_000_000,
+            dismissFinishTimeoutNs: 80_000_000
         )
         var closeCount = 0
         tracker.onAutoClose = { closeCount += 1 }
@@ -214,7 +252,8 @@ final class SocialComposerKeyboardTests: XCTestCase {
         let tracker = SocialComposerKeyboardTracker(
             hideConfirmDelayNs: 20_000_000,
             frameHideConfirmDelayNs: 40_000_000,
-            holdOpenDurationNs: 120_000_000
+            holdOpenDurationNs: 120_000_000,
+            dismissFinishTimeoutNs: 80_000_000
         )
         var closeCount = 0
         tracker.onAutoClose = { closeCount += 1 }
@@ -233,6 +272,65 @@ final class SocialComposerKeyboardTests: XCTestCase {
 
         try? await Task.sleep(nanoseconds: 80_000_000)
         XCTAssertEqual(closeCount, 0)
+    }
+
+    func testDockedCommentBarLiftsOnShowAndReturnsToBottomRepeatedly() async {
+        let tracker = SocialComposerKeyboardTracker(
+            autoCloseOnHide: false,
+            hideConfirmDelayNs: 20_000_000,
+            frameHideConfirmDelayNs: 40_000_000,
+            holdOpenDurationNs: 120_000_000,
+            dismissFinishTimeoutNs: 80_000_000
+        )
+        var hiddenCallbacks = 0
+        var autoCloseCallbacks = 0
+        tracker.onKeyboardHidden = { hiddenCallbacks += 1 }
+        tracker.onAutoClose = { autoCloseCallbacks += 1 }
+
+        // 第一轮弹出 -> 收起退回底部
+        tracker.handleKeyboardWillShow(
+            endFrame: CGRect(x: 0, y: 516, width: 393, height: 336),
+            containerBottom: 818,
+            duration: 0
+        )
+        XCTAssertEqual(tracker.overlap, 302)
+        tracker.handleKeyboardDidShow()
+
+        tracker.handleKeyboardWillHide(duration: 0)
+        XCTAssertEqual(tracker.overlap, 0)
+        let firstHidden = await waitUntil { hiddenCallbacks == 1 && tracker.hideCount == 1 }
+        XCTAssertTrue(firstHidden)
+        XCTAssertFalse(tracker.isClosing, "常驻评论输入栏退回底部后必须仍保持可用")
+        XCTAssertEqual(autoCloseCallbacks, 0)
+
+        // 第二轮再次弹出 -> 再次收起退回底部
+        tracker.handleKeyboardWillShow(
+            endFrame: CGRect(x: 0, y: 516, width: 393, height: 336),
+            containerBottom: 818,
+            duration: 0
+        )
+        XCTAssertEqual(tracker.overlap, 302)
+        tracker.handleKeyboardDidShow()
+
+        tracker.handleKeyboardWillHide(duration: 0)
+        let secondHidden = await waitUntil { hiddenCallbacks == 2 && tracker.hideCount == 2 }
+        XCTAssertTrue(secondHidden)
+        XCTAssertEqual(tracker.overlap, 0)
+        XCTAssertFalse(tracker.isClosing)
+    }
+
+    func testKeyboardMotionExtractsCurveAndUsesSpringForSystemKeyboard() {
+        let userInfo: [AnyHashable: Any] = [
+            UIResponder.keyboardFrameEndUserInfoKey: NSValue(cgRect: CGRect(x: 0, y: 550, width: 393, height: 302)),
+            UIResponder.keyboardAnimationDurationUserInfoKey: 0.25,
+            UIResponder.keyboardAnimationCurveUserInfoKey: 7
+        ]
+        let note = Notification(name: UIResponder.keyboardWillShowNotification, object: nil, userInfo: userInfo)
+        let geometry = SocialComposerKeyboardTracker.geometry(from: note)
+        XCTAssertEqual(geometry.frame, CGRect(x: 0, y: 550, width: 393, height: 302))
+        XCTAssertEqual(geometry.motion, KeyboardMotion(duration: 0.25, curve: 7))
+        XCTAssertNotNil(geometry.motion.animation)
+        XCTAssertNil(KeyboardMotion(duration: 0, curve: 7).animation)
     }
 
     func testSocialComposerViewClosesWhenKeyboardHideNotificationsFire() async {
@@ -280,5 +378,48 @@ final class SocialComposerKeyboardTests: XCTestCase {
             let closed = await waitUntil(timeout: 1.0) { closeCount == 1 }
             XCTAssertTrue(closed, "SocialComposer(\(target.id)) 应在收到键盘隐藏通知后自动关闭")
         }
+    }
+
+    func testSocialComposerViewClosesEvenWithOnlyWillHideNotification() async {
+        var closeCount = 0
+        let composer = SocialComposer(target: .danmaku) {
+            closeCount += 1
+        }
+
+        let window: UIWindow
+        if let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first {
+            window = UIWindow(windowScene: scene)
+            window.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
+        } else {
+            window = UIWindow(frame: CGRect(x: 0, y: 0, width: 393, height: 852))
+        }
+        let host = UIHostingController(rootView: composer)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        host.view.layoutIfNeeded()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        try? await Task.sleep(nanoseconds: 250_000_000)
+
+        let shownInfo: [AnyHashable: Any] = [
+            UIResponder.keyboardFrameEndUserInfoKey: NSValue(cgRect: CGRect(x: 0, y: 550, width: 393, height: 302)),
+            UIResponder.keyboardAnimationDurationUserInfoKey: 0.05
+        ]
+        NotificationCenter.default.post(name: UIResponder.keyboardWillShowNotification, object: nil, userInfo: shownInfo)
+        NotificationCenter.default.post(name: UIResponder.keyboardDidShowNotification, object: nil, userInfo: shownInfo)
+
+        try? await Task.sleep(nanoseconds: 40_000_000)
+
+        let hideInfo: [AnyHashable: Any] = [
+            UIResponder.keyboardFrameEndUserInfoKey: NSValue(cgRect: CGRect(x: 0, y: 852, width: 393, height: 302)),
+            UIResponder.keyboardAnimationDurationUserInfoKey: 0.05
+        ]
+        NotificationCenter.default.post(name: UIResponder.keyboardWillHideNotification, object: nil, userInfo: hideInfo)
+
+        let closed = await waitUntil(timeout: 1.0) { closeCount == 1 }
+        XCTAssertTrue(closed, "即使仅发出 keyboardWillHideNotification，退场结束后也应兜底卸载")
     }
 }

@@ -298,8 +298,7 @@ private struct DanmakuTabControls: View {
 struct AnimeCommentsView: View {
     let vid: Int
     var bottomInset: CGFloat = 0
-    /// 点「说点什么…」或某条的「回复」：宿主在避让键盘的那一层弹出输入栏（见 SocialComposer）
-    var onCompose: ((AnimeComment?) -> Void)? = nil
+    var allowsCompose: Bool = true
 
     private enum Sort: String, CaseIterable, Identifiable {
         case hot, latest
@@ -308,6 +307,7 @@ struct AnimeCommentsView: View {
     }
 
     @ObservedObject private var account = AnimeAccount.shared
+    @StateObject private var tracker = SocialComposerKeyboardTracker(autoCloseOnHide: false)
     @State private var sort: Sort = .hot
     @State private var pinned: [AnimeComment] = []
     @State private var hot: [AnimeComment] = []
@@ -323,6 +323,9 @@ struct AnimeCommentsView: View {
     @State private var loadedVid: Int?
     @State private var showSignIn = false
     @State private var notice = ""
+    @State private var draft = ""
+    @State private var replyTo: AnimeComment?
+    @FocusState private var composerFocused: Bool
 
     private var visible: [AnimeComment] {
         let body = sort == .hot ? (hot.isEmpty ? latest : hot) : latest
@@ -331,18 +334,64 @@ struct AnimeCommentsView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    header
-                    content
+        GeometryReader { proxy in
+            let active = composerFocused || tracker.keyboardVisible || tracker.overlap > 0
+            let restingPad = max(bottomInset - 10, 0)
+            let bottomPad = max(restingPad, tracker.overlap)
+            ZStack(alignment: .bottom) {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        header
+                        content
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, allowsCompose ? (76 + bottomInset) : 28)
                 }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 28)
+                .scrollIndicators(.hidden)
+
+                if allowsCompose {
+                    Color.black.opacity(active ? Theme.Opacity.soft : 0)
+                        .ignoresSafeArea()
+                        .allowsHitTesting(active)
+                        .contentShape(Rectangle())
+                        .onTapGesture(perform: dismissComposer)
+                        .gesture(
+                            DragGesture(minimumDistance: 12).onEnded { value in
+                                if value.translation.height > 24 { dismissComposer() }
+                            }
+                        )
+                        .animation(.easeOut(duration: 0.2), value: active)
+                        .accessibilityLabel("收起输入框")
+                        .accessibilityAddTraits(.isButton)
+                        .accessibilityHidden(!active)
+
+                    VStack(spacing: 0) {
+                        SocialInputBar(
+                            target: .comment(vid: vid, replyTo: replyTo),
+                            tracker: tracker,
+                            text: $draft,
+                            focused: $composerFocused,
+                            requiresSignIn: needsSignIn,
+                            onRequireSignIn: { showSignIn = true },
+                            onCancelReply: replyTo == nil ? nil : { replyTo = nil },
+                            onDidSend: {
+                                replyTo = nil
+                                dismissComposer()
+                            },
+                            onEmptySubmit: dismissComposer
+                        )
+                        Color.clear.frame(height: bottomPad)
+                    }
+                    .background {
+                        Theme.surface.ignoresSafeArea(edges: .bottom)
+                    }
+                    .overlay(alignment: .top) { Theme.rule.frame(height: Theme.Stroke.hairline) }
+                }
             }
-            .scrollIndicators(.hidden)
-            if onCompose != nil { composeStub }
+            .frame(width: proxy.size.width, height: proxy.size.height)
+            .trackKeyboard(tracker, containerBottom: proxy.frame(in: .global).maxY)
         }
+        .ignoresSafeArea(.keyboard, edges: .bottom)
         .overlay(alignment: .top) {
             if !notice.isEmpty {
                 Text(notice)
@@ -361,40 +410,46 @@ struct AnimeCommentsView: View {
             guard (note.userInfo?["vid"] as? Int) == vid, let comment = note.userInfo?["comment"] as? AnimeComment else { return }
             mine.insert(comment, at: 0)
         }
+        .onAppear {
+            tracker.onKeyboardHidden = {
+                composerFocused = false
+                if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    replyTo = nil
+                }
+            }
+        }
+        .onDisappear {
+            tracker.onKeyboardHidden = nil
+            tracker.cancel()
+            if composerFocused || tracker.keyboardVisible {
+                composerFocused = false
+                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            }
+        }
         .animeSignInSheet(isPresented: $showSignIn)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("player.comments")
     }
 
-    /// 底部的「说点什么…」：点了才弹出真正的输入栏（键盘上方）
-    private var composeStub: some View {
-        Button { compose(nil) } label: {
-            HStack(spacing: Theme.Space.sm) {
-                Text(account.isSignedIn ? "说点什么…" : "登录后参与评论")
-                    .font(Theme.Typo.row)
-                    .foregroundStyle(Theme.textTertiary)
-                Spacer()
-                Image(icon: .send)
-                    .font(.scaled(16, weight: Theme.iconWeight))
-                    .foregroundStyle(Theme.textMuted)
-            }
-            .padding(.horizontal, 14)
-            .frame(height: 40)
-            .background(Theme.inputFill, in: Capsule())
-            .contentShape(Capsule())
-        }
-        .buttonStyle(.pressable(scale: 0.98))
-        .padding(.horizontal, 16)
-        .padding(.top, 10)
-        .padding(.bottom, max(bottomInset, 10))
-        .background(Theme.surface.ignoresSafeArea(edges: .bottom))
-        .overlay(alignment: .top) { Theme.rule.frame(height: Theme.Stroke.hairline) }
-        .accessibilityIdentifier("player.comments.compose")
+    private var needsSignIn: Bool {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["HPLAYER_COMPOSER_TEST"] == "1" { return false }
+        #endif
+        return !account.isSignedIn
     }
 
     private func compose(_ reply: AnimeComment?) {
-        guard account.isSignedIn else { showSignIn = true; return }
-        onCompose?(reply)
+        guard !needsSignIn else { showSignIn = true; return }
+        replyTo = reply
+        composerFocused = true
+    }
+
+    private func dismissComposer() {
+        composerFocused = false
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            replyTo = nil
+        }
     }
 
     private func like(_ comment: AnimeComment) {
@@ -458,7 +513,7 @@ struct AnimeCommentsView: View {
             stateMessage
         } else {
             ForEach(visible) { comment in
-                AnimeCommentRow(comment: comment, onReply: onCompose == nil ? nil : { compose($0) },
+                AnimeCommentRow(comment: comment, onReply: allowsCompose ? { compose($0) } : nil,
                                 onLike: { like($0) })
                     .onAppear {
                         if sort == .latest, comment.id == latest.last?.id { Task { await loadMore() } }
@@ -501,7 +556,7 @@ struct AnimeCommentsView: View {
     private var stateDetail: String {
         if !error.isEmpty { return error }
         if unsupported { return "接口返回了评论，但字段和预期不一致，后续版本会适配" }
-        return onCompose == nil ? "来抢第一条评论吧" : "点下面的输入框，来抢第一条评论"
+        return allowsCompose ? "点下面的输入框，来抢第一条评论" : "来抢第一条评论吧"
     }
 
     @ViewBuilder
@@ -527,6 +582,9 @@ struct AnimeCommentsView: View {
         loadedVid = vid
         pinned = []; hot = []; latest = []; mine = []; page = 0; exhausted = false; error = ""; unsupported = false
         guard !InterfacePreview.active else { exhausted = true; return }
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["HPLAYER_COMPOSER_TEST"] == "1" { exhausted = true; return }
+        #endif
         loading = true
         defer { loading = false }
         async let topPage = try? AnimeClient.shared.fetchComments(.top, vid: vid)

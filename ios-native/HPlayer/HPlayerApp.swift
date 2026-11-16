@@ -272,6 +272,7 @@ private struct PlayerUITestHost: View {
 
 private struct ComposerUITestHost: View {
     @State private var composer: SocialComposerTarget?
+    @State private var showComments = false
 
     var body: some View {
         NavigationStack {
@@ -280,19 +281,31 @@ private struct ComposerUITestHost: View {
                     .accessibilityIdentifier("composerTest.state")
                 Button("打开弹幕输入") { composer = .danmaku }
                     .accessibilityIdentifier("composerTest.openDanmaku")
-                Button("打开评论输入") { composer = .comment(vid: 1, replyTo: nil) }
-                    .accessibilityIdentifier("composerTest.openComment")
+                Button("打开评论页") { showComments = true }
+                    .accessibilityIdentifier("composerTest.openCommentsPage")
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .overlay {
                 if let composer {
                     SocialComposer(target: composer) { self.composer = nil }
-                        .transition(.opacity)
                 }
             }
-            .animation(Motion.smooth, value: composer)
             .navigationTitle("输入测试")
             .navigationBarTitleDisplayMode(.inline)
+            .navigationDestination(isPresented: $showComments) {
+                AnimeCommentsView(vid: 1)
+                    .background(Theme.pageBackground.ignoresSafeArea())
+                    .navigationTitle("评论测试")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button("收起键盘") {
+                                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                            }
+                            .accessibilityIdentifier("composerTest.dismissCommentsKeyboard")
+                        }
+                    }
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("收起键盘") {
