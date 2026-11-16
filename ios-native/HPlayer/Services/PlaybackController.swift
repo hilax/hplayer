@@ -215,6 +215,16 @@ final class PlaybackController: ObservableObject {
     private var currentDirect115 = false
     private var currentCookie = ""
     private var currentCustomHeaders: [String: String] = [:]
+    private var currentStreamID: String?
+    private var currentPlaylistRenew: (() async throws -> URL)?
+    private var currentEngineURL: URL?
+    private var rawCacheSpeed: Int = 0
+    private var healthyPlaybackSeconds: Int = 0
+    private var openingSeconds: Int = 0
+    private var tier1RefreshAttemptedInStall = false
+    private var pausedAtUptime: TimeInterval?
+    private var preferLargerPauseWait = false
+    private static let minHealthyCacheSpeedBytes = 32 * 1024
     private var urlRefresher: (() async throws -> URL)?
     private var watchdogEnabled = true
     private var openTimeoutSeconds: UInt64 = 45
@@ -229,6 +239,8 @@ final class PlaybackController: ObservableObject {
     private var boostDesyncSince: TimeInterval?
     private var lastBoostReduction = -Double.infinity
     private var loaded = false
+    /// 视频是否已经完成头信息加载（用于播放页错峰获取画质菜单）
+    var hasLoaded: Bool { loaded }
     private var opening = false
     private var pausedForCache = false
     private var seeking = false
@@ -403,15 +415,14 @@ final class PlaybackController: ObservableObject {
             ("subs-fallback", "yes"),
             ("slang", "zh,chi,zho,chs,sc,cht,tc,en,eng"),
             ("screenshot-format", "jpg"),
-            // 网络：115 的冷门文件第一次读可能要等十几秒，给足 30 秒；真卡死由看门狗换地址重连
-            ("network-timeout", "30"),
+            // 网络：115 偶发卡顿时 15 秒触发一次底层重试，更早切换或重连
+            ("network-timeout", "15"),
             ("stream-lavf-o", "reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=4"),
-            // 边播边存：开头不等缓存，攒到一点就播；卡住时攒够 3 秒再继续，免得一顿一顿
+            // 边播边存：开头不等缓存，攒到一点就播；卡住重连后适度多攒 2.5 秒防抖动
             ("cache", "yes"),
             ("cache-pause", "yes"),
             ("cache-pause-initial", "no"),
-            // 卡住后攒够 1 秒就接着播，不要等太久
-            ("cache-pause-wait", "1"),
+            ("cache-pause-wait", preferLargerPauseWait ? "2.5" : "1"),
             // 打开时少探测一点格式信息，网络视频更快出画面
             ("demuxer-lavf-analyzeduration", "1"),
             ("demuxer-lavf-probesize", "4194304"),
@@ -459,7 +470,9 @@ final class PlaybackController: ObservableObject {
         startTime: Double? = nil,
         refreshURL: (() async throws -> URL)? = nil,
         autoRecover: Bool = true,
-        openTimeoutSeconds: UInt64 = 45
+        openTimeoutSeconds: UInt64 = 45,
+        streamID: String? = nil,
+        playlistRenew: (() async throws -> URL)? = nil
     ) {
         guard !closingPlayback else { return }
         session += 1
@@ -467,12 +480,16 @@ final class PlaybackController: ObservableObject {
             playedThisSession = false
             softwareFallbackNoticed = false
             pictureInPictureStillReady = false
+            preferLargerPauseWait = false
         }
         recoveryTask?.cancel()
         recoveryTask = nil
         recoveryAttempts = []
         statusNote = ""
         urlRefresher = refreshURL
+        currentStreamID = streamID
+        currentPlaylistRenew = playlistRenew
+        pausedAtUptime = nil
         watchdogEnabled = autoRecover
         self.openTimeoutSeconds = openTimeoutSeconds
         let position = preservingPosition ? resumePoint : max(0, startTime ?? 0)
@@ -538,13 +555,18 @@ final class PlaybackController: ObservableObject {
         let currentSession = session
         let generation = addressGeneration
         let renew = urlRefresher
+        let streamID = currentStreamID
+        let playlistRenew = currentPlaylistRenew
+        currentEngineURL = nil
         addressTask = Task { @MainActor [weak self, weak engine] in
             let address = await Self.engineAddress(for: url, direct115: direct115, cookieHeader: cookieHeader,
-                                                   customHeaders: customHeaders, renew: renew)
+                                                   customHeaders: customHeaders, streamID: streamID,
+                                                   renew: renew, playlistRenew: playlistRenew)
             guard let self, let engine, !Task.isCancelled, !self.closingPlayback,
                   self.session == currentSession, self.addressGeneration == generation,
                   self.engine === engine else { return }
             self.addressTask = nil
+            self.currentEngineURL = URL(string: address)
             engine.command(["loadfile", address, "replace"])
         }
         startWatchdog()
@@ -597,6 +619,10 @@ final class PlaybackController: ObservableObject {
         cachedSeconds = 0
         rawCachedSeconds = 0
         downloadSpeed = 0
+        rawCacheSpeed = 0
+        healthyPlaybackSeconds = 0
+        openingSeconds = 0
+        tier1RefreshAttemptedInStall = false
         lastPublishedTime = -1
         notifiedEngineTime = -1
         activeHwdec = ""
@@ -644,6 +670,7 @@ final class PlaybackController: ObservableObject {
         pictureInPicture?.stop()
         closingPlayback = true
         userPaused = true
+        pausedAtUptime = ProcessInfo.processInfo.systemUptime
         pendingOpen = nil
         cancelAddressResolution()
         openTimeoutTask?.cancel()
@@ -690,17 +717,25 @@ final class PlaybackController: ObservableObject {
         }
         if playing {
             userPaused = true
+            pausedAtUptime = ProcessInfo.processInfo.systemUptime
             engine?.set("pause", true)
             captureResumeFrame()
         } else {
+            let pauseElapsed = pausedAtUptime.map { ProcessInfo.processInfo.systemUptime - $0 } ?? 0
+            pausedAtUptime = nil
             userPaused = false
             noDataSeconds = 0
+            openingSeconds = 0
+            tier1RefreshAttemptedInStall = false
             if !loaded, recoveryTask == nil, !opening || !error.isEmpty {
                 // 连接断了停在那里：从停下的位置重新打开
                 recoveryAttempts = []
                 recover(reason: "")
             } else {
                 engine?.set("pause", false)
+                if pauseElapsed >= 90, urlRefresher != nil, let engineURL = currentEngineURL {
+                    LocalStreamProxy.shared.refreshActiveUpstream(for: engineURL)
+                }
             }
         }
         updateFlags()
@@ -773,6 +808,12 @@ final class PlaybackController: ObservableObject {
     }
 
     func checkHealthForTesting() { checkHealth() }
+
+    func setEngineURLForTesting(_ url: URL?) { currentEngineURL = url }
+
+    var recoveryCountForTesting: Int { recoveryAttempts.count }
+
+    var customHeadersForTesting: [String: String] { currentCustomHeaders }
     #endif
 
     func skip(_ seconds: Double) { seek(to: max(0, currentTime + seconds)) }
@@ -1210,17 +1251,20 @@ final class PlaybackController: ObservableObject {
             // 进度条上的浅色缓存段：差不到半秒画不出区别，不必每次都让播放页重算
             if value != bufferedUntil, abs(value - bufferedUntil) >= 0.5 || value < bufferedUntil { bufferedUntil = value }
         case ("demuxer-cache-duration", .double(let value)):
-            // 看门狗按原值判断有没有新数据进来；界面上「已缓冲 N 秒」变化超过半秒才更新
-            if value > rawCachedSeconds + 0.01 { dataSinceTick = true }
+            // 缓冲停顿或起播卡住时，只有明显上涨才算真正在缓冲，防止龟速保活导致看门狗死锁
+            let growthThreshold = (pausedForCache || seeking || !loaded) ? 0.25 : 0.01
+            if value > rawCachedSeconds + growthThreshold { dataSinceTick = true }
             rawCachedSeconds = value
             if abs(value - cachedSeconds) >= 0.5 || (value < 1 && cachedSeconds >= 1) { cachedSeconds = value }
         case ("cache-speed", .int(let value)):
-            let speed = Double(max(0, value))
+            rawCacheSpeed = Int(max(0, value))
+            let speed = Double(rawCacheSpeed)
             // 网速显示到小数点后一位，变化不到 5% 看不出来
             if speed != downloadSpeed, speed == 0 || downloadSpeed == 0 || abs(speed - downloadSpeed) >= downloadSpeed * 0.05 {
                 downloadSpeed = speed
             }
-            if value > 0 { dataSinceTick = true }
+            let healthyFloor = (pausedForCache || seeking || !loaded) ? Self.minHealthyCacheSpeedBytes : 1
+            if value >= healthyFloor { dataSinceTick = true }
         case ("track-list/count", .int):
             refreshTracks()
         case ("aid", .string(let value)):
@@ -1439,13 +1483,43 @@ final class PlaybackController: ObservableObject {
         if boosted { checkBoostSync(avSync, at: ProcessInfo.processInfo.systemUptime) }
         if dataSinceTick {
             noDataSeconds = 0
+            if !pausedForCache || rawCacheSpeed >= Self.minHealthyCacheSpeedBytes {
+                tier1RefreshAttemptedInStall = false
+            }
         } else {
             noDataSeconds += 1
             // 一直没有新数据，界面上的网速也不要停在旧数字上
             if noDataSeconds >= 2, downloadSpeed > 0 { downloadSpeed = 0 }
         }
         dataSinceTick = false
-        guard watchdogEnabled, recoveryTask == nil, currentURL != nil, error.isEmpty, !userPaused, loaded, !ended else { return }
+
+        if loaded, playing, !pausedForCache, !seeking, !ended, error.isEmpty {
+            healthyPlaybackSeconds += 1
+            if healthyPlaybackSeconds >= 25, !recoveryAttempts.isEmpty {
+                recoveryAttempts = []
+            }
+        } else {
+            healthyPlaybackSeconds = 0
+        }
+
+        guard watchdogEnabled, recoveryTask == nil, currentURL != nil, error.isEmpty, !userPaused, !ended else { return }
+
+        // 起播卡住（尚未 fileLoaded）：不等 45 秒总超时，6 秒先由中转静默切节点，14 秒未果直接重开
+        if !loaded {
+            openingSeconds += 1
+            if openingSeconds >= 6, noDataSeconds >= 6, !tier1RefreshAttemptedInStall,
+               let engineURL = currentEngineURL, LocalStreamProxy.shared.refreshActiveUpstream(for: engineURL) {
+                tier1RefreshAttemptedInStall = true
+                statusNote = "连接缓慢，正在切换节点…"
+                return
+            }
+            if noDataSeconds >= 14 || (openingSeconds >= 18 && rawCacheSpeed < Self.minHealthyCacheSpeedBytes) {
+                recover(reason: "起播超时")
+            }
+            return
+        }
+        openingSeconds = 0
+
         // With keep-open, a failed seek can leave an EOF without end-file, even
         // while the demuxer keeps downloading. Do not wait for a no-data timeout.
         if eofReached, engine?.flag("eof-reached") != false {
@@ -1458,33 +1532,46 @@ final class PlaybackController: ObservableObject {
             recover(reason: "跳转后网络没有响应")
             return
         }
-        // 卡在缓冲或跳转里、8 秒一个字节都没收到：连接多半已经死了，换地址从原位置接着连
-        // 跳转后 mpv 处在「seeking」而不是「paused-for-cache」，两种都算
-        if hasPlayed, pausedForCache || seeking, noDataSeconds >= 8 {
+        // Tier-1 静默切节点：缓冲停住 5 秒（或播放中余量不足 6 秒且断流 6 秒）先由中转无缝续传，保留 mpv 本地缓存
+        let lowBufferStall = playing && !pausedForCache && !seeking && cachedSeconds < 6
+            && (duration <= 0 || currentTime + cachedSeconds < duration - 5) && noDataSeconds >= 6
+        if (hasPlayed && (pausedForCache || seeking) && noDataSeconds >= 5) || lowBufferStall {
+            if !tier1RefreshAttemptedInStall, let engineURL = currentEngineURL,
+               LocalStreamProxy.shared.refreshActiveUpstream(for: engineURL) {
+                tier1RefreshAttemptedInStall = true
+                engine?.set("cache-pause-wait", "2.5")
+                if pausedForCache || seeking { statusNote = "正在切换高速节点…" }
+                return
+            }
+        }
+        // Tier-2 兜底重开：中转节点刷新仍未恢复，才停掉重连
+        let reopenThreshold = tier1RefreshAttemptedInStall ? 10 : 8
+        if hasPlayed, pausedForCache || seeking, noDataSeconds >= reopenThreshold {
             recover(reason: "网络卡住了")
         }
     }
 
-    /// 停掉卡住的连接，换（新）地址从原位置重新打开。90 秒内最多自动试 3 次，之后提示用户点重试。
+    /// 停掉卡住的连接，换（新）地址从原位置重新打开；连续恢复期间保留已攒下的重连额度（稳定播放 25 秒自动重置）。
     private func recover(reason: String) {
         guard let url = currentURL, recoveryTask == nil else { return }
         cancelAddressResolution()
         let now = Date()
-        // 播过之后断了：90 秒内最多试 3 次；一次都没播出来：总共也只再试 3 次，免得一直转圈
         if playedThisSession {
-            recoveryAttempts = recoveryAttempts.filter { now.timeIntervalSince($0) < 90 }
+            recoveryAttempts = recoveryAttempts.filter { now.timeIntervalSince($0) < 120 }
         }
-        guard recoveryAttempts.count < 3 else {
+        guard recoveryAttempts.count < 5 else {
             engine?.command(["stop"])
             giveUp(reason.isEmpty ? "网络连接中断" : reason)
             return
         }
         recoveryAttempts.append(now)
+        preferLargerPauseWait = true
         let position = pendingSeek ?? resumePoint
         logEvent("重连（\(reason.isEmpty ? "手动" : reason)）第 \(recoveryAttempts.count) 次，从 \(Self.clock(position))")
         let refresher = urlRefresher
         let direct115 = currentDirect115
         let cookie = currentCookie
+        let customHeaders = currentCustomHeaders
         let currentSession = session
         openTimeoutTask?.cancel()
         // 刚打开就失败的第一次重试悄悄进行，不弹「打开失败」吓人；之后再说明在重连
@@ -1494,9 +1581,7 @@ final class PlaybackController: ObservableObject {
             statusNote = reason.isEmpty ? "正在重新连接…" : "\(reason)，正在重新连接…"
         }
         engine?.command(["stop"])
-        // 第一次马上重连；再失败说明对方（115 的服务器、网络）当时正忙或在掐连接，隔几秒再来，
-        // 不要 1 秒内连着撞三次就放弃
-        let backoff: [Double] = [0, 2, 5]
+        let backoff: [Double] = [0, 1, 2, 4, 6]
         let wait = backoff[min(recoveryAttempts.count - 1, backoff.count - 1)]
         recoveryTask = Task { @MainActor [weak self] in
             if wait > 0 { try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000)) }
@@ -1504,7 +1589,7 @@ final class PlaybackController: ObservableObject {
             if let refresher, let fresh = try? await refresher() { target = fresh }
             guard let self, !Task.isCancelled, self.session == currentSession else { return }
             self.recoveryTask = nil
-            self.start(target, direct115: direct115, cookie: cookie, position: position, keepPlaying: !self.userPaused, keepDuration: true)
+            self.start(target, direct115: direct115, cookie: cookie, customHeaders: customHeaders, position: position, keepPlaying: !self.userPaused, keepDuration: true)
         }
         updateFlags()
     }
@@ -1588,7 +1673,8 @@ final class PlaybackController: ObservableObject {
     /// 网络视频交给本机中转，由系统网络栈去连 115（mpv 自带的 TLS 连 115 会被断开）；本机地址（磁力边下边播）直接给内核
     /// `renew`：115 地址过期（上游 403）时中转自己换新地址接着下，不打断播放
     private static func engineAddress(for url: URL, direct115: Bool, cookieHeader: String, customHeaders: [String: String] = [:],
-                                      renew: (() async throws -> URL)? = nil) async -> String {
+                                      streamID: String? = nil, renew: (() async throws -> URL)? = nil,
+                                      playlistRenew: (() async throws -> URL)? = nil) async -> String {
         if url.isFileURL { return url.path }
         guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return url.absoluteString }
         let host = url.host?.lowercased() ?? ""
@@ -1606,7 +1692,8 @@ final class PlaybackController: ObservableObject {
         for (k, v) in customHeaders {
             headers[k] = v
         }
-        return await LocalStreamProxy.shared.localURL(for: url, headers: headers, renew: renew)?.absoluteString ?? url.absoluteString
+        return await LocalStreamProxy.shared.localURL(for: url, headers: headers, streamID: streamID,
+                                                      renew: renew, playlistRenew: playlistRenew)?.absoluteString ?? url.absoluteString
     }
 
     static func clock(_ seconds: Double) -> String {

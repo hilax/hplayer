@@ -36,7 +36,14 @@ struct InterfaceCatalogHost: View {
 
     @ViewBuilder private var destination: some View {
         switch screen {
-        case "home", "home-more", "home-empty", "add", "film-menu": tabs(.home)
+        case "home", "home-more", "home-empty", "film-menu": tabs(.home)
+        case "add":
+            tabs(.home)
+                .sheet(isPresented: .constant(true)) {
+                    AddMediaSheet { _ in }
+                        .presentationDetents([.height(460)])
+                        .presentationDragIndicator(.visible)
+                }
         case "library", "library-empty": tabs(.cloud)
         case "catalog": tabs(.home, channel: .library)
         case "magnet-tab": tabs(.magnet)

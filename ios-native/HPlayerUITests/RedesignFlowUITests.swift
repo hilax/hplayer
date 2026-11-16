@@ -40,34 +40,48 @@ final class RedesignFlowUITests: XCTestCase {
         let app = launch("home")
         defer { app.terminate() }
         let search = app.descendants(matching: .any)["home.search"].firstMatch
+        let compactSearch = app.buttons["home.search.compact"].firstMatch
         let play = app.buttons["home.heroPlay"].firstMatch
         let channel = app.descendants(matching: .any)["home.channel.recommend"].firstMatch
+        let missav = app.buttons["home.channel.missav"].firstMatch
         XCTAssertTrue(search.waitForExistence(timeout: 25))
         XCTAssertTrue(play.waitForExistence(timeout: 10))
         Thread.sleep(forTimeInterval: 1)
         let restSearch = search.frame
+        let restChannel = channel.frame
         let gap = play.frame.minY - restSearch.maxY
         XCTAssertGreaterThanOrEqual(gap, 0, "The carousel must not slide under the search bar")
         XCTAssertLessThanOrEqual(gap, 30, "The carousel starts right below the search bar (gap \(gap))")
         XCTAssertTrue(channel.isHittable)
+        XCTAssertFalse(app.buttons["home.sources"].exists, "Header + button is removed")
+        XCTAssertFalse(compactSearch.isHittable, "Compact search stays hidden while large search bar is visible")
+        XCTAssertLessThanOrEqual(missav.frame.maxX, app.frame.width - 12, "MissAV must fit without clipping at rest")
 
         let low = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8))
         let high = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
         low.press(forDuration: 0.05, thenDragTo: high, withVelocity: .slow, thenHoldForDuration: 0.3)
         Thread.sleep(forTimeInterval: 1)
-        let pinned = search.frame
-        XCTAssertLessThan(pinned.minY, restSearch.minY - 40, "The search bar moves up into the channel row's place")
-        XCTAssertGreaterThan(pinned.minY, 20, "The search bar stays below the status bar")
-        XCTAssertFalse(channel.isHittable, "The channel row is hidden once the header collapses")
+        XCTAssertTrue(channel.isHittable, "The channel row stays pinned when scrolling up")
+        XCTAssertEqual(channel.frame.minY, restChannel.minY, accuracy: 1.5, "Pinned channel row does not jump vertically")
+        XCTAssertFalse(search.isHittable, "Large search bar collapses when scrolling up")
+        XCTAssertTrue(compactSearch.isHittable, "Compact search button appears in the top-right corner")
+        XCTAssertGreaterThanOrEqual(compactSearch.frame.minX, missav.frame.maxX - 1, "Compact search must not cover MissAV")
+        XCTAssertEqual(compactSearch.frame.midY, channel.frame.midY, accuracy: 4, "Compact search aligns vertically with channel bar")
         let pinnedShot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         pinnedShot.name = "Home header pinned"
         pinnedShot.lifetime = .keepAlways
         add(pinnedShot)
 
+        compactSearch.tap()
+        XCTAssertTrue(app.textFields["search.query"].waitForExistence(timeout: 10), "Tapping compact search opens search")
+        app.buttons["search.back"].tap()
+        XCTAssertTrue(wait { compactSearch.isHittable }, "Closing search returns to pinned header")
+
         high.press(forDuration: 0.05, thenDragTo: low, withVelocity: .fast, thenHoldForDuration: 0.1)
         high.press(forDuration: 0.05, thenDragTo: low, withVelocity: .fast, thenHoldForDuration: 0.1)
-        XCTAssertTrue(channel.waitForExistence(timeout: 3))
-        Thread.sleep(forTimeInterval: 1)
+        XCTAssertTrue(wait { search.isHittable }, "Scrolling back down restores large search bar")
+        XCTAssertFalse(compactSearch.isHittable, "Compact search hides once large search bar returns")
+        Thread.sleep(forTimeInterval: 0.5)
         // 在货架标题那一行横滑（不碰横滑货架和轮播），翻到下一个频道
         let screen = app.frame
         let titles = ["home.shelf.continue", "home.shelf.trending", "home.shelf.movies", "home.shelf.watchlist"]
@@ -158,16 +172,20 @@ final class RedesignFlowUITests: XCTestCase {
     }
 
     func testSourcePanelAndFilmMatchingRoute() {
+        let emptyApp = launch("home-empty")
+        let emptyAdd = emptyApp.buttons["添加影片"].firstMatch
+        XCTAssertTrue(emptyAdd.waitForExistence(timeout: 20))
+        emptyAdd.tap()
+        XCTAssertTrue(emptyApp.staticTexts["添加影片"].waitForExistence(timeout: 5))
+        for title in ["导入本机视频", "添加 115 文件夹", "打开磁力链接"] { XCTAssertTrue(emptyApp.staticTexts[title].exists) }
+        XCTAssertFalse(emptyApp.staticTexts["开始全盘扫描"].exists, "Home's add panel only concerns playable content")
+        emptyApp.buttons["关闭"].tap()
+        emptyApp.terminate()
+
         let app = launch("home")
         defer { app.terminate() }
-        let sources = app.buttons["home.sources"]
-        XCTAssertTrue(sources.waitForExistence(timeout: 20))
-        sources.tap()
-        XCTAssertTrue(app.staticTexts["添加影片"].waitForExistence(timeout: 5))
-        for title in ["导入本机视频", "添加 115 文件夹", "打开磁力链接"] { XCTAssertTrue(app.staticTexts[title].exists) }
-        XCTAssertFalse(app.staticTexts["开始全盘扫描"].exists, "Home's add panel only concerns playable content")
-        app.buttons["关闭"].tap()
         // 轮播卡片上没有按钮：长按卡片弹出菜单，「更多选项」打开影片选项面板。
+        XCTAssertTrue(app.buttons["home.heroPlay"].firstMatch.waitForExistence(timeout: 20))
         app.buttons["home.heroPlay"].firstMatch.press(forDuration: 1.2)
         let more = app.buttons["更多选项"].firstMatch
         XCTAssertTrue(more.waitForExistence(timeout: 5), "Long-pressing a featured slide shows its menu")

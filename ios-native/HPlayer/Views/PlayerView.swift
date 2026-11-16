@@ -208,11 +208,20 @@ struct PlayerView: View {
                         PlayerWindowController.shared.note("拿到原画地址")
                         guard await openAfterReveal(request, source: source, session: session) else { return }
                         playback.open(original, direct115: true, directCookie: client.cookie, startTime: resume,
-                                      refreshURL: Self.originalRefresher(client, pickCode: pickCode))
+                                      refreshURL: Self.originalRefresher(client, pickCode: pickCode),
+                                      streamID: "p115:\(pickCode)")
                         loading = false
                     } catch {
                         guard isCurrentRequest(request, source: source, session: session), !Task.isCancelled else { return }
                         originalError = error
+                    }
+                    // 原画打开后稍等首帧加载（最多 1.5s）再去拉转码画质列表，避免与起播探测争抢弱网连接。
+                    if originalError == nil {
+                        for _ in 0..<15 {
+                            if playback.hasLoaded || Task.isCancelled || !isCurrentRequest(request, source: source, session: session) { break }
+                            try? await Task.sleep(nanoseconds: 100_000_000)
+                        }
+                        guard isCurrentRequest(request, source: source, session: session), !Task.isCancelled else { return }
                     }
                     // 转码画质只作为手动选项，原画失败时不要悄悄切换画质。
                     var streams: [Direct115Stream] = []
@@ -335,14 +344,16 @@ struct PlayerView: View {
                 guard isCurrentRequest(request, source: source, session: session), !Task.isCancelled else { return nil }
                 guard let fresh = refreshed.first(where: { $0.title == requestedStream.title }) else { throw APIError.server("该画质暂不可用") }
                 directQualities = refreshed; selectedQuality = fresh.title
+                let refresher = Self.streamRefresher(client, pickCode: pickCode, title: fresh.title)
                 playback.open(fresh.url, direct115: true, directCookie: client.cookie, preservingPosition: preservePosition, startTime: savedPosition,
-                              refreshURL: Self.streamRefresher(client, pickCode: pickCode, title: fresh.title))
+                              refreshURL: refresher, streamID: "p115:\(pickCode):hls:\(fresh.title)", playlistRenew: refresher)
             } else {
                 let original = try await client.originalURL(pickCode: pickCode)
                 guard isCurrentRequest(request, source: source, session: session), !Task.isCancelled else { return nil }
                 selectedQuality = "原画"
                 playback.open(original, direct115: true, directCookie: client.cookie, preservingPosition: preservePosition, startTime: savedPosition,
-                              refreshURL: Self.originalRefresher(client, pickCode: pickCode))
+                              refreshURL: Self.originalRefresher(client, pickCode: pickCode),
+                              streamID: "p115:\(pickCode)")
             }
             return request
         } catch {

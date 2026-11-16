@@ -328,4 +328,71 @@ final class PlaybackEndTests: XCTestCase {
         XCTAssertFalse(player.ended)
         XCTAssertFalse(player.error.isEmpty)
     }
+
+    func testTrickleSpeedBelowThresholdStillTriggersRecoveryAndPreservesCustomHeaders() async throws {
+        let player = PlaybackController()
+        defer { player.stop() }
+        player.open(
+            try XCTUnwrap(URL(string: "https://example.com/video.mkv")),
+            customHeaders: ["Referer": "https://ref.example.com/", "User-Agent": "CustomUA"],
+            autoRecover: true
+        )
+        player.receiveEventForTesting(.fileLoaded)
+        player.receiveEventForTesting(.property("duration", .double(300)))
+        player.receiveEventForTesting(.property("seekable", .flag(true)))
+        player.receiveEventForTesting(.playbackRestart)
+        player.receiveEventForTesting(.property("time-pos", .double(25)))
+        player.receiveEventForTesting(.property("paused-for-cache", .flag(true)))
+
+        // 模拟 115 被限速到极慢（2 KB/s < 32 KB/s）并持续 8 秒无法攒出有效缓冲
+        var cacheSeconds = 0.0
+        for _ in 0..<8 {
+            cacheSeconds += 0.05
+            player.receiveEventForTesting(.property("cache-speed", .int(2048)))
+            player.receiveEventForTesting(.property("demuxer-cache-duration", .double(cacheSeconds)))
+            player.checkHealthForTesting()
+        }
+
+        try await Task.sleep(nanoseconds: 80_000_000)
+        XCTAssertEqual(player.recoveryCountForTesting, 1, "龟速保活（< 32 KB/s）也必须触发恢复，不能永久转圈")
+        XCTAssertEqual(player.customHeadersForTesting["Referer"], "https://ref.example.com/")
+        XCTAssertEqual(player.customHeadersForTesting["User-Agent"], "CustomUA")
+    }
+
+    func testPreLoadStallTriggersRecoveryBefore45SecondOpenTimeout() throws {
+        let player = PlaybackController()
+        defer { player.stop() }
+        player.open(try XCTUnwrap(URL(string: "https://example.com/video.mkv")), autoRecover: true)
+
+        for _ in 0..<14 {
+            player.checkHealthForTesting()
+        }
+
+        XCTAssertEqual(player.recoveryCountForTesting, 1, "起播阶段卡死必须在 14 秒左右主动触发重连，而不必干等 45 秒")
+    }
+
+    func testHealthyPlaybackClearsRecoveryBudgetAfter25Seconds() async throws {
+        let player = PlaybackController()
+        defer { player.stop() }
+        player.open(try XCTUnwrap(URL(string: "https://example.com/video.mkv")), autoRecover: true)
+        player.receiveEventForTesting(.fileLoaded)
+        player.receiveEventForTesting(.property("duration", .double(300)))
+        player.receiveEventForTesting(.property("seekable", .flag(true)))
+        player.receiveEventForTesting(.playbackRestart)
+        player.receiveEventForTesting(.property("time-pos", .double(25)))
+        player.receiveEventForTesting(.property("paused-for-cache", .flag(true)))
+
+        for _ in 0..<8 { player.checkHealthForTesting() }
+        XCTAssertEqual(player.recoveryCountForTesting, 1)
+        try await Task.sleep(nanoseconds: 80_000_000)
+
+        // 重开后恢复正常播放并稳定持续 25 秒
+        player.receiveEventForTesting(.fileLoaded)
+        player.receiveEventForTesting(.playbackRestart)
+        player.receiveEventForTesting(.property("paused-for-cache", .flag(false)))
+        player.receiveEventForTesting(.property("time-pos", .double(26)))
+        for _ in 0..<25 { player.checkHealthForTesting() }
+
+        XCTAssertEqual(player.recoveryCountForTesting, 0, "稳定播放 25 秒后必须归零连续失败计数，保证长片后续还能自动恢复")
+    }
 }

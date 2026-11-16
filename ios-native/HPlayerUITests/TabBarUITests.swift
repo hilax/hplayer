@@ -148,6 +148,7 @@ final class TabBarUITests: XCTestCase {
         let missav = app.buttons["home.channel.missav"]
         XCTAssertTrue(recommend.waitForExistence(timeout: 25))
         XCTAssertTrue(recommend.isSelected)
+        XCTAssertLessThanOrEqual(missav.frame.maxX, app.frame.width - 12, "MissAV channel title must fit without edge clipping")
 
         let heroPlay = app.buttons["home.heroPlay"].firstMatch
         XCTAssertTrue(heroPlay.waitForExistence(timeout: 10))

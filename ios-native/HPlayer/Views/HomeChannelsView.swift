@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// 首页标签：推荐 / 动漫 / 片库 / 短剧四个频道左右滑动切换（PagedHeaderContainer）。
-/// 频道条和搜索框是盖在上面的固定头部：往上滑时频道条淡出，搜索框固定在顶端。
+/// 首页标签：推荐 / 动漫 / 片库 / 短剧 / Jable / MissAV 频道左右滑动切换（PagedHeaderContainer）。
+/// 第一行频道栏始终固定在顶端；往上滑时第二行大搜索栏向上收起，右上角渐显紧凑搜索键。
 /// 详情页走 HomeView 的公共导航栈，盖住频道区和底部胶囊栏。
 struct HomeChannelsView: View {
     @Binding var channel: HomeChannel
@@ -9,8 +9,7 @@ struct HomeChannelsView: View {
     var onSearch: () -> Void
     var onBrowseLibrary: () -> Void
 
-    /// 头部按钮转给对应频道：推荐的「添加」、片库的「筛选」
-    @State private var addRequest = 0
+    /// 头部按钮转给对应频道：片库的「筛选」
     @State private var filterRequest = 0
 
     init(channel: Binding<HomeChannel>, catalogPreset: Binding<CatalogPreset?>,
@@ -23,26 +22,34 @@ struct HomeChannelsView: View {
 
     var body: some View {
         Group {
-            PagedHeaderContainer(pages: HomeChannel.allCases, selection: $channel) {
-                HStack(spacing: 4) {
+            PagedHeaderContainer(pages: HomeChannel.allCases, selection: $channel, collapseStyle: .pinFirstRow) { collapseProgress in
+                let compactProgress = min(max((collapseProgress - 0.35) / 0.45, 0), 1)
+                let compactActive = compactProgress > 0.35
+                ZStack(alignment: .trailing) {
+                    Color.clear
+                        .frame(maxWidth: .infinity, minHeight: 44, maxHeight: 44)
                     HomeChannelBar(selection: $channel)
-                    Spacer(minLength: 8)
-                    if channel == .recommend {
-                        Button { addRequest += 1 } label: {
-                            Image(appIconNamed: AppIcon.addCircle.name)
-                                .font(.scaled(20, weight: Theme.iconWeight))
+                        .padding(.leading, Theme.contentInset)
+                        .padding(.trailing, Theme.contentInset + compactProgress * 34)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if compactProgress > 0.02 {
+                        Button(action: onSearch) {
+                            Image(appIconNamed: AppIcon.search.name)
+                                .font(.scaled(19, weight: Theme.iconWeight))
                                 .heroForeground()
                                 .frame(width: 44, height: 44)
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.pressable(scale: 0.88))
-                        .accessibilityLabel("添加")
-                        .accessibilityIdentifier("home.sources")
-                        .transition(.opacity)
+                        .scaleEffect(0.84 + 0.16 * compactProgress)
+                        .opacity(compactProgress)
+                        .allowsHitTesting(compactActive)
+                        .accessibilityLabel("搜索")
+                        .accessibilityIdentifier("\(searchIdentifier).compact")
+                        .accessibilityHidden(!compactActive)
+                        .padding(.trailing, 6)
                     }
                 }
-                .padding(.leading, Theme.contentInset)
-                .padding(.trailing, 6)
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("home.heroBar")
             } secondRow: {
@@ -55,7 +62,7 @@ struct HomeChannelsView: View {
                     HomeTab(onBrowseLibrary: onBrowseLibrary, onSearch: onSearch, onOpenCatalog: { kind, sort in
                         catalogPreset = CatalogPreset(kind: kind, sort: sort)
                         withAnimation(Motion.smooth) { channel = .library }
-                    }, channel: $channel, addRequest: addRequest)
+                    }, channel: $channel)
                 case .anime:
                     AnimeCatalogView()
                 case .library:

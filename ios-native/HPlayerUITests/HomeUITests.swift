@@ -54,7 +54,7 @@ final class HomeUITests: XCTestCase {
         app.launch()
         let dune = app.buttons["home.poster.tt1160419"].firstMatch
         XCTAssertTrue(dune.waitForExistence(timeout: 30), "Imported movie should receive metadata")
-        XCTAssertTrue(app.buttons["home.sources"].exists)
+        XCTAssertFalse(app.buttons["home.sources"].exists)
         XCTAssertTrue(app.buttons["home.heroPlay"].firstMatch.isHittable, "Featured play button must fit inside the card")
         XCTAssertTrue(app.descendants(matching: .any)["home.artwork.Dune"].firstMatch.waitForExistence(timeout: 25), "Artwork should load successfully")
         let frame = app.windows.firstMatch.frame
@@ -79,7 +79,7 @@ final class HomeUITests: XCTestCase {
         let result = app.buttons["metadata.result.tt1160419"]
         XCTAssertTrue(result.waitForExistence(timeout: 15), "Manual matching should show title search results")
         result.tap()
-        XCTAssertTrue(app.buttons["home.sources"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["home.heroPlay"].firstMatch.waitForExistence(timeout: 5))
 
         // 结束进程后禁用资料服务：下一次首页必须直接复用本机封面，而不是先闪空片库再联网匹配。
         app.terminate()

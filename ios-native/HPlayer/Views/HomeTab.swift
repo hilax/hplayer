@@ -8,8 +8,6 @@ struct HomeTab: View {
     var onOpenCatalog: (CatalogKind, CatalogSort) -> Void = { _, _ in }
     /// 首页频道（推荐 / 片库 / 动漫）；这一页本身是「推荐」。
     var channel: Binding<HomeChannel> = .constant(.recommend)
-    /// 顶部头部的「添加」按钮在频道容器里；按一次这个数就加一，这里打开添加面板
-    var addRequest = 0
     /// 内容从哪里开始（顶部头部盖在上面）
     @Environment(\.channelPageInsets) private var insets
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -127,7 +125,6 @@ struct HomeTab: View {
             .onChange(of: librarySnapshots.revision) { _ in prefetchArtwork(snapshot) }
             .onChange(of: online.banners.count) { _ in prefetchArtwork(snapshot) }
             .onAppear { if snapshotReady { prefetchArtwork(snapshot) } }
-            .onChange(of: addRequest) { _ in showAdd = true }
         }
         .designScreen(library.featured.isEmpty ? "home-empty" : "home")
         .sheet(isPresented: $showAdd, onDismiss: performAddAction) {

@@ -108,7 +108,6 @@ final class ScreenCatalogUITests: XCTestCase {
         if screen == "home-more" {
             XCTAssertTrue(app.staticTexts["home.shelf.movies"].firstMatch.waitForExistence(timeout: 5))
         }
-        if screen == "add" { app.buttons["home.sources"].tap() }
         if screen == "film-menu" {
             // 轮播卡片长按 →「更多选项」打开影片选项面板
             app.buttons["home.heroPlay"].firstMatch.press(forDuration: 1.2)
@@ -152,7 +151,7 @@ final class ScreenCatalogUITests: XCTestCase {
             XCTAssertFalse(app.staticTexts["待匹配"].exists)
         }
         if screen == "home" {
-            let bar = app.otherElements["home.heroBar"]
+            let bar = app.descendants(matching: .any)["home.heroBar"].firstMatch
             XCTAssertTrue(bar.exists)
             XCTAssertFalse(bar.staticTexts["首页"].exists)
         }

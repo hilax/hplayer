@@ -84,47 +84,84 @@ struct HomeChannelBar: View {
     @Binding var selection: HomeChannel
     @Namespace private var underline
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var viewportWidth: CGFloat = 0
+    @State private var contentWidth: CGFloat = 0
 
     var body: some View {
+        let overflows = contentWidth > viewportWidth + 1 && viewportWidth > 0
         // 频道多了一屏放不下：左右滑内容换频道时，频道条跟着把选中的那个滚到看得见的位置
         ScrollViewReader { reader in
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 18) {
-                ForEach(HomeChannel.allCases) { channel in
-                    let selected = channel == selection
-                    Button {
-                        guard !selected else { return }
-                        Haptics.select()
-                        withAnimation(reduceMotion ? nil : Motion.snappy) { selection = channel }
-                    } label: {
-                        Text(channel.title)
-                            .font(.scaled(selected ? 20 : 16, weight: selected ? .heavy : .medium))
-                            .heroForeground(secondary: !selected)
-                            .frame(height: 40)
-                            .overlay(alignment: .bottom) {
-                                if selected {
-                                    Capsule()
-                                        .fill(Theme.prismGradient)
-                                        .frame(width: 18, height: 3)
-                                        .matchedGeometryEffect(id: "home.channel.underline", in: underline)
-                                        .offset(y: -1)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 12) {
+                    ForEach(HomeChannel.allCases) { channel in
+                        let selected = channel == selection
+                        Button {
+                            guard !selected else { return }
+                            Haptics.select()
+                            withAnimation(reduceMotion ? nil : Motion.snappy) { selection = channel }
+                        } label: {
+                            Text(channel.title)
+                                .font(.scaled(selected ? 19 : 15.5, weight: selected ? .heavy : .medium))
+                                .heroForeground(secondary: !selected)
+                                .frame(height: 40)
+                                .overlay(alignment: .bottom) {
+                                    if selected {
+                                        Capsule()
+                                            .fill(Theme.prismGradient)
+                                            .frame(width: 18, height: 3)
+                                            .matchedGeometryEffect(id: "home.channel.underline", in: underline)
+                                            .offset(y: -1)
+                                    }
                                 }
-                            }
-                            .contentShape(Rectangle())
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityAddTraits(selected ? .isSelected : [])
+                        .accessibilityIdentifier("home.channel.\(channel.rawValue)")
+                        .id(channel)
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityAddTraits(selected ? .isSelected : [])
-                    .accessibilityIdentifier("home.channel.\(channel.rawValue)")
-                    .id(channel)
+                }
+                .padding(.trailing, 4)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("home.channels")
+                .background {
+                    GeometryReader { proxy in
+                        Color.clear.preference(key: ChannelBarWidthKey.self, value: proxy.size.width)
+                    }
                 }
             }
+            .background {
+                GeometryReader { proxy in
+                    Color.clear.preference(key: ChannelBarViewportKey.self, value: proxy.size.width)
+                }
+            }
+            .onPreferenceChange(ChannelBarWidthKey.self) { contentWidth = $0 }
+            .onPreferenceChange(ChannelBarViewportKey.self) { viewportWidth = $0 }
+            .mask {
+                if overflows {
+                    HStack(spacing: 0) {
+                        Color.black
+                        LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
+                            .frame(width: 14)
+                    }
+                } else {
+                    Color.black
+                }
+            }
+            .onAppear { reader.scrollTo(selection, anchor: .center) }
+            .onChange(of: selection) { value in
+                withAnimation(reduceMotion ? nil : Motion.snappy) { reader.scrollTo(value, anchor: .center) }
+            }
         }
-        .onAppear { reader.scrollTo(selection, anchor: .center) }
-        .onChange(of: selection) { value in
-            withAnimation(reduceMotion ? nil : Motion.snappy) { reader.scrollTo(value, anchor: .center) }
-        }
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("home.channels")
     }
+}
+
+private struct ChannelBarWidthKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
+private struct ChannelBarViewportKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }

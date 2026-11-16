@@ -422,6 +422,209 @@ final class LocalStreamProxyTests: XCTestCase {
         XCTAssertEqual(server.receivedRanges(), ["bytes=0-\(total - 1)", "bytes=\(cut)-\(total - 1)", "bytes=\(cut)-\(total - 1)"], detail)
         XCTAssertEqual(server.receivedTargets().last, "/a/video.mp4?fresh=1", detail)
     }
+
+    /// 上游连上后发了一半就永久假死：停滞看门狗在设定超时内主动掐断，并在同一个响应流里从断点续传。
+    func testAbortsStalledUpstreamAndSplicesFromBreakPoint() async throws {
+        let total = 10_000
+        let cut = 3_000
+        let full = pattern(total)
+        ScriptedUpstream.install([
+            .hold(status: 206, headers: ["Content-Type": "video/mp4", "Content-Range": "bytes 0-\(total - 1)/\(total)", "Content-Length": "\(total)"], body: Data(full.prefix(cut))),
+            .reply(status: 206, headers: ["Content-Type": "video/mp4", "Content-Range": "bytes \(cut)-\(total - 1)/\(total)", "Content-Length": "\(total - cut)"], body: Data(full.suffix(total - cut))),
+        ])
+        let proxy = LocalStreamProxy(protocolClasses: [ScriptedUpstream.self])
+        proxy.setRetryDelaysForTesting([0.05])
+        proxy.setStallTimeoutForTesting(0.15, minSpeed: 0)
+
+        let local = try await relayURL(proxy)
+        let fetched = try fetch(local, range: "bytes=0-\(total - 1)")
+        let history = proxy.problemHistoryLines.joined(separator: "\n")
+        XCTAssertEqual(fetched.status, 206, history)
+        XCTAssertTrue(fetched.body == full, history)
+        XCTAssertEqual(ScriptedUpstream.receivedRanges(), ["bytes=0-\(total - 1)", "bytes=\(cut)-\(total - 1)"], history)
+        XCTAssertEqual(ScriptedUpstream.stoppedCount, 1)
+        XCTAssertTrue(history.contains("无响应"), history)
+    }
+
+    /// 开放式 Range 请求会按分段大小逐段向 115 拉取并无感拼接成同一条响应返回给 mpv。
+    func testSplitsOpenEndedRequestIntoBoundedChunksSeamlessly() async throws {
+        let total = 10_000
+        let full = pattern(total)
+        ScriptedUpstream.install([
+            .reply(status: 206, headers: ["Content-Type": "video/mp4", "Content-Range": "bytes 0-3999/\(total)", "Content-Length": "4000"], body: Data(full[0..<4000])),
+            .reply(status: 206, headers: ["Content-Type": "video/mp4", "Content-Range": "bytes 4000-7999/\(total)", "Content-Length": "4000"], body: Data(full[4000..<8000])),
+            .reply(status: 206, headers: ["Content-Type": "video/mp4", "Content-Range": "bytes 8000-9999/\(total)", "Content-Length": "2000"], body: Data(full[8000..<10000])),
+        ])
+        let proxy = LocalStreamProxy(protocolClasses: [ScriptedUpstream.self])
+        proxy.setChunkSizeForTesting(4_000)
+
+        let local = try await relayURL(proxy)
+        let fetched = try fetch(local, range: "bytes=0-")
+        let history = proxy.problemHistoryLines.joined(separator: "\n")
+        XCTAssertEqual(fetched.status, 206, history)
+        XCTAssertTrue(fetched.head.contains("Content-Length: 10000"), fetched.head)
+        XCTAssertTrue(fetched.head.contains("Content-Range: bytes 0-9999/10000"), fetched.head)
+        XCTAssertTrue(fetched.body == full)
+        XCTAssertEqual(ScriptedUpstream.receivedRanges(), ["bytes=0-3999", "bytes=4000-7999", "bytes=8000-9999"])
+    }
+
+    /// 头尾与热点缓存：重复探测（或小幅回跳）直接命中内存缓存，部分命中只向 115 拉取缺失后缀。
+    func testServesCachedHeadAndHotBlocksWithoutTouchingUpstream() async throws {
+        let total = 8_000
+        let full = pattern(total)
+        ScriptedUpstream.install([
+            .reply(status: 206, headers: ["Content-Type": "video/mp4", "Content-Range": "bytes 0-3999/\(total)", "Content-Length": "4000", "Accept-Ranges": "bytes"], body: Data(full[0..<4000])),
+            .reply(status: 206, headers: ["Content-Type": "video/mp4", "Content-Range": "bytes 4000-7999/\(total)", "Content-Length": "4000", "Accept-Ranges": "bytes"], body: Data(full[4000..<8000])),
+        ])
+        let proxy = LocalStreamProxy(protocolClasses: [ScriptedUpstream.self])
+        proxy.setChunkSizeForTesting(100_000)
+
+        let local = try await relayURL(proxy)
+        let first = try fetch(local, range: "bytes=0-3999")
+        XCTAssertEqual(first.status, 206)
+        XCTAssertEqual(first.body, Data(full[0..<4000]))
+        XCTAssertEqual(proxy.cachedByteCountForTesting(), 4_000)
+
+        // 完全命中缓存：零上游请求
+        let headHit = try fetch(local, range: "bytes=0-1999")
+        XCTAssertEqual(headHit.status, 206)
+        XCTAssertEqual(headHit.body, Data(full[0..<2000]))
+        XCTAssertEqual(ScriptedUpstream.receivedRanges(), ["bytes=0-3999"])
+
+        // 前半段命中缓存 + 后半段接力拉取：上游只收到 4000-7999
+        let partialHit = try fetch(local, range: "bytes=2000-7999")
+        XCTAssertEqual(partialHit.status, 206)
+        XCTAssertEqual(partialHit.body, Data(full[2000..<8000]))
+        XCTAssertEqual(ScriptedUpstream.receivedRanges(), ["bytes=0-3999", "bytes=4000-7999"])
+    }
+
+    /// 使用统一 streamID 时，换用全新 115 URL 重开同一视频仍会立即抢占旧连接，避免并发 403。
+    func testStreamIDPreemptsOlderURLWhenAddressChanges() async throws {
+        let total = 4_000
+        let full = pattern(total)
+        let url1 = try XCTUnwrap(URL(string: "https://cdn1.example.com/file.mp4?t=1"))
+        let url2 = try XCTUnwrap(URL(string: "https://cdn2.example.com/file.mp4?t=2"))
+        ScriptedUpstream.install([
+            .hold(status: 206, headers: ["Content-Type": "video/mp4", "Content-Range": "bytes 0-\(total - 1)/\(total)", "Content-Length": "\(total)"], body: Data(full.prefix(500))),
+            .reply(status: 206, headers: ["Content-Type": "video/mp4", "Content-Range": "bytes 1000-\(total - 1)/\(total)", "Content-Length": "\(total - 1000)"], body: Data(full.suffix(total - 1000))),
+        ])
+        let proxy = LocalStreamProxy(protocolClasses: [ScriptedUpstream.self])
+        let relayed1 = await proxy.localURL(for: url1, headers: [:], streamID: "p115:pick123", renew: { url1 })
+        let local1 = try XCTUnwrap(relayed1)
+        let older = try openStream(local1, range: "bytes=0-\(total - 1)")
+        defer { close(older) }
+        _ = try readUntil(older, bodyBytes: 500)
+
+        let relayed2 = await proxy.localURL(for: url2, headers: [:], streamID: "p115:pick123", renew: { url2 })
+        let local2 = try XCTUnwrap(relayed2)
+        let fetched = try fetch(local2, range: "bytes=1000-\(total - 1)")
+        XCTAssertEqual(fetched.status, 206)
+        XCTAssertTrue(fetched.body == full.suffix(total - 1000))
+        XCTAssertEqual(ScriptedUpstream.stoppedCount, 1, "同一 pickCode 用新地址重开时，旧连接必须被立刻掐断让位")
+    }
+
+    /// Tier-1 静默切换：上层检测到卡顿调用 refreshActiveUpstream，中转在不断开 mpv 响应流的情况下换新地址断点续传。
+    func testRefreshActiveUpstreamSwitchesStalledNodeWithoutClosingClient() async throws {
+        let total = 4_000
+        let cut = 1_200
+        let full = pattern(total)
+        let url1 = try XCTUnwrap(URL(string: "https://cdn1.example.com/a.mp4"))
+        let url2 = try XCTUnwrap(URL(string: "https://cdn2.example.com/a.mp4"))
+        ScriptedUpstream.install([
+            .hold(status: 206, headers: ["Content-Type": "video/mp4", "Content-Range": "bytes 0-\(total - 1)/\(total)", "Content-Length": "\(total)"], body: Data(full.prefix(cut))),
+            .reply(status: 206, headers: ["Content-Type": "video/mp4", "Content-Range": "bytes \(cut)-\(total - 1)/\(total)", "Content-Length": "\(total - cut)"], body: Data(full.suffix(total - cut))),
+        ])
+        let proxy = LocalStreamProxy(protocolClasses: [ScriptedUpstream.self])
+        let calls = RenewCounter()
+        let relayed = await proxy.localURL(for: url1, headers: [:], streamID: "p115:tier1", renew: { calls.increment(); return url2 })
+        let local = try XCTUnwrap(relayed)
+
+        let client = try openStream(local, range: "bytes=0-\(total - 1)")
+        defer { close(client) }
+        var received = try readUntil(client, bodyBytes: cut)
+
+        XCTAssertTrue(proxy.refreshActiveUpstream(for: local))
+        received.append(try readToEnd(client))
+        let body = try XCTUnwrap(received.range(of: Data("\r\n\r\n".utf8)).map { received[$0.upperBound...] })
+        XCTAssertTrue(Data(body) == full, proxy.problemHistoryLines.joined(separator: "\n"))
+        XCTAssertEqual(calls.value, 1)
+        XCTAssertEqual(ScriptedUpstream.receivedURLs(), [url1, url2])
+        XCTAssertEqual(ScriptedUpstream.receivedRanges(), ["bytes=0-\(total - 1)", "bytes=\(cut)-\(total - 1)"])
+    }
+
+    /// m3u8 转码播放期间分片（.ts）返回 403：重拉最新 m3u8 列表，匹配同一分片的新签名地址重下，不能把 m3u8 文本塞给 .ts 请求。
+    func testRefreshesM3U8PlaylistSegmentsWhenSegmentReturns403() async throws {
+        let master1 = try XCTUnwrap(URL(string: "https://v.115.com/master1.m3u8"))
+        let master2 = try XCTUnwrap(URL(string: "https://v.115.com/master2.m3u8"))
+        let m3u8Body1 = "#EXTM3U\n#EXTINF:5.0,\nhttps://cdn.example.com/seg0.ts?sign=old\n"
+        let m3u8Body2 = "#EXTM3U\n#EXTINF:5.0,\nhttps://cdn.example.com/seg0.ts?sign=fresh\n"
+        let tsPayload = Data("TS-FRESH-SEGMENT-DATA".utf8)
+        ScriptedUpstream.install([
+            .reply(status: 200, headers: ["Content-Type": "application/vnd.apple.mpegurl"], body: Data(m3u8Body1.utf8)),
+            .reply(status: 403, headers: [:], body: Data()),
+            .reply(status: 200, headers: ["Content-Type": "application/vnd.apple.mpegurl"], body: Data(m3u8Body2.utf8)),
+            .reply(status: 200, headers: ["Content-Type": "video/mp2t", "Content-Length": "\(tsPayload.count)"], body: tsPayload),
+        ])
+        let proxy = LocalStreamProxy(protocolClasses: [ScriptedUpstream.self])
+        let relayed = await proxy.localURL(for: master1, headers: [:], streamID: "p115:hls", playlistRenew: { master2 })
+        let local = try XCTUnwrap(relayed)
+
+        let playlist = try fetch(local, range: nil)
+        XCTAssertEqual(playlist.status, 200)
+        let playlistText = String(decoding: playlist.body, as: UTF8.self)
+        let segURLString = try XCTUnwrap(playlistText.components(separatedBy: "\n").first { $0.contains("seg0.ts") })
+        let segURL = try XCTUnwrap(URL(string: segURLString))
+
+        let segment = try fetch(segURL, range: nil)
+        XCTAssertEqual(segment.status, 200, proxy.problemHistoryLines.joined(separator: "\n"))
+        XCTAssertEqual(segment.body, tsPayload)
+        XCTAssertEqual(ScriptedUpstream.receivedURLs().last?.absoluteString, "https://cdn.example.com/seg0.ts?sign=fresh")
+    }
+
+    /// 跨域名 302 跳转（离开 .115.com 到外部 CDN）时，中转的 URLSession 代理必须剥离 Cookie，且拒绝 HTTPS 降级到 HTTP。
+    func testRedirectGuardStripsCookieOff115Domains() throws {
+        let proxy = LocalStreamProxy()
+        let dummySession = URLSession(configuration: .ephemeral)
+        let task = dummySession.dataTask(with: URL(string: "https://cdn.115.com/video.mp4")!)
+        let redirectReply = HTTPURLResponse(url: URL(string: "https://cdn.115.com/video.mp4")!, statusCode: 302, httpVersion: "HTTP/1.1", headerFields: nil)!
+
+        // 跳转到外部 CDN：剥离 Cookie
+        var offDomainReq = URLRequest(url: URL(string: "https://oss-cdn.example.com/video.mp4")!)
+        offDomainReq.setValue("UID=secret", forHTTPHeaderField: "Cookie")
+        offDomainReq.setValue("bytes=0-100", forHTTPHeaderField: "Range")
+        var acceptedOffDomain: URLRequest?
+        let exp1 = expectation(description: "off-domain redirect")
+        proxy.urlSession(dummySession, task: task, willPerformHTTPRedirection: redirectReply, newRequest: offDomainReq) { req in
+            acceptedOffDomain = req
+            exp1.fulfill()
+        }
+        wait(for: [exp1], timeout: 1)
+        XCTAssertNil(acceptedOffDomain?.value(forHTTPHeaderField: "Cookie"))
+        XCTAssertEqual(acceptedOffDomain?.value(forHTTPHeaderField: "Range"), "bytes=0-100")
+
+        // 跳转到 *.115.com：保留 Cookie
+        var in115Req = URLRequest(url: URL(string: "https://vip.115.com/video.mp4")!)
+        in115Req.setValue("UID=secret", forHTTPHeaderField: "Cookie")
+        var acceptedIn115: URLRequest?
+        let exp2 = expectation(description: "in-115 redirect")
+        proxy.urlSession(dummySession, task: task, willPerformHTTPRedirection: redirectReply, newRequest: in115Req) { req in
+            acceptedIn115 = req
+            exp2.fulfill()
+        }
+        wait(for: [exp2], timeout: 1)
+        XCTAssertEqual(acceptedIn115?.value(forHTTPHeaderField: "Cookie"), "UID=secret")
+
+        // HTTPS -> HTTP 降级跳转：拒绝
+        let downgradeReq = URLRequest(url: URL(string: "http://cdn.115.com/video.mp4")!)
+        var acceptedDowngrade: URLRequest? = downgradeReq
+        let exp3 = expectation(description: "downgrade blocked")
+        proxy.urlSession(dummySession, task: task, willPerformHTTPRedirection: redirectReply, newRequest: downgradeReq) { req in
+            acceptedDowngrade = req
+            exp3.fulfill()
+        }
+        wait(for: [exp3], timeout: 1)
+        XCTAssertNil(acceptedDowngrade)
+    }
 }
 
 private final class RenewCounter: @unchecked Sendable {

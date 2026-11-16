@@ -11,10 +11,18 @@ import Combine
 ///
 /// 每一页要做两件事：内容最上面留出 `channelPageInsets.top` 的空白（头部盖在这里），
 /// 给滚动内容加 `.tracksPageScroll()` 把滚动位置报上来。
+enum PagedHeaderCollapseStyle {
+    /// 向上滑时收起第一行，把第二行固定在状态栏下方（如磁力页）
+    case hideFirstRow
+    /// 向上滑时第一行始终固定在状态栏下方，第二行向上收起并淡出（如首页频道页）
+    case pinFirstRow
+}
+
 struct PagedHeaderContainer<Page: Hashable, FirstRow: View, SecondRow: View, Content: View>: View {
     let pages: [Page]
     @Binding var selection: Page
-    let firstRow: () -> FirstRow
+    let collapseStyle: PagedHeaderCollapseStyle
+    let firstRow: (CGFloat) -> FirstRow
     let secondRow: () -> SecondRow
     let content: (Page) -> Content
     /// 盖在分页上面、头部下面的内容（例如磁力页搜索结果）；有它时不显示分页
@@ -26,15 +34,26 @@ struct PagedHeaderContainer<Page: Hashable, FirstRow: View, SecondRow: View, Con
     @State private var heroPages: Set<Page> = []
 
     init(pages: [Page], selection: Binding<Page>, overlay: AnyView? = nil,
-         @ViewBuilder firstRow: @escaping () -> FirstRow,
+         collapseStyle: PagedHeaderCollapseStyle = .hideFirstRow,
+         @ViewBuilder firstRow: @escaping (CGFloat) -> FirstRow,
          @ViewBuilder secondRow: @escaping () -> SecondRow,
          @ViewBuilder content: @escaping (Page) -> Content) {
         self.pages = pages
         _selection = selection
         self.overlay = overlay
+        self.collapseStyle = collapseStyle
         self.firstRow = firstRow
         self.secondRow = secondRow
         self.content = content
+    }
+
+    init(pages: [Page], selection: Binding<Page>, overlay: AnyView? = nil,
+         collapseStyle: PagedHeaderCollapseStyle = .hideFirstRow,
+         @ViewBuilder firstRow: @escaping () -> FirstRow,
+         @ViewBuilder secondRow: @escaping () -> SecondRow,
+         @ViewBuilder content: @escaping (Page) -> Content) {
+        self.init(pages: pages, selection: selection, overlay: overlay, collapseStyle: collapseStyle,
+                  firstRow: { _ in firstRow() }, secondRow: secondRow, content: content)
     }
 
     /// iOS 17+ 用横向分页 ScrollView 记当前页（和 selection 双向同步）
@@ -61,7 +80,7 @@ struct PagedHeaderContainer<Page: Hashable, FirstRow: View, SecondRow: View, Con
 
                 PagedHeader(state: scroll, key: overlay == nil ? AnyHashable(selection) : AnyHashable(Self.overlayKey),
                             safeTop: safeTop, onArtwork: overlay == nil && heroPages.contains(selection),
-                            firstRow: firstRow, secondRow: secondRow)
+                            collapseStyle: collapseStyle, firstRow: firstRow, secondRow: secondRow)
             }
             .ignoresSafeArea(edges: .top)
         }
@@ -162,14 +181,15 @@ struct PagedHeaderContainer<Page: Hashable, FirstRow: View, SecondRow: View, Con
     }
 }
 
-/// 头部：分类条 + 搜索框。滚动 0～54pt 时整体上移、第一行淡出；之后搜索框固定在顶端。
+/// 头部：支持「隐藏第一行固定第二行」或「固定第一行收起第二行」两种模式。
 struct PagedHeader<FirstRow: View, SecondRow: View>: View {
     @ObservedObject var state: PageScrollState
     let key: AnyHashable
     let safeTop: CGFloat
     /// 当前页顶部有轮播氛围层：没收起时频道条白字、搜索框磨砂
     var onArtwork = false
-    let firstRow: () -> FirstRow
+    var collapseStyle: PagedHeaderCollapseStyle = .hideFirstRow
+    let firstRow: (CGFloat) -> FirstRow
     let secondRow: () -> SecondRow
 
     static var rowHeight: CGFloat { 44 }
@@ -177,15 +197,22 @@ struct PagedHeader<FirstRow: View, SecondRow: View>: View {
     static var searchHeight: CGFloat { 38 }
     /// 头部（不含状态栏）总高：第一行 + 间距 + 搜索框 + 下边距
     static var height: CGFloat { rowHeight + spacing + searchHeight + 10 }
-    /// 收起的距离：第一行和它下面的间距
-    static var collapseDistance: CGFloat { rowHeight + spacing }
+    /// 固定第一行模式收起后的底栏高度（不含状态栏）：第一行 + 底部留白
+    static var pinnedRowHeight: CGFloat { rowHeight + 6 }
+    private var collapseDistance: CGFloat {
+        switch collapseStyle {
+        case .hideFirstRow: return Self.rowHeight + Self.spacing
+        case .pinFirstRow: return Self.height - Self.pinnedRowHeight
+        }
+    }
 
     var body: some View {
+        let distance = collapseDistance
         let offset = max(0, state.offsets[key] ?? 0)
-        let collapse = min(offset, Self.collapseDistance)
-        let progress = collapse / Self.collapseDistance
+        let collapse = min(offset, distance)
+        let progress = distance > 0 ? collapse / distance : 0
         ZStack(alignment: .top) {
-            // 收起后头部铺上页面底色，下面滚上来的内容不会从搜索框后面透出来
+            // 收起后头部铺上页面底色，下面滚上来的内容不会透出来
             Theme.pageBackground
                 .frame(height: safeTop + Self.height - collapse)
                 .opacity(progress)
@@ -194,16 +221,43 @@ struct PagedHeader<FirstRow: View, SecondRow: View>: View {
                 }
                 .allowsHitTesting(false)
 
-            VStack(spacing: Self.spacing) {
-                firstRow()
-                    .frame(height: Self.rowHeight)
-                    .opacity(1 - progress)
-                    .allowsHitTesting(progress < 0.5)
-                secondRow()
-                    .frame(height: Self.searchHeight)
+            Group {
+                switch collapseStyle {
+                case .hideFirstRow:
+                    VStack(spacing: Self.spacing) {
+                        firstRow(progress)
+                            .frame(height: Self.rowHeight)
+                            .opacity(1 - progress)
+                            .allowsHitTesting(progress < 0.5)
+                        secondRow()
+                            .frame(height: Self.searchHeight)
+                    }
+                    .offset(y: -collapse)
+
+                case .pinFirstRow:
+                    ZStack(alignment: .top) {
+                        Color.clear
+                            .frame(height: Self.spacing + Self.searchHeight + 4)
+                            .overlay(alignment: .top) {
+                                if progress < 0.95 {
+                                    secondRow()
+                                        .frame(height: Self.searchHeight)
+                                        .padding(.top, Self.spacing)
+                                        .offset(y: -collapse)
+                                        .opacity(max(0.0, 1.0 - Double(progress) * 1.35))
+                                }
+                            }
+                            .clipped()
+                            .padding(.top, Self.rowHeight)
+                            .allowsHitTesting(progress < 0.45)
+                            .accessibilityHidden(progress >= 0.45)
+
+                        firstRow(progress)
+                            .frame(height: Self.rowHeight)
+                    }
+                }
             }
             .padding(.top, safeTop)
-            .offset(y: -collapse)
             .environment(\.onHeroArtwork, onArtwork && progress < 0.6)
             .animation(.easeInOut(duration: 0.2), value: onArtwork && progress < 0.6)
         }
@@ -224,7 +278,7 @@ struct PageScrollReporter {
         // 收起只看前 60pt，再往下的变化不发布，滚长列表时头部不跟着每帧重算
         let clamped = min(max(offset, -1), PagedHeaderLimits.trackLimit)
         let old = state.offsets[key] ?? 0
-        guard abs(old - clamped) > 0.5 else { return }
+        guard (clamped <= 0 && old > 0) || abs(old - clamped) > 0.5 else { return }
         state.offsets[key] = clamped
     }
 }
