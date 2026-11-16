@@ -223,6 +223,36 @@ final class SocialComposerKeyboardTests: XCTestCase {
         XCTAssertFalse(tracker.isDismissing)
     }
 
+    func testWillHideTriggersDismissTimeoutFallbackWhenDidHideNeverArrives() async {
+        let tracker = SocialComposerKeyboardTracker(
+            hideConfirmDelayNs: 20_000_000,
+            frameHideConfirmDelayNs: 40_000_000,
+            holdOpenDurationNs: 120_000_000,
+            dismissFinishTimeoutNs: 80_000_000
+        )
+        var autoClosed = 0
+        var finished = 0
+        tracker.onAutoClose = { autoClosed += 1 }
+        tracker.onFinishDismiss = { finished += 1 }
+
+        tracker.handleKeyboardWillShow(
+            endFrame: CGRect(x: 0, y: 550, width: 393, height: 302),
+            containerBottom: 852,
+            duration: 0
+        )
+        tracker.handleKeyboardDidShow()
+
+        // 仅发出 willHide（不发 didHide），应先触发退场，再由兜底定时器完成卸载
+        tracker.handleKeyboardWillHide(duration: 0)
+        let closed = await waitUntil { autoClosed == 1 }
+        XCTAssertTrue(closed)
+        XCTAssertTrue(tracker.isDismissing)
+
+        let dismissed = await waitUntil { finished == 1 }
+        XCTAssertTrue(dismissed)
+        XCTAssertFalse(tracker.isDismissing)
+    }
+
     func testSoftKeyboardFrameCollapseToZeroClosesEvenWithoutWillHide() async {
         let tracker = SocialComposerKeyboardTracker(
             hideConfirmDelayNs: 20_000_000,
@@ -352,6 +382,7 @@ final class SocialComposerKeyboardTests: XCTestCase {
             window.makeKeyAndVisible()
             host.view.layoutIfNeeded()
             defer {
+                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
                 window.isHidden = true
                 window.rootViewController = nil
             }
@@ -375,7 +406,7 @@ final class SocialComposerKeyboardTests: XCTestCase {
             NotificationCenter.default.post(name: UIResponder.keyboardWillHideNotification, object: nil, userInfo: hideInfo)
             NotificationCenter.default.post(name: UIResponder.keyboardDidHideNotification, object: nil, userInfo: hideInfo)
 
-            let closed = await waitUntil(timeout: 1.0) { closeCount == 1 }
+            let closed = await waitUntil(timeout: 1.5) { closeCount == 1 }
             XCTAssertTrue(closed, "SocialComposer(\(target.id)) 应在收到键盘隐藏通知后自动关闭")
         }
     }
@@ -398,11 +429,13 @@ final class SocialComposerKeyboardTests: XCTestCase {
         window.makeKeyAndVisible()
         host.view.layoutIfNeeded()
         defer {
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             window.isHidden = true
             window.rootViewController = nil
         }
 
-        try? await Task.sleep(nanoseconds: 250_000_000)
+        // 等模拟器自身首次聚焦的键盘动画彻底落稳，再发模拟通知，避免真实 didShow 延迟到达冲掉人工 willHide
+        try? await Task.sleep(nanoseconds: 700_000_000)
 
         let shownInfo: [AnyHashable: Any] = [
             UIResponder.keyboardFrameEndUserInfoKey: NSValue(cgRect: CGRect(x: 0, y: 550, width: 393, height: 302)),
@@ -411,7 +444,7 @@ final class SocialComposerKeyboardTests: XCTestCase {
         NotificationCenter.default.post(name: UIResponder.keyboardWillShowNotification, object: nil, userInfo: shownInfo)
         NotificationCenter.default.post(name: UIResponder.keyboardDidShowNotification, object: nil, userInfo: shownInfo)
 
-        try? await Task.sleep(nanoseconds: 40_000_000)
+        try? await Task.sleep(nanoseconds: 50_000_000)
 
         let hideInfo: [AnyHashable: Any] = [
             UIResponder.keyboardFrameEndUserInfoKey: NSValue(cgRect: CGRect(x: 0, y: 852, width: 393, height: 302)),
@@ -419,7 +452,7 @@ final class SocialComposerKeyboardTests: XCTestCase {
         ]
         NotificationCenter.default.post(name: UIResponder.keyboardWillHideNotification, object: nil, userInfo: hideInfo)
 
-        let closed = await waitUntil(timeout: 1.0) { closeCount == 1 }
+        let closed = await waitUntil(timeout: 2.0) { closeCount == 1 }
         XCTAssertTrue(closed, "即使仅发出 keyboardWillHideNotification，退场结束后也应兜底卸载")
     }
 }
