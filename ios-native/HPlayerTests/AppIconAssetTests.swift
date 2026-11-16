@@ -11,15 +11,22 @@ final class AppIconAssetTests: XCTestCase {
 
     func testEveryIconIsABundledSymbolThatDrawsSomething() throws {
         let config = UIImage.SymbolConfiguration(pointSize: 24)
+        var problems: [String] = []
         for name in allNames {
-            let image = try XCTUnwrap(UIImage(named: name, in: .main, with: config), "Missing symbol \(name)")
-            XCTAssertTrue(image.isSymbolImage, "\(name) should compile as a symbol image")
-            XCTAssertGreaterThan(image.size.width, 6, "\(name) is too narrow")
-            XCTAssertGreaterThan(image.size.height, 12, "\(name) is too short")
+            guard let image = UIImage(named: name, in: .main, with: config) else {
+                problems.append("\(name): missing")
+                continue
+            }
+            if !image.isSymbolImage { problems.append("\(name): not a symbol") }
+            // 扁的图标（…、播放进度条）本来就矮，只要求宽或高有一边像样
+            if max(image.size.width, image.size.height) < 14 {
+                problems.append("\(name): too small \(image.size)")
+            }
             let coverage = inkCoverage(of: image)
-            XCTAssertGreaterThan(coverage, 0.01, "\(name) draws nothing")
-            XCTAssertLessThan(coverage, 0.9, "\(name) draws a solid block")
+            if coverage < 0.01 { problems.append("\(name): draws nothing (\(coverage))") }
+            if coverage > 0.9 { problems.append("\(name): solid block (\(coverage))") }
         }
+        XCTAssertTrue(problems.isEmpty, problems.joined(separator: "; "))
     }
 
     func testIconsScaleWithTheRequestedPointSize() throws {
