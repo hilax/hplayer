@@ -34,6 +34,8 @@ struct HPlayerApp: App {
                         .preferredColorScheme(style == "dark" ? .dark : .light)
                 } else if ProcessInfo.processInfo.environment["HPLAYER_HOME_TEST"] == "1" {
                     HomeUITestHost()
+                } else if ProcessInfo.processInfo.environment["HPLAYER_COMPOSER_TEST"] == "1" {
+                    ComposerUITestHost()
                 } else if let value = ProcessInfo.processInfo.environment["HPLAYER_UI_TEST_URL"], let url = URL(string: value) {
                     let first = PlaybackSource.direct(title: "测试影片", url: url)
                     let second = PlaybackSource.direct(title: "测试下一集", url: url)
@@ -265,6 +267,41 @@ private struct PlayerUITestHost: View {
             .playerWindow(isPresented: $presentingPlayer) {
                 PlayerView(source: first, playlist: [first, second])
             }
+    }
+}
+
+private struct ComposerUITestHost: View {
+    @State private var composer: SocialComposerTarget?
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 16) {
+                Text(composer == nil ? "closed" : "open")
+                    .accessibilityIdentifier("composerTest.state")
+                Button("打开弹幕输入") { composer = .danmaku }
+                    .accessibilityIdentifier("composerTest.openDanmaku")
+                Button("打开评论输入") { composer = .comment(vid: 1, replyTo: nil) }
+                    .accessibilityIdentifier("composerTest.openComment")
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .overlay {
+                if let composer {
+                    SocialComposer(target: composer) { self.composer = nil }
+                        .transition(.opacity)
+                }
+            }
+            .animation(Motion.smooth, value: composer)
+            .navigationTitle("输入测试")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("收起键盘") {
+                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                    }
+                    .accessibilityIdentifier("composerTest.dismissKeyboard")
+                }
+            }
+        }
     }
 }
 #endif
