@@ -349,3 +349,42 @@ struct NavigationIcon: View {
             .contentShape(Rectangle())
     }
 }
+
+// MARK: - 排查用：导航栏探针
+
+#if DEBUG
+/// 排查「导航栏右上角只剩玻璃圆」用：UI 测试设置 HPLAYER_TOOLBAR_PROBE=1 时，
+/// 在右上角多放几种按钮（红方块、文字、系统符号），由测试量出各自画出了多少像素。
+private struct ToolbarProbe: ViewModifier {
+    @ViewBuilder func body(content: Content) -> some View {
+        if ProcessInfo.processInfo.environment["HPLAYER_TOOLBAR_PROBE"] == "1" {
+            content.toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {} label: { Rectangle().fill(Color.red).frame(width: 18, height: 18) }
+                        .accessibilityIdentifier("probe.rect")
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("测") {}
+                        .accessibilityIdentifier("probe.text")
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {} label: { Image(systemName: "plus") }
+                        .accessibilityIdentifier("probe.sf")
+                }
+            }
+        } else {
+            content
+        }
+    }
+}
+#endif
+
+extension View {
+    @ViewBuilder func toolbarProbe() -> some View {
+        #if DEBUG
+        modifier(ToolbarProbe())
+        #else
+        self
+        #endif
+    }
+}
