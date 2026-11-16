@@ -9,7 +9,6 @@ struct DownloadsView: View {
     @State private var storage: DownloadStorageSummary
     @State private var playing: PlaybackQueue?
     @State private var removal: DownloadItem?
-    @State private var message: String?
     /// 界面预览时固定的存储数字，正常使用时为 nil，由页面自己读取
     private let fixedStorage: DownloadStorageSummary?
 
@@ -42,7 +41,6 @@ struct DownloadsView: View {
             ToolbarItem(placement: .primaryAction) { moreMenu }
         }
         .designScreen("downloads")
-        .toast($message)
         .task {
             if fixedStorage != nil || InterfacePreview.active { return }
             while !Task.isCancelled {
@@ -134,7 +132,7 @@ struct DownloadsView: View {
             .disabled(!hasResumable)
             Button {
                 manager.clearCompletedRecords()
-                message = "已清除下载记录，文件仍保留在手机上"
+                HUD.show("已清除下载记录，文件仍保留在手机上", .success)
             } label: {
                 Label("清除已完成记录", systemImage: AppIcon.trash.name)
             }

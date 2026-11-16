@@ -4,7 +4,7 @@ import Foundation
 /// 磁力播放的进度中心：开播前的等待都画在资源卡片上，不遮住播放器。
 /// - 资源卡片上点「115 播放」：在这里起一份 MagnetController（只走 115 离线），卡片显示 提交 → 下载中 xx% → 准备播放
 /// - 点「磁力播放」：同样起一份（只走软件自带的 BT 解析），卡片显示 连接节点 → 读取文件列表
-/// - 115 准备好时：卡片所在页面还开着就直接打开播放器；页面已经关了就弹一句全局提示
+/// - 115 准备好时：卡片所在页面还开着就直接打开播放器；页面已经关了就弹一句全局 HUD 提示，带「去播放」
 /// - 已经在 115 下载好的资源记在本机，下次卡片按钮直接是「播放」
 /// 播放窗口打开时用 take 接手同一份控制器，不会重复提交离线任务。
 /// 只负责「持有、汇总状态和提示」，115 离线和 BT 解析的流程仍然全部在 MagnetController 里。
@@ -35,6 +35,7 @@ final class MagnetRelayCenter: ObservableObject {
 
     private struct Job {
         let controller: MagnetController
+        let magnet: String
         let title: String
         let mode: MagnetPlaybackRequest.Mode
         var watcher: AnyCancellable?
@@ -47,8 +48,8 @@ final class MagnetRelayCenter: ObservableObject {
         let token = UUID()
     }
 
-    /// 全局轻提示（首页根视图上显示）
-    @Published var message: String?
+    /// 全局提示上点了「去播放」：根视图看到后打开磁力播放窗口（窗口用 take 接手同一份控制器）
+    @Published var openRequest: MagnetPlaybackRequest?
     /// 每个资源（信息哈希，小写）这次的 115 进度
     @Published private(set) var statuses: [String: Status] = [:]
     /// 已经在 115 下载好过的资源（保存在本机）
@@ -117,6 +118,12 @@ final class MagnetRelayCenter: ObservableObject {
 
     func consumeReady() { readyToOpen = nil }
 
+    /// 全局提示上点了「去播放」
+    func requestOpen(_ hash: String) {
+        guard let job = jobs[hash] else { return }
+        openRequest = MagnetPlaybackRequest(magnet: job.magnet, title: job.title, mode: job.mode)
+    }
+
     // MARK: 115 播放
 
     /// 资源卡片上点了「115 播放」：交给 115 离线，进度在卡片上显示。
@@ -130,7 +137,7 @@ final class MagnetRelayCenter: ObservableObject {
         controller.activate()
         controller.configureCloud(client: client, enabled: true)
         statuses[hash] = downloaded.contains(hash) ? .preparing : .submitting
-        adopt(controller, hash: hash, title: title, mode: .cloud)
+        adopt(controller, hash: hash, magnet: magnet, title: title, mode: .cloud)
         controller.open(link)
     }
 
@@ -144,7 +151,7 @@ final class MagnetRelayCenter: ObservableObject {
         controller.activate()
         controller.configureCloud(client: nil, enabled: false)
         statuses[hash] = .connecting(0)
-        adopt(controller, hash: hash, title: title, mode: .bt)
+        adopt(controller, hash: hash, magnet: magnet, title: title, mode: .bt)
         controller.open(link)
     }
 
@@ -169,8 +176,8 @@ final class MagnetRelayCenter: ObservableObject {
 
     // MARK: 内部
 
-    private func adopt(_ controller: MagnetController, hash: String, title: String, mode: MagnetPlaybackRequest.Mode) {
-        var job = Job(controller: controller, title: title, mode: mode)
+    private func adopt(_ controller: MagnetController, hash: String, magnet: String, title: String, mode: MagnetPlaybackRequest.Mode) {
+        var job = Job(controller: controller, magnet: magnet, title: title, mode: mode)
         // objectWillChange 在改动之前发出；放到下一轮再读，拿到的是改动后的值
         job.watcher = controller.objectWillChange
             .receive(on: RunLoop.main)
@@ -207,16 +214,16 @@ final class MagnetRelayCenter: ObservableObject {
             if watching[hash] != nil {
                 readyToOpen = ReadyItem(hash: hash, mode: job.mode)
             } else {
-                message = job.mode == .cloud ? "「\(job.title)」已在 115 准备好，点「播放」就能看"
-                    : "「\(job.title)」可以播放了，点「播放」开始"
+                let text = job.mode == .cloud ? "「\(job.title)」已在 115 准备好" : "「\(job.title)」可以播放了"
+                HUD.show(text, .success, action: "去播放") { [weak self] in self?.requestOpen(hash) }
             }
         case .failed(let reason):
             // 以前下载过、这次却找不到了（比如网盘里删掉了）：按钮回到「115 播放」
             if job.mode == .cloud, downloaded.remove(hash) != nil { save() }
             job.watcher?.cancel()
             controller.deactivate()
-            jobs[hash] = Job(controller: controller, title: job.title, mode: job.mode, watcher: nil)
-            if watching[hash] == nil { message = "「\(job.title)」没有准备好：\(reason)" }
+            jobs[hash] = Job(controller: controller, magnet: job.magnet, title: job.title, mode: job.mode, watcher: nil)
+            if watching[hash] == nil { HUD.show("「\(job.title)」没有准备好：\(reason)", .error) }
         case .connecting, .reading, .submitting, .downloading, .preparing:
             break
         }

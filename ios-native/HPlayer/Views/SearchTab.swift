@@ -14,6 +14,7 @@ struct SearchTab: View {
         NavigationStack {
             SearchView(initialQuery: initialQuery, initialResults: initialResults, isActive: isActive, library: library, onClose: onClose)
         }
+        .navigationButtonTint()
     }
 }
 

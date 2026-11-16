@@ -285,7 +285,7 @@ struct PlaybackControlsView: View {
     /// 缓冲超过一小会儿才显示转圈，打开视频和小卡顿时画面上不闪「正在缓冲」
     @State private var showBusy = false
     @State private var busyTask: Task<Void, Never>?
-    @State private var copiedDiagnostics = false
+    @StateObject private var diagnosticsCopier = CopyFeedback()
     /// 播放器窗口当前是不是横屏（给状态栏和系统手势用，它们在 GeometryReader 外面）
     @State private var isLandscapeWindow = PlayerWindowController.startsInLandscape
     /// 正在柔和关闭：整个播放页淡出并轻轻缩小
@@ -720,7 +720,7 @@ struct PlaybackControlsView: View {
         popoverCloseTask?.cancel()
         let next: PlayerPopover? = popover == kind ? nil : kind
         moreSection = nil
-        if next != nil { copiedDiagnostics = false }
+        if next != nil { diagnosticsCopier.reset() }
         withAnimation(next == nil ? popoverCloseAnimation : (reduceMotion ? .easeOut(duration: 0.15) : Self.popoverSpring)) {
             popover = next
         }
@@ -1263,17 +1263,16 @@ struct PlaybackControlsView: View {
                 }
                 popoverDivider
                 Button {
-                    UIPasteboard.general.string = diagnosticsText
-                    copiedDiagnostics = true
+                    diagnosticsCopier.copy(diagnosticsText)
                 } label: {
                     HStack(spacing: 10) {
                         Image(systemName: AppIcon.copy.name)
                             .font(.scaled(16))
-                            .foregroundStyle(copiedDiagnostics ? Theme.accent : Color.white.opacity(Theme.Opacity.heavy))
+                            .foregroundStyle(diagnosticsCopier.isCopied() ? Theme.accent : Color.white.opacity(Theme.Opacity.heavy))
                             .frame(width: 22)
-                        Text(copiedDiagnostics ? "已复制诊断信息" : "复制播放诊断信息")
+                        Text(diagnosticsCopier.isCopied() ? "已复制诊断信息" : "复制播放诊断信息")
                             .font(.scaled(15, weight: .medium))
-                            .foregroundStyle(copiedDiagnostics ? Theme.accent : Color.white)
+                            .foregroundStyle(diagnosticsCopier.isCopied() ? Theme.accent : Color.white)
                         Spacer(minLength: 0)
                     }
                     .padding(.horizontal, 12)
@@ -2662,10 +2661,9 @@ struct PlaybackControlsView: View {
             if error.isEmpty {
                 // 真机上打不开时，把内核日志复制下来发给开发者
                 Button {
-                    UIPasteboard.general.string = diagnosticsText
-                    copiedDiagnostics = true
+                    diagnosticsCopier.copy(diagnosticsText)
                 } label: {
-                    Text(copiedDiagnostics ? "已复制" : "复制诊断信息")
+                    Text(diagnosticsCopier.isCopied() ? "已复制" : "复制诊断信息")
                         .font(.footnote)
                         .foregroundStyle(.white.opacity(Theme.Opacity.heavy))
                 }
@@ -2684,7 +2682,7 @@ struct PlaybackControlsView: View {
         busyTask?.cancel()
         guard busy else {
             showBusy = false
-            copiedDiagnostics = false
+            diagnosticsCopier.reset()
             return
         }
         let delay: UInt64 = playback.currentTime > 0.5 && !loading ? 800_000_000 : 1_500_000_000
@@ -2755,18 +2753,22 @@ struct PlaybackControlsView: View {
             if let adjustment {
                 switch adjustment.kind {
                 case .seek:
-                    SeekHUD(time: timeText(adjustment.targetTime ?? 0), delta: adjustment.valueText)
+                    PlayerSeekHUD(time: timeText(adjustment.targetTime ?? 0),
+                                  delta: "\(adjustment.title) \(adjustment.valueText)",
+                                  progress: playback.duration > 0 ? adjustment.progress : nil,
+                                  total: playback.duration > 0 ? "共 \(timeText(playback.duration))" : nil)
                         .frame(maxWidth: width)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                         .padding(.top, insets.top + Self.hudTopInset)
                         .transition(.opacity)
                 case .brightness, .volume:
-                    LevelHUD(adjustment: adjustment, width: width)
+                    PlayerLevelHUD(kind: adjustment.kind == .brightness ? .brightness : .volume,
+                                   value: adjustment.progress, width: width)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                         .padding(.top, insets.top + Self.hudTopInset)
                         .transition(.opacity)
                 case .notice:
-                    NoticeHUD(text: adjustment.valueText)
+                    PlayerNoticeHUD(text: adjustment.valueText)
                         .frame(maxWidth: width)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                         .padding(.top, insets.top + Self.hudTopInset)
@@ -3381,104 +3383,7 @@ private enum ScreenBrightness {
 // MARK: - 提示视图
 
 /// 亮度、音量：顶部一条玻璃胶囊，左边图标、中间细进度条、右边百分比
-private struct LevelHUD: View {
-    let adjustment: PlaybackAdjustment
-    let width: CGFloat
-
-    private var value: Double { min(max(adjustment.progress, 0), 1) }
-
-    var body: some View {
-        HStack(spacing: width < 180 ? 8 : 12) {
-            Image(systemName: icon)
-                .font(.scaled(16, weight: .semibold))
-                .frame(width: 22)
-            LevelBar(value: value)
-                .frame(height: 6)
-            Text("\(Int((value * 100).rounded()))%")
-                .font(.scaled(13, weight: .bold).monospacedDigit())
-                .frame(width: 40, alignment: .trailing)
-        }
-        .foregroundStyle(.white)
-        .padding(.horizontal, width < 180 ? 10 : 16)
-        .frame(width: width, height: 44)
-        .glassCapsule()
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(adjustment.kind == .brightness ? "亮度" : "音量")
-        .accessibilityValue("\(Int((value * 100).rounded()))%")
-        .accessibilityIdentifier("playback.levelHUD")
-    }
-
-    private var icon: String {
-        switch adjustment.kind {
-        case .brightness:
-            return value < 0.35 ? AppIcon.brightnessLow.name : AppIcon.brightnessHigh.name
-        case .volume:
-            if value <= 0.001 { return AppIcon.volumeMute.name }
-            if value < 0.34 { return AppIcon.volumeLow.name }
-            if value < 0.67 { return AppIcon.volumeMedium.name }
-            return AppIcon.volumeHigh.name
-        case .seek:
-            return AppIcon.seek.name
-        case .notice:
-            return AppIcon.alert.name
-        }
-    }
-}
-
-/// 一句话提示：例如视频暂时不能拖动进度
-private struct NoticeHUD: View {
-    let text: String
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: AppIcon.alert.name)
-                .font(.scaled(13, weight: .semibold))
-            Text(text)
-                .font(.footnote.weight(.medium))
-                .lineLimit(1)
-        }
-        .foregroundStyle(.white)
-        .padding(.horizontal, 14)
-        .frame(height: 34)
-        .glassCapsule()
-    }
-}
-
-/// 左右滑快进快退：画面中上方，不加底板；上面是目标时间，下面是跳了多少（金色）
-private struct SeekHUD: View {
-    let time: String
-    let delta: String
-
-    var body: some View {
-        VStack(spacing: 2) {
-            Text(time)
-                .font(.scaled(34, weight: .bold).monospacedDigit())
-            Text(delta)
-                .font(.scaled(15, weight: .bold).monospacedDigit())
-                .foregroundStyle(Theme.gold)
-        }
-        .foregroundStyle(.white)
-        .shadow(color: .black.opacity(Theme.Opacity.heavy), radius: 8, y: 1)
-        .shadow(color: .black.opacity(Theme.Opacity.strong), radius: 1)
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("playback.seekHUD")
-    }
-}
-
-private struct LevelBar: View {
-    let value: Double
-
-    var body: some View {
-        GeometryReader { proxy in
-            ZStack(alignment: .leading) {
-                Capsule().fill(.white.opacity(Theme.Opacity.soft))
-                Capsule()
-                    .fill(.white)
-                    .frame(width: proxy.size.width * min(max(value, 0), 1))
-            }
-        }
-    }
-}
+// 亮度 / 音量、快进、一句话提示的 HUD 组件统一在 HUD.swift（PlayerLevelHUD / PlayerSeekHUD / PlayerNoticeHUD）
 
 // MARK: - 进度条
 

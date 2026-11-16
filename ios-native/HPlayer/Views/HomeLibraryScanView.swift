@@ -18,7 +18,7 @@ struct HomeLibraryScanView: View {
     let onStart: (Bool) -> Void
     let onStartFolder: (String, String) -> Void
     @State private var pickingFolder = false
-    @State private var copiedDiagnostics = false
+    @StateObject private var diagnosticsCopier = CopyFeedback()
     private var hasDMMKey: Bool { DMMClient.storedCredentials() != nil }
     let onRetryMatching: () -> Void
 
@@ -98,12 +98,7 @@ struct HomeLibraryScanView: View {
         ]
         let recent = MatchDiagnostics.shared.snapshot
         lines += recent.isEmpty ? ["（还没有记录。先点「重新匹配未识别封面」再复制）"] : recent
-        UIPasteboard.general.string = lines.joined(separator: "\n")
-        copiedDiagnostics = true
-        Task {
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            copiedDiagnostics = false
-        }
+        diagnosticsCopier.copy(lines.joined(separator: "\n"))
     }
 
     private var status: String {
@@ -141,7 +136,7 @@ struct HomeLibraryScanView: View {
                 }
             }
         }
-        .tint(Theme.textPrimary)
+        .navigationButtonTint()
         .designScreen("manage")
         .sheet(isPresented: $pickingFolder) {
             ScanFolderPicker(onSelect: onStartFolder).environmentObject(appState)
@@ -520,8 +515,8 @@ struct HomeLibraryScanView: View {
             }
             rowDivider
             Button { copyDiagnostics() } label: {
-                LibraryActionRow(symbol: copiedDiagnostics ? AppIcon.success.name : AppIcon.copy.name,
-                                 title: copiedDiagnostics ? "已复制" : "复制匹配诊断信息",
+                LibraryActionRow(symbol: diagnosticsCopier.isCopied() ? AppIcon.success.name : AppIcon.copy.name,
+                                 title: diagnosticsCopier.isCopied() ? "已复制" : "复制匹配诊断信息",
                                  subtitle: "匹配不上时，把它发给开发者", showsChevron: false)
             }
             .buttonStyle(.pressable(scale: 0.985))

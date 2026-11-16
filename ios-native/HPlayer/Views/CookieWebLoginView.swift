@@ -69,6 +69,8 @@ struct CookieWebLoginView: View {
                 .navigationTitle("115 官方登录").navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { showingWeb = false } } }
             }
+            .navigationButtonTint()
+            .hudHost(.sheet)
         }
         .onChange(of: showingWeb) { visible in
             if !visible { cancelConnection() }

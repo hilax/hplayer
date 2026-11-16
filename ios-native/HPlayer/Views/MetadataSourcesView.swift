@@ -75,6 +75,6 @@ struct MetadataSourcesView: View {
         .sheet(isPresented: $credentials, onDismiss: {
             tmdbEnabled = !TMDBClient.storedKey.isEmpty
             dmmEnabled = DMMClient.storedCredentials() != nil
-        }) { NavigationStack { MetadataCredentialsView() } }
+        }) { NavigationStack { MetadataCredentialsView() }.navigationButtonTint().hudHost(.sheet) }
     }
 }

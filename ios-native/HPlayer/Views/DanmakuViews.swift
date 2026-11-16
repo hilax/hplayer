@@ -164,6 +164,8 @@ struct DanmakuSettingsSheet: View {
                 }
             }
         }
+        .navigationButtonTint()
+        .hudHost(.sheet)
         .onChange(of: speed) { _ in store.relayout() }
         .onChange(of: scale) { _ in store.relayout() }
         .presentationDetents([.medium, .large])
@@ -322,7 +324,6 @@ struct AnimeCommentsView: View {
     @State private var unsupported = false
     @State private var loadedVid: Int?
     @State private var showSignIn = false
-    @State private var notice = ""
     @State private var draft = ""
     @State private var replyTo: AnimeComment?
     @FocusState private var composerFocused: Bool
@@ -396,19 +397,8 @@ struct AnimeCommentsView: View {
             .trackKeyboard(tracker, containerBottom: proxy.frame(in: .global).maxY)
         }
         .ignoresSafeArea(.keyboard, edges: .bottom)
-        .overlay(alignment: .top) {
-            if !notice.isEmpty {
-                Text(notice)
-                    .font(Theme.Typo.meta)
-                    .foregroundStyle(Theme.textPrimary)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .floatingSurface(cornerRadius: 999)
-                    .padding(.top, 8)
-                    .transition(.opacity)
-            }
-        }
-        .animation(Motion.smooth, value: notice)
+        // 评论区是播放页里的面板：提示贴在面板顶部（底部会被键盘挡住）
+        .hudHost(.sheet)
         .task(id: vid) { await loadFirst() }
         .onReceive(NotificationCenter.default.publisher(for: .animeCommentPosted)) { note in
             guard (note.userInfo?["vid"] as? Int) == vid, let comment = note.userInfo?["comment"] as? AnimeComment else { return }
@@ -462,16 +452,8 @@ struct AnimeCommentsView: View {
             do {
                 try await AnimeLikeStore.shared.toggle(comment, vid: vid)
             } catch {
-                show(error.localizedDescription)
+                HUD.show(error.localizedDescription, .error)
             }
-        }
-    }
-
-    private func show(_ text: String) {
-        notice = text
-        Task {
-            try? await Task.sleep(nanoseconds: 2_500_000_000)
-            if notice == text { notice = "" }
         }
     }
 

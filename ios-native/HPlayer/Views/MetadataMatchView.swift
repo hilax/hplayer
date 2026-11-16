@@ -117,9 +117,11 @@ struct MetadataMatchView: View {
                     startSearch()
                 }
             }) {
-                NavigationStack { MetadataSourcesView(showsCloseButton: true) }
+                NavigationStack { MetadataSourcesView(showsCloseButton: true) }.navigationButtonTint().hudHost(.sheet)
             }
         }
+        .navigationButtonTint()
+        .hudHost(.sheet)
     }
 
     private func startSearch() {
@@ -208,7 +210,7 @@ struct MetadataRow: View {
 
 /// 填写 TMDB API Key：v3 的 API Key 或 v4 的「API 读访问令牌」都可以，存在钥匙串里
 struct TMDBKeyView: View {
-    var body: some View { NavigationStack { MetadataCredentialsView() } }
+    var body: some View { NavigationStack { MetadataCredentialsView() }.navigationButtonTint().hudHost(.sheet) }
 }
 
 struct HomeCloudBrowser: View {
@@ -231,6 +233,8 @@ struct HomeCloudBrowser: View {
             }
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } }
         }
+        .navigationButtonTint()
+        .hudHost(.sheet)
     }
 
     private func directory(_ cid: String) -> some View {

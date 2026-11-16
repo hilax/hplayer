@@ -19,7 +19,7 @@ struct MagnetPlayActions: View {
 
     @EnvironmentObject private var appState: AppState
     @ObservedObject private var relay = MagnetRelayCenter.shared
-    @State private var copied = false
+    @StateObject private var copier = CopyFeedback()
 
     private var hash: String? { MagnetLink.parse(magnet)?.infoHash }
     private var status: MagnetRelayCenter.Status? { relay.status(hash) }
@@ -78,14 +78,14 @@ struct MagnetPlayActions: View {
             }
 
             Button(action: copy) {
-                Image(systemName: copied ? AppIcon.check.name : AppIcon.copy.name)
+                Image(systemName: copier.isCopied() ? AppIcon.check.name : AppIcon.copy.name)
                     .font(.scaled(14))
-                    .foregroundStyle(copied ? Theme.accent : Color.primary)
+                    .foregroundStyle(copier.isCopied() ? Theme.accent : Color.primary)
             }
             .buttonStyle(MagnetActionStyle(prominent: false))
             .frame(width: 52)
-            .successPop(copied)
-            .accessibilityLabel(copied ? "已复制" : "复制磁力链接")
+            .successPop(copier.isCopied())
+            .accessibilityLabel(copier.isCopied() ? "已复制" : "复制磁力链接")
             .accessibilityIdentifier("\(identifierPrefix).copy")
         }
     }
@@ -220,10 +220,7 @@ struct MagnetPlayActions: View {
     }
 
     private func copy() {
-        UIPasteboard.general.string = magnet
-        Haptics.success()
-        copied = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
+        copier.copy(magnet)
     }
 }
 

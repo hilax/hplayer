@@ -22,6 +22,8 @@ struct ScanFolderPicker: View {
                 }
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } } }
         }
+        .navigationButtonTint()
+        .hudHost(.sheet)
         .onChange(of: appState.sessionID) { _ in path = [] }
     }
 

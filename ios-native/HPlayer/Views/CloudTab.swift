@@ -49,6 +49,8 @@ struct CloudTab: View {
                 }
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { showDirectLogin = false } } }
             }
+            .navigationButtonTint()
+            .hudHost(.sheet)
         }
         .onChange(of: appState.sessionID) { _ in
             path = []; playing = nil

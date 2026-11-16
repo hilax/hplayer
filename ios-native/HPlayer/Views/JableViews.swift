@@ -514,7 +514,6 @@ struct JableDetailView: View {
     @State private var loading = true
     @State private var error = ""
     @State private var playingQueue: PlaybackQueue?
-    @State private var copiedNotice = false
 
     private let columns = [
         GridItem(.flexible(), spacing: 12, alignment: .top),
@@ -601,27 +600,8 @@ struct JableDetailView: View {
                     .font(.subheadline.weight(.semibold).monospaced())
                     .foregroundStyle(Theme.accent)
 
-                Button {
-                    UIPasteboard.general.string = route.id.uppercased()
-                    Haptics.select()
-                    withAnimation(Motion.snappy) {
-                        copiedNotice = true
-                    }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                        withAnimation(Motion.snappy) { copiedNotice = false }
-                    }
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: AppIcon.copy.name)
-                        Text(copiedNotice ? "已复制" : "复制番号")
-                    }
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(copiedNotice ? Theme.accent : Theme.textSecondary)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Theme.surface, in: Capsule())
-                }
-                .buttonStyle(.plain)
+                // 统一的复制反馈（HUD.swift）
+                CopyCodeChip(code: route.id.uppercased())
 
                 Spacer()
             }

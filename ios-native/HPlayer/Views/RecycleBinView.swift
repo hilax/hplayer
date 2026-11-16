@@ -59,7 +59,6 @@ struct RecycleBinView: View {
     @State private var confirmation: RecycleConfirmation?
     @State private var keyRequest: RecycleKeyRequest?
     @State private var operation: String?
-    @State private var message: String?
     @State private var problem: String?
     /// 这次打开页面期间用户输入过的安全密钥，下次不用再输入
     @State private var rememberedKey = ""
@@ -87,8 +86,7 @@ struct RecycleBinView: View {
             }
             .designScreen("recycle")
             .safeAreaInset(edge: .bottom, spacing: 0) { dock }
-            .overlay { operationOverlay }
-            .toast($message)
+            .hudProgress(operation)
             .task {
                 if !InterfacePreview.active { await load() }
             }
@@ -278,8 +276,8 @@ struct RecycleBinView: View {
     // MARK: 顶栏与底部操作
 
     private var clearButton: some View {
+        // 颜色跟随导航栏按键色（Theme.navigationButton），和返回键一致；红色只用在确认弹窗里
         Button("清空") { confirmation = .clear }
-            .foregroundStyle(Theme.danger)
             .disabled(items.isEmpty || loading || operation != nil)
             .accessibilityIdentifier("library.recycle.clear")
     }
@@ -324,13 +322,6 @@ struct RecycleBinView: View {
             .transition(.move(edge: .bottom).combined(with: .opacity))
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("library.recycle.dock")
-        }
-    }
-
-    @ViewBuilder
-    private var operationOverlay: some View {
-        if let text = operation {
-            OperationOverlay(text: text)
         }
     }
 
@@ -402,9 +393,8 @@ struct RecycleBinView: View {
                 Haptics.warning()
                 problem = failure
             } else {
-                Haptics.success()
                 remove(Set(ids))
-                message = "已还原 \(ids.count) 项"
+                HUD.show("已还原 \(ids.count) 项", .success)
             }
             await load(silent: true)
         }
@@ -428,18 +418,17 @@ struct RecycleBinView: View {
                 Haptics.warning()
                 askForKeyOrReport(failure, scope: scope)
             } else {
-                Haptics.success()
                 rememberedKey = key
                 if wasEverything {
                     items = []
                     selection = []
                     total = 0
                     nextOffset = nil
-                    message = "回收站已清空"
+                    HUD.show("回收站已清空", .success)
                 } else {
                     let count = scope.ids.count
                     remove(Set(scope.ids))
-                    message = "已彻底删除 \(count) 项"
+                    HUD.show("已彻底删除 \(count) 项", .success)
                 }
             }
             await load(silent: true)
@@ -512,7 +501,7 @@ struct RecycleBinView: View {
                     nextOffset = page.nextOffset
                 }
             } catch {
-                if sessionID == appState.sessionID { message = error.localizedDescription }
+                if sessionID == appState.sessionID { HUD.show(error.localizedDescription, .error) }
             }
             loadingMore = false
         }

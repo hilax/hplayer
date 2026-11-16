@@ -18,14 +18,16 @@ struct LibraryCleanupView: View {
     var body: some View {
         NavigationStack {
             DesignPage(eyebrow: "Tidy up", title: "清理已失效文件") {
-                content
+                // 页面里的按钮、进度条保留琥珀强调色；导航栏按键统一用导航栏按键色
+                content.tint(Theme.accent)
             }
             .navigationTitle("清理已失效文件")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } }
             }
         }
-        .tint(Theme.accent)
+        .navigationButtonTint()
+        .hudHost(.sheet)
         .sheet(isPresented: $pickingFolder) {
             ScanFolderPicker(onSelect: { id, name in cleanup.start(scope: (id: id, name: name)) })
                 .environmentObject(appState)

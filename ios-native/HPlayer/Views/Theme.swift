@@ -159,6 +159,77 @@ enum Theme {
     static let paper = Color(uiColor: UIColor(hex: 0xF5F5F6))
     static let brandNight = ink
 
+    // MARK: 导航栏按键色
+
+    /// 导航栏按键色：返回键，以及右上角的文字按钮和图标（清空、搜索、关闭、完成 …）都用它，保持同一个颜色。
+    /// 由 NavigationStack 上的 `.tint` 统一下发；工具栏按钮不要再单独设前景色，
+    /// 这样禁用时也由系统统一变灰。危险操作的红色留给二次确认弹窗里的按钮。
+    static let navigationButton = textPrimary
+
+    // MARK: HUD 提示
+
+    /// 全应用 HUD 提示的样式、位置、时长、震动：只在这里改（组件在 HUD.swift）
+    enum HUD {
+        /// 页面轻提示离底部安全区的距离：浮在标签栏 / 多选操作栏上方
+        static let pageBottomInset: CGFloat = 96
+        /// 弹窗、面板里的轻提示离顶部的距离：在拖动条下面
+        static let sheetTopInset: CGFloat = 20
+        /// 播放窗口里的提示离顶部安全区的距离（和手势 HUD 同一高度）
+        static let playerTopInset: CGFloat = 18
+        /// 轻提示圆角：单行时正好是胶囊，多行时是圆角卡片
+        static let toastRadius: CGFloat = 22
+
+        /// 普通、成功：2.4 秒；注意、失败：3.5 秒；带按钮：4 秒
+        static let shortDuration: Double = 2.4
+        static let longDuration: Double = 3.5
+        static let actionDuration: Double = 4
+        /// 复制按钮「已复制」的停留时间
+        static let copiedDuration: Double = 2
+
+        static func duration(for tone: HUDTone, hasAction: Bool) -> Double {
+            if hasAction { return actionDuration }
+            switch tone {
+            case .neutral, .success: return shortDuration
+            case .warning, .error: return longDuration
+            }
+        }
+
+        /// 进度 HUD 的遮罩：比弹窗遮罩浅，卡片本身已经够显眼
+        static let scrim = Color(uiColor: .adaptive(light: UIColor(hex: 0x0A0A0B, alpha: 0.28),
+                                                     dark: UIColor(hex: 0x000000, alpha: 0.45)))
+        /// 播放器快进量的琥珀色：播放画面永远是深色，固定不随深浅模式变
+        static let playerAccent = Color(uiColor: UIColor(hex: 0xE6A54B))
+
+        /// 语气对应的图标；普通提示不带图标
+        static func icon(for tone: HUDTone) -> AppIcon? {
+            switch tone {
+            case .neutral: return nil
+            case .success: return .success
+            case .warning: return .alert
+            case .error: return .failure
+            }
+        }
+
+        /// 语气对应的图标颜色（文字统一主文字色）
+        static func tint(for tone: HUDTone) -> Color {
+            switch tone {
+            case .neutral: return Theme.textSecondary
+            case .success: return Theme.success
+            case .warning: return Theme.warning
+            case .error: return Theme.danger
+            }
+        }
+
+        @MainActor
+        static func haptic(for tone: HUDTone) {
+            switch tone {
+            case .neutral: break
+            case .success: Haptics.success()
+            case .warning, .error: Haptics.warning()
+            }
+        }
+    }
+
     // MARK: 强调（琥珀，全应用唯一的彩色）
 
     static let accentUIColor = UIColor.adaptive(light: UIColor(hex: 0x8A6008), dark: UIColor(hex: 0xE6A54B))
@@ -335,6 +406,10 @@ private struct TintAwareForeground: ViewModifier {
 }
 
 extension View {
+    /// 导航栏按键配色：套在每个 NavigationStack 上（包括弹窗里自带的导航栈），
+    /// 返回键、关闭、完成、取消和右上角按钮就统一成 Theme.navigationButton。
+    func navigationButtonTint() -> some View { tint(Theme.navigationButton) }
+
     /// 次要文字：普通页面用主题灰，铺了封面色的首页用半透明白。
     func secondaryTextStyle() -> some View { modifier(TintAwareForeground(tertiary: false)) }
     /// 三级文字（数量、注释）：同上。

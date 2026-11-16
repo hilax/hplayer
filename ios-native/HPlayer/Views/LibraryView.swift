@@ -104,7 +104,6 @@ struct DirectoryView: View {
     /// 操作失败的原因
     @State private var problem: String?
     /// 操作完成后的轻提示
-    @State private var message: String?
     /// 根页的大标题已经滚出屏幕：顶部换成紧凑标题栏
     @State private var titleAway = false
     private let previewInfo: Direct115FileInfo?
@@ -156,8 +155,7 @@ struct DirectoryView: View {
                     CompactTitleBar(title: rootTitle, visible: titleAway) { rootActions(compact: true) }
                 }
             }
-            .overlay { operationOverlay }
-            .toast($message)
+            .hudProgress(operation)
             .sheet(item: $sheet) { current in
                 sheetContent(current)
             }
@@ -217,13 +215,6 @@ struct DirectoryView: View {
 
     private var problemBinding: Binding<Bool> {
         Binding(get: { problem != nil }, set: { if !$0 { problem = nil } })
-    }
-
-    @ViewBuilder
-    private var operationOverlay: some View {
-        if let text = operation {
-            OperationOverlay(text: text)
-        }
     }
 
     @ViewBuilder
@@ -765,6 +756,8 @@ struct DirectoryView: View {
                               onDownload: infoDownloadAction(for: file),
                               preloaded: previewInfo)
             }
+            .navigationButtonTint()
+            .hudHost(.sheet)
         }
     }
 
@@ -820,9 +813,8 @@ struct DirectoryView: View {
                 Haptics.warning()
                 problem = failure
             } else {
-                Haptics.success()
                 if selecting { exitSelection() }
-                if let done { message = done }
+                if let done { HUD.show(done, .success) } else { Haptics.success() }
             }
             await load(silent: true)
         }
@@ -877,16 +869,14 @@ struct DirectoryView: View {
 
     private func download(_ chosen: [P115File]) {
         let summary = DownloadManager.shared.enqueue(chosen, folderLabel: FileOperationText.pathLabel(trail))
-        if summary.added > 0 { Haptics.success() } else { Haptics.warning() }
-        message = FileOperationText.downloadResult(summary)
+        HUD.show(FileOperationText.downloadResult(summary), summary.added > 0 ? .success : .warning)
         if selecting { exitSelection() }
     }
 
     private func addToHome(_ videos: [P115File]) {
         guard currentAccountOwnsFiles, !videos.isEmpty else { return }
         mediaLibrary.add(videos, for: appState)
-        Haptics.success()
-        message = "已把 \(videos.count) 个视频加入首页"
+        HUD.show("已把 \(videos.count) 个视频加入首页", .success)
         if selecting { exitSelection() }
     }
 

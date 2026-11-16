@@ -87,7 +87,6 @@ struct OfflineTasksView: View {
     @State private var pendingRemoval: Direct115OfflineTask?
     @State private var pendingClear: Direct115OfflineClearScope?
     @State private var operation: String?
-    @State private var message: String?
     @State private var problem: String?
     @State private var loadRequestID = UUID()
 
@@ -136,8 +135,7 @@ struct OfflineTasksView: View {
             ToolbarItem(placement: .primaryAction) { addButton }
         }
         .designScreen("offline")
-        .overlay { operationOverlay }
-        .toast($message)
+        .hudProgress(operation)
         .task {
             if InterfacePreview.active { return }
             if Self.cachedSessionID != appState.sessionID {
@@ -155,7 +153,7 @@ struct OfflineTasksView: View {
         .sheet(isPresented: $showAdd) {
             OfflineAddSheet(client: appState.directClient()) { summary in
                 filter = OfflineFilter.running.rawValue
-                message = "已添加 \(summary.succeeded) 个离线任务"
+                HUD.show("已添加 \(summary.succeeded) 个离线任务", .success)
                 Task { await load(silent: true, onlyFirstPage: true) }
             }
         }
@@ -461,13 +459,6 @@ struct OfflineTasksView: View {
         }
     }
 
-    @ViewBuilder
-    private var operationOverlay: some View {
-        if let text = operation {
-            OperationOverlay(text: text)
-        }
-    }
-
     // MARK: 操作
 
     private func run(_ title: String, _ work: @escaping (Direct115Client) async throws -> String) {
@@ -488,8 +479,7 @@ struct OfflineTasksView: View {
                 Haptics.warning()
                 problem = failure
             } else {
-                Haptics.success()
-                message = done
+                if let done { HUD.show(done, .success) }
             }
             await load(silent: true)
         }
@@ -520,8 +510,7 @@ struct OfflineTasksView: View {
 
     private func copyLink(_ task: Direct115OfflineTask) {
         UIPasteboard.general.string = task.sourceURL
-        Haptics.success()
-        message = "已复制链接"
+        HUD.show("已复制链接", .success)
     }
 
     private func showFolder(_ task: Direct115OfflineTask) {

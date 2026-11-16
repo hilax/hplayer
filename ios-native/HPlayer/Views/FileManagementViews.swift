@@ -10,66 +10,7 @@ struct DestructiveActionStyle: ButtonStyle {
     }
 }
 
-// MARK: - 轻提示
-
-/// 屏幕底部短暂出现的提示条：已移动、已加入下载……
-private struct ToastModifier: ViewModifier {
-    @Binding var text: String?
-
-    func body(content: Content) -> some View {
-        content
-            .overlay(alignment: .bottom) {
-                if let message = text {
-                    Text(message)
-                        .font(Theme.Typo.row.weight(.medium))
-                        .foregroundStyle(Theme.textPrimary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, Theme.Space.lg)
-                        .padding(.vertical, Theme.Space.md)
-                        .floatingSurface()
-                        .padding(.horizontal, Theme.Space.xl)
-                        .padding(.bottom, 96)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                        .allowsHitTesting(false)
-                        .accessibilityIdentifier("library.toast")
-                        .task(id: message) {
-                            try? await Task.sleep(nanoseconds: 2_800_000_000)
-                            guard !Task.isCancelled else { return }
-                            text = nil
-                        }
-                }
-            }
-            .animation(Motion.smooth, value: text)
-    }
-}
-
-extension View {
-    /// 底部轻提示：给 `text` 赋值就会出现，几秒后自己消失。
-    func toast(_ text: Binding<String?>) -> some View {
-        modifier(ToastModifier(text: text))
-    }
-}
-
-/// 操作进行中的遮罩：挡住重复点击，并告诉用户在做什么。
-struct OperationOverlay: View {
-    let text: String
-
-    var body: some View {
-        ZStack {
-            Theme.scrim.ignoresSafeArea()
-            HStack(spacing: Theme.Space.md) {
-                ProgressView().tint(Theme.textSecondary)
-                Text(text).font(Theme.Typo.row.weight(.medium)).foregroundStyle(Theme.textPrimary)
-            }
-            .padding(.horizontal, Theme.Space.page)
-            .padding(.vertical, Theme.Space.lg)
-            .floatingSurface()
-        }
-        .transition(.opacity)
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("library.operation")
-    }
-}
+// 轻提示、操作进行中的遮罩：已统一到 HUD.swift（HUD.show / .hudProgress）
 
 // MARK: - 底部操作栏
 
@@ -736,7 +677,7 @@ struct FileInfoSheet: View {
     @State private var info: Direct115FileInfo?
     @State private var loading = true
     @State private var error = ""
-    @State private var copied = ""
+    @StateObject private var copier = CopyFeedback()
     @Environment(\.dismiss) private var dismiss
 
     init(file: P115File, client: Direct115Client?, inLibrary: Bool, onPlay: (() -> Void)?,
@@ -955,11 +896,9 @@ struct FileInfoSheet: View {
 
     private func copyButton(_ value: String) -> some View {
         Button {
-            UIPasteboard.general.string = value
-            Haptics.success()
-            copied = value
+            copier.copy(value, key: value)
         } label: {
-            Image(systemName: copied == value ? AppIcon.check.name : AppIcon.copy.name)
+            Image(systemName: copier.isCopied(value) ? AppIcon.check.name : AppIcon.copy.name)
                 .font(.scaled(14, weight: Theme.iconWeight))
                 .foregroundStyle(Theme.accent)
                 .frame(width: 32, height: 32)

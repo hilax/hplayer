@@ -459,6 +459,8 @@ private struct PlayerWindowModifier<Root: View>: ViewModifier {
         if let token, PlayerWindowController.shared.isShowing(token) { return }
         let binding = $isPresented
         let view = root()
+            // 播放窗口是独立窗口：全局 HUD 提示在播放时落到画面顶部（深色）
+            .hudHost(.player)
             .environmentObject(appState)
             .environment(\.dismissPlayerWindow, { binding.wrappedValue = false })
         token = PlayerWindowController.shared.present(

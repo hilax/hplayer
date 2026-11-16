@@ -82,8 +82,8 @@ struct MagnetPlayerView: View {
                 NavigationLink {
                     MagnetSearchView()
                 } label: {
+                    // 颜色跟随导航栏按键色，和返回键一致
                     Image(systemName: AppIcon.search.name)
-                        .foregroundStyle(Theme.accent)
                 }
             }
             if !initialMagnet.isEmpty {

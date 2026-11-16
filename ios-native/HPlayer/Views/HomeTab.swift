@@ -181,6 +181,8 @@ struct HomeTab: View {
                         }
                     }
             }
+            .navigationButtonTint()
+            .hudHost(.sheet)
             .environmentObject(appState)
         }
     }

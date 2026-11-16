@@ -184,12 +184,8 @@ struct DramaFeedView: View {
             .padding(.horizontal, 6)
 
             if let edgeHint {
-                Text(edgeHint)
-                    .font(.scaled(13, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 14)
-                    .frame(height: 34)
-                    .background(.black.opacity(Theme.Opacity.strong), in: Capsule())
+                // 统一的播放器提示 HUD（HUD.swift）
+                PlayerNoticeHUD(text: edgeHint)
                     .frame(maxHeight: .infinity)
                     .transition(.opacity)
                     .allowsHitTesting(false)
@@ -904,28 +900,15 @@ private struct DramaLandscapeView: View {
         panDirection = nil
     }
 
+    /// 左右滑快进快退：和正片播放器同一个 HUD（HUD.swift）
     private func seekHUD(target: Double, from start: Double) -> some View {
         let delta = (target - start).rounded()
-        let fraction = player.duration > 0 ? min(max(target / player.duration, 0), 1) : 0
-        return VStack(spacing: 8) {
-            Text("\(delta >= 0 ? "快进" : "快退") \(delta >= 0 ? "+" : "-")\(DramaFeedPage.time(abs(delta)))")
-                .font(.scaled(15, weight: .semibold).monospacedDigit())
-            Text("\(DramaFeedPage.time(target)) / \(DramaFeedPage.time(player.duration))")
-                .font(.scaled(13, weight: .medium).monospacedDigit())
-                .foregroundStyle(Theme.textSecondaryOnArtwork)
-            GeometryReader { proxy in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(.white.opacity(Theme.Opacity.soft))
-                    Capsule().fill(.white).frame(width: proxy.size.width * fraction)
-                }
-            }
-            .frame(width: 180, height: 4)
-        }
-        .foregroundStyle(.white)
-        .padding(.horizontal, 20)
-        .padding(.vertical, 14)
-        .background(.black.opacity(Theme.Opacity.strong), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .accessibilityElement(children: .combine)
+        return PlayerSeekHUD(
+            time: DramaFeedPage.time(target),
+            delta: "\(delta >= 0 ? "快进" : "快退") \(delta >= 0 ? "+" : "-")\(DramaFeedPage.time(abs(delta)))",
+            progress: player.duration > 0 ? target / player.duration : nil,
+            total: player.duration > 0 ? "共 \(DramaFeedPage.time(player.duration))" : nil
+        )
     }
 
     private var controls: some View {
@@ -1035,6 +1018,8 @@ private struct DramaFeedEpisodeSheet: View {
             .navigationTitle("选集 · 共 \(model.count) 集")
             .navigationBarTitleDisplayMode(.inline)
         }
+        .navigationButtonTint()
+        .hudHost(.sheet)
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
     }

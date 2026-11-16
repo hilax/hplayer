@@ -15,6 +15,8 @@ enum AppIcon: String, CaseIterable {
     // MARK: 通用动作
     case search, back, forward, expand, collapse, close, clear, more, add, remove
     case check, selected, unselected, success, alert, info, help, addCircle
+    /// 操作失败（HUD 失败语气）
+    case failure
     case refresh, history, clock, sortAscending, sortDescending, tune, settings
     case copy, trash, openExternal, returnKey, sparkles, hidden, hot, topics, mirror
     case heart, heartFill, bolt
@@ -77,6 +79,7 @@ enum AppIcon: String, CaseIterable {
         case .success: return "checkmark.circle"
         case .alert: return "exclamationmark.circle"
         case .info: return "info.circle"
+        case .failure: return "xmark.circle"
         case .help: return "questionmark.circle"
         case .refresh: return "arrow.clockwise"
         case .history: return "clock.arrow.circlepath"
