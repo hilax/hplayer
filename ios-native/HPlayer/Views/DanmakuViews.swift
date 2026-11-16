@@ -350,20 +350,24 @@ struct AnimeCommentsView: View {
                 .scrollIndicators(.hidden)
 
                 if allowsCompose {
-                    Color.black.opacity(active ? Theme.Opacity.soft : 0)
-                        .ignoresSafeArea()
-                        .allowsHitTesting(active)
-                        .contentShape(Rectangle())
-                        .onTapGesture(perform: dismissComposer)
-                        .gesture(
-                            DragGesture(minimumDistance: 12).onEnded { value in
-                                if value.translation.height > 24 { dismissComposer() }
-                            }
-                        )
-                        .animation(.easeOut(duration: 0.2), value: active)
-                        .accessibilityLabel("收起输入框")
-                        .accessibilityAddTraits(.isButton)
-                        .accessibilityHidden(!active)
+                    Group {
+                        if active {
+                            Color.black.opacity(Theme.Opacity.soft)
+                                .ignoresSafeArea()
+                                .contentShape(Rectangle())
+                                .onTapGesture(perform: dismissComposer)
+                                .simultaneousGesture(
+                                    DragGesture(minimumDistance: 12).onEnded { value in
+                                        if value.translation.height > 24 { dismissComposer() }
+                                    }
+                                )
+                                .transition(.opacity)
+                                .accessibilityLabel("收起输入框")
+                                .accessibilityAddTraits(.isButton)
+                        }
+                    }
+                    .allowsHitTesting(active)
+                    .animation(.easeOut(duration: 0.2), value: active)
 
                     VStack(spacing: 0) {
                         SocialInputBar(
@@ -583,7 +587,14 @@ struct AnimeCommentsView: View {
         pinned = []; hot = []; latest = []; mine = []; page = 0; exhausted = false; error = ""; unsupported = false
         guard !InterfacePreview.active else { exhausted = true; return }
         #if DEBUG
-        if ProcessInfo.processInfo.environment["HPLAYER_COMPOSER_TEST"] == "1" { exhausted = true; return }
+        if ProcessInfo.processInfo.environment["HPLAYER_COMPOSER_TEST"] == "1" {
+            latest = (1...15).map { index in
+                AnimeComment(localID: index, userName: "测试用户\(index)",
+                             content: "测试评论第 \(index) 条内容，用于验证评论列表滚动与键盘联动。", replyTo: "")
+            }
+            exhausted = true
+            return
+        }
         #endif
         loading = true
         defer { loading = false }

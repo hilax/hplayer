@@ -47,13 +47,21 @@ final class SocialComposerUITests: XCTestCase {
             XCTAssertTrue(wait(timeout: 3) { !sendButton.exists && state.label == "closed" })
         }
 
-        // 3. 评论页常驻底栏：只有一个底部输入框，键盘顶上来，收起后随键盘退回原底部
+        // 3. 评论页常驻底栏：列表可自由滑动，只有一个底部输入框，键盘顶上来，收起后随键盘退回原底部且列表仍可滑动
         app.buttons["composerTest.openCommentsPage"].tap()
         XCTAssertTrue(sendButton.waitForExistence(timeout: 5))
         let commentField = app.textViews["composer.text"].exists ? app.textViews["composer.text"] : app.textFields["composer.text"]
         XCTAssertTrue(commentField.waitForExistence(timeout: 5))
         XCTAssertEqual(app.buttons.matching(identifier: "composer.send").count, 1, "评论页底部只能有一个发送栏")
         let restingMinY = sendButton.frame.minY
+
+        let firstComment = app.staticTexts["测试用户1"]
+        XCTAssertTrue(firstComment.waitForExistence(timeout: 5))
+        let firstInitialY = firstComment.frame.minY
+        let commentsScroll = app.scrollViews.firstMatch
+        commentsScroll.swipeUp()
+        XCTAssertTrue(wait(timeout: 3) { !firstComment.exists || firstComment.frame.minY < firstInitialY - 40 },
+                      "评论页列表必须可以正常滑动")
 
         commentField.tap()
         commentField.typeText("abc")
@@ -66,6 +74,13 @@ final class SocialComposerUITests: XCTestCase {
             XCTAssertTrue(commentField.exists && sendButton.exists, "键盘收起后评论页底部输入框应继续常驻")
             XCTAssertTrue(wait(timeout: 3) { abs(sendButton.frame.minY - restingMinY) <= 2 },
                           "键盘收起后评论页底部输入框应随键盘退回原来的底部位置")
+
+            let lastComment = app.staticTexts["测试用户15"]
+            for _ in 0..<4 where !(lastComment.exists && lastComment.frame.minY < restingMinY - 10) {
+                commentsScroll.swipeUp()
+            }
+            XCTAssertTrue(lastComment.exists && lastComment.frame.minY < restingMinY - 10,
+                          "键盘收起退回底部后，评论列表必须依然可以正常滑动")
         }
     }
 
