@@ -309,7 +309,7 @@ private struct DramaFeedPage: View {
         .overlay(alignment: .top) {
             if boosting {
                 HStack(spacing: 6) {
-                    Image(systemName: AppIcon.speed.name)
+                    Image(appIconNamed: AppIcon.speed.name)
                     Text("2× 快进中")
                 }
                 .font(.scaled(13, weight: .semibold))
@@ -329,7 +329,7 @@ private struct DramaFeedPage: View {
         switch player.state {
         case .failed(let message):
             VStack(spacing: 12) {
-                Image(systemName: AppIcon.alert.name)
+                Image(appIconNamed: AppIcon.alert.name)
                     .font(.scaled(28, weight: .semibold))
                     .foregroundStyle(Theme.rating)
                 Text(message)
@@ -350,7 +350,7 @@ private struct DramaFeedPage: View {
             if player.isBuffering && isActive {
                 ProgressView().tint(.white).controlSize(.large)
             } else if !player.isPlaying && isActive && !scrubbing && !boosting {
-                Image(systemName: AppIcon.play.name)
+                Image(appIconNamed: AppIcon.play.name)
                     .font(.scaled(54, weight: .semibold))
                     .foregroundStyle(.white.opacity(Theme.Opacity.solid))
                     .shadow(color: .black.opacity(Theme.Opacity.medium), radius: 10)
@@ -364,7 +364,7 @@ private struct DramaFeedPage: View {
     private var fullscreenButton: some View {
         Button(action: onFullscreen) {
             HStack(spacing: 6) {
-                Image(systemName: AppIcon.fullscreen.name)
+                Image(appIconNamed: AppIcon.fullscreen.name)
                 Text("全屏观看")
             }
             .font(.scaled(13, weight: .semibold))
@@ -397,7 +397,7 @@ private struct DramaFeedPage: View {
     private func railButton(icon: AppIcon, title: String, identifier: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             VStack(spacing: 4) {
-                Image(systemName: icon.name)
+                Image(appIconNamed: icon.name)
                     .font(.scaled(24, weight: .semibold))
                 Text(title)
                     .font(.scaled(11, weight: .semibold).monospacedDigit())
@@ -842,7 +842,7 @@ private struct DramaLandscapeView: View {
 
     private var boostPill: some View {
         HStack(spacing: 6) {
-            Image(systemName: AppIcon.speed.name)
+            Image(appIconNamed: AppIcon.speed.name)
             Text("2× 快进中")
         }
         .font(.scaled(13, weight: .semibold))
@@ -929,7 +929,7 @@ private struct DramaLandscapeView: View {
             Spacer()
             HStack(spacing: 14) {
                 Button { player.togglePlay(); scheduleHide() } label: {
-                    Image(systemName: player.isPlaying ? AppIcon.pause.name : AppIcon.play.name)
+                    Image(appIconNamed: player.isPlaying ? AppIcon.pause.name : AppIcon.play.name)
                         .font(.scaled(22, weight: .semibold))
                         .frame(width: 44, height: 44)
                 }
@@ -944,7 +944,7 @@ private struct DramaLandscapeView: View {
                 Text(DramaFeedPage.time(player.duration))
                     .font(.scaled(12, weight: .medium).monospacedDigit())
                 Button(action: onExit) {
-                    Image(systemName: AppIcon.exitFullscreen.name)
+                    Image(appIconNamed: AppIcon.exitFullscreen.name)
                         .font(.scaled(18, weight: .semibold))
                         .frame(width: 44, height: 44)
                 }

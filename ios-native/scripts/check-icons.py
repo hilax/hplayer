@@ -19,12 +19,20 @@ SAFE_PREFIXES = ("screen.", "home.", "library.", "settings.", "search.", "player
                  "magnet.", "torrent.", "account.", "metadata.", "detail.", "tab.", "cloud.", "mine.", "performer.", "manage.", "catalog.", "history.")
 
 
+# 图标是自定义符号（Assets.xcassets/Icons），不再用系统 SF Symbols：
+# 视图里不能用系统符号的入口，统一走 Image(icon:) / Image(appIconNamed:) / Label(_, icon:) / Button(_, icon:)。
+SYSTEM_SYMBOL = re.compile(r'\b(?:UI)?Image\(systemName:|\b(?:Label|Button)\([^()]*\bsystemImage:')
+
+
 def main() -> int:
     problems = []
     for path in sorted((ROOT / "Views").glob("*.swift")):
         if path.name in ALLOWED:
             continue
         for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if SYSTEM_SYMBOL.search(line):
+                problems.append(f"{path.relative_to(ROOT.parent)}:{number}: system SF Symbol API — use Image(icon:) / Label(_, icon:)")
+                continue
             if "accessibilityIdentifier" in line or "designScreen" in line:
                 continue
             if not ARGUMENT.search(line):

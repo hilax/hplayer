@@ -34,24 +34,24 @@ struct MagnetHistoryView: View {
                             Button(role: .destructive) {
                                 remove(item)
                             } label: {
-                                Label("删除", systemImage: AppIcon.trash.name)
+                                Label("删除", image: AppIcon.trash.name)
                             }
                         }
                         .contextMenu {
                             Button {
                                 playLaunch = MagnetPlaybackRequest(magnet: item.magnet, title: item.name)
                             } label: {
-                                Label(item.lastProgress == nil ? "播放" : "续播", systemImage: AppIcon.play.name)
+                                Label(item.lastProgress == nil ? "播放" : "续播", image: AppIcon.play.name)
                             }
                             Button {
                                 UIPasteboard.general.string = item.magnet
                             } label: {
-                                Label("复制磁力链接", systemImage: AppIcon.copy.name)
+                                Label("复制磁力链接", image: AppIcon.copy.name)
                             }
                             Button(role: .destructive) {
                                 remove(item)
                             } label: {
-                                Label("删除记录", systemImage: AppIcon.trash.name)
+                                Label("删除记录", image: AppIcon.trash.name)
                             }
                         }
                     }
@@ -124,7 +124,7 @@ private struct MagnetHistoryRow: View {
                     .scaledToFill()
             } else {
                 Theme.surfaceRaised
-                Image(systemName: AppIcon.magnet.name)
+                Image(appIconNamed: AppIcon.magnet.name)
                     .font(.scaled(18, weight: Theme.iconWeight))
                     .foregroundStyle(Theme.textTertiary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)

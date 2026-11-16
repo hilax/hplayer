@@ -561,7 +561,7 @@ private struct DramaRankRow: View {
                 }
                 if item.metricValue > 0 {
                     HStack(spacing: 4) {
-                        Image(systemName: AppIcon.hot.name)
+                        Image(appIconNamed: AppIcon.hot.name)
                         Text("\(item.metricLabel) \(compactCount(item.metricValue))")
                             .monospacedDigit()
                     }
@@ -572,7 +572,7 @@ private struct DramaRankRow: View {
 
             Spacer(minLength: 8)
 
-            Image(systemName: AppIcon.forward.name)
+            Image(appIconNamed: AppIcon.forward.name)
                 .font(Theme.Typo.meta.weight(.semibold))
                 .foregroundStyle(Theme.textMuted)
                 .accessibilityHidden(true)
@@ -686,7 +686,7 @@ struct DramaDetailView: View {
                 if let detail {
                     HStack(spacing: 10) {
                         if detail.score > 0 {
-                            Label(String(format: "%.1f", detail.score), systemImage: AppIcon.rating.name)
+                            Label(String(format: "%.1f", detail.score), image: AppIcon.rating.name)
                                 .foregroundStyle(Theme.rating)
                         }
                         Text(detail.isFinished ? "全 \(detail.episodes.count) 集" : "更新至 \(detail.episodes.count) 集")
@@ -724,7 +724,7 @@ struct DramaDetailView: View {
             if let target { play(target, in: detail) }
         } label: {
             HStack(spacing: 8) {
-                Image(systemName: AppIcon.play.name)
+                Image(appIconNamed: AppIcon.play.name)
                 Text(target == nil ? "暂无可播放的分集" : lastWatched == nil ? "播放第 1 集" : "继续看第 \(target?.number ?? 1) 集")
             }
         }

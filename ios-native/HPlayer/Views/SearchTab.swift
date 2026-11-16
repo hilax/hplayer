@@ -167,7 +167,7 @@ struct SearchView: View {
                     .id(route.id)
             } else {
                 VStack(spacing: 10) {
-                    Image(systemName: AppIcon.people.name)
+                    Image(appIconNamed: AppIcon.people.name)
                     Text("演员合集已更新").font(.headline)
                     Text("返回搜索页后重新进入演员合集。").foregroundStyle(.secondary)
                 }
@@ -225,7 +225,7 @@ struct SearchView: View {
                 onClose()
             }
             HStack(spacing: 8) {
-                Image(systemName: AppIcon.search.name)
+                Image(appIconNamed: AppIcon.search.name)
                     .font(.scaled(15, weight: Theme.iconWeight))
                     .foregroundStyle(Theme.textTertiary)
                 TextField("片名、文件名或演员", text: $keyword)
@@ -236,7 +236,7 @@ struct SearchView: View {
                     .accessibilityIdentifier("search.query")
                 if !keyword.isEmpty {
                     Button { keyword = "" } label: {
-                        Image(systemName: AppIcon.clear.name)
+                        Image(appIconNamed: AppIcon.clear.name)
                             .font(.scaled(15))
                             .foregroundStyle(Theme.textTertiary)
                             .frame(width: 28, height: 28)
@@ -326,7 +326,7 @@ struct SearchView: View {
                             Text("演员合集 · \(group.collectionItems.count) 部").font(.scaled(12)).foregroundStyle(Theme.textSecondary)
                         }
                         Spacer(minLength: 8)
-                        Image(systemName: AppIcon.forward.name).font(.scaled(12, weight: .semibold)).foregroundStyle(Theme.textTertiary)
+                        Image(appIconNamed: AppIcon.forward.name).font(.scaled(12, weight: .semibold)).foregroundStyle(Theme.textTertiary)
                     }
                     .padding(12)
                     .surfaceCard()
@@ -406,7 +406,7 @@ struct SearchView: View {
             .searchRow()
         } else if !error.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
-                Label(error, systemImage: AppIcon.alert.name)
+                Label(error, image: AppIcon.alert.name)
                     .font(.subheadline)
                     .foregroundStyle(Theme.warning)
                 Button("重试") { startSearch() }
@@ -476,7 +476,7 @@ struct SearchView: View {
     }
 
     private func hintRow(icon: String, text: String) -> some View {
-        Label(text, systemImage: icon)
+        Label(text, image: icon)
             .font(.subheadline)
             .foregroundStyle(.secondary)
             .searchRow(top: 4, bottom: 12)
@@ -551,7 +551,7 @@ private struct LibraryResultRow: View {
             Spacer(minLength: 8)
 
             if showsPlay {
-                Image(systemName: AppIcon.play.name)
+                Image(appIconNamed: AppIcon.play.name)
                     .font(.scaled(13, weight: .bold))
                     .foregroundStyle(Theme.onPrimary)
                     .frame(width: 36, height: 36)

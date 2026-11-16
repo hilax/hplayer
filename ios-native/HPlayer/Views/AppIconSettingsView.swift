@@ -88,7 +88,7 @@ struct AppIconSettingsView: View {
                     store.supportsAlternateIcons
                         ? "轻点样式，即可更换主屏幕上的应用图标。"
                         : "当前设备暂不支持更换应用图标。",
-                    systemImage: AppIcon.info.name
+                    image: AppIcon.info.name
                 )
                 .font(.footnote)
                 .foregroundStyle(Theme.textSecondary)
@@ -196,7 +196,7 @@ struct AppIconSettingsView: View {
         Button {
             store.select(.prism)
         } label: {
-            Label("恢复默认", systemImage: AppIcon.refresh.name)
+            Label("恢复默认", image: AppIcon.refresh.name)
                 .font(.subheadline.weight(.medium))
                 .fixedSize()
                 .foregroundStyle(store.selected == .prism ? Theme.textTertiary : Theme.accent)
@@ -239,7 +239,7 @@ struct AppIconSettingsView: View {
                             .tint(Theme.textPrimary)
                             .frame(width: 20, height: 20)
                     } else {
-                        Image(systemName: selected ? AppIcon.selected.name : AppIcon.unselected.name)
+                        Image(appIconNamed: selected ? AppIcon.selected.name : AppIcon.unselected.name)
                             .font(.scaled(20, weight: Theme.iconWeight))
                             .foregroundStyle(selected ? Theme.textPrimary : Theme.textTertiary)
                             .frame(width: 20, height: 20)
@@ -336,7 +336,7 @@ private struct IconChangeNoticeCard: View {
                         .foregroundStyle(Theme.textSecondary)
                 }
             case .failure(let message):
-                Image(systemName: AppIcon.alert.name)
+                Image(appIconNamed: AppIcon.alert.name)
                     .font(.scaled(20, weight: Theme.iconWeight))
                     .foregroundStyle(Theme.danger)
                     .frame(width: 36, height: 36)
@@ -367,7 +367,7 @@ private struct IconChangeNoticeCard: View {
             Button {
                 store.clearNotice()
             } label: {
-                Image(systemName: AppIcon.close.name)
+                Image(appIconNamed: AppIcon.close.name)
                     .font(.scaled(13, weight: Theme.iconWeight))
                     .foregroundStyle(Theme.textSecondary)
                     .frame(width: 44, height: 44)

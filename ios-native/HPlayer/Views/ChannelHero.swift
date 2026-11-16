@@ -203,7 +203,7 @@ struct ChannelSearchField: View {
         HStack(spacing: 0) {
             Button(action: onSearch) {
                 HStack(spacing: 8) {
-                    Image(systemName: AppIcon.search.name)
+                    Image(appIconNamed: AppIcon.search.name)
                         .font(.scaled(15, weight: Theme.iconWeight))
                     Text(placeholder)
                         .font(Theme.Typo.row)
@@ -275,7 +275,7 @@ struct ChannelShortcutLabel: View {
 
     var body: some View {
         VStack(spacing: Theme.Space.sm) {
-            Image(systemName: icon.name)
+            Image(appIconNamed: icon.name)
                 .font(.scaled(18, weight: Theme.iconWeight))
                 .foregroundStyle(selected ? Theme.onPrimary : Theme.textPrimary)
                 .frame(width: 48, height: 48)
@@ -321,7 +321,7 @@ struct FilterMenuChip<Option: Hashable>: View {
             HStack(spacing: 4) {
                 Text(title(selection))
                     .font(.scaled(13, weight: active ? .semibold : .medium))
-                Image(systemName: AppIcon.expand.name)
+                Image(appIconNamed: AppIcon.expand.name)
                     .font(.scaled(9, weight: .bold))
             }
             .foregroundStyle(active ? Theme.onPrimary : Theme.textPrimary)

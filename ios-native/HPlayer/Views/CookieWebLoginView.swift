@@ -42,7 +42,7 @@ struct CookieWebLoginView: View {
                 Button {
                     error = ""; candidate = ""; lastAttempt = ""; pageLoading = true
                     pendingConnected = false; showingWeb = true
-                } label: { Label("打开官方登录页面", systemImage: AppIcon.openExternal.name) }
+                } label: { Label("打开官方登录页面", image: AppIcon.openExternal.name) }
                     .buttonStyle(SecondaryActionStyle()).accessibilityIdentifier("connect115.openWeb")
             }.frame(maxWidth: .infinity).padding(20).surfaceCard()
             DesignNotice(symbol: AppIcon.privacy.name, text: "登录凭证仅保存在本机钥匙串。退出账号会移除本机凭证，不会删除你的网盘文件。")
@@ -102,14 +102,14 @@ struct CookieWebLoginView: View {
                 case .scanned, .connecting:
                     VStack(spacing: 8) {
                         if qrPhase == .connecting { ProgressView().tint(.gray) }
-                        else { Image(systemName: AppIcon.success.name).font(.scaled(38, weight: Theme.iconWeight)) }
+                        else { Image(appIconNamed: AppIcon.success.name).font(.scaled(38, weight: Theme.iconWeight)) }
                         Text(qrPhase == .connecting ? "正在连接…" : "已扫码").font(.subheadline.weight(.semibold))
                     }
                     .foregroundStyle(Theme.accent)
                 case .ended:
                     Button { startQR() } label: {
                         VStack(spacing: 8) {
-                            Image(systemName: AppIcon.refresh.name).font(.scaled(30, weight: Theme.iconWeight))
+                            Image(appIconNamed: AppIcon.refresh.name).font(.scaled(30, weight: Theme.iconWeight))
                             Text("刷新二维码").font(.subheadline.weight(.semibold))
                         }
                         .foregroundStyle(Theme.accent)
@@ -135,10 +135,10 @@ struct CookieWebLoginView: View {
             // 二维码显示在这台手机上时，可以存到相册，再用 115 App 扫一扫里的「相册」识别
             if qrImage != nil, qrPhase == .waiting || qrPhase == .scanned {
                 HStack(spacing: 10) {
-                    Button { saveQR() } label: { Label("存到相册", systemImage: AppIcon.download.name) }
+                    Button { saveQR() } label: { Label("存到相册", image: AppIcon.download.name) }
                         .buttonStyle(SecondaryActionStyle())
                     if let url = URL(string: qrContent), url.scheme?.hasPrefix("http") == true {
-                        Button { openURL(url) } label: { Label("用 115 打开", systemImage: AppIcon.openExternal.name) }
+                        Button { openURL(url) } label: { Label("用 115 打开", image: AppIcon.openExternal.name) }
                             .buttonStyle(SecondaryActionStyle())
                     }
                 }

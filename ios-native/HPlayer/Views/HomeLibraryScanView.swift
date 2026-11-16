@@ -49,7 +49,7 @@ struct HomeLibraryScanView: View {
     private var performerEnrichmentStatus: some View {
         switch metadata.performerEnrichmentState {
         case .waiting:
-            Label("封面匹配完成后将自动开始补全演员", systemImage: AppIcon.clock.name)
+            Label("封面匹配完成后将自动开始补全演员", image: AppIcon.clock.name)
                 .font(.subheadline).foregroundStyle(.secondary)
         case .running:
             VStack(alignment: .leading, spacing: 8) {
@@ -67,7 +67,7 @@ struct HomeLibraryScanView: View {
             }
             .accessibilityElement(children: .combine)
         case .failed:
-            Label("部分资料暂时无法获取，请检查网络后重试。", systemImage: AppIcon.alert.name)
+            Label("部分资料暂时无法获取，请检查网络后重试。", image: AppIcon.alert.name)
                 .font(.subheadline).foregroundStyle(Theme.warning)
         case .completed:
             Text(metadata.performerEnrichmentFailures > 0 ? "补全结束，部分资料暂时无法获取，可稍后重试。" : "本轮补全已结束，未收录的演员信息可能仍为空。")
@@ -126,7 +126,7 @@ struct HomeLibraryScanView: View {
                         .toolbar {
                             ToolbarItem(placement: .navigationBarLeading) {
                                 Button { dismiss() } label: {
-                                    Image(systemName: AppIcon.back.name)
+                                    Image(appIconNamed: AppIcon.back.name)
                                         .font(.scaled(17, weight: .semibold))
                                 }
                                 .accessibilityLabel("返回")
@@ -183,7 +183,7 @@ struct HomeLibraryScanView: View {
         VStack(alignment: .leading, spacing: 18) {
             HStack(spacing: 16) {
                 ProgressRing(value: scanRingValue, lineWidth: 6) {
-                    Image(systemName: scanner.phase == .completed ? AppIcon.success.name : AppIcon.autoMatch.name)
+                    Image(appIconNamed: scanner.phase == .completed ? AppIcon.success.name : AppIcon.autoMatch.name)
                         .font(.scaled(22, weight: Theme.iconWeight))
                         .foregroundStyle(Theme.accent)
                         .morphSymbol()
@@ -200,7 +200,7 @@ struct HomeLibraryScanView: View {
                 Spacer(minLength: 0)
             }
             HStack(spacing: 6) {
-                Image(systemName: AppIcon.folder.name).font(.scaled(11, weight: Theme.iconWeight))
+                Image(appIconNamed: AppIcon.folder.name).font(.scaled(11, weight: Theme.iconWeight))
                 Text("扫描范围").foregroundStyle(Theme.textSecondary)
                 Text(scanner.scopeName ?? "整个网盘").fontWeight(.semibold).lineLimit(1)
             }
@@ -210,7 +210,7 @@ struct HomeLibraryScanView: View {
             if scanner.phase != .idle {
                 scanMetrics
                 if scanner.phase == .running, !scanner.currentFolderName.isEmpty {
-                    Label(scanner.currentFolderName, systemImage: AppIcon.folder.name)
+                    Label(scanner.currentFolderName, image: AppIcon.folder.name)
                         .font(.caption).foregroundStyle(Theme.textSecondary).lineLimit(1)
                 }
             }
@@ -287,20 +287,20 @@ struct HomeLibraryScanView: View {
                     metadata.stopByUser()
                     library.flush()
                 } label: {
-                    Label("暂停扫描", systemImage: AppIcon.pause.name)
+                    Label("暂停扫描", image: AppIcon.pause.name)
                 }
                 .buttonStyle(PrimaryActionStyle())
                 .accessibilityIdentifier("scan.pause")
             } else {
                 if scanner.canResume {
                     Button { onStart(false) } label: {
-                        Label("继续全盘扫描", systemImage: AppIcon.play.name)
+                        Label("继续全盘扫描", image: AppIcon.play.name)
                     }
                     .buttonStyle(PrimaryActionStyle())
                     .accessibilityIdentifier("scan.resume")
                 } else {
                     Button { onStart(scanner.phase == .completed) } label: {
-                        Label(scanner.phase == .completed ? "重新扫描全盘" : "开始全盘扫描", systemImage: AppIcon.autoMatch.name)
+                        Label(scanner.phase == .completed ? "重新扫描全盘" : "开始全盘扫描", image: AppIcon.autoMatch.name)
                     }
                     .buttonStyle(PrimaryActionStyle())
                     .accessibilityIdentifier("scan.start")
@@ -308,12 +308,12 @@ struct HomeLibraryScanView: View {
                 HStack(spacing: 10) {
                     if scanner.canResume {
                         Button { onStart(true) } label: {
-                            Label("从头重新扫描", systemImage: AppIcon.refresh.name).lineLimit(1).minimumScaleFactor(0.8)
+                            Label("从头重新扫描", image: AppIcon.refresh.name).lineLimit(1).minimumScaleFactor(0.8)
                         }
                         .buttonStyle(SecondaryActionStyle())
                     }
                     Button { pickingFolder = true } label: {
-                        Label("选择文件夹扫描", systemImage: AppIcon.folderSettings.name).lineLimit(1).minimumScaleFactor(0.8)
+                        Label("选择文件夹扫描", image: AppIcon.folderSettings.name).lineLimit(1).minimumScaleFactor(0.8)
                     }
                     .buttonStyle(SecondaryActionStyle())
                     .accessibilityIdentifier("scan.chooseFolder")
@@ -437,7 +437,7 @@ struct HomeLibraryScanView: View {
                 metadata.stopByUser()
                 library.flush()
             } label: {
-                Label("停止", systemImage: AppIcon.stop.name)
+                Label("停止", image: AppIcon.stop.name)
                     .font(.scaled(13, weight: .semibold))
                     .foregroundStyle(Theme.danger)
             }
@@ -467,7 +467,7 @@ struct HomeLibraryScanView: View {
                 }
             } label: {
                 Label(performerEnrichmentActive ? "停止补全演员" : "补全演员资料",
-                      systemImage: performerEnrichmentActive ? AppIcon.stop.name : AppIcon.peopleAdd.name)
+                      image: performerEnrichmentActive ? AppIcon.stop.name : AppIcon.peopleAdd.name)
             }
             .buttonStyle(SecondaryActionStyle())
             .disabled(!performerEnrichmentActive && !metadata.isMatching && performerStats.have >= performerStats.total)
@@ -596,7 +596,7 @@ private struct UnmatchedRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 14) {
-                Image(systemName: AppIcon.video.name).font(.title).foregroundStyle(Theme.accent)
+                Image(appIconNamed: AppIcon.video.name).font(.title).foregroundStyle(Theme.accent)
                     .frame(width: 52, height: 68).background(Theme.tileTint, in: RoundedRectangle(cornerRadius: Theme.Radius.tile))
                 VStack(alignment: .leading, spacing: 6) {
                     Text(item.media.name).font(.subheadline.weight(.medium)).lineLimit(2)
@@ -605,9 +605,9 @@ private struct UnmatchedRow: View {
                 }
             }
             HStack(spacing: 10) {
-                Button(action: onMatch) { Label("匹配封面", systemImage: AppIcon.poster.name) }
+                Button(action: onMatch) { Label("匹配封面", image: AppIcon.poster.name) }
                     .buttonStyle(PrimaryActionStyle())
-                Button(action: onPlay) { Label("直接播放", systemImage: AppIcon.play.name) }
+                Button(action: onPlay) { Label("直接播放", image: AppIcon.play.name) }
                     .buttonStyle(SecondaryActionStyle())
             }
         }

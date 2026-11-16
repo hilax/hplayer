@@ -170,7 +170,7 @@ struct MagnetSearchView: View {
     }
 
     private func topIcon(_ icon: AppIcon) -> some View {
-        Image(systemName: icon.name)
+        Image(appIconNamed: icon.name)
             .font(.scaled(19, weight: Theme.iconWeight))
             .heroForeground()
             .frame(width: 44, height: 44)
@@ -397,7 +397,7 @@ struct MagnetSearchView: View {
                                 Haptics.select()
                                 withAnimation(Motion.smooth) { _ = favoriteStars.toggle(star) }
                             } label: {
-                                Label(liked ? "取消喜欢" : "喜欢", systemImage: liked ? AppIcon.heart.name : AppIcon.heartFill.name)
+                                Label(liked ? "取消喜欢" : "喜欢", image: liked ? AppIcon.heart.name : AppIcon.heartFill.name)
                             }
                         }
                         .onAppear {
@@ -417,7 +417,7 @@ struct MagnetSearchView: View {
         return VStack(alignment: .leading, spacing: 18) {
             // 口径：站点没有榜单页，这里是按女优人气排的近期主演新作。
             HStack(alignment: .top, spacing: 10) {
-                Image(systemName: AppIcon.info.name)
+                Image(appIconNamed: AppIcon.info.name)
                     .font(.scaled(15, weight: .semibold))
                     .foregroundStyle(Theme.accent)
                     .padding(.top, 1)

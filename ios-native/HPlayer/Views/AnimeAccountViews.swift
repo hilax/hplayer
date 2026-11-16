@@ -40,7 +40,7 @@ struct AccountField<Accessory: View>: View {
                 .accessibilityIdentifier(identifier)
                 if secure {
                     Button { revealed.toggle() } label: {
-                        Image(systemName: revealed ? AppIcon.hidden.name : AppIcon.eye.name)
+                        Image(appIconNamed: revealed ? AppIcon.hidden.name : AppIcon.eye.name)
                             .font(.scaled(16, weight: Theme.iconWeight))
                             .foregroundStyle(Theme.textTertiary)
                             .frame(width: 40, height: 44)
@@ -92,7 +92,7 @@ struct CaptchaField: View {
                     } else if loading {
                         ProgressView().controlSize(.small).tint(Color.gray)
                     } else {
-                        Image(systemName: AppIcon.refresh.name)
+                        Image(appIconNamed: AppIcon.refresh.name)
                             .font(.scaled(14, weight: Theme.iconWeight))
                             .foregroundStyle(Color.gray)
                     }
@@ -503,7 +503,7 @@ struct AnimeTasksView: View {
             }
             Spacer(minLength: Theme.Space.sm)
             if task.finished {
-                Label("已完成", systemImage: AppIcon.success.name)
+                Label("已完成", image: AppIcon.success.name)
                     .font(Theme.Typo.meta)
                     .foregroundStyle(Theme.textTertiary)
             }

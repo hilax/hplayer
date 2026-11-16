@@ -12,7 +12,7 @@ struct MagnetLinkPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top, spacing: 12) {
-                Image(systemName: AppIcon.magnet.name)
+                Image(appIconNamed: AppIcon.magnet.name)
                     .font(.scaled(18, weight: .semibold))
                     .foregroundStyle(Theme.Source.magnet)
                     .frame(width: 40, height: 40)

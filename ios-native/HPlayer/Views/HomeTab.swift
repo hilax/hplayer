@@ -214,18 +214,18 @@ struct HomeTab: View {
             .accessibilityLabel("\(recents.position(for: item.media.source) == nil ? "播放" : "继续播放") \(item.title)")
             .accessibilityIdentifier("home.heroPlay")
             .contextMenu {
-                Button("播放", systemImage: AppIcon.play.name) {
+                Button("播放", icon: AppIcon.play.name) {
                     playing = HomeLibrary.queue(for: item, in: library.items)
                 }
-                Button("匹配封面", systemImage: AppIcon.poster.name) {
+                Button("匹配封面", icon: AppIcon.poster.name) {
                     afterMenu { matching = MatchRequest(item: item) }
                 }
                 if canHideFromFeatured(item) {
-                    Button("不在精选中显示", systemImage: AppIcon.hidden.name) {
+                    Button("不在精选中显示", icon: AppIcon.hidden.name) {
                         if let id = item.metadata?.imdbID { FeaturedStore.shared.hide(id) }
                     }
                 }
-                Button("更多选项", systemImage: AppIcon.more.name) {
+                Button("更多选项", icon: AppIcon.more.name) {
                     afterMenu { actionItem = item }
                 }
             } preview: {
@@ -367,7 +367,7 @@ struct HomeTab: View {
                         .reveal(index, id: entry.id)
                         .shelfCard()
                         .contextMenu {
-                            Button("从继续观看移除", systemImage: AppIcon.remove.name, role: .destructive) {
+                            Button("从继续观看移除", icon: AppIcon.remove.name, role: .destructive) {
                                 remove(entry)
                             }
                         }
@@ -716,7 +716,7 @@ struct HomeTab: View {
         .buttonStyle(PosterButtonStyle())
         .accessibilityIdentifier("home.series.\(group.id)")
         .contextMenu {
-            Button("匹配封面", systemImage: AppIcon.poster.name) {
+            Button("匹配封面", icon: AppIcon.poster.name) {
                 matching = MatchRequest(group: group)
             }
         }
@@ -734,7 +734,7 @@ struct HomeTab: View {
 
     private var emptyState: some View {
         VStack(spacing: 16) {
-            Image(systemName: AppIcon.playback.name)
+            Image(appIconNamed: AppIcon.playback.name)
                 .font(.scaled(34, weight: Theme.iconWeight))
                 .foregroundStyle(Theme.accent)
                 .frame(width: 84, height: 84)
@@ -750,7 +750,7 @@ struct HomeTab: View {
                 .lineSpacing(5)
                 .reveal(2)
             Button { showAdd = true } label: {
-                Label("添加影片", systemImage: AppIcon.add.name)
+                Label("添加影片", image: AppIcon.add.name)
             }
             .buttonStyle(PrimaryActionStyle())
             .frame(maxWidth: 240)

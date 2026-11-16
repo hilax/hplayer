@@ -230,7 +230,7 @@ struct AnimeDetailView: View {
         return Button(action: {
             startPlay(episode: ep, detail: detail)
         }) {
-            Label(title, systemImage: AppIcon.play.name)
+            Label(title, image: AppIcon.play.name)
                 .font(.scaled(15, weight: .bold))
                 .foregroundStyle(Theme.onPrimary)
                 .lineLimit(1)

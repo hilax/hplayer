@@ -173,7 +173,7 @@ struct StarMoviesView: View {
             Haptics.select()
             withAnimation(Motion.snappy) { _ = favorites.toggle(favoriteEntry) }
         } label: {
-            Label(liked ? "已喜欢" : "喜欢", systemImage: liked ? AppIcon.heartFill.name : AppIcon.heart.name)
+            Label(liked ? "已喜欢" : "喜欢", image: liked ? AppIcon.heartFill.name : AppIcon.heart.name)
                 .font(Theme.Typo.meta.weight(.semibold))
                 .foregroundStyle(liked ? Theme.accent : Theme.textPrimary)
                 .padding(.horizontal, Theme.Space.lg)
@@ -554,7 +554,7 @@ struct MagnetDetailView: View {
                                 Text(star.name)
                                     .font(.footnote.weight(.semibold))
                                     .foregroundStyle(.primary)
-                                Image(systemName: AppIcon.forward.name)
+                                Image(appIconNamed: AppIcon.forward.name)
                                     .font(.scaled(11, weight: .bold))
                                     .foregroundStyle(.secondary)
                             }

@@ -44,7 +44,7 @@ struct MagnetPlayActions: View {
             if appState.isAuthenticated {
                 Button(action: playPrimary) {
                     HStack(spacing: 6) {
-                        Image(systemName: AppIcon.play.name)
+                        Image(appIconNamed: AppIcon.play.name)
                             .font(.scaled(12))
                         Text(primaryTitle)
                             .lineLimit(1)
@@ -56,7 +56,7 @@ struct MagnetPlayActions: View {
 
                 Button(action: playBT) {
                     HStack(spacing: 6) {
-                        Image(systemName: AppIcon.magnet.name)
+                        Image(appIconNamed: AppIcon.magnet.name)
                             .font(.scaled(13))
                         Text("磁力播放")
                             .lineLimit(1)
@@ -68,7 +68,7 @@ struct MagnetPlayActions: View {
             } else {
                 Button(action: playBT) {
                     HStack(spacing: 6) {
-                        Image(systemName: AppIcon.play.name)
+                        Image(appIconNamed: AppIcon.play.name)
                             .font(.scaled(12))
                         Text(relay.readyMode(hash) == .bt ? "播放" : "磁力播放")
                     }
@@ -78,7 +78,7 @@ struct MagnetPlayActions: View {
             }
 
             Button(action: copy) {
-                Image(systemName: copier.isCopied() ? AppIcon.check.name : AppIcon.copy.name)
+                Image(appIconNamed: copier.isCopied() ? AppIcon.check.name : AppIcon.copy.name)
                     .font(.scaled(14))
                     .foregroundStyle(copier.isCopied() ? Theme.accent : Color.primary)
             }
@@ -117,7 +117,7 @@ struct MagnetPlayActions: View {
                         .buttonStyle(MagnetActionStyle(prominent: false))
                     }
                     Button { relay.cancel(hash) } label: {
-                        Image(systemName: AppIcon.close.name)
+                        Image(appIconNamed: AppIcon.close.name)
                             .font(.scaled(13, weight: .semibold))
                     }
                     .buttonStyle(MagnetActionStyle(prominent: false))

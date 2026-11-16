@@ -287,10 +287,10 @@ struct CatalogTab: View {
             .accessibilityLabel("播放 \(item.title)")
             .accessibilityIdentifier("catalog.slide.\(item.id)")
             .contextMenu {
-                Button("播放", systemImage: AppIcon.play.name) {
+                Button("播放", icon: AppIcon.play.name) {
                     playing = HomeLibrary.queue(for: item, in: snapshot.items)
                 }
-                Button("匹配封面", systemImage: AppIcon.poster.name) {
+                Button("匹配封面", icon: AppIcon.poster.name) {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { matching = MatchRequest(item: item) }
                 }
             } preview: {
@@ -526,7 +526,7 @@ struct CatalogTab: View {
             .buttonStyle(PosterButtonStyle())
             .accessibilityIdentifier("catalog.series.\(group.id)")
             .contextMenu {
-                Button("匹配封面", systemImage: AppIcon.poster.name) { matching = MatchRequest(group: group) }
+                Button("匹配封面", icon: AppIcon.poster.name) { matching = MatchRequest(group: group) }
             }
         case .performer(let group):
             PerformerNavigationLink(group: group) {

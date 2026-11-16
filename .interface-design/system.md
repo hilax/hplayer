@@ -138,6 +138,7 @@
 - **叠在画面上的黑 / 白半透明**只用 `Theme.Opacity` 这几档：`hint 0.08 · faint 0.15 · soft 0.25 · medium 0.4 · strong 0.6 · heavy 0.75 · solid 0.9`。
 - **色值**只出现在 `Theme.swift`（外观预览图的两套固定色在 `Theme.Preview`）；封面取色这类运行时算出来的颜色除外。
 - **快捷入口**单色：未选中极淡灰底 + 正文色线框图标，选中白 / 墨实心。
+- **图标**是 HPlayer 自己的一套（`Assets.xcassets/Icons` 里的自定义符号，资源名 `hp.<case>`），不用系统 SF Symbols：24pt 网格、1.6 线宽、圆头圆角；一律经 `AppIcon` 取用（`Image(icon:)`、`Label(_, icon:)`、`Button(_, icon:)`），跟着 `.font` 缩放。改图形改 `ios-native/scripts/icons/icons.js`，再运行 `build-symbols.py` 重新生成。
 - **封面角标**一律 `TagBadge`：状态「更新」用 `.accent`，其余用 `.onArtwork`；轮播卡片的「精选 / 热播」也是 `.onArtwork`。一张封面最多两个角标。
 - **列表不画分隔线**：行与行靠行高和留白分开（网盘文件列表、「我的」各组）。
 - 栏目入口的文字统一是「全部 ›」。

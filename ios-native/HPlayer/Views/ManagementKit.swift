@@ -108,7 +108,7 @@ struct ManagementBanner: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: Theme.Space.md) {
-            Image(systemName: AppIcon.info.name)
+            Image(appIconNamed: AppIcon.info.name)
                 .font(.scaled(14, weight: Theme.iconWeight))
                 .foregroundStyle(Theme.accent)
                 .padding(.top, 1)
@@ -150,7 +150,7 @@ struct FolderTrailBar: View {
             HStack(spacing: 6) {
                 ForEach(Array(trail.enumerated()), id: \.offset) { index, crumb in
                     if index > 0 {
-                        Image(systemName: AppIcon.forward.name)
+                        Image(appIconNamed: AppIcon.forward.name)
                             .font(.caption2.weight(.bold))
                             .foregroundStyle(Theme.textTertiary)
                     }

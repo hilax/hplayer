@@ -67,7 +67,7 @@ struct FileActionDock: View {
         let titleColor: Color = !active ? Theme.textTertiary : (danger ? Theme.danger : Theme.textPrimary)
         return Button(action: perform) {
             VStack(spacing: 5) {
-                Image(systemName: icon.name)
+                Image(appIconNamed: icon.name)
                     .font(.scaled(20, weight: Theme.iconWeight))
                     .foregroundStyle(iconColor)
                 Text(title)
@@ -141,7 +141,7 @@ struct NamePromptSheet: View {
                 .overlay(alignment: .trailing) {
                     if !text.isEmpty {
                         Button { text = "" } label: {
-                            Image(systemName: AppIcon.clear.name)
+                            Image(appIconNamed: AppIcon.clear.name)
                                 .font(.scaled(16))
                                 .foregroundStyle(Theme.textTertiary)
                                 .frame(width: 44, height: 44)
@@ -227,7 +227,7 @@ struct DeleteConfirmSheet: View {
 
     private var header: some View {
         VStack(spacing: 8) {
-            Image(systemName: AppIcon.trash.name)
+            Image(appIconNamed: AppIcon.trash.name)
                 .font(.scaled(24, weight: Theme.iconWeight))
                 .foregroundStyle(Theme.danger)
                 .frame(width: 48, height: 48)
@@ -254,7 +254,7 @@ struct DeleteConfirmSheet: View {
         VStack(spacing: 0) {
             ForEach(shown) { file in
                 HStack(spacing: 10) {
-                    Image(systemName: symbol(for: file).name)
+                    Image(appIconNamed: symbol(for: file).name)
                         .font(.scaled(14, weight: Theme.iconWeight))
                         .foregroundStyle(file.isDir ? Theme.accent : Theme.textSecondary)
                         .frame(width: 18)
@@ -456,7 +456,7 @@ struct FolderPickerSheet: View {
 
     private var summaryCard: some View {
         HStack(spacing: 10) {
-            Image(systemName: AppIcon.folder.name)
+            Image(appIconNamed: AppIcon.folder.name)
                 .font(.scaled(16, weight: Theme.iconWeight))
                 .foregroundStyle(Theme.accent)
             Text("将 \(summary.count) 项（\(summary.kindsText)）\(mode.verb)到所选位置")
@@ -477,7 +477,7 @@ struct FolderPickerSheet: View {
             HStack(spacing: 6) {
                 ForEach(Array(trail.enumerated()), id: \.offset) { index, crumb in
                     if index > 0 {
-                        Image(systemName: AppIcon.forward.name)
+                        Image(appIconNamed: AppIcon.forward.name)
                             .font(.caption2.weight(.bold))
                             .foregroundStyle(Theme.textTertiary)
                     }
@@ -544,7 +544,7 @@ struct FolderPickerSheet: View {
             trail.append(Crumb(cid: folder.id, name: folder.name))
         } label: {
             HStack(spacing: 12) {
-                Image(systemName: AppIcon.folder.name)
+                Image(appIconNamed: AppIcon.folder.name)
                     .font(.scaled(18, weight: Theme.iconWeight))
                     .foregroundStyle(Theme.accent)
                     .frame(width: 36, height: 36)
@@ -559,7 +559,7 @@ struct FolderPickerSheet: View {
                         .font(.scaled(12))
                         .foregroundStyle(Theme.textTertiary)
                 } else {
-                    Image(systemName: AppIcon.forward.name)
+                    Image(appIconNamed: AppIcon.forward.name)
                         .font(.scaled(12, weight: .semibold))
                         .foregroundStyle(Theme.textTertiary)
                 }
@@ -580,7 +580,7 @@ struct FolderPickerSheet: View {
     private var footer: some View {
         VStack(spacing: 10) {
             HStack(spacing: 8) {
-                Image(systemName: AppIcon.folder.name)
+                Image(appIconNamed: AppIcon.folder.name)
                     .font(.scaled(13, weight: Theme.iconWeight))
                     .foregroundStyle(Theme.accent)
                 Text("目标位置：")
@@ -738,7 +738,7 @@ struct FileInfoSheet: View {
     // MARK: 版面
 
     private var placeholderIcon: some View {
-        Image(systemName: file.isDir ? AppIcon.folder.name : (file.isVideo ? AppIcon.video.name : AppIcon.file.name))
+        Image(appIconNamed: file.isDir ? AppIcon.folder.name : (file.isVideo ? AppIcon.video.name : AppIcon.file.name))
             .font(.scaled(34, weight: Theme.iconWeight))
             .foregroundStyle(Theme.textSecondary)
     }
@@ -898,7 +898,7 @@ struct FileInfoSheet: View {
         Button {
             copier.copy(value, key: value)
         } label: {
-            Image(systemName: copier.isCopied(value) ? AppIcon.check.name : AppIcon.copy.name)
+            Image(appIconNamed: copier.isCopied(value) ? AppIcon.check.name : AppIcon.copy.name)
                 .font(.scaled(14, weight: Theme.iconWeight))
                 .foregroundStyle(Theme.accent)
                 .frame(width: 32, height: 32)
@@ -914,7 +914,7 @@ struct FileInfoSheet: View {
                 Button {
                     onPlay()
                 } label: {
-                    Label("播放", systemImage: AppIcon.play.name)
+                    Label("播放", image: AppIcon.play.name)
                 }
                 .buttonStyle(PrimaryActionStyle())
                 .accessibilityIdentifier("library.info.play")
@@ -922,7 +922,7 @@ struct FileInfoSheet: View {
             Button {
                 onRename()
             } label: {
-                Label("重命名", systemImage: AppIcon.rename.name)
+                Label("重命名", image: AppIcon.rename.name)
             }
             .buttonStyle(SecondaryActionStyle())
             .accessibilityIdentifier("library.info.rename")
@@ -930,7 +930,7 @@ struct FileInfoSheet: View {
                 Button {
                     onDownload()
                 } label: {
-                    Label("下载", systemImage: AppIcon.download.name)
+                    Label("下载", image: AppIcon.download.name)
                 }
                 .buttonStyle(SecondaryActionStyle())
                 .accessibilityIdentifier("library.info.download")

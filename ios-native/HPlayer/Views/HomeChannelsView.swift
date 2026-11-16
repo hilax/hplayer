@@ -29,7 +29,7 @@ struct HomeChannelsView: View {
                     Spacer(minLength: 8)
                     if channel == .recommend {
                         Button { addRequest += 1 } label: {
-                            Image(systemName: AppIcon.addCircle.name)
+                            Image(appIconNamed: AppIcon.addCircle.name)
                                 .font(.scaled(20, weight: Theme.iconWeight))
                                 .heroForeground()
                                 .frame(width: 44, height: 44)

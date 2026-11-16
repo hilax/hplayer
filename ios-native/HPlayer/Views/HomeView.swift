@@ -298,7 +298,7 @@ struct HomeView: View {
                             Text(section.title)
                         } icon: {
                             if selection == section {
-                                Image(systemName: section.icon.activeName)
+                                Image(appIconNamed: section.icon.activeName)
                             } else {
                                 Image(uiImage: Self.restingTabIcon(section.icon, scheme: colorScheme))
                             }
@@ -340,7 +340,7 @@ struct HomeView: View {
     private static func restingTabIcon(_ icon: AppIcon, scheme: ColorScheme) -> UIImage {
         let traits = UITraitCollection(userInterfaceStyle: scheme == .dark ? .dark : .light)
         let color = Theme.textSecondaryUIColor.resolvedColor(with: traits)
-        guard let image = UIImage(systemName: icon.name) else { return UIImage() }
+        guard let image = UIImage(named: icon.name) else { return UIImage() }
         return image.withTintColor(color, renderingMode: .alwaysOriginal)
     }
 

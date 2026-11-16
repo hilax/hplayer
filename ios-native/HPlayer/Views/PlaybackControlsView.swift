@@ -1007,7 +1007,7 @@ struct PlaybackControlsView: View {
             revealControls()
         } label: {
             HStack(spacing: 10) {
-                Image(systemName: AppIcon.check.name)
+                Image(appIconNamed: AppIcon.check.name)
                     .font(.scaled(13, weight: .bold))
                     .foregroundStyle(Theme.accent)
                     .opacity(selected ? 1 : 0)
@@ -1093,7 +1093,7 @@ struct PlaybackControlsView: View {
                         .multilineTextAlignment(.leading)
                     if current {
                         HStack(spacing: 5) {
-                            Image(systemName: AppIcon.nowPlaying.name)
+                            Image(appIconNamed: AppIcon.nowPlaying.name)
                                 .font(.scaled(10, weight: .semibold))
                             Text("正在播放")
                         }
@@ -1220,7 +1220,7 @@ struct PlaybackControlsView: View {
                     withAnimation(reduceMotion ? nil : Motion.snappy) { moreSection = nil }
                 } label: {
                     HStack(spacing: 8) {
-                        Image(systemName: AppIcon.back.name)
+                        Image(appIconNamed: AppIcon.back.name)
                             .font(.scaled(13, weight: .bold))
                             .foregroundStyle(.white.opacity(Theme.Opacity.heavy))
                             .frame(width: 22)
@@ -1242,7 +1242,7 @@ struct PlaybackControlsView: View {
                 moreRow(.sleepTimer, title: "定时关闭", value: sleepTimer.title, id: "sleep") { openMoreSection(.sleep) }
                 if playback.pictureInPictureSupported {
                     HStack(spacing: 10) {
-                        Image(systemName: "pip")
+                        Image(icon: .pictureInPicture)
                             .font(.scaled(16))
                             .foregroundStyle(.white.opacity(Theme.Opacity.heavy))
                             .frame(width: 22)
@@ -1266,7 +1266,7 @@ struct PlaybackControlsView: View {
                     diagnosticsCopier.copy(diagnosticsText)
                 } label: {
                     HStack(spacing: 10) {
-                        Image(systemName: AppIcon.copy.name)
+                        Image(appIconNamed: AppIcon.copy.name)
                             .font(.scaled(16))
                             .foregroundStyle(diagnosticsCopier.isCopied() ? Theme.accent : Color.white.opacity(Theme.Opacity.heavy))
                             .frame(width: 22)
@@ -1295,7 +1295,7 @@ struct PlaybackControlsView: View {
     private func moreRow(_ icon: AppIcon, title: String, value: String, id: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 10) {
-                Image(systemName: icon.name)
+                Image(appIconNamed: icon.name)
                     .font(.scaled(16))
                     .foregroundStyle(.white.opacity(Theme.Opacity.heavy))
                     .frame(width: 22)
@@ -1305,7 +1305,7 @@ struct PlaybackControlsView: View {
                 Text(value)
                     .font(.scaled(13))
                     .foregroundStyle(.white.opacity(Theme.Opacity.strong))
-                Image(systemName: AppIcon.forward.name)
+                Image(appIconNamed: AppIcon.forward.name)
                     .font(.scaled(11, weight: .bold))
                     .foregroundStyle(.white.opacity(Theme.Opacity.medium))
             }
@@ -1363,7 +1363,7 @@ struct PlaybackControlsView: View {
     private func popoverRow(title: String, detail: String = "", selected: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 10) {
-                Image(systemName: AppIcon.check.name)
+                Image(appIconNamed: AppIcon.check.name)
                     .font(.scaled(13, weight: .bold))
                     .foregroundStyle(Theme.accent)
                     .opacity(selected ? 1 : 0)
@@ -1499,7 +1499,7 @@ struct PlaybackControlsView: View {
                 .allowsHitTesting(false)
             if playback.pictureInPictureActive {
                 VStack(spacing: 10) {
-                    Image(systemName: "pip")
+                    Image(icon: .pictureInPicture)
                         .font(.scaled(34, weight: .light))
                     Text("正在小窗播放")
                         .font(.scaled(14, weight: .medium))
@@ -1823,17 +1823,17 @@ struct PlaybackControlsView: View {
             }
             quickCell(.speed, "\(String(format: "%g", playback.rate))×", "倍速", id: "playback.speed",
                       on: abs(playback.rate - 1) > 0.01) {
-                Image(systemName: AppIcon.speed.name).font(.scaled(18, weight: .medium))
+                Image(appIconNamed: AppIcon.speed.name).font(.scaled(18, weight: .medium))
             }
             quickCell(.tracks, playback.selectedSubtitle == nil ? "关闭" : "已开启", "字幕", id: "playback.tracks",
                       on: playback.selectedSubtitle != nil) {
-                Image(systemName: AppIcon.subtitle.name).font(.scaled(18, weight: .medium))
+                Image(appIconNamed: AppIcon.subtitle.name).font(.scaled(18, weight: .medium))
             }
             quickCell(.aspect, playback.aspect.title, "画面比例", id: "playback.aspect") {
-                Image(systemName: AppIcon.aspect.name).font(.scaled(18, weight: .medium))
+                Image(appIconNamed: AppIcon.aspect.name).font(.scaled(18, weight: .medium))
             }
             quickCell(.decoding, playback.decoding.title, "解码", id: "playback.decoding") {
-                Image(systemName: AppIcon.decoder.name).font(.scaled(18, weight: .medium))
+                Image(appIconNamed: AppIcon.decoder.name).font(.scaled(18, weight: .medium))
             }
         }
         .padding(4)
@@ -2147,7 +2147,7 @@ struct PlaybackControlsView: View {
                                         @ViewBuilder content: () -> Content) -> some View {
         Button(action: action) {
             HStack(spacing: 8) {
-                Image(systemName: AppIcon.check.name)
+                Image(appIconNamed: AppIcon.check.name)
                     .font(.scaled(14, weight: .semibold))
                     .foregroundStyle(Color.primary)
                     .opacity(selected ? 1 : 0)
@@ -2429,7 +2429,7 @@ struct PlaybackControlsView: View {
                 revealControls()
             } label: {
                 HStack(spacing: 12) {
-                    Image(systemName: AppIcon.play.name)
+                    Image(appIconNamed: AppIcon.play.name)
                         .font(.scaled(16, weight: .semibold))
                         .foregroundStyle(Theme.accent)
                         .frame(width: 104, height: 58)
@@ -2504,7 +2504,7 @@ struct PlaybackControlsView: View {
     private func panelClose(_ label: String, action: @escaping () -> Void) -> some View {
         if lightChrome {
             Button(action: action) {
-                Image(systemName: AppIcon.close.name)
+                Image(appIconNamed: AppIcon.close.name)
                     .font(.scaled(12, weight: .bold))
                     .foregroundStyle(Theme.textPrimary)
                     .frame(width: 32, height: 32)
@@ -2576,7 +2576,7 @@ struct PlaybackControlsView: View {
             HStack(spacing: 12) {
                 Group {
                     if current {
-                        Image(systemName: AppIcon.audio.name)
+                        Image(appIconNamed: AppIcon.audio.name)
                             .font(.scaled(13, weight: .bold))
                             .foregroundStyle(Theme.accent)
                     } else {
@@ -2627,7 +2627,7 @@ struct PlaybackControlsView: View {
 
     private func errorCard(_ text: String) -> some View {
         VStack(spacing: 12) {
-            Image(systemName: AppIcon.alert.name)
+            Image(appIconNamed: AppIcon.alert.name)
                 .font(.scaled(20, weight: .semibold))
                 .foregroundStyle(Color(uiColor: .systemYellow))
             Text(text)
@@ -2714,7 +2714,7 @@ struct PlaybackControlsView: View {
     /// 长按快进：顶部的玻璃胶囊，和亮度、音量提示在同一个位置
     private var boostPill: some View {
         HStack(spacing: 8) {
-            Image(systemName: AppIcon.skip.name)
+            Image(appIconNamed: AppIcon.skip.name)
                 .font(.scaled(13, weight: .bold))
                 .foregroundStyle(Theme.gold)
             Text("\(String(format: "%g", playback.effectiveRate))× 快进中")
@@ -2809,7 +2809,7 @@ struct PlaybackControlsView: View {
     // MARK: 小部件
 
     private func controlIcon(_ name: String, label: String, size: CGFloat = 20, frame: CGFloat = 44) -> some View {
-        Image(systemName: name)
+        Image(appIconNamed: name)
             .font(.scaled(size, weight: .semibold))
             .frame(width: frame, height: 44)
             .contentShape(Rectangle())
@@ -2895,7 +2895,7 @@ struct PlaybackControlsView: View {
             showNotice("定时关闭：已暂停播放")
         }
     }
-    private var pipIconName: String { playback.pictureInPictureActive ? "pip.exit" : "pip.enter" }
+    private var pipIconName: String { playback.pictureInPictureActive ? AppIcon.pictureInPictureExit.name : AppIcon.pictureInPicture.name }
     private var pipLabel: String { playback.pictureInPictureActive ? "退出小窗" : "小窗播放" }
     private func togglePictureInPicture() {
         revealControls()
@@ -3262,7 +3262,7 @@ private struct GlassIconButton: View {
     var body: some View {
         if #available(iOS 26.0, *) {
             Button(action: action) {
-                Image(systemName: systemImage)
+                Image(appIconNamed: systemImage)
                     .font(.scaled(diameter * 0.36, weight: .semibold))
                     .frame(width: diameter - 14, height: diameter - 14)
             }
@@ -3271,7 +3271,7 @@ private struct GlassIconButton: View {
             .accessibilityLabel(label)
         } else {
             Button(action: action) {
-                Image(systemName: systemImage)
+                Image(appIconNamed: systemImage)
                     .font(.scaled(diameter * 0.36, weight: .semibold))
                     .frame(width: diameter, height: diameter)
                     .background(.ultraThinMaterial, in: Circle())

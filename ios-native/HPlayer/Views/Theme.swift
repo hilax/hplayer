@@ -619,7 +619,7 @@ struct GlassCapsuleButton: View {
 
     var body: some View {
         Button(action: action) {
-            Label(title, systemImage: systemImage)
+            Label(title, image: systemImage)
                 .font(Theme.Typo.button)
                 .padding(.horizontal, Theme.Space.page)
                 .padding(.vertical, Theme.Space.md)

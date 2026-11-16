@@ -121,24 +121,24 @@ struct DownloadsView: View {
             Button {
                 manager.pauseAll()
             } label: {
-                Label("全部暂停", systemImage: AppIcon.pause.name)
+                Label("全部暂停", image: AppIcon.pause.name)
             }
             .disabled(manager.activeCount == 0)
             Button {
                 manager.resumeAll()
             } label: {
-                Label("全部继续", systemImage: AppIcon.play.name)
+                Label("全部继续", image: AppIcon.play.name)
             }
             .disabled(!hasResumable)
             Button {
                 manager.clearCompletedRecords()
                 HUD.show("已清除下载记录，文件仍保留在手机上", .success)
             } label: {
-                Label("清除已完成记录", systemImage: AppIcon.trash.name)
+                Label("清除已完成记录", image: AppIcon.trash.name)
             }
             .disabled(manager.completed.isEmpty)
         } label: {
-            Image(systemName: AppIcon.more.name)
+            Image(appIconNamed: AppIcon.more.name)
         }
         .accessibilityLabel("更多")
         .accessibilityIdentifier("library.downloads.menu")
@@ -235,7 +235,7 @@ struct DownloadsView: View {
                 Button(role: .destructive) {
                     manager.delete(item.id)
                 } label: {
-                    Label("删除", systemImage: AppIcon.trash.name)
+                    Label("删除", image: AppIcon.trash.name)
                 }
             }
     }
@@ -270,7 +270,7 @@ struct DownloadsView: View {
             Button(role: .destructive) {
                 removal = item
             } label: {
-                Label("删除", systemImage: AppIcon.trash.name)
+                Label("删除", image: AppIcon.trash.name)
             }
         }
         .accessibilityElement(children: .contain)
@@ -281,7 +281,7 @@ struct DownloadsView: View {
     private func doneLine(_ item: DownloadItem, exists: Bool) -> some View {
         if exists {
             HStack(spacing: 6) {
-                Image(systemName: AppIcon.success.name)
+                Image(appIconNamed: AppIcon.success.name)
                     .font(.scaled(12, weight: .semibold))
                 Text(DownloadsText.savedLine(item))
                     .lineLimit(1)
@@ -317,7 +317,7 @@ struct DownloadsView: View {
 
     private func pillLabel(_ title: String, glyph: AppIcon) -> some View {
         HStack(spacing: 5) {
-            Image(systemName: glyph.name)
+            Image(appIconNamed: glyph.name)
                 .font(.scaled(12, weight: .bold))
             Text(title)
                 .font(.scaled(13, weight: .semibold))
@@ -413,7 +413,7 @@ struct DownloadProgressCard: View {
 
     private func circleButton(_ glyph: AppIcon, label: String, tinted: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: glyph.name)
+            Image(appIconNamed: glyph.name)
                 .font(.scaled(14, weight: .semibold))
                 .foregroundStyle(tinted ? Theme.accent : Theme.textPrimary)
                 .frame(width: 34, height: 34)
@@ -426,7 +426,7 @@ struct DownloadProgressCard: View {
     }
 
     static func fileTile(_ item: DownloadItem) -> some View {
-        Image(systemName: item.isVideo ? AppIcon.video.name : AppIcon.file.name)
+        Image(appIconNamed: item.isVideo ? AppIcon.video.name : AppIcon.file.name)
             .font(.scaled(18, weight: Theme.iconWeight))
             .foregroundStyle(Theme.textSecondary)
             .frame(width: 72, height: 44)

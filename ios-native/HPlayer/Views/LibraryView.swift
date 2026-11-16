@@ -299,7 +299,7 @@ struct DirectoryView: View {
         Menu {
             rowActions(file)
         } label: {
-            Image(systemName: AppIcon.more.name)
+            Image(appIconNamed: AppIcon.more.name)
                 .font(.scaled(16, weight: .semibold))
                 .foregroundStyle(Theme.textTertiary)
                 .frame(width: 44, height: 44)
@@ -315,41 +315,41 @@ struct DirectoryView: View {
         Button {
             sheet = .rename(file)
         } label: {
-            Label("重命名", systemImage: AppIcon.rename.name)
+            Label("重命名", image: AppIcon.rename.name)
         }
         Button {
             sheet = .destination([file], .move)
         } label: {
-            Label("移动到…", systemImage: AppIcon.moveTo.name)
+            Label("移动到…", image: AppIcon.moveTo.name)
         }
         Button {
             sheet = .destination([file], .copy)
         } label: {
-            Label("复制到…", systemImage: AppIcon.copy.name)
+            Label("复制到…", image: AppIcon.copy.name)
         }
         if !file.isDir {
             Button {
                 download([file])
             } label: {
-                Label("下载到手机", systemImage: AppIcon.download.name)
+                Label("下载到手机", image: AppIcon.download.name)
             }
         }
         if file.isVideo && !file.pickCode.isEmpty {
             Button {
                 addToHome([file])
             } label: {
-                Label("加入首页", systemImage: AppIcon.addToLibrary.name)
+                Label("加入首页", image: AppIcon.addToLibrary.name)
             }
         }
         Button {
             sheet = .info(file)
         } label: {
-            Label("信息", systemImage: AppIcon.info.name)
+            Label("信息", image: AppIcon.info.name)
         }
         Button(role: .destructive) {
             sheet = .delete([file])
         } label: {
-            Label("删除", systemImage: AppIcon.trash.name)
+            Label("删除", image: AppIcon.trash.name)
         }
     }
 
@@ -383,7 +383,7 @@ struct DirectoryView: View {
         Menu {
             menuContent
         } label: {
-            Image(systemName: AppIcon.more.name)
+            Image(appIconNamed: AppIcon.more.name)
                 .font(.scaled(20, weight: Theme.iconWeight))
                 .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
@@ -430,7 +430,7 @@ struct DirectoryView: View {
             } label: {
                 HStack(spacing: 4) {
                     Text(sortKey.title)
-                    Image(systemName: ascending ? AppIcon.sortAscending.name : AppIcon.sortDescending.name)
+                    Image(appIconNamed: ascending ? AppIcon.sortAscending.name : AppIcon.sortDescending.name)
                         .font(.caption2.weight(.bold))
                 }
                 .font(.scaled(13, weight: .medium))
@@ -450,7 +450,7 @@ struct DirectoryView: View {
                 chooseSort(key)
             } label: {
                 if key == sortKey {
-                    Label("\(key.title) \(ascending ? "↑" : "↓")", systemImage: AppIcon.check.name)
+                    Label("\(key.title) \(ascending ? "↑" : "↓")", image: AppIcon.check.name)
                 } else {
                     Text(key.title)
                 }
@@ -464,7 +464,7 @@ struct DirectoryView: View {
             HStack(spacing: 4) {
                 ForEach(Array(trail.enumerated()), id: \.offset) { index, crumb in
                     if index > 0 {
-                        Image(systemName: AppIcon.forward.name)
+                        Image(appIconNamed: AppIcon.forward.name)
                             .font(.caption2.weight(.bold))
                             .foregroundStyle(.tertiary)
                     }
@@ -550,7 +550,7 @@ struct DirectoryView: View {
         Menu {
             menuContent
         } label: {
-            Image(systemName: AppIcon.more.name)
+            Image(appIconNamed: AppIcon.more.name)
         }
         .disabled(loading)
         .accessibilityLabel("更多")
@@ -563,31 +563,31 @@ struct DirectoryView: View {
             Button {
                 sheet = .newFolder
             } label: {
-                Label("新建文件夹", systemImage: AppIcon.newFolder.name)
+                Label("新建文件夹", image: AppIcon.newFolder.name)
             }
         }
         Button {
             startSelecting()
         } label: {
-            Label("选择", systemImage: AppIcon.success.name)
+            Label("选择", image: AppIcon.success.name)
         }
         .disabled(items.isEmpty)
         if management {
             Menu {
                 sortOptions
             } label: {
-                Label("排序方式", systemImage: AppIcon.sort.name)
+                Label("排序方式", image: AppIcon.sort.name)
             }
             Section {
                 Button {
                     onOpenPage?(.offline)
                 } label: {
-                    Label("离线下载", systemImage: AppIcon.cloudDownload.name)
+                    Label("离线下载", image: AppIcon.cloudDownload.name)
                 }
                 Button {
                     onOpenPage?(.recycleBin)
                 } label: {
-                    Label("回收站", systemImage: AppIcon.recycleBin.name)
+                    Label("回收站", image: AppIcon.recycleBin.name)
                 }
             }
             Section {
@@ -598,14 +598,14 @@ struct DirectoryView: View {
             Button {
                 addAllToHome()
             } label: {
-                Label(management ? "把此文件夹加入首页" : "加入首页", systemImage: AppIcon.addToLibrary.name)
+                Label(management ? "把此文件夹加入首页" : "加入首页", image: AppIcon.addToLibrary.name)
             }
             .disabled(!files.contains { $0.isVideo && !$0.pickCode.isEmpty })
             if management {
                 Button {
                     Task { await load(silent: true) }
                 } label: {
-                    Label("刷新", systemImage: AppIcon.refresh.name)
+                    Label("刷新", image: AppIcon.refresh.name)
                 }
             }
         }
@@ -658,10 +658,10 @@ struct DirectoryView: View {
     private var selectionBar: some View {
         VStack(spacing: 10) {
             if onImported == nil {
-                Button { playSelected() } label: { Label("播放所选 · \(selectedVideos.count) 项", systemImage: AppIcon.play.name) }
+                Button { playSelected() } label: { Label("播放所选 · \(selectedVideos.count) 项", image: AppIcon.play.name) }
                     .buttonStyle(PrimaryActionStyle()).disabled(selectedVideos.isEmpty)
             }
-            Button(action: addSelectedToHome) { Label("加入首页", systemImage: AppIcon.add.name) }
+            Button(action: addSelectedToHome) { Label("加入首页", image: AppIcon.add.name) }
                 .buttonStyle(SecondaryActionStyle()).disabled(selectedVideos.isEmpty)
             Text("按当前列表顺序连续播放所选视频。")
                 .font(.caption2).foregroundStyle(.secondary)
@@ -1029,7 +1029,7 @@ struct FileRow: View {
 
             Spacer(minLength: 0)
             if file.isDir && !selecting {
-                Image(systemName: AppIcon.forward.name)
+                Image(appIconNamed: AppIcon.forward.name)
                     .font(.footnote.weight(.semibold))
                     .foregroundStyle(Theme.textMuted)
                     .accessibilityHidden(true)
@@ -1057,7 +1057,7 @@ struct FileRow: View {
     private var thumbnail: some View {
         if file.isDir {
             // 文件夹用中性灰：琥珀只留给进度和「更新」
-            Image(systemName: AppIcon.folder.name)
+            Image(appIconNamed: AppIcon.folder.name)
                 .font(.scaled(22, weight: Theme.iconWeight))
                 .foregroundStyle(Theme.textSecondary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1076,7 +1076,7 @@ struct FileRow: View {
     }
 
     private var placeholder: some View {
-        Image(systemName: file.isVideo ? AppIcon.video.name : AppIcon.file.name)
+        Image(appIconNamed: file.isVideo ? AppIcon.video.name : AppIcon.file.name)
             .font(.scaled(18, weight: Theme.iconWeight))
             .foregroundStyle(Theme.textSecondary)
             .frame(maxWidth: .infinity, maxHeight: .infinity)

@@ -41,7 +41,7 @@ struct LocalVideosView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button { showImporter = true } label: {
-                    Image(systemName: AppIcon.add.name)
+                    Image(appIconNamed: AppIcon.add.name)
                 }
                 .disabled(localStore.isImporting)
                 .accessibilityLabel("导入视频")
@@ -101,7 +101,7 @@ struct LocalVideosView: View {
                             Button(role: .destructive) {
                                 downloads.delete(item.id)
                             } label: {
-                                Label("删除", systemImage: AppIcon.trash.name)
+                                Label("删除", image: AppIcon.trash.name)
                             }
                         }
                 }
@@ -122,12 +122,12 @@ struct LocalVideosView: View {
                         Button(role: .destructive) {
                             localStore.delete(file)
                         } label: {
-                            Label("删除", systemImage: AppIcon.trash.name)
+                            Label("删除", image: AppIcon.trash.name)
                         }
                     }
                     .contextMenu {
-                        Button("播放", systemImage: AppIcon.play.name) { play(file) }
-                        Button("删除本地文件", systemImage: AppIcon.trash.name, role: .destructive) {
+                        Button("播放", icon: AppIcon.play.name) { play(file) }
+                        Button("删除本地文件", icon: AppIcon.trash.name, role: .destructive) {
                             localStore.delete(file)
                         }
                     }
@@ -193,7 +193,7 @@ private struct LocalVideoRow: View {
             }
 
             Spacer(minLength: 0)
-            Image(systemName: AppIcon.play.name)
+            Image(appIconNamed: AppIcon.play.name)
                 .font(.scaled(12, weight: .bold))
                 .foregroundStyle(Theme.onPrimary)
                 .frame(width: 34, height: 34)

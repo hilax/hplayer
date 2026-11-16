@@ -16,7 +16,7 @@ struct PlayerStatusClock: View {
                 HStack(spacing: 3) {
                     Text("\(Int((level * 100).rounded()))%")
                         .monospacedDigit()
-                    Image(systemName: battery.icon.name)
+                    Image(appIconNamed: battery.icon.name)
                         .font(.scaled(13, weight: .regular))
                         .foregroundStyle(battery.lowPower ? Theme.danger : Color.white)
                 }

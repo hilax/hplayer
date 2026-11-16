@@ -233,7 +233,7 @@ struct CheckBadge: View {
                 .fill(Theme.gold)
                 .scaleEffect(selected ? 1 : 0.4)
                 .opacity(selected ? 1 : 0)
-            Image(systemName: AppIcon.check.name)
+            Image(appIconNamed: AppIcon.check.name)
                 .font(.scaled(size * 0.5, weight: .bold))
                 .foregroundStyle(Theme.onPrimary)
                 .scaleEffect(selected ? 1 : 0.3)
