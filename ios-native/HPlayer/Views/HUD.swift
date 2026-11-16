@@ -187,7 +187,7 @@ struct HUDToast: View {
     var body: some View {
         HStack(spacing: Theme.Space.sm + 2) {
             if let icon = Theme.HUD.icon(for: message.tone) {
-                Image(systemName: icon.name)
+                Image(appIconNamed: icon.name)
                     .font(.scaled(16, weight: .semibold))
                     .foregroundStyle(Theme.HUD.tint(for: message.tone))
                     .accessibilityHidden(true)
@@ -278,7 +278,7 @@ struct PlayerLevelHUD: View {
 
     var body: some View {
         HStack(spacing: width < 180 ? 8 : 12) {
-            Image(systemName: icon.name)
+            Image(appIconNamed: icon.name)
                 .font(.scaled(16, weight: .semibold))
                 .frame(width: 22)
             PlayerHUDBar(value: clamped)
@@ -352,7 +352,7 @@ struct PlayerNoticeHUD: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: (Theme.HUD.icon(for: tone) ?? .info).name)
+            Image(appIconNamed: (Theme.HUD.icon(for: tone) ?? .info).name)
                 .font(.scaled(14, weight: .semibold))
                 .accessibilityHidden(true)
             Text(text)
@@ -437,7 +437,7 @@ struct CopyCodeChip: View {
             copier.copy(code)
         } label: {
             HStack(spacing: 4) {
-                Image(systemName: copier.isCopied() ? AppIcon.check.name : AppIcon.copy.name)
+                Image(appIconNamed: copier.isCopied() ? AppIcon.check.name : AppIcon.copy.name)
                 Text(copier.isCopied() ? "已复制" : "复制番号")
             }
             .font(.caption.weight(.medium))

@@ -294,7 +294,7 @@ struct SourceBadge: View {
     let isCloud: Bool
 
     var body: some View {
-        Image(systemName: isCloud ? AppIcon.cloud.name : AppIcon.device.name)
+        Image(appIconNamed: isCloud ? AppIcon.cloud.name : AppIcon.device.name)
             .font(Theme.Typo.badge)
             .foregroundStyle(Theme.paper)
             .frame(width: 22, height: 18)
@@ -383,9 +383,9 @@ struct PosterCard: View {
         .buttonStyle(PosterButtonStyle())
         .accessibilityIdentifier("home.poster.\(item.metadata?.imdbID ?? item.id)")
         .contextMenu {
-            Button("播放", systemImage: AppIcon.play.name, action: onPlay)
-            Button("匹配封面", systemImage: AppIcon.poster.name, action: onMatch)
-            Button(item.isCloud ? "从媒体库移除" : "删除本地文件", systemImage: AppIcon.trash.name, role: .destructive, action: onDelete)
+            Button("播放", icon: AppIcon.play.name, action: onPlay)
+            Button("匹配封面", icon: AppIcon.poster.name, action: onMatch)
+            Button(item.isCloud ? "从媒体库移除" : "删除本地文件", icon: AppIcon.trash.name, role: .destructive, action: onDelete)
         }
     }
 }
@@ -435,7 +435,7 @@ struct ContinueCard: View {
             ContinueArtworkView(entry: entry, width: width, height: height)
                 .allowsHitTesting(false)
                 .overlay(alignment: .bottomLeading) {
-                    Image(systemName: AppIcon.play.name)
+                    Image(appIconNamed: AppIcon.play.name)
                         .font(.scaled(10, weight: .semibold))
                         .foregroundStyle(Theme.onPrimary)
                         .frame(width: 26, height: 26)
@@ -523,9 +523,9 @@ struct ContinueHistoryView: View {
             // 「…」是菜单，清空放在菜单里；确认框挂在这个按钮上，从按钮弹出。
             // 以前点「…」直接弹确认框，又挂在整页上，iOS 26 会把它当成指向页面中间的气泡，盖住标题和第一行
             Menu {
-                Button("清空继续观看", systemImage: AppIcon.trash.name, role: .destructive) { confirmClear = true }
+                Button("清空继续观看", icon: AppIcon.trash.name, role: .destructive) { confirmClear = true }
             } label: {
-                Image(systemName: AppIcon.more.name)
+                NavigationIcon(.more)
             }
             .accessibilityLabel("历史选项")
             .accessibilityIdentifier("continue.more")
@@ -580,9 +580,9 @@ struct ContinueHistoryView: View {
             .accessibilityLabel("继续播放 \(entry.title)，\(entry.subtitle)")
             .accessibilityValue(validProgress(entry.progress).map { "观看进度 \(Int(($0 * 100).rounded()))%" } ?? "暂无进度")
             Menu {
-                Button("从继续观看移除", systemImage: AppIcon.remove.name, role: .destructive) { onRemove(entry) }
+                Button("从继续观看移除", icon: AppIcon.remove.name, role: .destructive) { onRemove(entry) }
             } label: {
-                Image(systemName: AppIcon.more.name).foregroundStyle(.secondary)
+                Image(appIconNamed: AppIcon.more.name).foregroundStyle(.secondary)
                     .frame(width: 44, height: 44).contentShape(Rectangle())
             }
             .accessibilityLabel("\(entry.title) 的更多选项")

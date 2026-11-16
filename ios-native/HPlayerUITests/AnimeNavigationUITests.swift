@@ -51,6 +51,9 @@ final class AnimeNavigationUITests: XCTestCase {
         } else {
             XCTAssertTrue(app.buttons["anime.play"].waitForExistence(timeout: 15))
             XCTAssertTrue(watchlist.isEnabled)
+            // 右上角追番按钮要真的画出爱心（真机上出现过只剩玻璃圆）
+            let ink = watchlist.iconInkRatio()
+            XCTAssertGreaterThan(ink, 0.02, "The watchlist button must draw its heart (\(style)); ink=\(ink)")
         }
         assertSameFrame(back.frame, backFrame, message: "Loading must not move or resize the back button")
         assertSameFrame(navigationBar.frame, barFrame, message: "Loading must not change the navigation bar height")

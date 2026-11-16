@@ -50,9 +50,9 @@ struct SeriesDetailView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 if let group {
                     Menu {
-                        Button("匹配封面", systemImage: AppIcon.poster.name) { matching = MatchRequest(group: group) }
+                        Button("匹配封面", icon: AppIcon.poster.name) { matching = MatchRequest(group: group) }
                     } label: {
-                        Image(systemName: AppIcon.more.name)
+                        NavigationIcon(.more)
                     }
                     .accessibilityLabel("剧集选项")
                     .accessibilityIdentifier("series.more")
@@ -165,7 +165,7 @@ struct SeriesDetailView: View {
                     if let country = group.episodes.first?.countryLabel, !country.isEmpty { Text(country) }
                     if !group.rating.isEmpty {
                         HStack(spacing: 3) {
-                            Image(systemName: AppIcon.rating.name)
+                            Image(appIconNamed: AppIcon.rating.name)
                                 .font(.scaled(10, weight: .bold))
                             Text(group.rating)
                         }
@@ -204,7 +204,7 @@ struct SeriesDetailView: View {
                 Button {
                     play(target.item, in: group)
                 } label: {
-                    Label(target.title, systemImage: AppIcon.play.name)
+                    Label(target.title, image: AppIcon.play.name)
                         .font(.scaled(15, weight: .bold))
                         .foregroundStyle(Theme.onPrimary)
                         .lineLimit(1)
@@ -299,7 +299,7 @@ struct SeriesDetailView: View {
                     .font(.scaled(16, weight: .semibold).monospacedDigit())
                     .foregroundStyle(isCurrent ? Theme.onPrimary : (finished ? Theme.textTertiary : Color.primary))
                 if finished && !isCurrent {
-                    Image(systemName: AppIcon.check.name)
+                    Image(appIconNamed: AppIcon.check.name)
                         .font(.scaled(8, weight: .bold))
                         .foregroundStyle(Theme.textTertiary)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
@@ -333,9 +333,9 @@ struct SeriesDetailView: View {
         .accessibilityLabel(episode.episodeTitle)
         .accessibilityValue(finished ? "已看完" : (recent?.position).map { "看到 \(playbackTimeText($0))" } ?? "")
         .contextMenu {
-            Button("播放", systemImage: AppIcon.play.name) { play(episode, in: group) }
-            Button("匹配封面", systemImage: AppIcon.poster.name) { matching = MatchRequest(item: episode) }
-            Button(episode.isCloud ? "从媒体库移除" : "删除本地文件", systemImage: AppIcon.trash.name, role: .destructive) {
+            Button("播放", icon: AppIcon.play.name) { play(episode, in: group) }
+            Button("匹配封面", icon: AppIcon.poster.name) { matching = MatchRequest(item: episode) }
+            Button(episode.isCloud ? "从媒体库移除" : "删除本地文件", icon: AppIcon.trash.name, role: .destructive) {
                 pendingRemoval = episode
             }
         }

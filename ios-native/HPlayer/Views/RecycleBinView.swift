@@ -245,7 +245,7 @@ struct RecycleBinView: View {
         case .video: symbol = AppIcon.video.name
         case .file: symbol = AppIcon.file.name
         }
-        return Image(systemName: symbol)
+        return Image(appIconNamed: symbol)
             .font(.scaled(kind == .folder ? 22 : 18, weight: Theme.iconWeight))
             .foregroundStyle(Theme.textSecondary)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -299,7 +299,7 @@ struct RecycleBinView: View {
                     Button {
                         confirmation = .delete(selectedItems)
                     } label: {
-                        Label("彻底删除", systemImage: AppIcon.trash.name)
+                        Label("彻底删除", image: AppIcon.trash.name)
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(ActionButtonStyle(kind: .secondaryDestructive))
@@ -308,7 +308,7 @@ struct RecycleBinView: View {
                     Button {
                         restore(selectedItems)
                     } label: {
-                        Label("还原", systemImage: AppIcon.restore.name)
+                        Label("还原", image: AppIcon.restore.name)
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(PrimaryActionStyle())

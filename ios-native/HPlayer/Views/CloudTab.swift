@@ -113,7 +113,7 @@ struct CloudTab: View {
                     Text("账号")
                         .font(Theme.Typo.meta)
                         .foregroundStyle(Theme.textSecondary)
-                    Image(systemName: AppIcon.forward.name)
+                    Image(appIconNamed: AppIcon.forward.name)
                         .font(.footnote.weight(.semibold))
                         .foregroundStyle(Theme.textMuted)
                 }
@@ -470,7 +470,7 @@ private struct QuickEntryButton: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: Theme.Space.sm) {
-                Image(systemName: icon.name)
+                Image(appIconNamed: icon.name)
                     .font(.scaled(17, weight: Theme.iconWeight))
                     .foregroundStyle(Theme.textPrimary)
                     .frame(width: 24)

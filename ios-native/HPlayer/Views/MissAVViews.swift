@@ -129,7 +129,7 @@ struct MissAVPosterCard: View {
                                     Rectangle()
                                         .fill(Theme.surfaceRaised)
                                         .overlay {
-                                            Image(systemName: AppIcon.video.name)
+                                            Image(appIconNamed: AppIcon.video.name)
                                                 .foregroundStyle(Theme.textTertiary)
                                         }
                                 }
@@ -138,7 +138,7 @@ struct MissAVPosterCard: View {
                             Rectangle()
                                 .fill(Theme.surfaceRaised)
                                 .overlay {
-                                    Image(systemName: AppIcon.video.name)
+                                    Image(appIconNamed: AppIcon.video.name)
                                         .foregroundStyle(Theme.textTertiary)
                                 }
                         }
@@ -555,7 +555,7 @@ struct MissAVDetailView: View {
                     .fill(Color.black.opacity(0.6))
                     .frame(width: 56, height: 56)
                     .overlay {
-                        Image(systemName: AppIcon.play.name)
+                        Image(appIconNamed: AppIcon.play.name)
                             .font(.system(size: 26, weight: .bold))
                             .foregroundStyle(Theme.accent)
                             .offset(x: 2)
@@ -590,7 +590,7 @@ struct MissAVDetailView: View {
                 play()
             } label: {
                 HStack(spacing: 8) {
-                    Image(systemName: AppIcon.play.name)
+                    Image(appIconNamed: AppIcon.play.name)
                     Text("立即播放")
                 }
             }

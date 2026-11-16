@@ -31,21 +31,21 @@ struct MetadataMatchView: View {
         NavigationStack {
             DesignPage(eyebrow: "Find the right story", title: "匹配封面", subtitle: "为这份文件，找到正确的影片资料。") {
                 HStack(spacing: 12) {
-                    Image(systemName: AppIcon.video.name).font(.title2).foregroundStyle(Theme.accent)
+                    Image(appIconNamed: AppIcon.video.name).font(.title2).foregroundStyle(Theme.accent)
                     VStack(alignment: .leading, spacing: 5) {
                         Text("源文件").font(.caption).foregroundStyle(.secondary)
                         Text(file.name).font(.subheadline.weight(.medium)).lineLimit(2).textSelection(.enabled)
                     }
                 }.padding(16).surfaceCard()
                 HStack(spacing: 12) {
-                    Image(systemName: AppIcon.search.name).foregroundStyle(.secondary)
+                    Image(appIconNamed: AppIcon.search.name).foregroundStyle(.secondary)
                     TextField("输入片名或番号", text: $query)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
                         .submitLabel(.search).onSubmit { startSearch() }
                         .accessibilityIdentifier("metadata.query")
                     if searching { ProgressView() }
                     else if !query.isEmpty {
-                        Button { query = "" } label: { Image(systemName: AppIcon.clear.name) }.accessibilityLabel("清空")
+                        Button { query = "" } label: { Image(appIconNamed: AppIcon.clear.name) }.accessibilityLabel("清空")
                     }
                 }.padding(15).surfaceCard()
                 if !parsed.searchTitles.isEmpty {
@@ -90,7 +90,7 @@ struct MetadataMatchView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("完成") { dismiss() } }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button { showTMDB = true } label: { Image(systemName: AppIcon.tune.name) }.accessibilityLabel("资料来源")
+                    Button { showTMDB = true } label: { NavigationIcon(.tune) }.accessibilityLabel("资料来源")
                 }
             }
             .task {
@@ -192,7 +192,7 @@ struct MetadataRow: View {
             }
             Spacer(minLength: 0)
             if selected {
-                Image(systemName: AppIcon.selected.name)
+                Image(appIconNamed: AppIcon.selected.name)
                     .foregroundStyle(Theme.gold)
                     .transition(.scale.combined(with: .opacity))
             }

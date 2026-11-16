@@ -85,13 +85,14 @@ struct AnimeDetailView: View {
                     Haptics.tap()
                     watchlist.toggle(detail: detail)
                 } label: {
-                    Image(icon: watchlist.isWatched(id: animeId) ? .heartFill : .heart)
-                        .foregroundStyle(watchlist.isWatched(id: animeId) ? Theme.accent : Theme.textPrimary)
+                    // 未追番线框、已追番实心，颜色都是导航栏按键色（和返回键一致，不用琥珀）。
+                    // 切换时用系统的符号弹跳。导航栏按钮上不叠 Pow 的 changeEffect（跳动、飘心）：
+                    // 它会在图标外再包一层动画视图，真机上这个按钮出现过只剩玻璃圆、看不到爱心。
+                    NavigationIcon(watchlist.isWatched(id: animeId) ? .heartFill : .heart)
+                        .bounceSymbol(on: watchlist.isWatched(id: animeId))
                 }
                 // 加载、成功和失败时都保留同一个按钮，导航栏不会因工具项增删而重新布局。
                 .disabled(detail == nil)
-                // 加入追番时爱心轻轻一跳并飘出几颗小心；取消时不动
-                .successPop(watchlist.isWatched(id: animeId), particle: .heartFill)
                 .accessibilityLabel(watchlist.isWatched(id: animeId) ? "取消追番" : "追番")
                 .accessibilityIdentifier("anime.watchlist.\(animeId)")
             }
@@ -230,7 +231,7 @@ struct AnimeDetailView: View {
         return Button(action: {
             startPlay(episode: ep, detail: detail)
         }) {
-            Label(title, systemImage: AppIcon.play.name)
+            Label(title, image: AppIcon.play.name)
                 .font(.scaled(15, weight: .bold))
                 .foregroundStyle(Theme.onPrimary)
                 .lineLimit(1)

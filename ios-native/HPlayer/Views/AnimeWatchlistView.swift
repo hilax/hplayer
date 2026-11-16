@@ -42,7 +42,7 @@ struct AnimeWatchlistView: View {
                                     Button(role: .destructive) {
                                         withAnimation(Motion.smooth) { store.remove(id: item.id) }
                                     } label: {
-                                        Label("取消追番", systemImage: AppIcon.heart.name)
+                                        Label("取消追番", image: AppIcon.heart.name)
                                     }
                                 }
                                 .accessibilityIdentifier("watchlist.item.\(item.id)")

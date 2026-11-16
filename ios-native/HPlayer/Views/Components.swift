@@ -69,6 +69,42 @@ struct PlayTriangle: Shape {
     }
 }
 
+/// 空状态、结果页正中间的图标（方向 B · 细线圆环）：外圈一条细线，里面一个卡片色的圆，
+/// 图标用主文字色。全应用的居中大图标都用它，不再用琥珀色或灰底圆角块。
+struct EmptyStateMark: View {
+    let icon: String
+    /// 外圈直径；里面的圆是它的 0.7，图标跟着等比缩放
+    var size: CGFloat = 132
+
+    init(icon: String, size: CGFloat = 132) {
+        self.icon = icon
+        self.size = size
+    }
+
+    init(_ icon: AppIcon, size: CGFloat = 132) {
+        self.init(icon: icon.name, size: size)
+    }
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .strokeBorder(Theme.hairline, lineWidth: 1)
+                .frame(width: size, height: size)
+            Circle()
+                .fill(Theme.surface)
+                .overlay(Circle().strokeBorder(Theme.hairline, lineWidth: 1))
+                .frame(width: size * 0.7, height: size * 0.7)
+                .shadow(color: Theme.floatShadow.opacity(0.45), radius: 9, y: 6)
+            // 圆的大小固定，图标也用固定字号，「更大字体」下不会撑出圆外
+            Image(appIconNamed: icon)
+                .font(.system(size: size * 0.18, weight: Theme.iconWeight))
+                .foregroundStyle(Theme.textPrimary)
+        }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
+    }
+}
+
 struct EmptyStateView: View {
     let icon: String
     let title: String
@@ -77,28 +113,28 @@ struct EmptyStateView: View {
     var action: (() -> Void)? = nil
 
     var body: some View {
-        VStack(spacing: 14) {
-            Image(systemName: icon)
-                .font(.scaled(30, weight: Theme.iconWeight))
-                .foregroundStyle(Theme.accent)
-                .frame(width: 76, height: 76)
-                .background(Theme.tileTint, in: RoundedRectangle(cornerRadius: Theme.Radius.sheet, style: .continuous))
+        VStack(spacing: 18) {
+            EmptyStateMark(icon: icon)
                 .reveal(0)
-            Text(title)
-                .font(.title3.weight(.bold))
-                .reveal(1)
-            Text(message)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 300)
-                .reveal(2)
+            VStack(spacing: 8) {
+                Text(title)
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(Theme.textPrimary)
+                    .multilineTextAlignment(.center)
+                Text(message)
+                    .font(.subheadline)
+                    .foregroundStyle(Theme.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .lineSpacing(3)
+                    .frame(maxWidth: 300)
+            }
+            .reveal(1)
             if let actionTitle, let action {
                 Button(actionTitle, action: action)
                     .buttonStyle(PrimaryActionStyle())
-                    .frame(maxWidth: 240)
-                    .padding(.top, 8)
-                    .reveal(3)
+                    .frame(maxWidth: 220)
+                    .padding(.top, 6)
+                    .reveal(2)
             }
         }
         .padding(32)

@@ -58,10 +58,46 @@ final class CloudNavigationUITests: XCTestCase {
         offline.tap()
         XCTAssertTrue(app.navigationBars["离线下载"].waitForExistence(timeout: 10))
         XCTAssertFalse(cloud.isHittable)
+        // 右上角的 ＋ 要真的画出来（真机上出现过只剩玻璃圆）
+        let add = app.buttons["library.offline.add"]
+        XCTAssertTrue(add.waitForExistence(timeout: 5))
+        let ink = add.iconInkRatio()
+        attach("CloudNavigation-offline-add")
+        XCTAssertGreaterThan(ink, 0.02, "The offline ＋ button must draw its icon; ink=\(ink)")
         app.navigationBars.buttons.element(boundBy: 0).tap()
         XCTAssertTrue(offline.waitForExistence(timeout: 5) && offline.isHittable)
         XCTAssertTrue(cloud.isHittable && cloud.isSelected)
         attach("CloudNavigation-offline-returned")
+    }
+
+    /// 排查用：右上角放几种探针按钮，量出各自画了多少像素（返回键作对照），结果写在失败信息里。
+    func testToolbarProbe() {
+        continueAfterFailure = true
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchEnvironment["HPLAYER_DESIGN_SCREEN"] = "library"
+        app.launchEnvironment["HPLAYER_TOOLBAR_PROBE"] = "1"
+        app.launch()
+        defer { app.terminate() }
+        let offline = app.buttons["cloud.offline"]
+        XCTAssertTrue(offline.waitForExistence(timeout: 25))
+        offline.tap()
+        let bar = app.navigationBars["离线下载"]
+        XCTAssertTrue(bar.waitForExistence(timeout: 10))
+        sleep(2)
+        func ink(_ element: XCUIElement) -> String {
+            element.exists ? String(format: "%.3f@%.0f,%.0f,%.0fx%.0f", element.iconInkRatio(), element.frame.minX,
+                                    element.frame.minY, element.frame.width, element.frame.height) : "missing"
+        }
+        let report = [
+            "back=\(ink(bar.buttons.element(boundBy: 0)))",
+            "add=\(ink(app.buttons["library.offline.add"]))",
+            "rect=\(ink(app.buttons["probe.rect"]))",
+            "text=\(ink(app.buttons["probe.text"]))",
+            "sf=\(ink(app.buttons["probe.sf"]))",
+        ].joined(separator: " ")
+        attach("ToolbarProbe")
+        XCTFail("toolbar probe: \(report) | \(String(bar.debugDescription.prefix(1800)))")
     }
 
     /// 本机视频（含正在下载）在「我的」页

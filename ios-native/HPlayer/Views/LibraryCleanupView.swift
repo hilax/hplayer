@@ -57,7 +57,7 @@ struct LibraryCleanupView: View {
         case .failed(let reason):
             VStack(spacing: 12) {
                 DesignNotice(symbol: AppIcon.alert.name, text: reason, warning: true)
-                Button { cleanup.retry() } label: { Label("继续核对", systemImage: AppIcon.refresh.name) }
+                Button { cleanup.retry() } label: { Label("继续核对", image: AppIcon.refresh.name) }
                     .buttonStyle(PrimaryActionStyle())
                 Button { cleanup.stop() } label: { Text("返回") }
                     .buttonStyle(SecondaryActionStyle())
@@ -119,7 +119,7 @@ struct LibraryCleanupView: View {
                 }
             }
             Button { confirming = true } label: {
-                Label("移除选中的 \(chosenCount) 个视频", systemImage: AppIcon.trash.name)
+                Label("移除选中的 \(chosenCount) 个视频", image: AppIcon.trash.name)
             }
             .buttonStyle(PrimaryActionStyle())
             .disabled(chosenCount == 0)
@@ -138,9 +138,7 @@ struct LibraryCleanupView: View {
 
     private func message(symbol: String, title: String, text: String, actionTitle: String = "完成", action: (() -> Void)? = nil) -> some View {
         VStack(spacing: 14) {
-            Image(systemName: symbol)
-                .font(.scaled(34, weight: Theme.iconWeight))
-                .foregroundStyle(Theme.accent)
+            EmptyStateMark(icon: symbol)
             Text(title).font(.scaled(18, weight: .bold))
             Text(text)
                 .font(.subheadline).foregroundStyle(Theme.textSecondary)
@@ -202,7 +200,7 @@ private struct StaleGroupRow: View {
     var body: some View {
         Button(action: onToggle) {
             HStack(alignment: .top, spacing: 12) {
-                Image(systemName: isSelected ? AppIcon.selected.name : AppIcon.unselected.name)
+                Image(appIconNamed: isSelected ? AppIcon.selected.name : AppIcon.unselected.name)
                     .font(.scaled(20, weight: Theme.iconWeight))
                     .foregroundStyle(isSelected ? Theme.accent : Theme.textTertiary)
                     .frame(width: 28)

@@ -45,7 +45,7 @@ struct MagnetArtwork: View {
             case .failed:
                 Rectangle()
                     .fill(Theme.surfaceRaised)
-                    .overlay { Image(systemName: placeholder).foregroundStyle(.secondary) }
+                    .overlay { Image(appIconNamed: placeholder).foregroundStyle(.secondary) }
             }
         }
     }
@@ -206,7 +206,7 @@ struct MagnetFallbackCover: View {
     private var placeholder: some View {
         Rectangle()
             .fill(Theme.surfaceRaised)
-            .overlay { Image(systemName: AppIcon.poster.name).foregroundStyle(.secondary) }
+            .overlay { Image(appIconNamed: AppIcon.poster.name).foregroundStyle(.secondary) }
     }
 }
 
@@ -428,7 +428,7 @@ struct MagnetSearchField: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: AppIcon.search.name)
+            Image(appIconNamed: AppIcon.search.name)
                 .font(.scaled(15, weight: Theme.iconWeight))
                 .foregroundStyle(Theme.textSecondary)
 
@@ -446,7 +446,7 @@ struct MagnetSearchField: View {
                 Button {
                     onClear()
                 } label: {
-                    Image(systemName: AppIcon.clear.name)
+                    Image(appIconNamed: AppIcon.clear.name)
                         .foregroundStyle(Theme.textTertiary)
                         .frame(width: 38, height: 38)
                         .contentShape(Rectangle())
@@ -498,7 +498,7 @@ struct MagnetStudioCard: View {
 
             Spacer(minLength: 0)
 
-            Image(systemName: AppIcon.forward.name)
+            Image(appIconNamed: AppIcon.forward.name)
                 .font(.scaled(13, weight: .semibold))
                 .foregroundStyle(.secondary)
         }
@@ -545,7 +545,7 @@ struct FavoriteHeartBadge: View {
     var size: CGFloat = 22
 
     var body: some View {
-        Image(systemName: AppIcon.heartFill.name)
+        Image(appIconNamed: AppIcon.heartFill.name)
             .font(.system(size: size * 0.5, weight: .bold))
             .foregroundStyle(Theme.accent)
             .frame(width: size, height: size)
@@ -587,7 +587,7 @@ struct FavoriteStarsRow: View {
                                     Haptics.select()
                                     withAnimation(Motion.smooth) { _ = favorites.toggle(star) }
                                 } label: {
-                                    Label("取消喜欢", systemImage: AppIcon.heart.name)
+                                    Label("取消喜欢", image: AppIcon.heart.name)
                                 }
                             }
                         }
@@ -620,7 +620,7 @@ struct MagnetStarChip: View {
                     .foregroundStyle(Theme.accent)
             }
 
-            Image(systemName: AppIcon.forward.name)
+            Image(appIconNamed: AppIcon.forward.name)
                 .font(.scaled(11, weight: .semibold))
                 .foregroundStyle(.secondary)
         }
@@ -758,10 +758,8 @@ struct MagnetErrorState: View {
     let retry: () -> Void
 
     var body: some View {
-        VStack(spacing: 10) {
-            Image(systemName: AppIcon.alert.name)
-                .font(.scaled(28))
-                .foregroundStyle(Theme.accent)
+        VStack(spacing: 14) {
+            EmptyStateMark(.alert, size: 104)
 
             Text("加载未完成")
                 .font(.headline)
@@ -790,10 +788,8 @@ struct MagnetEmptyState: View {
     var message: String?
 
     var body: some View {
-        VStack(spacing: 10) {
-            Image(systemName: icon.name)
-                .font(.scaled(28))
-                .foregroundStyle(.secondary)
+        VStack(spacing: 14) {
+            EmptyStateMark(icon, size: 104)
             Text(title)
                 .font(.subheadline.weight(.semibold))
             if let message {

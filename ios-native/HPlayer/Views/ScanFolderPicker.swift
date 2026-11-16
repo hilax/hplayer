@@ -53,7 +53,7 @@ private struct FolderList: View {
     var body: some View {
         DesignPage(eyebrow: "Choose a folder", title: "选择扫描目录", subtitle: "只整理需要的文件夹，保留目录中的原文件。") {
             HStack(spacing: 8) {
-                Image(systemName: AppIcon.cloud.name).font(.scaled(15, weight: Theme.iconWeight)).foregroundStyle(Theme.accent)
+                Image(appIconNamed: AppIcon.cloud.name).font(.scaled(15, weight: Theme.iconWeight)).foregroundStyle(Theme.accent)
                 Text(name).font(.subheadline.weight(.medium))
             }.padding(16).frame(maxWidth: .infinity, alignment: .leading).surfaceCard()
             GroupLabel(title: "子文件夹")
@@ -78,7 +78,7 @@ private struct FolderList: View {
         }
         .safeAreaInset(edge: .bottom) {
             Button { onSelect(cid, name) } label: {
-                Label(cid == "0" ? "扫描整个网盘" : "扫描此文件夹", systemImage: AppIcon.scan.name)
+                Label(cid == "0" ? "扫描整个网盘" : "扫描此文件夹", image: AppIcon.scan.name)
             }.buttonStyle(PrimaryActionStyle()).accessibilityIdentifier("scan.pickFolder")
                 .disabled(!appState.isAuthenticated)
                 .padding(Theme.contentInset).background(Theme.pageBackground)

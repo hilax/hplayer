@@ -192,7 +192,7 @@ struct ShelfLinkLabel: View {
     var body: some View {
         HStack(spacing: Theme.Space.xs) {
             Text(text)
-            Image(systemName: AppIcon.forward.name).font(.caption2.weight(.semibold))
+            Image(appIconNamed: AppIcon.forward.name).font(.caption2.weight(.semibold))
         }
         .font(Theme.Typo.meta)
         .secondaryTextStyle()
@@ -211,7 +211,7 @@ struct BarIconButton: View {
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: icon.name)
+            Image(appIconNamed: icon.name)
                 .font(.scaled(20, weight: Theme.iconWeight))
                 .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
@@ -233,7 +233,7 @@ struct SheetCloseButton: View {
             Haptics.tap()
             if let action { action() } else { dismiss() }
         } label: {
-            Image(systemName: AppIcon.close.name)
+            Image(appIconNamed: AppIcon.close.name)
                 .font(.scaled(12, weight: .semibold))
                 .foregroundStyle(Theme.textSecondary)
                 .frame(width: 30, height: 30)
@@ -272,7 +272,7 @@ struct LibraryActionRow: View {
     var body: some View {
         HStack(spacing: 14) {
             // 图标不垫底色：线框图标直接摆在行首，和标题同色
-            Image(systemName: symbol)
+            Image(appIconNamed: symbol)
                 .font(.scaled(19, weight: Theme.iconWeight))
                 .foregroundStyle(titleColor)
                 .frame(width: 24)
@@ -291,7 +291,7 @@ struct LibraryActionRow: View {
                     .lineLimit(1)
             }
             if showsChevron {
-                Image(systemName: AppIcon.forward.name)
+                Image(appIconNamed: AppIcon.forward.name)
                     .font(.footnote.weight(.semibold))
                     .foregroundStyle(Theme.textMuted)
                     .accessibilityHidden(true)
@@ -310,7 +310,7 @@ struct RowIcon: View {
     var tint: Color = Theme.textPrimary
 
     var body: some View {
-        Image(systemName: icon.name)
+        Image(appIconNamed: icon.name)
             .font(.scaled(19, weight: Theme.iconWeight))
             .foregroundStyle(tint)
             .frame(width: 24)
@@ -606,7 +606,7 @@ struct DesignNotice: View {
     var body: some View {
         Label {
             Text(text).fixedSize(horizontal: false, vertical: true)
-        } icon: { Image(systemName: symbol) }
+        } icon: { Image(appIconNamed: symbol) }
         .font(Theme.Typo.meta)
         .foregroundStyle(warning ? Theme.warning : Theme.textSecondary)
         .lineSpacing(3)

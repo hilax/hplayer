@@ -134,6 +134,7 @@ struct OfflineTasksView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) { addButton }
         }
+        .toolbarProbe()
         .designScreen("offline")
         .hudProgress(operation)
         .task {
@@ -331,7 +332,7 @@ struct OfflineTasksView: View {
             tint = Theme.danger
             background = Theme.danger.opacity(0.14)
         }
-        return Image(systemName: symbol)
+        return Image(appIconNamed: symbol)
             .font(.scaled(18, weight: Theme.iconWeight))
             .foregroundStyle(tint)
             .frame(width: 40, height: 40)
@@ -362,7 +363,7 @@ struct OfflineTasksView: View {
             .padding(.top, 12)
         case .done:
             HStack(spacing: 6) {
-                Image(systemName: AppIcon.success.name)
+                Image(appIconNamed: AppIcon.success.name)
                     .font(.scaled(13, weight: .semibold))
                 Text(OfflineTaskText.finished(task))
             }
@@ -384,23 +385,23 @@ struct OfflineTasksView: View {
                 Button {
                     copyLink(task)
                 } label: {
-                    Label("复制链接", systemImage: AppIcon.copy.name)
+                    Label("复制链接", image: AppIcon.copy.name)
                 }
             }
             if onShowFolder != nil && !task.folderID.isEmpty {
                 Button {
                     showFolder(task)
                 } label: {
-                    Label("在网盘中查看", systemImage: AppIcon.folder.name)
+                    Label("在网盘中查看", image: AppIcon.folder.name)
                 }
             }
             Button(role: .destructive) {
                 pendingRemoval = task
             } label: {
-                Label("删除任务", systemImage: AppIcon.trash.name)
+                Label("删除任务", image: AppIcon.trash.name)
             }
         } label: {
-            Image(systemName: AppIcon.more.name)
+            Image(appIconNamed: AppIcon.more.name)
                 .font(.scaled(16, weight: .semibold))
                 .foregroundStyle(Theme.textSecondary)
                 .frame(width: 32, height: 32)
@@ -416,7 +417,7 @@ struct OfflineTasksView: View {
         Button {
             showAdd = true
         } label: {
-            Image(systemName: AppIcon.add.name)
+            NavigationIcon(.add)
         }
         .accessibilityLabel("添加任务")
         .accessibilityIdentifier("library.offline.add")
@@ -736,7 +737,7 @@ struct OfflineAddSheet: View {
             Button {
                 paste()
             } label: {
-                Label("从剪贴板粘贴", systemImage: AppIcon.paste.name)
+                Label("从剪贴板粘贴", image: AppIcon.paste.name)
                     .font(.scaled(13, weight: .medium))
                     .foregroundStyle(Theme.accent)
                     .frame(minHeight: 32)
@@ -845,7 +846,7 @@ struct OfflineAddSheet: View {
                     if submitting {
                         ProgressView()
                     } else {
-                        Image(systemName: AppIcon.cloudDownload.name)
+                        Image(appIconNamed: AppIcon.cloudDownload.name)
                     }
                     Text(submitting ? "正在提交…" : "开始离线下载（\(count)）")
                 }
@@ -1035,7 +1036,7 @@ struct SaveFolderPickerSheet: View {
             trail.append(Crumb(cid: folder.id, name: folder.name))
         } label: {
             HStack(spacing: 12) {
-                Image(systemName: AppIcon.folder.name)
+                Image(appIconNamed: AppIcon.folder.name)
                     .font(.scaled(18, weight: Theme.iconWeight))
                     .foregroundStyle(Theme.accent)
                     .frame(width: 36, height: 36)
@@ -1045,7 +1046,7 @@ struct SaveFolderPickerSheet: View {
                     .foregroundStyle(Theme.textPrimary)
                     .lineLimit(1)
                 Spacer(minLength: 8)
-                Image(systemName: AppIcon.forward.name)
+                Image(appIconNamed: AppIcon.forward.name)
                     .font(.scaled(12, weight: .semibold))
                     .foregroundStyle(Theme.textTertiary)
             }
@@ -1063,7 +1064,7 @@ struct SaveFolderPickerSheet: View {
     private var footer: some View {
         VStack(spacing: 10) {
             HStack(spacing: 8) {
-                Image(systemName: AppIcon.folder.name)
+                Image(appIconNamed: AppIcon.folder.name)
                     .font(.scaled(13, weight: Theme.iconWeight))
                     .foregroundStyle(Theme.accent)
                 Text("保存位置：")

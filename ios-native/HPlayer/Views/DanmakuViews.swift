@@ -281,7 +281,7 @@ private struct DanmakuTabControls: View {
             .accessibilityLabel(store.enabled ? "关闭弹幕" : "打开弹幕")
             .accessibilityIdentifier("player.danmaku.toggle")
             Button(action: onSettings) {
-                Image(systemName: AppIcon.tune.name)
+                Image(appIconNamed: AppIcon.tune.name)
                     .font(.scaled(16, weight: Theme.iconWeight))
                     .foregroundStyle(Theme.textSecondary)
                     .frame(width: 36, height: 44)
@@ -511,7 +511,7 @@ struct AnimeCommentsView: View {
 
     private var stateMessage: some View {
         VStack(spacing: 10) {
-            Image(systemName: AppIcon.comment.name)
+            Image(appIconNamed: AppIcon.comment.name)
                 .font(.scaled(26, weight: Theme.iconWeight))
                 .foregroundStyle(Theme.textTertiary)
             Text(stateTitle)
@@ -720,7 +720,7 @@ struct AnimeCommentRow: View {
                 .accessibilityLabel(liked ? "取消点赞，\(count) 个赞" : "点赞，\(count) 个赞")
                 .accessibilityIdentifier("comment.like.\(comment.id)")
             } else {
-                Label(compactCount(count), systemImage: AppIcon.like.name)
+                Label(compactCount(count), image: AppIcon.like.name)
                     .font(.scaled(12))
                     .foregroundStyle(Theme.textTertiary)
                     .labelStyle(.titleAndIcon)
