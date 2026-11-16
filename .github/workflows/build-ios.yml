@@ -17,6 +17,7 @@ on:
         default: all
         options:
           - all
+          - web-sources
           - navigation
           - navigation-details
   push:
@@ -183,7 +184,12 @@ jobs:
         timeout-minutes: 80
         run: |
           test_filters=()
-          if [[ "$HPLAYER_TEST_SCOPE" == 'navigation' ]]; then
+          if [[ "$HPLAYER_TEST_SCOPE" == 'web-sources' ]]; then
+            test_filters=(
+              -only-testing:HPlayerTests/JableTests
+              -only-testing:HPlayerTests/MissAVTests
+            )
+          elif [[ "$HPLAYER_TEST_SCOPE" == 'navigation' ]]; then
             test_filters=(
               -only-testing:HPlayerTests/HomeNavigationTests
               -only-testing:HPlayerUITests/TabBarUITests

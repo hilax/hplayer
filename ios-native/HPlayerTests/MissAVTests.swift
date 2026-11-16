@@ -135,7 +135,8 @@ final class MissAVTests: XCTestCase {
         }
         let body = Data(listHTML.utf8)
         RoutedURLProtocol.install { _ in .init(headers: ["Content-Type": "text/html"], body: body) }
-        let client = MissAVClient(session: RoutedURLProtocol.session(), websiteDataStore: dataStore)
+        let session = RoutedURLProtocol.session()
+        let client = MissAVClient(session: session, websiteDataStore: dataStore)
 
         let cards = try await client.list(category: .todayHot)
         XCTAssertEqual(cards.map(\.id), ["sw-001"])
@@ -146,10 +147,33 @@ final class MissAVTests: XCTestCase {
         let request = try XCTUnwrap(requests.first)
         XCTAssertEqual(request.value(forHTTPHeaderField: "User-Agent"), MissAVClient.userAgent)
         XCTAssertEqual(request.value(forHTTPHeaderField: "Referer"), "https://missav.ws/")
-        XCTAssertTrue(request.value(forHTTPHeaderField: "Cookie")?.contains("cf_clearance=test-clearance") == true)
+        // URLProtocol 替代了系统 HTTP 协议，不会经过系统自动添加 Cookie 头的步骤。
+        // 默认会话验证 Cookie 已同步到存储；无 Cookie 存储的手动加头路径另测。
+        let storedCookies = session.configuration.httpCookieStorage?.cookies(for: request.url!) ?? []
+        XCTAssertTrue(storedCookies.contains { $0.name == "cf_clearance" && $0.value == "test-clearance" })
 
         _ = try await client.list(category: .weeklyHot)
         XCTAssertEqual(RoutedURLProtocol.requests().count, 2, "后续分类继续复用会话，不重开验证网页")
+    }
+
+    func testHTTPWithoutCookieStorageSendsBrowserCookieHeader() async throws {
+        let dataStore = WKWebsiteDataStore.nonPersistent()
+        let clearance = try XCTUnwrap(HTTPCookie(properties: [
+            .name: "cf_clearance", .value: "test-clearance", .domain: ".missav.ws", .path: "/", .secure: "TRUE",
+        ]))
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            dataStore.httpCookieStore.setCookie(clearance) { continuation.resume() }
+        }
+        let body = Data(listHTML.utf8)
+        RoutedURLProtocol.install { _ in .init(headers: ["Content-Type": "text/html"], body: body) }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [RoutedURLProtocol.self]
+        configuration.httpCookieStorage = nil
+        let client = MissAVClient(session: URLSession(configuration: configuration), websiteDataStore: dataStore)
+
+        _ = try await client.list(category: .todayHot)
+        let request = try XCTUnwrap(RoutedURLProtocol.requests().first)
+        XCTAssertTrue(request.value(forHTTPHeaderField: "Cookie")?.contains("cf_clearance=test-clearance") == true)
     }
 
     func testHTMLParsingDoesNotRunPageScriptsOrTreatWidgetsAsChallenge() async throws {
@@ -206,7 +230,8 @@ final class MissAVTests: XCTestCase {
             cookie("wrong-path", path: "/today"), cookie("expired", expires: Date(timeIntervalSinceNow: -60)),
         ]
         XCTAssertEqual(MissAVClient.cookies(cookies, matching: URL(string: "https://missav.ws/today-hot")!).map(\.name), ["clearance"])
-        XCTAssertTrue(MissAVClient.cookies(cookies, matching: URL(string: "https://missav.ws.example.com/")!).isEmpty)
+        XCTAssertEqual(MissAVClient.cookies(cookies, matching: URL(string: "https://missav.ws.example.com/")!).map(\.name), ["unrelated"],
+                       "相似域名只匹配它自己的 example.com Cookie，不得带上 MissAV Cookie")
         XCTAssertTrue(MissAVClient.cookies(cookies, matching: URL(string: "http://missav.ws/")!).isEmpty)
     }
 
