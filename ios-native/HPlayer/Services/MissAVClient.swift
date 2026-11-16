@@ -7,6 +7,7 @@ enum MissAVError: LocalizedError {
     case noStreamFound
     case timeout
     case challengeCancelled
+    case serverError(Int)
     case parsingFailed(String)
 
     var errorDescription: String? {
@@ -15,6 +16,7 @@ enum MissAVError: LocalizedError {
         case .noStreamFound: return "未能从页面中提取到播放流地址（.m3u8）"
         case .timeout: return "页面加载超时，请检查网络或完成安全验证"
         case .challengeCancelled: return "已取消安全验证"
+        case .serverError(let status): return "MissAV 服务器响应异常（\(status)）"
         case .parsingFailed(let msg): return "解析页面失败: \(msg)"
         }
     }
@@ -42,6 +44,10 @@ final class MissAVClient: NSObject, ObservableObject {
     }
 
     private var webView: WKWebView!
+    private let session: URLSession
+    private let websiteDataStore: WKWebsiteDataStore
+    private var requestTask: Task<Void, Never>?
+    private var loadingWebPage = false
     private var isProcessing = false
     private var queue: [QueuedTask] = []
     private var currentTask: QueuedTask?
@@ -66,7 +72,16 @@ final class MissAVClient: NSObject, ObservableObject {
         let continuation: CheckedContinuation<String, Error>
     }
 
-    override init() {
+    init(session: URLSession? = nil, websiteDataStore: WKWebsiteDataStore? = nil) {
+        if let session {
+            self.session = session
+        } else {
+            let configuration = URLSessionConfiguration.default
+            configuration.timeoutIntervalForRequest = 15
+            configuration.timeoutIntervalForResource = 25
+            self.session = URLSession(configuration: configuration)
+        }
+        self.websiteDataStore = websiteDataStore ?? .default()
         super.init()
         setupWebView()
     }
@@ -75,7 +90,7 @@ final class MissAVClient: NSObject, ObservableObject {
         let config = WKWebViewConfiguration()
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = .all
-        config.websiteDataStore = WKWebsiteDataStore.default()
+        config.websiteDataStore = websiteDataStore
         // 页面骨架就绪就提取、不下载图片视频字体（见 BackgroundWebPage）
         config.userContentController.addUserScript(BackgroundWebPage.domReadyScript)
         config.userContentController.add(self, name: BackgroundWebPage.domReadyHandler)
@@ -182,6 +197,10 @@ final class MissAVClient: NSObject, ObservableObject {
     }
 
     private func cancelQueued(_ id: UUID) {
+        if currentTask?.id == id {
+            complete(id, with: .failure(CancellationError()))
+            return
+        }
         guard let index = queue.firstIndex(where: { $0.id == id }) else { return }
         queue.remove(at: index).continuation.resume(throwing: CancellationError())
     }
@@ -194,11 +213,104 @@ final class MissAVClient: NSObject, ObservableObject {
         let task = queue.removeFirst()
         currentTask = task
         armTimeout(for: task.id)
-        currentStartedAt = Date()
+        requestTask = Task { [weak self] in
+            await self?.fetchPage(for: task)
+        }
+    }
 
-        var request = URLRequest(url: task.url, cachePolicy: .useProtocolCachePolicy, timeoutInterval: 25)
+    /// 和 JavBus 一样先用普通网络会话取 HTML，不执行站点的广告、跳转及额外验证脚本。
+    /// 真正被拦截或播放地址需要网页脚本生成时，才回到浏览器处理。
+    private func fetchPage(for task: QueuedTask) async {
+        do {
+            let browserCookies: [HTTPCookie] = await withCheckedContinuation { continuation in
+                websiteDataStore.httpCookieStore.getAllCookies { continuation.resume(returning: $0) }
+            }
+            guard currentTask?.id == task.id, !Task.isCancelled else { return }
+            let storage = session.configuration.httpCookieStorage
+            let cookies = Self.cookies(browserCookies, matching: task.url)
+            cookies.forEach { storage?.setCookie($0) }
+
+            var request = pageRequest(for: task.url)
+            if storage == nil {
+                for (name, value) in HTTPCookie.requestHeaderFields(with: cookies) {
+                    request.setValue(value, forHTTPHeaderField: name)
+                }
+            }
+            let (data, response) = try await session.data(for: request)
+            guard currentTask?.id == task.id, !Task.isCancelled else { return }
+            let finalURL = response.url ?? task.url
+            await copySessionCookiesToBrowser(for: finalURL)
+            guard currentTask?.id == task.id, !Task.isCancelled else { return }
+
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 200
+            if status == 403 || status == 503 {
+                loadWebPage(for: task)
+                return
+            }
+            guard (200...299).contains(status) else { throw MissAVError.serverError(status) }
+
+            // DOMParser 的文档不运行页面脚本；仍复用现有提取器和 Packer 解包逻辑。
+            let result = try await webView.callAsyncJavaScript(
+                Self.htmlExtractionScript(extractorJS: task.extractorJS),
+                arguments: ["html": String(decoding: data, as: UTF8.self), "baseURL": finalURL.absoluteString],
+                in: nil, contentWorld: .defaultClient
+            ) as? [String: Any]
+            guard currentTask?.id == task.id, !Task.isCancelled else { return }
+            guard result?["challenge"] as? Bool != true,
+                  let json = result?["json"] as? String,
+                  Self.hasUsableExtraction(json, extractorJS: task.extractorJS) else {
+                loadWebPage(for: task)
+                return
+            }
+            complete(task.id, with: .success(json))
+        } catch {
+            guard currentTask?.id == task.id else { return }
+            if Task.isCancelled || (error as? URLError)?.code == .cancelled {
+                complete(task.id, with: .failure(CancellationError()))
+            } else if error is WKError {
+                loadWebPage(for: task)
+            } else {
+                complete(task.id, with: .failure(error))
+            }
+        }
+    }
+
+    private func pageRequest(for url: URL) -> URLRequest {
+        var request = URLRequest(url: url, cachePolicy: .useProtocolCachePolicy, timeoutInterval: 25)
         request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
-        webView.load(request)
+        request.setValue(Self.baseURL + "/", forHTTPHeaderField: "Referer")
+        request.setValue("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", forHTTPHeaderField: "Accept")
+        request.setValue("zh-CN,zh-Hans;q=0.9,ja;q=0.8,en;q=0.7", forHTTPHeaderField: "Accept-Language")
+        return request
+    }
+
+    static func cookies(_ cookies: [HTTPCookie], matching url: URL) -> [HTTPCookie] {
+        guard let host = url.host?.lowercased() else { return [] }
+        return cookies.filter { cookie in
+            let domain = cookie.domain.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
+            let path = url.path.isEmpty ? "/" : url.path
+            let matchesPath = path == cookie.path || (path.hasPrefix(cookie.path) &&
+                (cookie.path.hasSuffix("/") || path.dropFirst(cookie.path.count).hasPrefix("/")))
+            return (host == domain || (cookie.domain.hasPrefix(".") && host.hasSuffix("." + domain))) &&
+                matchesPath && (!cookie.isSecure || url.scheme?.lowercased() == "https") &&
+                (cookie.expiresDate.map { $0 > Date() } ?? true)
+        }
+    }
+
+    private func copySessionCookiesToBrowser(for url: URL) async {
+        for cookie in session.configuration.httpCookieStorage?.cookies(for: url) ?? [] {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                websiteDataStore.httpCookieStore.setCookie(cookie) { continuation.resume() }
+            }
+        }
+    }
+
+    private func loadWebPage(for task: QueuedTask) {
+        guard currentTask?.id == task.id else { return }
+        loadingWebPage = true
+        armTimeout(for: task.id)
+        currentStartedAt = Date()
+        webView.load(pageRequest(for: task.url))
     }
 
     private func armTimeout(for id: UUID) {
@@ -217,22 +329,27 @@ final class MissAVClient: NSObject, ObservableObject {
         timeoutTimer = nil
         challengeCheckTimer?.invalidate()
         challengeCheckTimer = nil
-        dismissChallenge()
-
+        requestTask?.cancel()
+        requestTask = nil
+        loadingWebPage = false
+        webView.stopLoading()
         currentTask = nil
-        isProcessing = false
         extracting = false
         challengeSeenAt = nil
 
         task.continuation.resume(with: result)
-        processNextTaskIfNeeded()
+        dismissChallenge { [weak self] in
+            guard let self else { return }
+            self.isProcessing = false
+            self.processNextTaskIfNeeded()
+        }
     }
 
     private func inspectAndHandlePage(afterLoad: Bool = false) {
-        guard let task = currentTask, !extracting else { return }
+        guard loadingWebPage, let task = currentTask, !extracting else { return }
         let id = task.id
         let startedAt = currentStartedAt
-        webView.evaluateJavaScript(BackgroundWebPage.stateScript) { [weak self] result, _ in
+        webView.evaluateJavaScript(Self.pageStateScript) { [weak self] result, _ in
             guard let self, self.currentTask?.id == id, !self.extracting else { return }
             // 现在页面骨架一就绪就提取，上一个请求的页面回调可能晚到：导航比这次请求还早的不处理
             guard BackgroundWebPage.isCurrentPage(result, startedAt: startedAt) else { return }
@@ -244,7 +361,6 @@ final class MissAVClient: NSObject, ObservableObject {
             guard afterLoad || !self.webView.isLoading else { return }
             self.challengeCheckTimer?.invalidate()
             self.challengeCheckTimer = nil
-            self.dismissChallenge()
             self.extracting = true
             self.webView.evaluateJavaScript(task.extractorJS) { [weak self] res, err in
                 guard let self, self.currentTask?.id == id else { return }
@@ -297,15 +413,23 @@ final class MissAVClient: NSObject, ObservableObject {
         presenter.present(navigation, animated: true)
     }
 
-    private func dismissChallenge() {
-        guard let controller = challengeController else { return }
+    private func dismissChallenge(completion: @escaping () -> Void) {
+        guard let controller = challengeController else { completion(); return }
         challengeController = nil
-        if controller.presentingViewController != nil { controller.dismiss(animated: true) }
+        if controller.presentingViewController != nil {
+            controller.dismiss(animated: true, completion: completion)
+        } else {
+            completion()
+        }
     }
 
     private func cancelChallenge(_ id: UUID) {
-        challengeController = nil
+        guard currentTask?.id == id else { return }
+        // 首页会同时排队取多个分类；取消一次验证后，不让后面的请求逐个再弹同一个框。
+        let pending = queue
+        queue.removeAll()
         complete(id, with: .failure(MissAVError.challengeCancelled))
+        pending.forEach { $0.continuation.resume(throwing: MissAVError.challengeCancelled) }
     }
 
     private static func topViewController() -> UIViewController? {
@@ -375,6 +499,36 @@ final class MissAVClient: NSObject, ObservableObject {
     }
 
     // MARK: - 网页提取 JS 脚本
+
+    /// 正常内容页也可能带 Turnstile 小组件，不能因此打断已经能读取的列表或视频。
+    static let challengeDetectionScript = """
+    (() => {
+        if (document.querySelector('div.thumbnail, video, .plyr, #player')) return false;
+        return \(CloudflareChallenge.detectionScript);
+    })()
+    """
+
+    private static let pageStateScript = "(() => ({ challenge: \(challengeDetectionScript), origin: performance.timeOrigin }))()"
+
+    static func htmlExtractionScript(extractorJS: String) -> String {
+        """
+        const document = new DOMParser().parseFromString(html, 'text/html');
+        const window = {};
+        document.querySelectorAll('base').forEach(base => base.remove());
+        const base = document.createElement('base');
+        base.href = baseURL;
+        document.head.prepend(base);
+        if (\(challengeDetectionScript)) return { challenge: true };
+        return { challenge: false, json: \(extractorJS) };
+        """
+    }
+
+    private static func hasUsableExtraction(_ json: String, extractorJS: String) -> Bool {
+        if extractorJS == detailExtractorScript {
+            return (try? parseVideoDetail(json: json, fallbackId: "").hlsUrl.isEmpty) == false
+        }
+        return (try? parseVideoCards(json: json)) != nil
+    }
 
     static let listExtractorScript = """
     (() => {
@@ -589,7 +743,7 @@ extension MissAVClient: WKNavigationDelegate {
     private func navigationFailed(_ error: Error) {
         if (error as NSError).code == NSURLErrorCancelled { return }
         // 用户在验证页里操作时页面出错：留着验证页让他刷新重试，不直接判失败
-        guard let id = currentTask?.id, challengeController == nil else { return }
+        guard loadingWebPage, let id = currentTask?.id, challengeController == nil else { return }
         complete(id, with: .failure(error))
     }
 }
