@@ -416,7 +416,7 @@ struct OfflineTasksView: View {
         Button {
             showAdd = true
         } label: {
-            Image(appIconNamed: AppIcon.add.name)
+            NavigationIcon(.add)
         }
         .accessibilityLabel("添加任务")
         .accessibilityIdentifier("library.offline.add")

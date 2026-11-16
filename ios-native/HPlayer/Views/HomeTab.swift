@@ -734,11 +734,7 @@ struct HomeTab: View {
 
     private var emptyState: some View {
         VStack(spacing: 16) {
-            Image(appIconNamed: AppIcon.playback.name)
-                .font(.scaled(34, weight: Theme.iconWeight))
-                .foregroundStyle(Theme.accent)
-                .frame(width: 84, height: 84)
-                .background(Theme.tileTint, in: RoundedRectangle(cornerRadius: Theme.Radius.sheet, style: .continuous))
+            EmptyStateMark(.playback)
                 .reveal(0)
             Text("让好内容，在这里相遇")
                 .font(.display(22))

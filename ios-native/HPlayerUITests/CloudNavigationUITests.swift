@@ -58,6 +58,12 @@ final class CloudNavigationUITests: XCTestCase {
         offline.tap()
         XCTAssertTrue(app.navigationBars["离线下载"].waitForExistence(timeout: 10))
         XCTAssertFalse(cloud.isHittable)
+        // 右上角的 ＋ 要真的画出来（真机上出现过只剩玻璃圆）
+        let add = app.buttons["library.offline.add"]
+        XCTAssertTrue(add.waitForExistence(timeout: 5))
+        let ink = add.iconInkRatio()
+        attach("CloudNavigation-offline-add")
+        XCTAssertGreaterThan(ink, 0.02, "The offline ＋ button must draw its icon; ink=\(ink)")
         app.navigationBars.buttons.element(boundBy: 0).tap()
         XCTAssertTrue(offline.waitForExistence(timeout: 5) && offline.isHittable)
         XCTAssertTrue(cloud.isHittable && cloud.isSelected)

@@ -138,9 +138,7 @@ struct LibraryCleanupView: View {
 
     private func message(symbol: String, title: String, text: String, actionTitle: String = "完成", action: (() -> Void)? = nil) -> some View {
         VStack(spacing: 14) {
-            Image(appIconNamed: symbol)
-                .font(.scaled(34, weight: Theme.iconWeight))
-                .foregroundStyle(Theme.accent)
+            EmptyStateMark(icon: symbol)
             Text(title).font(.scaled(18, weight: .bold))
             Text(text)
                 .font(.subheadline).foregroundStyle(Theme.textSecondary)

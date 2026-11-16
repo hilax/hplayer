@@ -41,7 +41,7 @@ struct LocalVideosView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button { showImporter = true } label: {
-                    Image(appIconNamed: AppIcon.add.name)
+                    NavigationIcon(.add)
                 }
                 .disabled(localStore.isImporting)
                 .accessibilityLabel("导入视频")

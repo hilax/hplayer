@@ -126,8 +126,7 @@ struct HomeLibraryScanView: View {
                         .toolbar {
                             ToolbarItem(placement: .navigationBarLeading) {
                                 Button { dismiss() } label: {
-                                    Image(appIconNamed: AppIcon.back.name)
-                                        .font(.scaled(17, weight: .semibold))
+                                    NavigationIcon(.back)
                                 }
                                 .accessibilityLabel("返回")
                                 .accessibilityIdentifier("manage.back")

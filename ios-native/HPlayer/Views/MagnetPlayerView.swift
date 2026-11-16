@@ -83,7 +83,7 @@ struct MagnetPlayerView: View {
                     MagnetSearchView()
                 } label: {
                     // 颜色跟随导航栏按键色，和返回键一致
-                    Image(appIconNamed: AppIcon.search.name)
+                    NavigationIcon(.search)
                 }
             }
             if !initialMagnet.isEmpty {
@@ -290,11 +290,7 @@ struct MagnetPlayerView: View {
     private var resolvingCard: some View {
         VStack(alignment: .leading, spacing: 16) {
             VStack(spacing: 18) {
-                ZStack {
-                    Circle().stroke(Theme.accent.opacity(0.12), lineWidth: 1).frame(width: 132, height: 132)
-                    Circle().stroke(Theme.accent.opacity(0.25), lineWidth: 1).frame(width: 96, height: 96)
-                    Image(appIconNamed: AppIcon.link.name).font(.scaled(32, weight: .light)).foregroundStyle(Theme.accent)
-                }.frame(height: 132)
+                EmptyStateMark(.magnet)
                 // 转圈放在圆环下面单独一行，不再压在圆环边上
                 ProgressView().scaleEffect(1.2)
                 Text(controller.usesCloud ? "115 云下载" : "本机 BT 引擎")

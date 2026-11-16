@@ -525,7 +525,7 @@ struct ContinueHistoryView: View {
             Menu {
                 Button("清空继续观看", icon: AppIcon.trash.name, role: .destructive) { confirmClear = true }
             } label: {
-                Image(appIconNamed: AppIcon.more.name)
+                NavigationIcon(.more)
             }
             .accessibilityLabel("历史选项")
             .accessibilityIdentifier("continue.more")

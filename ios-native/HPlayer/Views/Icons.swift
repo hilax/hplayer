@@ -325,3 +325,27 @@ struct IconTile: View {
             .accessibilityHidden(true)
     }
 }
+
+/// 导航栏按钮里的图标（右上角的 ＋、…、搜索、追番 …）。
+///
+/// iOS 26 会把「按钮里只有一张图」转换成系统栏按钮再上色，真机上出现过右上角只剩玻璃圆、
+/// 图标不见了（动漫详情的追番、离线下载的 ＋）。这里给图标固定尺寸并显式上色，由 SwiftUI 自己画，
+/// 不走那次转换；禁用时变灰。所有导航栏图标按钮的 label 都用它。
+struct NavigationIcon: View {
+    let icon: AppIcon
+    var active = false
+    @Environment(\.isEnabled) private var isEnabled
+
+    init(_ icon: AppIcon, active: Bool = false) {
+        self.icon = icon
+        self.active = active
+    }
+
+    var body: some View {
+        Image(icon: icon, active: active)
+            .font(.system(size: 17, weight: Theme.iconWeight))
+            .foregroundStyle(isEnabled ? Theme.navigationButton : Theme.textMuted)
+            .frame(width: 28, height: 28)
+            .contentShape(Rectangle())
+    }
+}

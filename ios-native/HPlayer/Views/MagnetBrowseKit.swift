@@ -758,10 +758,8 @@ struct MagnetErrorState: View {
     let retry: () -> Void
 
     var body: some View {
-        VStack(spacing: 10) {
-            Image(appIconNamed: AppIcon.alert.name)
-                .font(.scaled(28))
-                .foregroundStyle(Theme.accent)
+        VStack(spacing: 14) {
+            EmptyStateMark(.alert, size: 104)
 
             Text("加载未完成")
                 .font(.headline)
@@ -790,10 +788,8 @@ struct MagnetEmptyState: View {
     var message: String?
 
     var body: some View {
-        VStack(spacing: 10) {
-            Image(appIconNamed: icon.name)
-                .font(.scaled(28))
-                .foregroundStyle(.secondary)
+        VStack(spacing: 14) {
+            EmptyStateMark(icon, size: 104)
             Text(title)
                 .font(.subheadline.weight(.semibold))
             if let message {

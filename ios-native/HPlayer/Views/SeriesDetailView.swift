@@ -52,7 +52,7 @@ struct SeriesDetailView: View {
                     Menu {
                         Button("匹配封面", icon: AppIcon.poster.name) { matching = MatchRequest(group: group) }
                     } label: {
-                        Image(appIconNamed: AppIcon.more.name)
+                        NavigationIcon(.more)
                     }
                     .accessibilityLabel("剧集选项")
                     .accessibilityIdentifier("series.more")

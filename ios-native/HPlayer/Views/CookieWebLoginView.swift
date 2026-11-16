@@ -105,14 +105,14 @@ struct CookieWebLoginView: View {
                         else { Image(appIconNamed: AppIcon.success.name).font(.scaled(38, weight: Theme.iconWeight)) }
                         Text(qrPhase == .connecting ? "正在连接…" : "已扫码").font(.subheadline.weight(.semibold))
                     }
-                    .foregroundStyle(Theme.accent)
+                    .foregroundStyle(Theme.textPrimary)
                 case .ended:
                     Button { startQR() } label: {
                         VStack(spacing: 8) {
                             Image(appIconNamed: AppIcon.refresh.name).font(.scaled(30, weight: Theme.iconWeight))
                             Text("刷新二维码").font(.subheadline.weight(.semibold))
                         }
-                        .foregroundStyle(Theme.accent)
+                        .foregroundStyle(Theme.textPrimary)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .contentShape(Rectangle())
                     }

@@ -90,7 +90,7 @@ struct MetadataMatchView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("完成") { dismiss() } }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button { showTMDB = true } label: { Image(appIconNamed: AppIcon.tune.name) }.accessibilityLabel("资料来源")
+                    Button { showTMDB = true } label: { NavigationIcon(.tune) }.accessibilityLabel("资料来源")
                 }
             }
             .task {
