@@ -30,7 +30,7 @@ struct SettingsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Space.xl) {
-                ScreenTitleBar(title: "我的") { messagesButton }
+                ScreenTitleBar("我的")
                     .padding(.horizontal, -Theme.contentInset)
                     .scrolledAway($titleAway)
                 accountCard.reveal(0)
@@ -55,28 +55,6 @@ struct SettingsView: View {
     }
 
     // MARK: 账号
-
-    /// 标题右边的铃铛：有未读消息时右上角一个琥珀小点
-    @ViewBuilder
-    private var messagesButton: some View {
-        if account.isSignedIn {
-            NavigationLink { AnimeMessagesView() } label: {
-                Image(icon: .bell)
-                    .font(.scaled(20, weight: Theme.iconWeight))
-                    .foregroundStyle(Theme.textPrimary)
-                    .frame(width: 44, height: 44)
-                    .overlay(alignment: .topTrailing) {
-                        if account.totalUnread > 0 {
-                            Circle().fill(Theme.accent).frame(width: 8, height: 8).offset(x: -10, y: 10)
-                        }
-                    }
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.pressable(scale: 0.9))
-            .accessibilityLabel(account.totalUnread > 0 ? "消息通知，\(account.totalUnread) 条未读" : "消息通知")
-            .accessibilityIdentifier("mine.messagesBell")
-        }
-    }
 
     private var avatarLetter: String? {
         guard let first = account.user?.displayName.first else { return nil }
@@ -149,14 +127,12 @@ struct SettingsView: View {
             HStack(spacing: Theme.Space.md + 2) {
                 avatar(size: 60)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(account.user?.displayName ?? "正在读取账号")
+                    Text(account.user?.displayName ?? "HPlayer 用户")
                         .font(.display(20))
                         .foregroundStyle(Theme.textPrimary)
                         .lineLimit(1)
                     if let user = account.user, user.isVip {
                         TagBadge(text: "VIP", style: .accent)
-                    } else if account.loadingUser && account.user == nil {
-                        ProgressView().controlSize(.small)
                     }
                 }
                 Spacer(minLength: 0)
@@ -236,14 +212,14 @@ struct SettingsView: View {
     private var activityGroup: some View {
         SettingsSection(title: "") {
             if account.isSignedIn {
-                NavigationLink { AnimeTasksView() } label: {
+                NavigationLink(value: MineRoute.tasks) {
                     LibraryActionRow(symbol: AppIcon.checklist.name, title: "任务中心",
-                                     value: account.signedToday ? "\(account.user?.coin ?? 0) 金币" : "可签到",
+                                     value: account.signedToday ? "" : "可签到",
                                      valueHighlighted: !account.signedToday)
                 }
                 .buttonStyle(.pressable(scale: 0.985))
                 .accessibilityIdentifier("mine.tasks")
-                NavigationLink { AnimeMessagesView() } label: {
+                NavigationLink(value: MineRoute.messages) {
                     LibraryActionRow(symbol: AppIcon.bell.name, title: "消息通知",
                                      value: account.totalUnread > 0 ? "\(account.totalUnread)" : "",
                                      valueHighlighted: account.totalUnread > 0)
@@ -251,13 +227,13 @@ struct SettingsView: View {
                 .buttonStyle(.pressable(scale: 0.985))
                 .accessibilityIdentifier("mine.messages")
             }
-            NavigationLink { AnimeWatchlistView() } label: {
+            NavigationLink(value: MineRoute.watchlist) {
                 LibraryActionRow(symbol: AppIcon.heart.name, title: "追番收藏",
                                  value: watchlist.items.isEmpty ? "" : "\(watchlist.items.count)")
             }
             .buttonStyle(.pressable(scale: 0.985))
             .accessibilityIdentifier("mine.watchlist")
-            NavigationLink { LocalVideosView() } label: {
+            NavigationLink(value: MineRoute.page(.localVideos)) {
                 LibraryActionRow(symbol: AppIcon.device.name, title: "本机视频",
                                  value: activeDownloads > 0 ? "\(activeDownloads) 个下载中"
                                      : (localStore.files.isEmpty ? "" : "\(localStore.files.count)"),
@@ -855,5 +831,7 @@ private struct AppearancePreview: View {
 /// 「我的」页里压进导航栈的页面
 enum MineRoute: Hashable {
     case watchlist
+    case tasks
+    case messages
     case page(ManagementPage)
 }

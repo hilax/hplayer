@@ -9,7 +9,9 @@ struct RootView: View {
         HomeView(appState: appState)
             .task {
                 PlayerWarmup.prepare()
-                await appState.checkAuth()
+                async let auth: Void = appState.checkAuth()
+                async let accountRefresh: Void = AnimeAccount.shared.refreshIfNeeded()
+                _ = await (auth, accountRefresh)
             }
             .onOpenURL { url in
                 guard url.scheme?.lowercased() == "magnet" else { return }

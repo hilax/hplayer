@@ -11,6 +11,52 @@ final class AnimeNavigationUITests: XCTestCase {
         exerciseDetailNavigation(style: "light", fails: true)
     }
 
+    /// 从「我的 → 追番收藏」点卡片能正常再次进入动漫详情页，且我的页不再有重复铃铛按钮。
+    func testOpeningAnimeDetailFromMineWatchlist() {
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchEnvironment["HPLAYER_DESIGN_SCREEN"] = "home"
+        app.launch()
+        defer { app.terminate() }
+
+        let home = app.tabButton("首页")
+        XCTAssertTrue(home.waitForExistence(timeout: 25))
+        let poster = app.buttons["anime.poster.900001"].firstMatch
+        for _ in 0..<8 where !poster.isHittable { app.swipeUp() }
+        XCTAssertTrue(poster.isHittable)
+        poster.tap()
+
+        XCTAssertTrue(app.buttons["anime.play"].waitForExistence(timeout: 15))
+        let watchlistButton = app.buttons["anime.watchlist.900001"]
+        XCTAssertTrue(watchlistButton.isEnabled)
+        if watchlistButton.label == "追番" { watchlistButton.tap() }
+        let watchedPredicate = NSPredicate(format: "label == %@", "取消追番")
+        let watchedExpectation = XCTNSPredicateExpectation(predicate: watchedPredicate, object: watchlistButton)
+        XCTAssertEqual(XCTWaiter.wait(for: [watchedExpectation], timeout: 5), .completed)
+        XCTAssertGreaterThan(watchlistButton.iconInkRatio(), 0.02, "Filled watchlist heart must draw visibly")
+
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        let mine = app.tabButton("我的")
+        XCTAssertTrue(mine.waitForExistence(timeout: 10))
+        mine.tap()
+        XCTAssertFalse(app.buttons["mine.messagesBell"].exists, "Duplicate top-right bell button should be removed")
+
+        let mineWatchlist = app.buttons["mine.watchlist"]
+        XCTAssertTrue(mineWatchlist.waitForExistence(timeout: 5))
+        for _ in 0..<4 where !mineWatchlist.isHittable { app.swipeUp() }
+        mineWatchlist.tap()
+
+        let card = app.buttons["watchlist.item.900001"].firstMatch
+        XCTAssertTrue(card.waitForExistence(timeout: 10), "Saved anime must appear in Mine Watchlist")
+        card.tap()
+
+        XCTAssertTrue(app.buttons["anime.play"].waitForExistence(timeout: 15),
+                      "Tapping a card in Mine Watchlist must open AnimeDetailView")
+        XCTAssertGreaterThan(app.buttons["anime.watchlist.900001"].iconInkRatio(), 0.02)
+        attach("AnimeNavigation-watchlist-reopened")
+    }
+
     private func exerciseDetailNavigation(style: String, fails: Bool) {
         continueAfterFailure = false
         XCUIDevice.shared.orientation = .portrait

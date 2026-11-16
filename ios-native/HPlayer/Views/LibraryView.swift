@@ -550,7 +550,7 @@ struct DirectoryView: View {
         Menu {
             menuContent
         } label: {
-            Image(appIconNamed: AppIcon.more.name)
+            NavigationIcon(.more)
         }
         .disabled(loading)
         .accessibilityLabel("更多")

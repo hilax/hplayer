@@ -255,6 +255,10 @@ struct HomeView: View {
                         switch route {
                         case .watchlist:
                             AnimeWatchlistView()
+                        case .tasks:
+                            AnimeTasksView()
+                        case .messages:
+                            AnimeMessagesView()
                         case .page(.offline):
                             OfflineTasksView()
                         case .page(.downloads):

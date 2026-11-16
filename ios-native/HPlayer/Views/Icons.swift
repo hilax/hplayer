@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// 全应用唯一的图标表。
 ///
@@ -328,63 +329,113 @@ struct IconTile: View {
 
 /// 导航栏按钮里的图标（右上角的 ＋、…、搜索、追番 …）。
 ///
-/// iOS 26 会把「按钮里只有一张图」转换成系统栏按钮再上色，真机上出现过右上角只剩玻璃圆、
-/// 图标不见了（动漫详情的追番、离线下载的 ＋）。这里给图标固定尺寸并显式上色，由 SwiftUI 自己画，
-/// 不走那次转换；禁用时变灰。所有导航栏图标按钮的 label 都用它。
+/// iOS 26 液态玻璃导航栏会把工具栏按钮里的自定义 `.symbolset` 图标放进系统栏位渲染管线，
+/// 真机上出现过只剩玻璃圆、图标本身画不出来。这里预先把自定义符号光栅化成带缩放倍率的高清位图
+/// (`isSymbolImage == false`, `.alwaysOriginal`)，包在固定尺寸容器中绘制，避免被系统桥接吞掉。
 struct NavigationIcon: View {
     let icon: AppIcon
     var active = false
+    var size: CGFloat = 18
     @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.displayScale) private var displayScale
 
-    init(_ icon: AppIcon, active: Bool = false) {
+    init(_ icon: AppIcon, active: Bool = false, size: CGFloat = 18) {
         self.icon = icon
         self.active = active
+        self.size = size
     }
 
     var body: some View {
-        Image(icon: icon, active: active)
-            .font(.system(size: 17, weight: Theme.iconWeight))
-            .foregroundStyle(isEnabled ? Theme.navigationButton : Theme.textMuted)
-            .frame(width: 28, height: 28)
-            .contentShape(Rectangle())
-    }
-}
-
-// MARK: - 排查用：导航栏探针
-
-#if DEBUG
-/// 排查「导航栏右上角只剩玻璃圆」用：UI 测试设置 HPLAYER_TOOLBAR_PROBE=1 时，
-/// 在右上角多放几种按钮（红方块、文字、系统符号），由测试量出各自画出了多少像素。
-private struct ToolbarProbe: ViewModifier {
-    @ViewBuilder func body(content: Content) -> some View {
-        if ProcessInfo.processInfo.environment["HPLAYER_TOOLBAR_PROBE"] == "1" {
-            content.toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {} label: { Rectangle().fill(Color.red).frame(width: 18, height: 18) }
-                        .accessibilityIdentifier("probe.rect")
+        let assetName = active ? icon.activeName : icon.name
+        let color = resolvedUIColor
+        if let bitmap = NavigationIconCache.shared.bitmap(name: assetName, pointSize: size, color: color, scale: displayScale) {
+            Color.clear
+                .frame(width: 28, height: 28)
+                .overlay {
+                    Image(uiImage: bitmap)
+                        .resizable()
+                        .interpolation(.high)
+                        .scaledToFit()
+                        .frame(width: 22, height: 22)
+                        .accessibilityHidden(true)
                 }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("测") {}
-                        .accessibilityIdentifier("probe.text")
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {} label: { Image(systemName: "plus") }
-                        .accessibilityIdentifier("probe.sf")
-                }
-            }
+                .contentShape(Rectangle())
+                .accessibilityLabel(Text(icon.spokenName))
         } else {
-            content
+            Image(icon: icon, active: active)
+                .font(.system(size: size, weight: Theme.iconWeight))
+                .foregroundStyle(Color(uiColor: color))
+                .frame(width: 28, height: 28)
+                .contentShape(Rectangle())
         }
     }
-}
-#endif
 
-extension View {
-    @ViewBuilder func toolbarProbe() -> some View {
-        #if DEBUG
-        modifier(ToolbarProbe())
-        #else
-        self
-        #endif
+    private var resolvedUIColor: UIColor {
+        let base = isEnabled ? Theme.navigationButtonUIColor : Theme.textMutedUIColor
+        let style: UIUserInterfaceStyle = colorScheme == .dark ? .dark : .light
+        return base.resolvedColor(with: UITraitCollection(userInterfaceStyle: style))
+    }
+}
+
+/// 缓存光栅化后的导航栏位图图标，避免滚动或重绘时重复渲染。
+private final class NavigationIconCache: @unchecked Sendable {
+    static let shared = NavigationIconCache()
+    private let lock = NSLock()
+    private var bitmaps: [String: UIImage] = [:]
+
+    func bitmap(name: String, pointSize: CGFloat, color: UIColor, scale: CGFloat) -> UIImage? {
+        let resolvedScale = max(scale, 1)
+        let key = cacheKey(name: name, pointSize: pointSize, color: color, scale: resolvedScale)
+        lock.lock()
+        if let cached = bitmaps[key] {
+            lock.unlock()
+            return cached
+        }
+        lock.unlock()
+
+        let weightConfig = UIImage.SymbolConfiguration(pointSize: pointSize, weight: .medium)
+        let fallbackConfig = UIImage.SymbolConfiguration(pointSize: pointSize)
+        guard let symbol = UIImage(named: name, in: .main, with: weightConfig)
+            ?? UIImage(named: name, in: .main, with: fallbackConfig)
+            ?? UIImage(named: name),
+              symbol.size.width > 0, symbol.size.height > 0 else {
+            return nil
+        }
+
+        let canvasSide: CGFloat = 22
+        let maxGlyph: CGFloat = 20
+        let maxDim = max(symbol.size.width, symbol.size.height)
+        let factor = maxDim > maxGlyph ? (maxGlyph / maxDim) : 1
+        let drawnSize = CGSize(width: symbol.size.width * factor, height: symbol.size.height * factor)
+        let origin = CGPoint(x: (canvasSide - drawnSize.width) / 2, y: (canvasSide - drawnSize.height) / 2)
+
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = resolvedScale
+        format.opaque = false
+
+        let tinted = symbol.withTintColor(color, renderingMode: .alwaysOriginal)
+        let rendered = UIGraphicsImageRenderer(size: CGSize(width: canvasSide, height: canvasSide), format: format).image { _ in
+            tinted.draw(in: CGRect(origin: origin, size: drawnSize))
+        }.withRenderingMode(.alwaysOriginal)
+
+        lock.lock()
+        bitmaps[key] = rendered
+        lock.unlock()
+        return rendered
+    }
+
+    private func cacheKey(name: String, pointSize: CGFloat, color: UIColor, scale: CGFloat) -> String {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        if !color.getRed(&r, green: &g, blue: &b, alpha: &a) {
+            var white: CGFloat = 0
+            color.getWhite(&white, alpha: &a)
+            r = white; g = white; b = white
+        }
+        let rgba = (Int((r * 255).rounded()) << 24)
+            | (Int((g * 255).rounded()) << 16)
+            | (Int((b * 255).rounded()) << 8)
+            | Int((a * 255).rounded())
+        return "\(name)|\(Int(pointSize.rounded()))|\(rgba)|\(Int(scale.rounded()))"
     }
 }

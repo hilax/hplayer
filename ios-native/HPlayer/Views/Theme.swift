@@ -91,12 +91,14 @@ enum Theme {
 
     // MARK: 文字（四级）
 
-    static let textPrimary = Color(uiColor: .adaptive(light: UIColor(hex: 0x111113), dark: UIColor(hex: 0xEDEDEF)))
+    static let textPrimaryUIColor = UIColor.adaptive(light: UIColor(hex: 0x111113), dark: UIColor(hex: 0xEDEDEF))
+    static let textPrimary = Color(uiColor: textPrimaryUIColor)
     static let textSecondaryUIColor = UIColor.adaptive(light: UIColor(hex: 0x52525B), dark: UIColor(hex: 0xA1A1AA))
     static let textSecondary = Color(uiColor: textSecondaryUIColor)
     static let textTertiary = Color(uiColor: .adaptive(light: UIColor(hex: 0x62626B), dark: UIColor(hex: 0x85858E)))
     /// 第四级：不可用、占位。刻意不满足正文对比度，只用在禁用态和占位字。
-    static let textMuted = Color(uiColor: .adaptive(light: UIColor(hex: 0xA1A1AA), dark: UIColor(hex: 0x5A5A62)))
+    static let textMutedUIColor = UIColor.adaptive(light: UIColor(hex: 0xA1A1AA), dark: UIColor(hex: 0x5A5A62))
+    static let textMuted = Color(uiColor: textMutedUIColor)
     /// 首页铺的是封面取色的底：上面的灰色次要文字会发闷，改用半透明白，底色偏亮偏暗都看得清。
     static let textSecondaryOnArtwork = Color.white.opacity(0.78)
     static let textTertiaryOnArtwork = Color.white.opacity(0.56)
@@ -164,6 +166,7 @@ enum Theme {
     /// 导航栏按键色：返回键，以及右上角的文字按钮和图标（清空、搜索、关闭、完成 …）都用它，保持同一个颜色。
     /// 由 NavigationStack 上的 `.tint` 统一下发；工具栏按钮不要再单独设前景色，
     /// 这样禁用时也由系统统一变灰。危险操作的红色留给二次确认弹窗里的按钮。
+    static let navigationButtonUIColor = textPrimaryUIColor
     static let navigationButton = textPrimary
 
     // MARK: HUD 提示

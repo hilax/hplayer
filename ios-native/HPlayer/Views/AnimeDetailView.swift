@@ -26,6 +26,7 @@ struct AnimeDetailView: View {
     @Namespace private var routeNamespace
     @Namespace private var orderNamespace
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
 
     private static let scrollSpace = "anime.detail.scroll"
     private let backdropHeight: CGFloat = 260
@@ -80,20 +81,21 @@ struct AnimeDetailView: View {
         .modifier(TransparentNavigationBar())
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
+                let watched = watchlist.isWatched(id: animeId)
                 Button {
                     guard let detail else { return }
                     Haptics.tap()
-                    watchlist.toggle(detail: detail)
+                    withAnimation(Motion.resolved(Motion.snappy, reduceMotion: reduceMotion)) {
+                        watchlist.toggle(detail: detail)
+                    }
                 } label: {
                     // 未追番线框、已追番实心，颜色都是导航栏按键色（和返回键一致，不用琥珀）。
-                    // 切换时用系统的符号弹跳。导航栏按钮上不叠 Pow 的 changeEffect（跳动、飘心）：
-                    // 它会在图标外再包一层动画视图，真机上这个按钮出现过只剩玻璃圆、看不到爱心。
-                    NavigationIcon(watchlist.isWatched(id: animeId) ? .heartFill : .heart)
-                        .bounceSymbol(on: watchlist.isWatched(id: animeId))
+                    // NavigationIcon 光栅化为高清位图绘制，避免 iOS 26 液态玻璃栏抽空自定义符号。
+                    NavigationIcon(watched ? .heartFill : .heart)
                 }
                 // 加载、成功和失败时都保留同一个按钮，导航栏不会因工具项增删而重新布局。
                 .disabled(detail == nil)
-                .accessibilityLabel(watchlist.isWatched(id: animeId) ? "取消追番" : "追番")
+                .accessibilityLabel(watched ? "取消追番" : "追番")
                 .accessibilityIdentifier("anime.watchlist.\(animeId)")
             }
         }
@@ -150,6 +152,18 @@ struct AnimeDetailView: View {
                             endPoint: .bottom
                         )
                     }
+
+                // 深色模式下封面顶部偏亮（如光球）时压柔一点，保证导航栏浅色图标对比度
+                if colorScheme == .dark {
+                    LinearGradient(
+                        colors: [Color.black.opacity(0.32), .clear],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .frame(height: min(110, height))
+                    .frame(maxHeight: .infinity, alignment: .top)
+                    .allowsHitTesting(false)
+                }
             }
             .frame(width: proxy.size.width, height: height)
             .compositingGroup()

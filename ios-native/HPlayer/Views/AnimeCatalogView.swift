@@ -163,9 +163,7 @@ struct AnimeCatalogView: View {
             .buttonStyle(.pressable(scale: 0.92))
             .accessibilityIdentifier("anime.shortcut.hot")
 
-            NavigationLink {
-                AnimeWatchlistView()
-            } label: {
+            NavigationLink(value: MineRoute.watchlist) {
                 ChannelShortcutLabel(title: "我的追番", icon: .heart, tint: ShortcutTint.purple)
             }
             .buttonStyle(.pressable(scale: 0.92))

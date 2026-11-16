@@ -134,7 +134,6 @@ struct OfflineTasksView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) { addButton }
         }
-        .toolbarProbe()
         .designScreen("offline")
         .hudProgress(operation)
         .task {

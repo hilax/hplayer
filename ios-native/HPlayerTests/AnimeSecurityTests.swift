@@ -131,6 +131,26 @@ final class AnimeSecurityTests: XCTestCase {
         XCTAssertEqual(reply?.numericID, 897906)
     }
 
+    func testAccountUserCachePersistsAndClears() throws {
+        let suite = "AnimeAccountCacheTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let user = AnimeUser(json: [
+            "id": 2817982,
+            "user_name": "Hilax",
+            "email": "a@b.c",
+            "coin": 690,
+            "signnum": 5,
+            "isvip": true,
+        ])
+        AnimeAccount.saveCachedUser(user, in: defaults)
+        XCTAssertEqual(AnimeAccount.loadCachedUser(from: defaults), user)
+
+        AnimeAccount.clearCachedUser(from: defaults)
+        XCTAssertNil(AnimeAccount.loadCachedUser(from: defaults))
+    }
+
     func testCommentReadsRealFieldNames() {
         let json: [String: Any] = ["id": 264121, "uname": "用户", "comments": "正文", "hits": 621, "istop": 1,
                                    "isvip": true, "children_total": 135, "created_at": "2026-09-02T13:00:36+08:00",

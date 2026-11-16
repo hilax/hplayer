@@ -138,7 +138,7 @@ struct DownloadsView: View {
             }
             .disabled(manager.completed.isEmpty)
         } label: {
-            Image(appIconNamed: AppIcon.more.name)
+            NavigationIcon(.more)
         }
         .accessibilityLabel("更多")
         .accessibilityIdentifier("library.downloads.menu")

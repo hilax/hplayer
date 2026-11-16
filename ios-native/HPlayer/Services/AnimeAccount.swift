@@ -5,7 +5,7 @@ import UIKit
 // MARK: - 模型
 
 /// HPlayer 账号（动漫接口的用户）。字段来自 `GET /app/users/info` 的 GUserInfo。
-struct AnimeUser: Equatable {
+struct AnimeUser: Codable, Equatable {
     let id: Int
     let name: String
     let email: String
@@ -156,10 +156,17 @@ final class AnimeAccount: ObservableObject {
     @Published private(set) var loadingUser = false
     @Published var lastError = ""
 
+    nonisolated private static let cachedUserKey = "hplayer.anime.cachedUser"
     private var sessionObserver: NSObjectProtocol?
+    private var lastRefreshedAt: Date?
+    private let refreshThrottle: TimeInterval = 60
 
     private init() {
         isSignedIn = !InterfacePreview.active && AnimeSigner.shared.hasUserToken
+        if isSignedIn, let cached = Self.loadCachedUser() {
+            user = cached
+            signedDay = UserDefaults.standard.string(forKey: signedDayKey) ?? ""
+        }
         sessionObserver = NotificationCenter.default.addObserver(forName: .animeSessionExpired, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.clearSession(message: "登录已过期，请重新登录") }
         }
@@ -269,6 +276,8 @@ final class AnimeAccount: ObservableObject {
         tasks = []
         unread = [:]
         signedDay = ""
+        lastRefreshedAt = nil
+        Self.clearCachedUser()
         lastError = message
     }
 
@@ -283,10 +292,14 @@ final class AnimeAccount: ObservableObject {
         async let taskList: Void = loadTasks()
         async let summary: Void = loadUnread()
         _ = await (info, taskList, summary)
+        if user != nil { lastRefreshedAt = Date() }
     }
 
     func refreshIfNeeded() async {
-        guard isSignedIn, user == nil, !loadingUser else { return }
+        guard isSignedIn, !InterfacePreview.active, !loadingUser else { return }
+        if let lastRefreshedAt, user != nil, Date().timeIntervalSince(lastRefreshedAt) < refreshThrottle {
+            return
+        }
         await refresh()
     }
 
@@ -294,7 +307,9 @@ final class AnimeAccount: ObservableObject {
         do {
             let data = try await AnimeClient.shared.perform("/app/users/info")
             if let json = data as? [String: Any] {
-                user = AnimeUser(json: json)
+                let fetched = AnimeUser(json: json)
+                user = fetched
+                Self.saveCachedUser(fetched)
                 signedDay = UserDefaults.standard.string(forKey: signedDayKey) ?? ""
             }
         } catch {
@@ -309,6 +324,23 @@ final class AnimeAccount: ObservableObject {
         }
         guard isSignedIn, let data = try? await AnimeClient.shared.perform("/app/task") else { return }
         tasks = AnimeJSON.records(in: data).compactMap(AnimeTask.init(json:))
+        if tasks.first(where: \.isSign)?.finished == true {
+            rememberSignedToday()
+        }
+    }
+
+    nonisolated static func saveCachedUser(_ user: AnimeUser, in defaults: UserDefaults = .standard) {
+        guard let data = try? JSONEncoder().encode(user) else { return }
+        defaults.set(data, forKey: cachedUserKey)
+    }
+
+    nonisolated static func loadCachedUser(from defaults: UserDefaults = .standard) -> AnimeUser? {
+        guard let data = defaults.data(forKey: cachedUserKey) else { return nil }
+        return try? JSONDecoder().decode(AnimeUser.self, from: data)
+    }
+
+    nonisolated static func clearCachedUser(from defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: cachedUserKey)
     }
 
     private func loadUnread() async {
