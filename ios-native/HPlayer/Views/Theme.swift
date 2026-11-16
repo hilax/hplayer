@@ -95,7 +95,8 @@ enum Theme {
     static let textPrimary = Color(uiColor: textPrimaryUIColor)
     static let textSecondaryUIColor = UIColor.adaptive(light: UIColor(hex: 0x52525B), dark: UIColor(hex: 0xA1A1AA))
     static let textSecondary = Color(uiColor: textSecondaryUIColor)
-    static let textTertiary = Color(uiColor: .adaptive(light: UIColor(hex: 0x62626B), dark: UIColor(hex: 0x85858E)))
+    static let textTertiaryUIColor = UIColor.adaptive(light: UIColor(hex: 0x62626B), dark: UIColor(hex: 0x85858E))
+    static let textTertiary = Color(uiColor: textTertiaryUIColor)
     /// 第四级：不可用、占位。刻意不满足正文对比度，只用在禁用态和占位字。
     static let textMutedUIColor = UIColor.adaptive(light: UIColor(hex: 0xA1A1AA), dark: UIColor(hex: 0x5A5A62))
     static let textMuted = Color(uiColor: textMutedUIColor)

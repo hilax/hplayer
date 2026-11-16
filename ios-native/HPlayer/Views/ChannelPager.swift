@@ -86,10 +86,10 @@ struct PagedHeaderContainer<Page: Hashable, FirstRow: View, SecondRow: View, Con
                         }
                     }
                     .scrollTargetLayout()
+                    .background(PagerBounceDisabler())
                 }
                 .scrollTargetBehavior(.paging)
                 .scrollIndicators(.hidden)
-                .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
                 .scrollPosition(id: $position)
                 .ignoresSafeArea(edges: .top)
                 .onAppear { position = selection }
@@ -110,7 +110,9 @@ struct PagedHeaderContainer<Page: Hashable, FirstRow: View, SecondRow: View, Con
         } else {
             TabView(selection: $selection) {
                 ForEach(pages, id: \.self) { page in
-                    pageView(page, insets: insets).tag(page)
+                    pageView(page, insets: insets)
+                        .background(PagerBounceDisabler())
+                        .tag(page)
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
@@ -315,4 +317,96 @@ private struct PageScrollTracker: ViewModifier {
 private struct PageScrollOffsetKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
+/// 关闭横向分页容器两端（首页/末页）的回弹越界，防止向右或向左拖出空白底色，同时保留 SwiftUI 自身分页 delegate。
+private struct PagerBounceDisabler: UIViewRepresentable {
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeUIView(context: Context) -> ProbeView {
+        let view = ProbeView()
+        view.isHidden = true
+        view.isUserInteractionEnabled = false
+        view.accessibilityElementsHidden = true
+        view.onMovedToHierarchy = { [weak coordinator = context.coordinator] probe in
+            coordinator?.attach(from: probe)
+        }
+        return view
+    }
+
+    func updateUIView(_ uiView: ProbeView, context: Context) {
+        context.coordinator.attach(from: uiView)
+    }
+
+    final class ProbeView: UIView {
+        var onMovedToHierarchy: ((ProbeView) -> Void)?
+
+        override func didMoveToSuperview() {
+            super.didMoveToSuperview()
+            onMovedToHierarchy?(self)
+        }
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            onMovedToHierarchy?(self)
+        }
+    }
+
+    final class Coordinator {
+        private weak var observedScrollView: UIScrollView?
+        private var observations: [NSKeyValueObservation] = []
+        private var isEnforcing = false
+
+        func attach(from probe: UIView) {
+            guard let scrollView = nearestScrollView(from: probe) else { return }
+            if observedScrollView !== scrollView {
+                observations.removeAll()
+                observedScrollView = scrollView
+                observe(scrollView)
+            }
+            enforceNoHorizontalBounce()
+        }
+
+        private func nearestScrollView(from view: UIView) -> UIScrollView? {
+            var cursor = view.superview
+            while let current = cursor {
+                if let scrollView = current as? UIScrollView {
+                    return scrollView
+                }
+                cursor = current.superview
+            }
+            return nil
+        }
+
+        private func observe(_ scrollView: UIScrollView) {
+            observations.append(scrollView.observe(\.bounces, options: [.new]) { [weak self] _, _ in
+                self?.enforceNoHorizontalBounce()
+            })
+            observations.append(scrollView.observe(\.alwaysBounceHorizontal, options: [.new]) { [weak self] _, _ in
+                self?.enforceNoHorizontalBounce()
+            })
+            if #available(iOS 17.4, *) {
+                observations.append(scrollView.observe(\.bouncesHorizontally, options: [.new]) { [weak self] _, _ in
+                    self?.enforceNoHorizontalBounce()
+                })
+            }
+        }
+
+        private func enforceNoHorizontalBounce() {
+            guard !isEnforcing, let scrollView = observedScrollView else { return }
+            isEnforcing = true
+            defer { isEnforcing = false }
+            if scrollView.bounces {
+                scrollView.bounces = false
+            }
+            if scrollView.alwaysBounceHorizontal {
+                scrollView.alwaysBounceHorizontal = false
+            }
+            if #available(iOS 17.4, *), scrollView.bouncesHorizontally {
+                scrollView.bouncesHorizontally = false
+            }
+        }
+    }
 }

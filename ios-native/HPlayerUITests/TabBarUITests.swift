@@ -84,6 +84,120 @@ final class TabBarUITests: XCTestCase {
         }
     }
 
+    /// 真实首页环境下打开、关闭搜索页（首开与二次打开）：验证键盘与搜索页同步出现与消失，且页面不跳动。
+    func testSearchKeyboardOpenAndCloseRoundTrip() {
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchEnvironment["HPLAYER_HOME_TEST"] = "1"
+        app.launchEnvironment["HPLAYER_METADATA_TEST_ENDPOINT"] = "http://127.0.0.1:1"
+        app.launch()
+        defer { app.terminate() }
+
+        let searchEntry = app.buttons["home.search"]
+        XCTAssertTrue(searchEntry.waitForExistence(timeout: 25))
+        let homeFrameBefore = searchEntry.frame
+        let query = app.textFields["search.query"]
+        let back = app.buttons["search.back"]
+
+        // 1st open
+        searchEntry.tap()
+        XCTAssertTrue(waitFor(timeout: 10) { query.isHittable }, "1st open: search field must become interactive")
+        let keyboardShownFirst = waitFor(timeout: 3) { app.keyboards.count > 0 }
+        let queryFrameFirst = query.frame
+        Thread.sleep(forTimeInterval: 0.35)
+        XCTAssertEqual(query.frame.minY, queryFrameFirst.minY, accuracy: 0.5, "1st open: search field must not jump vertically")
+
+        // 1st close
+        back.tap()
+        XCTAssertTrue(waitFor(timeout: 10) { searchEntry.isHittable }, "1st close: home search bar must return")
+        if keyboardShownFirst {
+            XCTAssertTrue(waitFor(timeout: 2) { app.keyboards.count == 0 }, "1st close: software keyboard must dismiss with search page")
+        }
+        XCTAssertEqual(searchEntry.frame.minY, homeFrameBefore.minY, accuracy: 0.5, "1st close: home search bar must not shift")
+
+        // 2nd open
+        searchEntry.tap()
+        XCTAssertTrue(waitFor(timeout: 10) { query.isHittable }, "2nd open: search field must become interactive")
+        let keyboardShownSecond = waitFor(timeout: 3) { app.keyboards.count > 0 }
+        let queryFrameSecond = query.frame
+        Thread.sleep(forTimeInterval: 0.35)
+        XCTAssertEqual(query.frame.minY, queryFrameSecond.minY, accuracy: 0.5, "2nd open: search field must not jump vertically")
+
+        // 2nd close
+        back.tap()
+        XCTAssertTrue(waitFor(timeout: 10) { searchEntry.isHittable }, "2nd close: home search bar must return")
+        if keyboardShownSecond {
+            XCTAssertTrue(waitFor(timeout: 2) { app.keyboards.count == 0 }, "2nd close: software keyboard must dismiss with search page")
+        }
+        XCTAssertEqual(searchEntry.frame.minY, homeFrameBefore.minY, accuracy: 0.5, "2nd close: home search bar must not shift")
+    }
+
+    /// 首页最左「推荐」不能继续向右拖、最右「MissAV」不能继续向左拖；中间页左右切换仍正常工作。
+    func testHomeChannelEdgesDoNotOverscroll() throws {
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchEnvironment["HPLAYER_DESIGN_SCREEN"] = "home"
+        app.launch()
+        defer { app.terminate() }
+
+        let recommend = app.buttons["home.channel.recommend"]
+        let anime = app.buttons["home.channel.anime"]
+        let jable = app.buttons["home.channel.jable"]
+        let missav = app.buttons["home.channel.missav"]
+        XCTAssertTrue(recommend.waitForExistence(timeout: 25))
+        XCTAssertTrue(recommend.isSelected)
+
+        let heroPlay = app.buttons["home.heroPlay"].firstMatch
+        XCTAssertTrue(heroPlay.waitForExistence(timeout: 10))
+        let heroFrameBefore = heroPlay.frame
+
+        let screen = app.frame
+        let recommendTitles = ["home.shelf.continue", "home.shelf.trending", "home.shelf.movies", "home.shelf.watchlist"]
+            .map { app.descendants(matching: .any)[$0].firstMatch }
+        let title = try XCTUnwrap(recommendTitles.first { $0.exists && $0.frame.minY > 200 && $0.frame.maxY < screen.maxY - 120 },
+                                  "A Recommend shelf title must be on screen")
+        let recommendRow = title.frame.midY / screen.height
+        let recommendLeft = app.coordinate(withNormalizedOffset: CGVector(dx: 0.12, dy: recommendRow))
+        let recommendRight = app.coordinate(withNormalizedOffset: CGVector(dx: 0.88, dy: recommendRow))
+
+        // 最左「推荐」向右拖：停在首页不露白边也不切页
+        recommendLeft.press(forDuration: 0.05, thenDragTo: recommendRight, withVelocity: .slow, thenHoldForDuration: 0.6)
+        XCTAssertTrue(recommend.isSelected)
+        XCTAssertEqual(heroPlay.frame.minX, heroFrameBefore.minX, accuracy: 1.0, "Swiping right on Recommend must not shift content")
+
+        // 中间正常向左滑：推荐 -> 动漫
+        recommendRight.press(forDuration: 0.05, thenDragTo: recommendLeft, withVelocity: .default, thenHoldForDuration: 0.05)
+        XCTAssertTrue(waitFor(timeout: 5) { anime.isSelected }, "Swiping left on Recommend moves to Anime")
+
+        // 点到最右「MissAV」再向左拖：停在末页不露白边
+        if !missav.isHittable {
+            app.descendants(matching: .any)["home.channels"].firstMatch.swipeLeft()
+        }
+        missav.tap()
+        XCTAssertTrue(waitFor(timeout: 5) { missav.isSelected }, "Tapping MissAV selects the rightmost channel")
+
+        let missavShortcut = app.buttons["missav.shortcut.new"].firstMatch
+        XCTAssertTrue(missavShortcut.waitForExistence(timeout: 10))
+        let missavFrameBefore = missavShortcut.frame
+        let missavGapY = max(missavShortcut.frame.minY - 8, 220) / screen.height
+        let missavLeft = app.coordinate(withNormalizedOffset: CGVector(dx: 0.12, dy: missavGapY))
+        let missavRight = app.coordinate(withNormalizedOffset: CGVector(dx: 0.88, dy: missavGapY))
+
+        missavRight.press(forDuration: 0.05, thenDragTo: missavLeft, withVelocity: .slow, thenHoldForDuration: 0.6)
+        XCTAssertTrue(missav.isSelected)
+        XCTAssertEqual(missavShortcut.frame.minX, missavFrameBefore.minX, accuracy: 1.0, "Swiping left on MissAV must not shift content")
+
+        // 从末页向右滑仍能正常切回 Jable
+        missavLeft.press(forDuration: 0.05, thenDragTo: missavRight, withVelocity: .default, thenHoldForDuration: 0.05)
+        XCTAssertTrue(waitFor(timeout: 5) { jable.isSelected }, "Swiping right on MissAV moves back to Jable")
+    }
+
+    private func waitFor(timeout: TimeInterval, _ predicate: @escaping () -> Bool) -> Bool {
+        XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in predicate() }, object: nil)], timeout: timeout) == .completed
+    }
+
     private func exerciseNavigationReturn(usingGesture: Bool) {
         continueAfterFailure = false
         XCUIDevice.shared.orientation = .portrait

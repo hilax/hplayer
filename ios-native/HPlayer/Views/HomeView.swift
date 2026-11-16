@@ -24,6 +24,8 @@ struct HomeView: View {
     /// 搜索是盖在标签页上面的全屏页，不占标签位；打开过以后保持存活（搜索词还在）。
     @State private var searchOpen = false
     @State private var searchCreated = false
+    @StateObject private var searchKeyboard = SearchKeyboardCoordinator()
+    private let searchInitiallyVisible: Bool
     /// 首页分类入口带过来的筛选；片库读取后会清空。
     @State private var catalogPreset: CatalogPreset?
     /// 首页当前频道：推荐 / 片库 / 动漫（2.0：原「片库」Tab 并入首页）。
@@ -48,6 +50,7 @@ struct HomeView: View {
         _selection = State(initialValue: initialSection == .search ? .home : initialSection)
         _searchOpen = State(initialValue: initialSection == .search)
         _searchCreated = State(initialValue: initialSection == .search)
+        self.searchInitiallyVisible = initialSection == .search
         _channel = State(initialValue: initialChannel)
         if let library { _mediaLibrary = StateObject(wrappedValue: library) }
         if let local { _localStore = StateObject(wrappedValue: local) }
@@ -321,23 +324,27 @@ struct HomeView: View {
     }
 
     private var searchPage: some View {
-        SearchTab(initialQuery: initialSearch, initialResults: searchFiles, isActive: searchOpen,
-                  library: librarySnapshots.ready ? librarySnapshots.home : nil,
-                  onClose: { closeSearch() })
-            .background(Theme.pageBackground.ignoresSafeArea())
-            // 淡入淡出只作用在透明度上：搜索页内部的布局（键盘收起时它跟着变高）
-            // 不能被这个淡出动画接管，否则它和键盘自己的动画叠在一起，页面会先被带下去再弹回来。
-            .transaction { $0.animation = nil }
-            .opacity(searchOpen ? 1 : 0)
-            // 打开时柔和淡入；返回时快一点淡出，淡完之后搜索页才收键盘（见 SearchView）
-            .animation(reduceMotion ? nil : (searchOpen ? Motion.fade : .easeOut(duration: SearchView.closeFadeDuration)),
-                       value: searchOpen)
-            .allowsHitTesting(searchOpen)
-            .accessibilityHidden(!searchOpen)
-            // 搜索页也不跟系统的键盘避让：它的大小、位置在键盘弹出收起时一点都不变，
-            // 列表底部为键盘留的空白由搜索页自己量（见 SearchView.keyboardHeight）。
-            .ignoresSafeArea(.keyboard, edges: .bottom)
-            .zIndex(1)
+        SearchOverlayHost(isOpen: searchOpen,
+                          initiallyVisible: searchInitiallyVisible,
+                          coordinator: searchKeyboard) {
+            SearchTab(initialQuery: initialSearch,
+                      initialResults: searchFiles,
+                      isActive: searchOpen,
+                      library: librarySnapshots.ready ? librarySnapshots.home : nil,
+                      keyboard: searchKeyboard,
+                      onClose: { closeSearch() })
+                .environmentObject(appState)
+                .environmentObject(recents)
+                .environmentObject(mediaLibrary)
+                .environmentObject(localStore)
+                .environmentObject(metadataStore)
+                .environmentObject(librarySnapshots)
+                .tint(Theme.accent)
+        }
+        .ignoresSafeArea()
+        .allowsHitTesting(searchOpen)
+        .accessibilityHidden(!searchOpen)
+        .zIndex(1)
     }
 
     /// 没选中标签的图标：线框款，预先染成主题的次要文字灰（浅色 / 深色各一套）。
@@ -357,7 +364,9 @@ struct HomeView: View {
         searchOpen = true
     }
 
-    private func closeSearch() { searchOpen = false }
+    private func closeSearch() {
+        searchOpen = false
+    }
 
     @ViewBuilder
     private func page(for section: HomeSection) -> some View {
