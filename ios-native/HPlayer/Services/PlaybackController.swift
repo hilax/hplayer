@@ -159,6 +159,17 @@ final class PlaybackController: ObservableObject {
     @Published private(set) var aspect: VideoAspect = .fit
     /// 画面缩放，1 = 原始大小
     @Published private(set) var zoom: Double = 1
+    /// 内核报告的画面宽高比（宽 ÷ 高，已经算上像素宽高比和强制比例）；还没出画面时是 0。
+    /// 换下一集时先留着上一集的值：同一部剧比例一样，竖屏小窗不用先弹回 16:9 再变回来。
+    @Published private(set) var videoAspect: Double = 0
+    /// 竖屏信息页「文件信息」用：文件大小（字节，未知为 0）、视频 / 音频编码的简短名字（未知为空）
+    @Published private(set) var fileSize: Int64 = 0
+    @Published private(set) var videoCodecName = ""
+    @Published private(set) var audioCodecName = ""
+    /// 画面那一块现在摆在播放区域的什么位置（由画面视图报告）。只给诊断信息和界面测试看，不参与界面刷新
+    private(set) var pictureFrame = CGRect.zero
+    /// 整块画面图层现在占的位置（含它自带的黑边，竖屏时两边会伸到小窗外）
+    private(set) var canvasFrame = CGRect.zero
     @Published private(set) var audioTracks: [MediaTrack] = []
     @Published private(set) var subtitleTracks: [MediaTrack] = []
     @Published private(set) var selectedAudio: Int?
@@ -455,6 +466,10 @@ final class PlaybackController: ObservableObject {
         ("video-params/h", MPV_FORMAT_INT64),
         ("video-params/w", MPV_FORMAT_INT64),
         ("video-params/sig-peak", MPV_FORMAT_DOUBLE),
+        ("video-params/aspect", MPV_FORMAT_DOUBLE),
+        ("video-format", MPV_FORMAT_STRING),
+        ("audio-codec-name", MPV_FORMAT_STRING),
+        ("file-size", MPV_FORMAT_INT64),
         ("mute", MPV_FORMAT_FLAG),
         ("hwdec-current", MPV_FORMAT_STRING),
     ]
@@ -639,6 +654,9 @@ final class PlaybackController: ObservableObject {
             videoWidth = 0
             videoHeight = 0
             hdr = false
+            fileSize = 0
+            videoCodecName = ""
+            audioCodecName = ""
         }
     }
 
@@ -924,6 +942,36 @@ final class PlaybackController: ObservableObject {
     func setAspect(_ value: VideoAspect) {
         aspect = value
         if let engine { applyAspect(engine) }
+    }
+
+    /// 画面按现在的设置显示出来的宽高比（宽 ÷ 高）；还没出画面时为空。
+    /// 竖屏小窗的高度和画面的缩放都按它算。强制比例直接用选的那个值（内核要到下一帧才改过来）。
+    var displayAspect: Double? {
+        switch aspect {
+        case .ratio16x9: return 16.0 / 9.0
+        case .ratio4x3: return 4.0 / 3.0
+        case .ratio235: return 2.35
+        case .fit, .fill, .stretch: return videoAspect > 0 ? videoAspect : nil
+        }
+    }
+
+    /// 内核给的编码名（h264、hevc、aac、eac3…）换成常见写法
+    static func codecName(_ raw: String) -> String {
+        let known = ["h264": "H.264", "hevc": "H.265", "h265": "H.265", "av1": "AV1", "vp9": "VP9", "vp8": "VP8",
+                     "mpeg4": "MPEG-4", "mpeg2video": "MPEG-2", "vc1": "VC-1", "wmv3": "WMV", "rv40": "RMVB",
+                     "aac": "AAC", "ac3": "AC-3", "eac3": "E-AC-3", "truehd": "TrueHD", "dts": "DTS", "flac": "FLAC",
+                     "mp3": "MP3", "opus": "Opus", "vorbis": "Vorbis", "alac": "ALAC"]
+        let key = raw.trimmingCharacters(in: .whitespaces).lowercased()
+        if key.isEmpty { return "" }
+        if let name = known[key] { return name }
+        if key.hasPrefix("pcm") { return "PCM" }
+        return key.uppercased()
+    }
+
+    /// 画面视图摆好位置后报告一次
+    func notePictureGeometry(picture: CGRect, canvas: CGRect) {
+        pictureFrame = picture
+        canvasFrame = canvas
     }
 
     func setSubtitleStyle(_ value: SubtitleStyle) {
@@ -1287,6 +1335,18 @@ final class PlaybackController: ObservableObject {
         case ("video-params/sig-peak", .double(let value)):
             hdr = value > 1
             updateBadges()
+        case ("video-params/aspect", .double(let value)):
+            // 换文件、关画面时内核会报空值（不走这里），所以上一集的比例一直留到下一集出画面
+            guard value.isFinite, value > 0.1, value < 10, abs(value - videoAspect) > 0.002 else { return }
+            videoAspect = value
+        case ("video-format", .string(let value)):
+            let name = Self.codecName(value)
+            if name != videoCodecName { videoCodecName = name }
+        case ("audio-codec-name", .string(let value)):
+            let name = Self.codecName(value)
+            if name != audioCodecName { audioCodecName = name }
+        case ("file-size", .int(let value)):
+            if value > 0, value != fileSize { fileSize = value }
         case ("mute", .flag(let value)):
             muted = value
         case ("hwdec-current", .string(let value)):
@@ -1714,12 +1774,19 @@ struct PlayerVideoSurface: UIViewControllerRepresentable {
 
     func makeUIViewController(context: Context) -> PlayerVideoViewController {
         let controller = PlayerVideoViewController()
+        let playback = playback
+        controller.onGeometry = { [weak playback] picture, canvas in
+            playback?.notePictureGeometry(picture: picture, canvas: canvas)
+        }
         playback.attach(layer: controller.metalLayer)
         playback.attachPictureInPicture(layer: controller.pictureInPictureLayer)
         return controller
     }
 
-    func updateUIViewController(_ controller: PlayerVideoViewController, context: Context) {}
+    func updateUIViewController(_ controller: PlayerVideoViewController, context: Context) {
+        // 播放状态每秒会刷新好几次，这里只在比例真的变了时才重新摆画面
+        controller.setVideo(aspect: playback.displayAspect.map { CGFloat($0) }, stretch: playback.aspect == .stretch)
+    }
 }
 
 extension Notification.Name {
@@ -1730,37 +1797,59 @@ extension Notification.Name {
 final class PlayerVideoViewController: UIViewController {
     private let canvas = PlayerCanvasView()
     var metalLayer: MPVMetalLayer { canvas.metalLayer }
-    /// 小窗用的图层，垫在画面下面、被画面盖住，平时看不见。系统小窗从它的位置飞出去、回来时也飞回这里
+    /// 小窗（画中画）用的图层。系统要它里面有画面才允许开小窗，所以开播后会放进一帧；
+    /// 小窗从它的位置飞出去、回来时也飞回这里。它不该被看见，由 `stillHost` 保证永远压在画面正下方。
     let pictureInPictureLayer: AVSampleBufferDisplayLayer = {
         let layer = AVSampleBufferDisplayLayer()
         layer.videoGravity = .resizeAspect
         layer.backgroundColor = UIColor.black.cgColor
         return layer
     }()
+    /// 装着小窗图层的小视图：位置、大小始终等于屏幕上「视频那一块」，所以总被上面的画面盖住。
+    /// 以前小窗图层铺满整个容器，竖屏时画面比容器矮，上下各露出一条——露出来的就是开播时放进去的那一帧。
+    private let stillHost = UIView()
 
     /// 画面图层固定用横屏尺寸渲染。MPVKit 的 iOS 渲染上下文不会把图层尺寸的变化告诉 mpv，
     /// 转到竖屏后 mpv 还按横屏的大小算画面位置，画面会被挤到左上角、右边被裁掉。
-    /// 所以图层本身的尺寸始终不变，竖屏时只是把整块横屏画面等比缩小放在中间。
+    /// 所以图层本身的尺寸始终不变，竖屏时把它等比缩小：缩到视频那一块正好放进小窗，
+    /// 图层自带的左右黑边伸到小窗外面，被容器裁掉。
     private var renderSize = CGSize.zero
     /// 正在旋转：这段时间的画面位置和缩放只由旋转动画里的那一次设置决定，布局回调不插手，
     /// 否则布局先把终点值设上去，旋转动画就没有变化可以动了。
     private var transitioning = false
+    /// 视频显示出来的宽高比；还没出画面时为空（按 16:9 摆）
+    private var videoAspect: CGFloat?
+    /// 画面比例选的是「拉伸」
+    private var stretch = false
+    /// 每次摆好位置后报告：视频那一块、整块画面图层各自在容器里的位置
+    var onGeometry: ((CGRect, CGRect) -> Void)?
 
     override func loadView() {
         let container = UIView()
         container.backgroundColor = .black
         container.isUserInteractionEnabled = false
-        container.layer.addSublayer(pictureInPictureLayer)
+        // 竖屏时画面图层比小窗宽（多出来的是它自带的黑边），不能画到小窗外面
+        container.clipsToBounds = true
+        stillHost.backgroundColor = .black
+        stillHost.isUserInteractionEnabled = false
+        stillHost.clipsToBounds = true
+        stillHost.layer.addSublayer(pictureInPictureLayer)
+        container.addSubview(stillHost)
         container.addSubview(canvas)
         view = container
     }
 
+    /// 视频的显示比例或「拉伸」模式变了：重新摆画面
+    func setVideo(aspect: CGFloat?, stretch: Bool) {
+        guard aspect != videoAspect || stretch != self.stretch else { return }
+        videoAspect = aspect
+        self.stretch = stretch
+        guard isViewLoaded, !transitioning else { return }
+        applyGeometry(in: view.bounds.size)
+    }
+
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        pictureInPictureLayer.frame = view.bounds
-        CATransaction.commit()
         guard !transitioning else { return }
         applyGeometry(in: view.bounds.size)
     }
@@ -1768,10 +1857,12 @@ final class PlayerVideoViewController: UIViewController {
     override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
         super.viewWillTransition(to: size, with: coordinator)
         transitioning = true
+        // 系统给的是整个窗口转完以后的大小：转成竖屏时画面只占顶部的小窗，要按小窗的大小来摆
+        let target = PlayerVideoGeometry.container(afterTransitionTo: size, aspect: videoAspect)
         // 这个闭包由系统放进旋转动画里执行：center 和 transform 的变化会用和旋转一样的时长、曲线动起来，
         // 画面于是跟着界面一起转过去、缩放到竖屏的大小。
         coordinator.animate(alongsideTransition: { [weak self] _ in
-            self?.applyGeometry(in: size)
+            self?.applyGeometry(in: target)
         }, completion: { [weak self] _ in
             guard let self else { return }
             self.transitioning = false
@@ -1780,7 +1871,7 @@ final class PlayerVideoViewController: UIViewController {
         })
     }
 
-    /// 把横屏尺寸的画面等比缩放后放在容器正中。只改 center 和 transform，图层的 bounds 始终不变。
+    /// 把横屏尺寸的画面缩放后放在容器正中。只改 center 和 transform，图层的 bounds 始终不变。
     private func applyGeometry(in container: CGSize) {
         guard container.width > 0, container.height > 0 else { return }
         if renderSize == .zero {
@@ -1791,9 +1882,20 @@ final class PlayerVideoViewController: UIViewController {
         }
         let nativeScale = view.window?.screen.nativeScale ?? UIScreen.main.nativeScale
         if canvas.contentScaleFactor != nativeScale { canvas.contentScaleFactor = nativeScale }
-        let scale = min(container.width / renderSize.width, container.height / renderSize.height)
-        canvas.center = CGPoint(x: container.width / 2, y: container.height / 2)
-        canvas.transform = CGAffineTransform(scaleX: scale, y: scale)
+        let placement = PlayerVideoGeometry.placement(canvas: renderSize, container: container,
+                                                      aspect: videoAspect, stretch: stretch)
+        let center = CGPoint(x: container.width / 2, y: container.height / 2)
+        canvas.center = center
+        canvas.transform = CGAffineTransform(scaleX: placement.scaleX, y: placement.scaleY)
+        // 小窗图层跟着视频那一块走（不超出容器），和画面用同一次设置，转屏时也一起动
+        let shown = placement.shownSize
+        stillHost.bounds = CGRect(x: 0, y: 0, width: min(shown.width, container.width), height: min(shown.height, container.height))
+        stillHost.center = center
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        pictureInPictureLayer.frame = stillHost.bounds
+        CATransaction.commit()
+        onGeometry?(stillHost.frame, canvas.frame)
     }
 }
 

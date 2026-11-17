@@ -297,8 +297,12 @@ struct PlaybackControlsView: View {
     @State private var showSignIn = false
     @AppStorage("player.autoPlayNext") private var autoPlayNext = true
 
-    /// 竖屏时顶部小窗播放器的高度（不含状态栏）
-    private static let inlineVideoHeight: CGFloat = 220
+    /// 竖屏时顶部小窗播放器的高度（不含状态栏）：跟着视频的比例走。
+    /// 16:9 和更宽的片子是 16:9 的框，画面铺满整个宽度；4:3、竖拍的片子框更高，最高到正方形。
+    private func inlineVideoHeight(in size: CGSize) -> CGFloat {
+        PlayerVideoGeometry.inlineHeight(width: size.width, screenHeight: size.height,
+                                         aspect: playback.displayAspect.map { CGFloat($0) })
+    }
     private static var isUITest: Bool { ProcessInfo.processInfo.environment["HPLAYER_UI_TEST_URL"] != nil }
     private static var testAutoNext: Bool {
         #if DEBUG
@@ -345,12 +349,15 @@ struct PlaybackControlsView: View {
                     VStack(spacing: 0) {
                         if !landscape { Color.black.frame(height: insets.top) }
                         // 画面区永远是深色：浅色模式下也不会变成白色的控制按钮
-                        videoLayer(landscape: landscape, insets: insets, width: layoutSize.width)
+                        videoLayer(landscape: landscape, insets: insets, width: layoutSize.width,
+                                   inlineHeight: inlineVideoHeight(in: layoutSize))
                             .environment(\.colorScheme, .dark)
                             .foregroundStyle(Color.white)
                         if !landscape { infoPage(bottomInset: insets.bottom) }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    // 出画面后才知道视频比例：小窗从默认的 16:9 变到实际比例时顺滑过渡，下面的内容跟着让开
+                    .animation(reduceMotion ? nil : Motion.smooth, value: playback.displayAspect)
                     // 竖屏快捷入口的菜单：贴着入口弹出，画在整页上面
                     .overlayPreferenceValue(QuickAnchorKey.self) { anchors in
                         if !landscape && !locked {
@@ -1492,7 +1499,7 @@ struct PlaybackControlsView: View {
     // MARK: 视频层（竖屏小窗 / 横屏全屏）
 
     @ViewBuilder
-    private func videoLayer(landscape: Bool, insets: EdgeInsets, width: CGFloat) -> some View {
+    private func videoLayer(landscape: Bool, insets: EdgeInsets, width: CGFloat, inlineHeight: CGFloat) -> some View {
         let hudInsets = landscape ? insets : EdgeInsets()
         let hudWidth = topHUDWidth(landscape: landscape, insets: hudInsets, width: width)
         ZStack {
@@ -1561,7 +1568,7 @@ struct PlaybackControlsView: View {
             hudLayer(insets: hudInsets, width: hudWidth)
                 .zIndex(6)
         }
-        .frame(maxWidth: .infinity, maxHeight: landscape ? .infinity : Self.inlineVideoHeight)
+        .frame(maxWidth: .infinity, maxHeight: landscape ? .infinity : inlineHeight)
         .clipped()
     }
 
@@ -1614,7 +1621,8 @@ struct PlaybackControlsView: View {
         ZStack {
             VStack(spacing: 0) {
                 HStack(spacing: 0) {
-                    GlassIconButton(systemImage: AppIcon.close.name, label: "关闭播放", action: closePlayer)
+                    // 竖屏播放页是从下往上盖上来的整页：左上用向下的箭头收起（关闭播放），和系统整页弹层一致
+                    GlassIconButton(systemImage: AppIcon.expand.name, label: "关闭播放", action: closePlayer)
                         .accessibilityIdentifier("playback.close")
                     Spacer(minLength: 8)
                     GlassButtonGroup {
@@ -1700,7 +1708,7 @@ struct PlaybackControlsView: View {
     }
 
     /// 「…」下面展开的定时关闭菜单：毛玻璃卡片，右边和按钮对齐；选项和横屏的定时关闭一致。
-    /// 画在整页上面（竖屏视频区只有 220 高，放不下五行），点卡片以外的地方收起。
+    /// 画在整页上面（竖屏视频区一般只有 220 左右高，放不下五行），点卡片以外的地方收起。
     private func sleepMenu(insets: EdgeInsets) -> some View {
         ZStack(alignment: .topTrailing) {
             Color.clear
@@ -1740,24 +1748,31 @@ struct PlaybackControlsView: View {
 
     // MARK: 竖屏信息页
 
-    /// 片名下面：画质、HDR 小标签，后面一行灰字（倍速、定时、节点和网速），和横屏顶栏的标签是同一套
+    /// 片名下面一行：清晰度 / HDR / 编码小描边标签，后面是时长和灰字状态（倍速、定时、节点和网速）
     @ViewBuilder
     private var infoMeta: some View {
-        if !badges.isEmpty || !statusLine.isEmpty {
+        let tags = badges + (playback.videoCodecName.isEmpty ? [] : [playback.videoCodecName])
+        let parts = ([playback.duration > 0 ? timeText(playback.duration) : ""] + [statusLine]).filter { !$0.isEmpty }
+        if !tags.isEmpty || !parts.isEmpty {
             HStack(spacing: 6) {
-                ForEach(badges, id: \.self) { badge in
-                    Text(badge)
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(Theme.textPrimary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Theme.track, in: RoundedRectangle(cornerRadius: Theme.Radius.badge, style: .continuous))
-                }
-                if !statusLine.isEmpty {
-                    Text(statusLine)
-                        .font(.scaled(12))
+                ForEach(tags, id: \.self) { tag in
+                    Text(tag)
+                        .font(.scaled(10.5, weight: .bold))
+                        .tracking(0.3)
                         .foregroundStyle(Theme.textSecondary)
+                        .padding(.horizontal, 6)
+                        .frame(minHeight: 20)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: Theme.Radius.badge, style: .continuous)
+                                .strokeBorder(Theme.ruleStrong, lineWidth: 1)
+                        }
+                }
+                if !parts.isEmpty {
+                    Text(parts.joined(separator: " · "))
+                        .font(.scaled(13).monospacedDigit())
+                        .foregroundStyle(Theme.textTertiary)
                         .lineLimit(1)
+                        .padding(.leading, tags.isEmpty ? 0 : 2)
                 }
             }
             .accessibilityElement(children: .combine)
@@ -1770,7 +1785,8 @@ struct PlaybackControlsView: View {
         if let commentsVid {
             VStack(spacing: 0) {
                 PlayerInfoTabBar(selection: $infoTab, danmaku: danmaku, onComposeDanmaku: composeDanmaku) {
-                    showDanmakuSettings = true
+                    closeQuickMenu()
+                    withAnimation(reduceMotion ? nil : Motion.smooth) { showDanmakuSettings = true }
                 }
                 if infoTab == .comments {
                     AnimeCommentsView(vid: commentsVid, bottomInset: bottomInset)
@@ -1780,12 +1796,32 @@ struct PlaybackControlsView: View {
                         .transition(.opacity)
                 }
             }
-            .sheet(isPresented: $showDanmakuSettings) {
-                if let danmaku { DanmakuSettingsSheet(store: danmaku) }
+            // 弹幕设置是播放页自己的底部面板，只盖住信息区：上面的画面还露着，改了马上能看到效果
+            .overlay(alignment: .bottom) {
+                if showDanmakuSettings, let danmaku {
+                    ZStack(alignment: .bottom) {
+                        Theme.HUD.scrim
+                            .ignoresSafeArea()
+                            .contentShape(Rectangle())
+                            .onTapGesture { closeDanmakuSettings() }
+                            .accessibilityHidden(true)
+                            .transition(.opacity)
+                        DanmakuSettingsPanel(store: danmaku, bottomInset: bottomInset) { closeDanmakuSettings() }
+                            .gesture(DragGesture(minimumDistance: 12).onEnded { drag in
+                                if drag.translation.height > 60 { closeDanmakuSettings() }
+                            })
+                            .transition(.move(edge: .bottom))
+                    }
+                    .zIndex(5)
+                }
             }
         } else {
             introPage(bottomInset: bottomInset)
         }
+    }
+
+    private func closeDanmakuSettings() {
+        withAnimation(reduceMotion ? nil : Motion.smooth) { showDanmakuSettings = false }
     }
 
     private func introPage(bottomInset: CGFloat) -> some View {
@@ -1793,9 +1829,10 @@ struct PlaybackControlsView: View {
             VStack(alignment: .leading, spacing: 0) {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(title)
-                        .font(.scaled(22, weight: .bold))
+                        .font(.scaled(21, weight: .bold))
                         .foregroundStyle(Theme.textPrimary)
                         .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
                     infoMeta
                 }
                 quickRow
@@ -1804,71 +1841,63 @@ struct PlaybackControlsView: View {
                 fileInfoSection
             }
             .padding(.horizontal, 16)
-            .padding(.top, 16)
+            .padding(.top, 18)
             .padding(.bottom, bottomInset + 28)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .scrollIndicators(.hidden)
     }
 
-    /// 一张卡片里五个入口：图标在上、当前值在下，和横屏底栏的图标语言一致；
-    /// 偏离默认的（倍速不是 1×、字幕开着）用琥珀色标出来，和横屏一样。
-    /// 点一下在按钮下面弹出菜单（不是底部面板）。
+    /// 一排五个等宽胶囊：图标 + 当前值，和首页频道、搜索范围的胶囊是同一套。
+    /// 改过默认值的（倍速不是 1×、字幕开着）反白成主操作色（深色下白、浅色下墨黑），不用琥珀色。
+    /// 点一下在胶囊下面弹出菜单（不是底部面板）。
     private var quickRow: some View {
-        HStack(spacing: 0) {
-            quickCell(.quality, selectedQuality.isEmpty ? "原画" : selectedQuality, "清晰度", id: "playback.quality") {
-                Text("HD")
-                    .font(.scaled(10.5, weight: .bold))
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 1.5)
-                    .overlay { RoundedRectangle(cornerRadius: Theme.Radius.badge, style: .continuous).strokeBorder(lineWidth: 1.7) }
-            }
-            quickCell(.speed, "\(String(format: "%g", playback.rate))×", "倍速", id: "playback.speed",
-                      on: abs(playback.rate - 1) > 0.01) {
-                Image(appIconNamed: AppIcon.speed.name).font(.scaled(18, weight: .medium))
-            }
-            quickCell(.tracks, playback.selectedSubtitle == nil ? "关闭" : "已开启", "字幕", id: "playback.tracks",
-                      on: playback.selectedSubtitle != nil) {
-                Image(appIconNamed: AppIcon.subtitle.name).font(.scaled(18, weight: .medium))
-            }
-            quickCell(.aspect, playback.aspect.title, "画面比例", id: "playback.aspect") {
-                Image(appIconNamed: AppIcon.aspect.name).font(.scaled(18, weight: .medium))
-            }
-            quickCell(.decoding, playback.decoding.title, "解码", id: "playback.decoding") {
-                Image(appIconNamed: AppIcon.decoder.name).font(.scaled(18, weight: .medium))
-            }
+        HStack(spacing: 6) {
+            quickCell(.quality, selectedQuality.isEmpty ? "原画" : selectedQuality, "清晰度", icon: .playback, id: "playback.quality")
+            quickCell(.speed, "\(String(format: "%g", playback.rate))×", "倍速", icon: .speed, id: "playback.speed",
+                      on: abs(playback.rate - 1) > 0.01)
+            quickCell(.tracks, "字幕", "字幕", icon: .subtitle, id: "playback.tracks",
+                      on: playback.selectedSubtitle != nil,
+                      spokenValue: playback.selectedSubtitle == nil ? "关闭" : "已开启")
+            quickCell(.aspect, playback.aspect.title, "画面比例", icon: .aspect, id: "playback.aspect")
+            quickCell(.decoding, playback.decoding.title.replacingOccurrences(of: "解码", with: "解"), "解码",
+                      icon: .decoder, id: "playback.decoding", spokenValue: playback.decoding.title)
         }
-        .padding(4)
-        .infoCardBackground()
-        .padding(.top, 14)
+        .padding(.top, 18)
     }
 
-    /// 菜单开着的那个入口多一块很淡的中性灰底，一眼看出菜单是从哪个按钮出来的（不用主题色）
-    private func quickCell<Glyph: View>(_ menu: QuickMenu, _ value: String, _ label: String, id: String, on: Bool = false,
-                                        @ViewBuilder glyph: () -> Glyph) -> some View {
+    /// 菜单开着的那个胶囊多一块很淡的中性灰底，一眼看出菜单是从哪个按钮出来的（不用主题色）
+    private func quickCell(_ menu: QuickMenu, _ value: String, _ label: String, icon: AppIcon, id: String, on: Bool = false,
+                           spokenValue: String? = nil) -> some View {
         let open = quickMenu == menu
+        let foreground = on ? Theme.onPrimary : Theme.textPrimary
         return Button {
             toggleQuickMenu(menu)
         } label: {
-            VStack(spacing: 6) {
-                glyph()
-                    .foregroundStyle(on ? Theme.accent : Theme.textPrimary)
-                    .frame(height: 22)
+            HStack(spacing: 4) {
+                Image(icon: icon)
+                    .font(.scaled(14, weight: .medium))
                 Text(value)
-                    .font(.scaled(12, weight: .semibold))
-                    .foregroundStyle(on ? Theme.accentAlt : Theme.textPrimary)
+                    .font(.scaled(13, weight: .semibold).monospacedDigit())
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
             }
-            .frame(maxWidth: .infinity, minHeight: 56)
-            .background(open ? Color.primary.opacity(0.06) : Color.clear,
-                        in: RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous))
-            .contentShape(Rectangle())
+            .foregroundStyle(foreground)
+            .padding(.horizontal, 6)
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .background {
+                Capsule().fill(on ? Theme.primaryAction : (open ? Theme.pressTint : Theme.surface))
+            }
+            .overlay {
+                if !on { Capsule().strokeBorder(Theme.hairline, lineWidth: 0.5) }
+            }
+            .contentShape(Capsule())
+            .animation(reduceMotion ? nil : Motion.snappy, value: on)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.pressable(scale: 0.95))
         .quickAnchor(menu)
         .accessibilityLabel(label)
-        .accessibilityValue(value)
+        .accessibilityValue(spokenValue ?? value)
         .accessibilityAddTraits(open ? .isSelected : [])
         .accessibilityIdentifier(id)
     }
@@ -2215,15 +2244,15 @@ struct PlaybackControlsView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
                 Text("选集")
-                    .font(.scaled(17, weight: .bold))
+                    .font(.scaled(18, weight: .bold))
                     .foregroundStyle(Theme.textPrimary)
                 Spacer(minLength: 8)
                 if episodesExpanded {
                     episodeOrderToggle
                 } else {
                     Text("\(autoPlayNext ? "自动连播 · " : "")共 \(max(items.count, 1)) 集")
-                        .font(.scaled(12))
-                        .foregroundStyle(Theme.textSecondary)
+                        .font(.scaled(13))
+                        .foregroundStyle(Theme.textTertiary)
                         .lineLimit(1)
                 }
                 if items.count > 1 {
@@ -2239,11 +2268,11 @@ struct PlaybackControlsView: View {
                     } label: {
                         HStack(spacing: 3) {
                             Text(episodesExpanded ? "收起" : "全部")
-                                .font(.scaled(13))
+                                .font(.scaled(13, weight: .semibold))
                             Image(icon: episodesExpanded ? .collapse : .expand)
-                                .iconStyle(size: 10, color: Theme.textSecondary)
+                                .iconStyle(size: 10, color: Theme.textPrimary)
                         }
-                        .foregroundStyle(Theme.textSecondary)
+                        .foregroundStyle(Theme.textPrimary)
                         .frame(minWidth: 44, minHeight: 44, alignment: .trailing)
                         .contentShape(Rectangle())
                     }
@@ -2259,7 +2288,7 @@ struct PlaybackControlsView: View {
                 }
             }
         }
-        .padding(.top, 14)
+        .padding(.top, 22)
         .onChange(of: episodesDescending) { _ in episodeRange = rangeContainingCurrent() }
         .onChange(of: items.count) { _ in episodeRange = rangeContainingCurrent() }
     }
@@ -2395,108 +2424,158 @@ struct PlaybackControlsView: View {
         items.firstIndex { $0.id == selectedID } ?? 0
     }
 
+    /// 当前集：主操作色底（深色下白、浅色下墨黑）+ 正在播放的小柱；看过的集数字变灰。和动漫详情页的选集一致，不用琥珀色
     private func stripCell(_ item: PlaybackListItem, index: Int, currentIndex: Int, fill: Bool = false) -> some View {
         let current = index == currentIndex
+        let shape = RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous)
         return Button {
             onSelect(item.id)
             revealControls()
         } label: {
-            Text("\(index + 1)")
-                .font(.scaled(16, weight: current ? .bold : .medium).monospacedDigit())
-                .foregroundStyle(current ? Theme.accentAlt : (index < currentIndex ? Theme.textSecondary : Theme.textPrimary))
-                .frame(width: fill ? nil : 48, height: 48)
-                .frame(maxWidth: fill ? .infinity : nil)
-                .background(current ? Theme.accent.opacity(0.14) : Theme.surface,
-                            in: RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous))
-                .overlay {
-                    if current {
-                        RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous)
-                            .strokeBorder(Theme.accent, lineWidth: 1.5)
-                    }
+            VStack(spacing: 2) {
+                Text("\(index + 1)")
+                    .font(.scaled(16, weight: .semibold).monospacedDigit())
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                if current {
+                    Image(icon: .nowPlaying)
+                        .font(.system(size: 9, weight: .semibold))
+                        .accessibilityHidden(true)
                 }
-                .shadow(color: current ? .clear : Theme.shadow, radius: 2, y: 1)
-                .contentShape(Rectangle())
+            }
+            .foregroundStyle(current ? Theme.onPrimary : (index < currentIndex ? Theme.textTertiary : Theme.textPrimary))
+            .padding(.horizontal, 4)
+            .frame(width: fill ? nil : 56, height: 52)
+            .frame(maxWidth: fill ? .infinity : nil)
+            .background(current ? Theme.primaryAction : Theme.surface, in: shape)
+            .overlay {
+                if !current { shape.strokeBorder(Theme.hairline, lineWidth: 0.5) }
+            }
+            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.pressable(scale: 0.95))
         .accessibilityLabel(item.title)
         .accessibilityIdentifier("playback.episode.\(item.id)")
         .accessibilityAddTraits(current ? .isSelected : [])
     }
 
+    /// 「接下来」：左边一块画面位（下一集还没播过，没有截图，放一个中性的视频图标），
+    /// 中间是灰字「接下来 · 第 N 集」和片名，右边一个主操作色的圆形播放键。
     @ViewBuilder
     private var nextCard: some View {
-        if let id = nextID, let next = items.first(where: { $0.id == id }) {
+        if let id = nextID, let nextIndex = items.firstIndex(where: { $0.id == id }) {
+            let next = items[nextIndex]
             Button {
                 onSelect(id)
                 revealControls()
             } label: {
                 HStack(spacing: 12) {
-                    Image(appIconNamed: AppIcon.play.name)
-                        .font(.scaled(16, weight: .semibold))
-                        .foregroundStyle(Theme.accent)
+                    Image(icon: .video)
+                        .font(.scaled(22, weight: Theme.iconWeight))
+                        .foregroundStyle(Theme.textTertiary)
                         .frame(width: 104, height: 58)
                         .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("接下来")
-                            .font(.scaled(11, weight: .semibold))
-                            .foregroundStyle(Theme.accentAlt)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(items.count > 1 ? "接下来 · 第 \(nextIndex + 1) 集" : "接下来")
+                            .font(.scaled(12, weight: .semibold))
+                            .foregroundStyle(Theme.textTertiary)
                         Text(next.title)
-                            .font(.scaled(14, weight: .medium))
+                            .font(.scaled(15, weight: .semibold))
                             .foregroundStyle(Theme.textPrimary)
-                            .lineLimit(2)
-                            .multilineTextAlignment(.leading)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
                         if autoPlayNext {
                             Text("本集结束后自动播放")
-                                .font(.scaled(11))
-                                .foregroundStyle(Theme.textSecondary)
+                                .font(.scaled(12))
+                                .foregroundStyle(Theme.textTertiary)
                         }
                     }
                     Spacer(minLength: 0)
+                    Image(icon: .play)
+                        .font(.scaled(14, weight: .semibold))
+                        .foregroundStyle(Theme.onPrimary)
+                        .frame(width: 36, height: 36)
+                        .background(Theme.primaryAction, in: Circle())
+                        .accessibilityHidden(true)
                 }
-                .padding(12)
-                .infoCardBackground()
+                .padding(10)
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
+                        .strokeBorder(Theme.hairline, lineWidth: 0.5)
+                }
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-            .padding(.top, 16)
+            .buttonStyle(.pressable(scale: 0.98))
+            .padding(.top, 18)
             .accessibilityIdentifier("playback.nextCard")
         }
     }
 
     private var fileRows: [(String, String)] {
         var rows: [(String, String)] = [("文件", title)]
+        if playback.fileSize > 0 {
+            rows.append(("大小", ByteCountFormatter.string(fromByteCount: playback.fileSize, countStyle: .file)))
+        }
+        let codecs = [playback.videoCodecName, playback.audioCodecName].filter { !$0.isEmpty }
+        if !codecs.isEmpty { rows.append(("编码", codecs.joined(separator: " · "))) }
         if playback.duration > 0 { rows.append(("时长", timeText(playback.duration))) }
-        if playback.bufferedUntil > 1 { rows.append(("已缓存", "到 " + timeText(playback.bufferedUntil))) }
         return rows
     }
 
+    /// 文件信息：一张卡片，行与行之间不画分隔线（全应用的列表都不要分隔线）；
+    /// 已缓存放最后一行，下面一条细进度条表示缓存到了哪里。
     private var fileInfoSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             Text("文件信息")
-                .font(.scaled(17, weight: .bold))
+                .font(.scaled(18, weight: .bold))
                 .foregroundStyle(Theme.textPrimary)
             VStack(spacing: 0) {
-                ForEach(Array(fileRows.enumerated()), id: \.offset) { index, row in
-                    HStack(spacing: 12) {
-                        Text(row.0)
-                            .foregroundStyle(Theme.textSecondary)
-                        Spacer(minLength: 8)
-                        Text(row.1)
-                            .foregroundStyle(Theme.textPrimary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
+                ForEach(Array(fileRows.enumerated()), id: \.offset) { _, row in
+                    fileRow(row.0, row.1)
+                }
+                if playback.bufferedUntil > 1 {
+                    VStack(spacing: 8) {
+                        fileRow("已缓存", "到 " + timeText(playback.bufferedUntil), minHeight: 0)
+                        if playback.duration > 0 {
+                            GeometryReader { proxy in
+                                Capsule().fill(Theme.track)
+                                    .overlay(alignment: .leading) {
+                                        Capsule().fill(Theme.textSecondary)
+                                            .frame(width: proxy.size.width * min(1, max(0, playback.bufferedUntil / playback.duration)))
+                                    }
+                            }
+                            .frame(height: 4)
+                            .accessibilityHidden(true)
+                        }
                     }
-                    .font(.scaled(13))
-                    .frame(minHeight: 40)
-                    .overlay(alignment: .bottom) {
-                        if index < fileRows.count - 1 { Rectangle().fill(Theme.hairline).frame(height: 0.5) }
-                    }
+                    .padding(.vertical, 12)
                 }
             }
-            .padding(.horizontal, 14)
-            .infoCardBackground()
+            .padding(.horizontal, 16)
+            .padding(.vertical, 4)
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
+                    .strokeBorder(Theme.hairline, lineWidth: 0.5)
+            }
         }
-        .padding(.top, 18)
+        .padding(.top, 22)
+    }
+
+    private func fileRow(_ key: String, _ value: String, minHeight: CGFloat = 44) -> some View {
+        HStack(spacing: 16) {
+            Text(key)
+                .foregroundStyle(Theme.textSecondary)
+            Spacer(minLength: 8)
+            Text(value)
+                .foregroundStyle(Theme.textPrimary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .font(.scaled(15).monospacedDigit())
+        .frame(minHeight: minHeight)
+        .accessibilityElement(children: .combine)
     }
 
     // MARK: 设置面板
@@ -2981,7 +3060,19 @@ struct PlaybackControlsView: View {
     }
 
     private var diagnosticStatus: String {
-        "\(lastAdjustment); brightness=\(String(format: "%.3f", brightnessLevel)); volume=\(String(format: "%.3f", systemVolume.level)); time=\(String(format: "%.3f", playback.engineTime)); rate=\(String(format: "%g", playback.effectiveRate)); avsync=\(String(format: "%.3f", playback.avSync ?? .nan)); boostAVSyncPeak=\(String(format: "%.3f", playback.boostAVSyncPeak ?? .nan)); buffering=\(playback.buffering ? 1 : 0); note=\(playback.statusNote); error=\(playback.error)"
+        "\(lastAdjustment); brightness=\(String(format: "%.3f", brightnessLevel)); volume=\(String(format: "%.3f", systemVolume.level)); time=\(String(format: "%.3f", playback.engineTime)); rate=\(String(format: "%g", playback.effectiveRate)); avsync=\(String(format: "%.3f", playback.avSync ?? .nan)); boostAVSyncPeak=\(String(format: "%.3f", playback.boostAVSyncPeak ?? .nan)); buffering=\(playback.buffering ? 1 : 0); \(pictureDiagnostics); note=\(playback.statusNote); error=\(playback.error)"
+    }
+
+    /// 视频那一块和整块画面图层在播放区域里的位置，界面测试用它确认画面铺满了小窗
+    private var pictureDiagnostics: String {
+        let picture = playback.pictureFrame
+        let canvas = playback.canvasFrame
+        let values: [(String, CGFloat)] = [
+            ("aspect", CGFloat(playback.displayAspect ?? 0)),
+            ("pictureX", picture.minX), ("pictureY", picture.minY), ("pictureW", picture.width), ("pictureH", picture.height),
+            ("canvasX", canvas.minX), ("canvasY", canvas.minY), ("canvasW", canvas.width), ("canvasH", canvas.height),
+        ]
+        return values.map { "\($0.0)=\(String(format: "%.2f", Double($0.1)))" }.joined(separator: "; ")
     }
 
     private func toggleControls() {

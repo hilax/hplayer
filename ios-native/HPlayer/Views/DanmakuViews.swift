@@ -122,68 +122,243 @@ struct DanmakuGlyph: View {
 
 // MARK: - 弹幕设置
 
-struct DanmakuSettingsSheet: View {
+/// 弹幕设置：竖屏播放页自己的底部面板（盖在信息区上，上面的画面露着，改了马上能看到效果）。
+///
+/// 以前用系统弹出页：iOS 26 的半高弹出页是悬空的玻璃卡片，在播放页的独立窗口里底色发灰透明，
+/// 下面还露出一截信息页；拖动时整页变成半透明的灰。现在由播放页自己画，背景不透明、贴底。
+struct DanmakuSettingsPanel: View {
     @ObservedObject var store: DanmakuStore
-    @Environment(\.dismiss) private var dismiss
+    var bottomInset: CGFloat = 0
+    let onClose: () -> Void
     @AppStorage(DanmakuPrefs.area) private var area = 0.5
     @AppStorage(DanmakuPrefs.opacity) private var opacity = 0.9
     @AppStorage(DanmakuPrefs.scale) private var scale = 1.0
     @AppStorage(DanmakuPrefs.speed) private var speed = 1.0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Namespace private var areaSelection
+
+    private static let areas: [(String, Double)] = [("1/4", 0.25), ("半屏", 0.5), ("3/4", 0.75), ("全屏", 1.0)]
+    private var isDefault: Bool { area == 0.5 && opacity == 0.9 && scale == 1.0 && speed == 1.0 }
 
     var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    Toggle("显示弹幕", isOn: $store.enabled)
-                        .tint(Theme.accent)
-                        .accessibilityIdentifier("danmaku.settings.enabled")
-                } footer: {
-                    Text(store.loadedCount > 0 ? "本集已加载 \(store.loadedCount) 条弹幕" : "弹幕按播放进度分段加载")
-                }
-                Section("显示区域") {
-                    Picker("显示区域", selection: $area) {
-                        Text("1/4").tag(0.25)
-                        Text("半屏").tag(0.5)
-                        Text("3/4").tag(0.75)
-                        Text("全屏").tag(1.0)
+        VStack(alignment: .leading, spacing: 18) {
+            header
+            enabledCard
+            VStack(alignment: .leading, spacing: 18) {
+                section("显示区域") { areaPicker }
+                section("外观") {
+                    VStack(spacing: 18) {
+                        DanmakuSliderRow(title: "不透明度", value: $opacity, range: 0.2...1, step: 0.05,
+                                         text: "\(Int((opacity * 100).rounded()))%", id: "danmaku.settings.opacity")
+                        DanmakuSliderRow(title: "字号", value: $scale, range: 0.7...1.5, step: 0.1,
+                                         text: String(format: "%.1f×", scale), id: "danmaku.settings.scale")
+                        DanmakuSliderRow(title: "速度", value: $speed, range: 0.6...1.6, step: 0.1,
+                                         text: String(format: "%.1f×", speed), id: "danmaku.settings.speed")
                     }
-                    .pickerStyle(.segmented)
-                    .accessibilityIdentifier("danmaku.settings.area")
-                }
-                Section("外观") {
-                    sliderRow("不透明度", value: $opacity, range: 0.2...1, text: "\(Int(opacity * 100))%")
-                    sliderRow("字号", value: $scale, range: 0.7...1.5, text: String(format: "%.1f×", scale))
-                    sliderRow("速度", value: $speed, range: 0.6...1.6, text: String(format: "%.1f×", speed))
-                }
-            }
-            .navigationTitle("弹幕设置")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("完成") { dismiss() }
+                    .padding(16)
+                    .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
+                            .strokeBorder(Theme.hairline, lineWidth: 0.5)
+                    }
                 }
             }
+            // 弹幕关着时下面的设置变淡、不能改，一眼看出它们暂时不起作用
+            .opacity(store.enabled ? 1 : 0.4)
+            .disabled(!store.enabled)
+            .animation(reduceMotion ? nil : Motion.snappy, value: store.enabled)
         }
-        .navigationButtonTint()
-        .hudHost(.sheet)
+        .padding(.horizontal, 16)
+        .padding(.top, 10)
+        .padding(.bottom, bottomInset + 16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            // 只要上面两个圆角：底边往下多伸出一截，下面的圆角落在屏幕外
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .fill(Theme.pageBackground)
+                .padding(.bottom, -40)
+                .shadow(color: .black.opacity(0.18), radius: 24, y: -4)
+        }
         .onChange(of: speed) { _ in store.relayout() }
         .onChange(of: scale) { _ in store.relayout() }
-        .presentationDetents([.medium, .large])
         .designScreen("danmaku-settings")
     }
 
-    private func sliderRow(_ title: String, value: Binding<Double>, range: ClosedRange<Double>, text: String) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+    private var header: some View {
+        VStack(spacing: 10) {
+            Capsule()
+                .fill(Theme.ruleStrong)
+                .frame(width: 36, height: 5)
+                .accessibilityHidden(true)
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("弹幕设置")
+                        .font(.scaled(18, weight: .bold))
+                        .foregroundStyle(Theme.textPrimary)
+                    Text(store.loadedCount > 0 ? "本集已加载 \(store.loadedCount) 条弹幕" : "弹幕按播放进度分段加载")
+                        .font(.scaled(12))
+                        .foregroundStyle(Theme.textTertiary)
+                }
+                Spacer(minLength: 8)
+                if !isDefault {
+                    Button("恢复默认") {
+                        Haptics.select()
+                        withAnimation(reduceMotion ? nil : Motion.snappy) {
+                            area = 0.5; opacity = 0.9; scale = 1.0; speed = 1.0
+                        }
+                    }
+                    .font(.scaled(13, weight: .semibold))
+                    .foregroundStyle(Theme.textSecondary)
+                    .frame(minHeight: 44)
+                    .buttonStyle(.pressable(scale: 0.95))
+                    .accessibilityIdentifier("danmaku.settings.reset")
+                    .transition(.opacity)
+                }
+                Button(action: onClose) {
+                    Image(icon: .close)
+                        .font(.scaled(13, weight: .bold))
+                        .foregroundStyle(Theme.textPrimary)
+                        .frame(width: 32, height: 32)
+                        .background(Theme.surfaceRaised, in: Circle())
+                        .frame(width: 44, height: 44)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.pressable(scale: 0.92))
+                .accessibilityLabel("关闭弹幕设置")
+                .accessibilityIdentifier("danmaku.settings.close")
+            }
+            .animation(reduceMotion ? nil : Motion.snappy, value: isDefault)
+        }
+    }
+
+    private var enabledCard: some View {
+        HStack(spacing: 12) {
+            DanmakuGlyph(enabled: store.enabled, size: 13, tint: Theme.textPrimary,
+                         enabledFill: Theme.primaryAction, enabledTextColor: Theme.onPrimary)
+                .accessibilityHidden(true)
+            Toggle("显示弹幕", isOn: $store.enabled)
+                .font(.scaled(16, weight: .medium))
+                .foregroundStyle(Theme.textPrimary)
+                .tint(Theme.accentFill)
+                .accessibilityIdentifier("danmaku.settings.enabled")
+        }
+        .padding(.horizontal, 16)
+        .frame(minHeight: 56)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
+                .strokeBorder(Theme.hairline, lineWidth: 0.5)
+        }
+    }
+
+    private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.scaled(13, weight: .semibold))
+                .foregroundStyle(Theme.textTertiary)
+                .padding(.leading, 4)
+            content()
+        }
+    }
+
+    /// 四档等宽分段：选中的一档主操作色（深色下白、浅色下墨黑），在档位之间滑过去
+    private var areaPicker: some View {
+        HStack(spacing: 0) {
+            ForEach(Self.areas, id: \.1) { title, value in
+                let selected = abs(area - value) < 0.01
+                Button {
+                    guard !selected else { return }
+                    Haptics.select()
+                    withAnimation(reduceMotion ? nil : Motion.snappy) { area = value }
+                } label: {
+                    Text(title)
+                        .font(.scaled(14, weight: selected ? .semibold : .medium))
+                        .foregroundStyle(selected ? Theme.onPrimary : Theme.textSecondary)
+                        .frame(maxWidth: .infinity, minHeight: 40)
+                        .background {
+                            if selected {
+                                Capsule()
+                                    .fill(Theme.primaryAction)
+                                    .matchedGeometryEffect(id: "area", in: areaSelection)
+                            }
+                        }
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(selected ? .isSelected : [])
+                .accessibilityIdentifier("danmaku.settings.area.\(title)")
+            }
+        }
+        .padding(3)
+        .background(Theme.surface, in: Capsule())
+        .overlay { Capsule().strokeBorder(Theme.hairline, lineWidth: 0.5) }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("显示区域")
+        .accessibilityIdentifier("danmaku.settings.area")
+    }
+}
+
+/// 弹幕设置里的一条滑杆：标题和数值一行，下面一条细轨道，已选部分用主文字色（不用琥珀色）
+private struct DanmakuSliderRow: View {
+    let title: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let step: Double
+    let text: String
+    let id: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text(title)
+                    .font(.scaled(15, weight: .medium))
+                    .foregroundStyle(Theme.textPrimary)
                 Spacer()
                 Text(text)
-                    .font(.subheadline.monospacedDigit())
-                    .foregroundStyle(Theme.textSecondary)
+                    .font(.scaled(14).monospacedDigit())
+                    .foregroundStyle(Theme.textTertiary)
             }
-            Slider(value: value, in: range)
-                .tint(Theme.accent)
+            GeometryReader { proxy in
+                let thumb: CGFloat = 22
+                let span = max(1, proxy.size.width - thumb)
+                let fraction = CGFloat((min(max(value, range.lowerBound), range.upperBound) - range.lowerBound)
+                                       / (range.upperBound - range.lowerBound))
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Theme.track).frame(height: 4)
+                    Capsule().fill(Theme.textPrimary).frame(width: thumb / 2 + span * fraction, height: 4)
+                    Circle()
+                        .fill(Theme.surface)
+                        .overlay { Circle().strokeBorder(Theme.ruleStrong, lineWidth: 0.5) }
+                        .shadow(color: .black.opacity(0.15), radius: 3, y: 1)
+                        .frame(width: thumb, height: thumb)
+                        .offset(x: span * fraction)
+                }
+                .frame(maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .gesture(DragGesture(minimumDistance: 0).onChanged { drag in
+                    let ratio = Double(min(max((drag.location.x - thumb / 2) / span, 0), 1))
+                    let raw = range.lowerBound + ratio * (range.upperBound - range.lowerBound)
+                    let snapped = ((raw - range.lowerBound) / step).rounded() * step + range.lowerBound
+                    let clamped = min(max(snapped, range.lowerBound), range.upperBound)
+                    if abs(clamped - value) > step / 10 {
+                        value = clamped
+                        Haptics.select()
+                    }
+                })
+            }
+            .frame(height: 28)
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(title)
+        .accessibilityValue(text)
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .increment: value = min(range.upperBound, value + step)
+            case .decrement: value = max(range.lowerBound, value - step)
+            @unknown default: break
+            }
+        }
+        .accessibilityIdentifier(id)
     }
 }
 
@@ -222,8 +397,9 @@ struct PlayerInfoTabBar: View {
                         ZStack {
                             Capsule().fill(Color.clear).frame(width: 18, height: 3)
                             if selection == tab {
+                                // 选中的下划线用主文字色，和标签栏、频道的选中规则一致
                                 Capsule()
-                                    .fill(Theme.prismGradient)
+                                    .fill(Theme.textPrimary)
                                     .frame(width: 18, height: 3)
                                     .matchedGeometryEffect(id: "underline", in: underline)
                             }
@@ -256,13 +432,18 @@ private struct DanmakuTabControls: View {
     var body: some View {
         HStack(spacing: 4) {
             Button(action: onCompose) {
-                Text("发弹幕…")
-                    .font(.scaled(13))
-                    .foregroundStyle(Theme.textTertiary)
-                    .lineLimit(1)
-                    .padding(.horizontal, 12)
-                    .frame(height: 30)
-                    .background(Theme.inputFill, in: Capsule())
+                HStack(spacing: 6) {
+                    Image(icon: .danmaku)
+                        .font(.scaled(13, weight: Theme.iconWeight))
+                    Text("发条弹幕")
+                        .font(.scaled(13))
+                        .lineLimit(1)
+                }
+                .foregroundStyle(Theme.textTertiary)
+                .padding(.horizontal, 12)
+                .frame(height: 34)
+                .background(Theme.surface, in: Capsule())
+                .overlay { Capsule().strokeBorder(Theme.hairline, lineWidth: 0.5) }
                     .frame(minHeight: 44)
                     .contentShape(Rectangle())
             }
@@ -273,7 +454,8 @@ private struct DanmakuTabControls: View {
                 Haptics.tap()
                 store.enabled.toggle()
             } label: {
-                DanmakuGlyph(enabled: store.enabled, size: 12, tint: Theme.textPrimary, enabledFill: Theme.accentFill, enabledTextColor: Theme.onAccentFill)
+                // 弹幕开着：主操作色（深色下白、浅色下墨黑），不用琥珀色
+                DanmakuGlyph(enabled: store.enabled, size: 12, tint: Theme.textPrimary, enabledFill: Theme.primaryAction, enabledTextColor: Theme.onPrimary)
                     .frame(width: 40, height: 44)
                     .contentShape(Rectangle())
             }
