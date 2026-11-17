@@ -25,6 +25,8 @@ enum AppIcon: String, CaseIterable {
     case refresh, history, clock, sortAscending, sortDescending, tune, settings
     case copy, trash, openExternal, returnKey, sparkles, hidden, hot, topics, mirror
     case heart, heartFill, bolt
+    /// 追番（书签 + 加号）/ 已追番（实心书签 + 对勾）。爱心只留给磁力的「喜欢」。
+    case follow, followFill
     case comment, like, pin
 
     // MARK: 播放
@@ -114,6 +116,8 @@ enum AppIcon: String, CaseIterable {
         case .mirror: return "镜像站点"
         case .heart: return "收藏"
         case .heartFill: return "已收藏"
+        case .follow: return "追番"
+        case .followFill: return "已追番"
         case .bolt: return "加速"
         case .comment: return "评论"
         case .like: return "点赞"

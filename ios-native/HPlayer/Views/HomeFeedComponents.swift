@@ -374,7 +374,7 @@ struct HomeAnimeGridCard: View {
         let following = watchlist.isWatched(id: item.id)
         return Menu {
             Button(following ? "取消追番" : "加入追番",
-                   icon: following ? AppIcon.heartFill.name : AppIcon.heart.name) {
+                   icon: following ? AppIcon.followFill.name : AppIcon.follow.name) {
                 Haptics.tap()
                 watchlist.toggle(item: item)
             }

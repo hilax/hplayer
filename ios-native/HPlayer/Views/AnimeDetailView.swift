@@ -91,7 +91,7 @@ struct AnimeDetailView: View {
                 } label: {
                     // 未追番线框、已追番实心，颜色都是导航栏按键色（和返回键一致，不用琥珀）。
                     // NavigationIcon 光栅化为高清位图绘制，避免 iOS 26 液态玻璃栏抽空自定义符号。
-                    NavigationIcon(watched ? .heartFill : .heart)
+                    NavigationIcon(watched ? .followFill : .follow)
                 }
                 // 加载、成功和失败时都保留同一个按钮，导航栏不会因工具项增删而重新布局。
                 .disabled(detail == nil)
