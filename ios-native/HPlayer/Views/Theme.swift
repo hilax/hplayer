@@ -153,7 +153,7 @@ enum Theme {
     /// 主操作色：每屏唯一的主按钮、当前集、选中胶囊、勾选。深色模式为白，浅色模式为墨黑。
     static let gold = Color(uiColor: .adaptive(light: UIColor(hex: 0x111113), dark: UIColor(hex: 0xF5F5F6)))
     static let goldLight = Color(uiColor: .adaptive(light: UIColor(hex: 0x2A2A2E), dark: UIColor.white))
-    static let goldDeep = Color(uiColor: .adaptive(light: UIColor(hex: 0x7E3A00), dark: UIColor(hex: 0xD9731A)))
+    static let goldDeep = Color(uiColor: .adaptive(light: UIColor(hex: 0x6B4910), dark: UIColor(hex: 0xCF9440)))
     static let primaryAction = gold
     /// 压在主操作色上的文字和图标（与 gold 反相）
     static let onPrimary = Color(uiColor: .adaptive(light: .white, dark: UIColor(hex: 0x0A0A0B)))
@@ -202,7 +202,8 @@ enum Theme {
         static let scrim = Color(uiColor: .adaptive(light: UIColor(hex: 0x0A0A0B, alpha: 0.28),
                                                      dark: UIColor(hex: 0x000000, alpha: 0.45)))
         /// 播放器快进量的琥珀色：播放画面永远是深色，固定不随深浅模式变
-        static let playerAccent = Color(uiColor: UIColor(hex: 0xFF8A1F))
+        static let playerAccentUIColor = UIColor(hex: 0xE9B061)
+        static let playerAccent = Color(uiColor: playerAccentUIColor)
 
         /// 语气对应的图标；普通提示不带图标
         static func icon(for tone: HUDTone) -> AppIcon? {
@@ -234,28 +235,28 @@ enum Theme {
         }
     }
 
-    // MARK: 强调（Infuse 橙，全应用唯一的彩色；2026-11 由琥珀换来）
+    // MARK: 强调（柔金，和播放器进度条同一个颜色；全应用唯一的彩色）
 
-    static let accentUIColor = UIColor.adaptive(light: UIColor(hex: 0xA34B00), dark: UIColor(hex: 0xFF8A1F))
-    static let accentAltUIColor = UIColor.adaptive(light: UIColor(hex: 0x7E3A00), dark: UIColor(hex: 0xFFB066))
+    static let accentUIColor = UIColor.adaptive(light: UIColor(hex: 0x855B12), dark: UIColor(hex: 0xE9B061))
+    static let accentAltUIColor = UIColor.adaptive(light: UIColor(hex: 0x6B4910), dark: UIColor(hex: 0xF2C88A))
     /// 琥珀：观看进度、更新、在看、进行中的数量、焦点。文字、细线、进度用它，不做大面积底色。
     static let accent = Color(uiColor: accentUIColor)
     static let accentAlt = Color(uiColor: accentAltUIColor)
     /// 琥珀实心：开关、实心角标。上面的字和图标用 onAccentFill。
     static let accentFill = Color(uiColor: accentUIColor)
-    /// 压在强调色实心上的文字（浅色模式白字 5.9:1，深色模式墨字 8.4:1）
+    /// 压在强调色实心上的文字（浅色模式白字 6.0:1，深色模式墨字 10.2:1）
     static let onAccentFill = Color(uiColor: .adaptive(light: .white, dark: UIColor(hex: 0x0A0A0B)))
     /// 琥珀淡底：选中行、强调提示的底色
     static let accentWash = Color(uiColor: .adaptive(
-        light: UIColor(hex: 0xA34B00, alpha: 0.10),
-        dark: UIColor(hex: 0xFF8A1F, alpha: 0.14)
+        light: UIColor(hex: 0x855B12, alpha: 0.10),
+        dark: UIColor(hex: 0xE9B061, alpha: 0.14)
     ))
 
     /// 评分和排名也用琥珀（方案 A 不另设铜金）
     static let brass = accent
     static let rating = accent
     /// 压在封面暗底上的评分（不随模式变）
-    static let ratingOnArtwork = Color(uiColor: UIColor(hex: 0xFF8A1F))
+    static let ratingOnArtwork = Color(uiColor: UIColor(hex: 0xE9B061))
 
     // MARK: 语义色
 
@@ -290,7 +291,7 @@ enum Theme {
     static let playerBackground = Color(uiColor: UIColor(hex: 0x000000))
     static let playerSurface = Color(uiColor: UIColor(hex: 0x141416))
     /// 自己发的弹幕外面那圈描边：画面上永远是深色，固定用深色模式的琥珀
-    static let danmakuMine = Color(uiColor: UIColor(hex: 0xFF8A1F))
+    static let danmakuMine = Color(uiColor: UIColor(hex: 0xE9B061))
 
     // MARK: 间距（4pt 网格，偏紧凑）
 
@@ -367,7 +368,7 @@ enum Theme {
         static let darkPage = Color(uiColor: UIColor(hex: 0x0A0A0B))
         static let darkCard = Color(uiColor: UIColor(hex: 0x1C1C1F))
         static let darkLine = Color.white.opacity(0.3)
-        static let accent = Color(uiColor: UIColor(hex: 0xFF8A1F))
+        static let accent = Color(uiColor: UIColor(hex: 0xE9B061))
     }
 
     /// 2.0 的棱镜渐变改成琥珀实色：进度、选中指示都用它，调用处不用改。

@@ -3645,7 +3645,7 @@ private final class ScrubberSlider: UISlider {
 
     /// 轨道图片和轨道一样高，两头是半圆，拉伸时只拉中间
     private func applyTrackImages() {
-        setMinimumTrackImage(Self.capsule(UIColor(red: 0.914, green: 0.690, blue: 0.380, alpha: 1), height: trackHeight), for: .normal)
+        setMinimumTrackImage(Self.capsule(Theme.HUD.playerAccentUIColor, height: trackHeight), for: .normal)
         setMaximumTrackImage(Self.capsule(UIColor.white.withAlphaComponent(0.22), height: trackHeight), for: .normal)
     }
 
