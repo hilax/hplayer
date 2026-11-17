@@ -235,20 +235,21 @@ enum Theme {
         }
     }
 
-    // MARK: 强调（柔金，和播放器进度条同一个颜色；全应用唯一的彩色）
+    // MARK: 强调（柔金 #E9B061，深浅两种模式同一个颜色，和播放器进度条一致；全应用唯一的彩色）
+    // 注意：浅色底上柔金做文字对比度只有约 1.9:1，小字会偏淡；这是用户选的效果
 
-    static let accentUIColor = UIColor.adaptive(light: UIColor(hex: 0x855B12), dark: UIColor(hex: 0xE9B061))
+    static let accentUIColor = UIColor.adaptive(light: UIColor(hex: 0xE9B061), dark: UIColor(hex: 0xE9B061))
     static let accentAltUIColor = UIColor.adaptive(light: UIColor(hex: 0x6B4910), dark: UIColor(hex: 0xF2C88A))
     /// 琥珀：观看进度、更新、在看、进行中的数量、焦点。文字、细线、进度用它，不做大面积底色。
     static let accent = Color(uiColor: accentUIColor)
     static let accentAlt = Color(uiColor: accentAltUIColor)
     /// 琥珀实心：开关、实心角标。上面的字和图标用 onAccentFill。
     static let accentFill = Color(uiColor: accentUIColor)
-    /// 压在强调色实心上的文字（浅色模式白字 6.0:1，深色模式墨字 10.2:1）
-    static let onAccentFill = Color(uiColor: .adaptive(light: .white, dark: UIColor(hex: 0x0A0A0B)))
+    /// 压在强调色实心上的文字：柔金很亮，两种模式都用墨字（10.2:1）；白字在柔金上看不清
+    static let onAccentFill = Color(uiColor: UIColor(hex: 0x0A0A0B))
     /// 琥珀淡底：选中行、强调提示的底色
     static let accentWash = Color(uiColor: .adaptive(
-        light: UIColor(hex: 0x855B12, alpha: 0.10),
+        light: UIColor(hex: 0xE9B061, alpha: 0.18),
         dark: UIColor(hex: 0xE9B061, alpha: 0.14)
     ))
 
