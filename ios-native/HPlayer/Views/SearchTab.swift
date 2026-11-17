@@ -54,15 +54,23 @@ struct SearchView: View {
     @State private var keyword = ""
     @State private var scope: Scope = .all
     @StateObject private var cloudSearch = CloudSearchStore()
+    @StateObject private var animeSearch = AnimeSearchStore()
+    @ObservedObject private var historyStore = SearchHistoryStore.shared
     @State private var searchTask: Task<Void, Never>?
+    @State private var lastTrimmedQuery = ""
+    @State private var fallbackLibrary: HomeSnapshot?
     private var results: [P115File] { cloudSearch.results }
     private var searchedKeyword: String { cloudSearch.searchedKeyword }
     private var loading: Bool { cloudSearch.loading }
     private var error: String { cloudSearch.error }
+    private enum DetailRoute: Hashable {
+        case performer(PerformerRoute)
+        case anime(Int)
+        case series(String)
+    }
+
     @State private var playing: PlaybackQueue?
-    @State private var openSeriesID: String?
-    @State private var animeResults: [AnimeVideoItem] = []
-    @State private var isAnimeLoading = false
+    @State private var detailRoute: DetailRoute?
 
     init(initialQuery: String = "", initialResults: [P115File] = [], isActive: Bool = true,
          library: HomeSnapshot? = nil, externalKeyboard: SearchKeyboardCoordinator? = nil,
@@ -71,42 +79,95 @@ struct SearchView: View {
         self.sharedLibrary = library
         self.externalKeyboard = externalKeyboard
         self.onClose = onClose
+        let trimmed = initialQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         _keyword = State(initialValue: initialQuery)
-        _cloudSearch = StateObject(wrappedValue: CloudSearchStore(initialQuery: initialQuery, initialResults: initialResults))
+        _lastTrimmedQuery = State(initialValue: trimmed)
+        _cloudSearch = StateObject(wrappedValue: CloudSearchStore(initialQuery: trimmed, initialResults: initialResults))
+        _animeSearch = StateObject(wrappedValue: AnimeSearchStore(initialQuery: trimmed))
     }
 
     private var query: String {
         keyword.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    private var cloudActive: Bool { scope == .all || scope == .cloud }
+    private var animeActive: Bool { scope == .all || scope == .anime }
+    private var libraryActive: Bool { scope == .all || scope == .library }
+    private var cloudHasSearched: Bool { appState.isAuthenticated && cloudSearch.searchedKeyword == query }
+    private var animeHasSearched: Bool { animeSearch.searchedKeyword == query }
+
+    private struct FallbackSnapshotKey: Equatable {
+        let sessionID: UUID
+        let localCount: Int
+        let cloudRev: Int
+        let metaRev: Int
+        let needsFallback: Bool
+    }
+
+    private func isTotalEmpty(_ hits: LibraryHits) -> Bool {
+        guard !query.isEmpty else { return false }
+        if scope == .cloud && !appState.isAuthenticated { return false }
+        let hasLibraryHits = libraryActive && hits.count > 0
+        let hasCloudHits = cloudActive && cloudHasSearched && !results.isEmpty
+        let hasAnimeHits = animeActive && animeHasSearched && !animeSearch.results.isEmpty
+        guard !hasLibraryHits && !hasCloudHits && !hasAnimeHits else { return false }
+
+        let anyLoading = (cloudActive && loading) || (animeActive && animeSearch.loading)
+        let anyError = (cloudActive && appState.isAuthenticated && !error.isEmpty)
+            || (animeActive && !animeSearch.error.isEmpty)
+        guard !anyLoading && !anyError else { return false }
+
+        let cloudDone = !cloudActive || !appState.isAuthenticated || cloudHasSearched
+        let animeDone = !animeActive || animeHasSearched
+        return cloudDone && animeDone
+    }
+
     var body: some View {
-        let library = sharedLibrary ?? HomeLibrary.snapshot(local: localStore, cloud: mediaLibrary, metadata: metadataStore, appState: appState)
+        let library = sharedLibrary ?? fallbackLibrary ?? HomeSnapshot(items: [])
         let hits = libraryMatches(library)
+        let totalEmpty = isTotalEmpty(hits)
+        let snapshotKey = FallbackSnapshotKey(
+            sessionID: appState.sessionID,
+            localCount: localStore.files.count,
+            cloudRev: mediaLibrary.revision,
+            metaRev: metadataStore.revision,
+            needsFallback: sharedLibrary == nil
+        )
 
         VStack(spacing: 0) {
         searchBar
         scopePills
         List {
             if query.isEmpty {
+                emptyQueryContent
+            } else if totalEmpty {
                 EmptyStateView(
                     icon: AppIcon.search.name,
-                    title: "找到你想看的",
-                    message: "输入片名、演员或文件名里的关键词。片库里的影片会边输入边显示，按搜索键再查 115 网盘。"
+                    title: "暂时没有找到",
+                    message: "试试更短的片名，或检查文件名。也可以切换搜索范围后再试。",
+                    actionTitle: "清空并重搜",
+                    action: {
+                        keyword = ""
+                        keyboard.focusField()
+                    }
                 )
-                .frame(minHeight: 380)
+                .frame(minHeight: keyboard.keyboardHeight > 0 ? 220 : 340)
                 .searchRow()
-            } else if (scope == .cloud || hits.count == 0) && (scope == .library || results.isEmpty) && (scope == .library || animeResults.isEmpty) && !loading && !isAnimeLoading && error.isEmpty && (scope == .library || searchedKeyword == query) {
-                EmptyStateView(icon: AppIcon.search.name, title: "暂时没有找到", message: "试试更短的片名，或检查文件名。也可以切换搜索范围后再试。", actionTitle: "重新搜索", action: { keyboard.focusField() })
-                    .frame(minHeight: 380).searchRow()
             } else {
-                if scope != .cloud && scope != .anime {
+                if libraryActive {
                     librarySection(hits, library: library)
                 }
-                if scope == .all || scope == .anime {
-                    animeSection
-                }
-                if scope != .library && scope != .anime {
-                    cloudSection
+                if scope == .all && !cloudHasSearched && !animeHasSearched
+                    && !loading && !animeSearch.loading
+                    && error.isEmpty && animeSearch.error.isEmpty {
+                    pendingRemoteSection
+                } else {
+                    if animeActive {
+                        animeSection
+                    }
+                    if cloudActive {
+                        cloudSection
+                    }
                 }
             }
         }
@@ -122,6 +183,9 @@ struct SearchView: View {
         .ignoresSafeArea(.keyboard, edges: .bottom)
         .background(Theme.pageBackground.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
+        .task(id: snapshotKey) {
+            await refreshFallbackLibraryIfNeeded()
+        }
         .onAppear {
             if externalKeyboard == nil {
                 keyboard.handleStandaloneInitialAppearance(isActive: isActive, autoFocus: query.isEmpty && !InterfacePreview.active, reduceMotion: reduceMotion)
@@ -132,45 +196,53 @@ struct SearchView: View {
                 if active { keyboard.open(autoFocus: !InterfacePreview.active, reduceMotion: reduceMotion) }
                 else { keyboard.close(reduceMotion: reduceMotion) }
             }
-        }
-        .designScreen(query.isEmpty ? "search" : hits.count == 0 && results.isEmpty && !loading && error.isEmpty ? "search-empty" : "search-results")
-        .navigationDestination(for: PerformerRoute.self) { route in
-            if let group = library.performers.first(where: { $0.id == route.id }) {
-                PerformerCollectionView(group: group)
-                    .id(route.id)
-            } else {
-                VStack(spacing: 10) {
-                    Image(appIconNamed: AppIcon.people.name)
-                    Text("演员合集已更新").font(.headline)
-                    Text("返回搜索页后重新进入演员合集。").foregroundStyle(.secondary)
-                }
+            if !active {
+                searchTask?.cancel()
+                cloudSearch.invalidate()
+                animeSearch.invalidate()
             }
         }
-        .navigationDestination(for: AnimeDetailRoute.self) { route in
-            AnimeDetailView(animeId: route.animeId)
-                .id(route.animeId)
-        }
+        .designScreen(query.isEmpty ? "search" : totalEmpty ? "search-empty" : "search-results")
         .onChange(of: keyword) { _ in
+            let next = query
+            guard next != lastTrimmedQuery else { return }
+            lastTrimmedQuery = next
             searchTask?.cancel()
-            cloudSearch.invalidate(clearResults: query.isEmpty)
-            if query.isEmpty { animeResults = [] }
+            cloudSearch.invalidate(clearResults: next.isEmpty)
+            animeSearch.invalidate(clearResults: next.isEmpty)
         }
         .onChange(of: scope) { value in
-            searchTask?.cancel()
-            cloudSearch.invalidate()
-            if value != .library, !query.isEmpty { startSearch() }
+            guard value != .library, !query.isEmpty else { return }
+            startSearch(force: false)
         }
         .onChange(of: appState.sessionID) { _ in
             searchTask?.cancel()
             cloudSearch.invalidate(clearResults: true)
+            animeSearch.invalidate(clearResults: false)
         }
-        .onDisappear { searchTask?.cancel(); cloudSearch.invalidate() }
         .navigationDestination(isPresented: Binding(
-            get: { openSeriesID != nil },
-            set: { if !$0 { openSeriesID = nil } }
+            get: { detailRoute != nil },
+            set: { if !$0 { detailRoute = nil } }
         )) {
-            if let openSeriesID {
-                SeriesDetailView(seriesID: openSeriesID)
+            switch detailRoute {
+            case .performer(let route):
+                if let group = library.performers.first(where: { $0.id == route.id }) {
+                    PerformerCollectionView(group: group)
+                        .id(route.id)
+                } else {
+                    VStack(spacing: 10) {
+                        Image(appIconNamed: AppIcon.people.name)
+                        Text("演员合集已更新").font(.headline)
+                        Text("返回搜索页后重新进入演员合集。").foregroundStyle(.secondary)
+                    }
+                }
+            case .anime(let animeID):
+                AnimeDetailView(animeId: animeID)
+                    .id(animeID)
+            case .series(let seriesID):
+                SeriesDetailView(seriesID: seriesID)
+            case nil:
+                EmptyView()
             }
         }
         .playerWindow(item: $playing) { queue in
@@ -195,11 +267,15 @@ struct SearchView: View {
                     text: $keyword,
                     placeholder: "片名、文件名或演员",
                     coordinator: keyboard,
-                    onSubmit: { startSearch() }
+                    onSubmit: { startSearch(force: true) }
                 )
                 .frame(height: 28)
                 if !keyword.isEmpty {
-                    Button { keyword = "" } label: {
+                    Button {
+                        Haptics.tap()
+                        keyword = ""
+                        keyboard.focusField()
+                    } label: {
                         Image(appIconNamed: AppIcon.clear.name)
                             .font(.scaled(15))
                             .foregroundStyle(Theme.textTertiary)
@@ -216,7 +292,7 @@ struct SearchView: View {
             .background(Theme.surface, in: Capsule())
             .animation(Motion.snappy, value: keyword.isEmpty)
 
-            Button { startSearch(); keyboard.resignField() } label: {
+            Button { startSearch(force: true); keyboard.resignField() } label: {
                 Text("搜索")
                     .font(.scaled(15, weight: .semibold))
                     .foregroundStyle(query.isEmpty ? Theme.textTertiary : Theme.accent)
@@ -244,6 +320,85 @@ struct SearchView: View {
         .padding(.horizontal, Theme.contentInset)
         .padding(.top, 6)
         .padding(.bottom, 8)
+    }
+
+    // MARK: 空白与历史
+
+    @ViewBuilder
+    private var emptyQueryContent: some View {
+        if !InterfacePreview.active && !historyStore.items.isEmpty {
+            HStack {
+                Text("最近搜索")
+                    .font(.scaled(13, weight: .semibold))
+                    .foregroundStyle(Theme.textSecondary)
+                    .accessibilityAddTraits(.isHeader)
+                Spacer(minLength: 8)
+                Button("清空") {
+                    Haptics.tap()
+                    withAnimation(reduceMotion ? nil : Motion.snappy) {
+                        historyStore.clear()
+                    }
+                }
+                .font(Theme.Typo.meta)
+                .foregroundStyle(Theme.textTertiary)
+                .frame(minHeight: 32)
+                .contentShape(Rectangle())
+                .accessibilityIdentifier("search.history.clear")
+            }
+            .searchRow(top: 12, bottom: 4)
+
+            FlowLayout(spacing: Theme.Space.sm) {
+                ForEach(historyStore.items, id: \.self) { item in
+                    Button {
+                        applyHistoryKeyword(item)
+                    } label: {
+                        Text(item)
+                            .font(Theme.Typo.meta)
+                            .foregroundStyle(Theme.textPrimary)
+                            .lineLimit(1)
+                            .padding(.horizontal, Theme.Space.md)
+                            .padding(.vertical, 7)
+                            .background(Theme.surface, in: Capsule())
+                            .overlay {
+                                Capsule().strokeBorder(Theme.hairline, lineWidth: Theme.Stroke.hairline)
+                            }
+                    }
+                    .buttonStyle(.pressable(scale: 0.96))
+                    .contextMenu {
+                        Button("删除这条记录", icon: AppIcon.trash.name, role: .destructive) {
+                            historyStore.remove(item)
+                        }
+                    }
+                }
+            }
+            .searchRow(top: 4, bottom: 12)
+
+            Text("片库里的影片会边输入边显示，按搜索键再查在线动漫与 115 网盘。")
+                .font(Theme.Typo.caption)
+                .foregroundStyle(Theme.textTertiary)
+                .searchRow(top: 4, bottom: 12)
+        } else {
+            EmptyStateView(
+                icon: AppIcon.search.name,
+                title: "找到你想看的",
+                message: "输入片名、演员或文件名里的关键词。片库里的影片会边输入边显示，按搜索键再查在线动漫与 115 网盘。"
+            )
+            .frame(minHeight: keyboard.keyboardHeight > 0 ? 220 : 340)
+            .searchRow()
+        }
+    }
+
+    private var pendingRemoteSection: some View {
+        promptRow(
+            appState.isAuthenticated
+                ? "搜索在线动漫与 115 网盘中的「\(query)」"
+                : "搜索在线动漫中的「\(query)」",
+            top: 10
+        ) {
+            startSearch(force: true)
+            keyboard.resignField()
+        }
+        .accessibilityIdentifier("search.remotePrompt")
     }
 
     // MARK: 片库
@@ -282,7 +437,10 @@ struct SearchView: View {
                 .searchRow(top: 2, bottom: 12)
         } else {
             ForEach(hits.performers) { group in
-                PerformerNavigationLink(group: group) {
+                Button {
+                    keyboard.resignField()
+                    detailRoute = .performer(PerformerRoute(id: group.id, name: group.name))
+                } label: {
                     HStack(spacing: 14) {
                         IconTile(icon: .people, size: 56)
                         VStack(alignment: .leading, spacing: 4) {
@@ -304,7 +462,8 @@ struct SearchView: View {
 
             ForEach(Array(hits.series.enumerated()), id: \.element.id) { index, group in
                 Button {
-                    openSeriesID = group.id
+                    keyboard.resignField()
+                    detailRoute = .series(group.id)
                 } label: {
                     LibraryResultRow(
                         posterURL: group.posterURL,
@@ -321,6 +480,7 @@ struct SearchView: View {
 
             ForEach(Array(hits.movies.enumerated()), id: \.element.id) { index, item in
                 Button {
+                    keyboard.resignField()
                     playing = HomeLibrary.queue(for: item, in: library.items)
                 } label: {
                     LibraryResultRow(
@@ -353,7 +513,7 @@ struct SearchView: View {
 
     @ViewBuilder
     private var cloudSection: some View {
-        sectionTitle(searchedKeyword == query && !results.isEmpty ? "115 网盘 · \(results.count) 个视频" : "115 网盘")
+        sectionTitle(cloudHasSearched && !results.isEmpty ? "115 网盘 · \(results.count) 个视频" : "115 网盘")
 
         if !appState.isAuthenticated {
             hintRow(
@@ -361,30 +521,22 @@ struct SearchView: View {
                 text: "登录 115 后才能搜索网盘，到「网盘」页登录。"
             )
         } else if loading {
-            HStack {
-                Spacer()
-                ProgressView()
-                Spacer()
-            }
-            .padding(.vertical, 24)
-            .searchRow()
+            loadingRow()
         } else if !error.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                Label(error, image: AppIcon.alert.name)
-                    .font(.subheadline)
-                    .foregroundStyle(Theme.warning)
-                Button("重试") { startSearch() }
-                    .font(.subheadline.weight(.semibold))
-                    .buttonStyle(.borderless)
+            errorRow(error) {
+                startSearch(force: true, target: .cloudOnly)
             }
-            .searchRow(top: 4, bottom: 12)
-        } else if searchedKeyword != query {
-            hintRow(icon: AppIcon.returnKey.name, text: "按键盘上的搜索键，在 115 网盘里搜索「\(query)」。")
+        } else if !cloudHasSearched {
+            promptRow("在 115 网盘中搜索「\(query)」") {
+                startSearch(force: true, target: .cloudOnly)
+                keyboard.resignField()
+            }
         } else if results.isEmpty {
             hintRow(icon: AppIcon.search.name, text: "115 网盘里没有找到相关视频，换个关键词或者试试英文片名。")
         } else {
             ForEach(Array(results.enumerated()), id: \.element.id) { index, file in
                 Button {
+                    keyboard.resignField()
                     let source = PlaybackSource.p115(title: file.name, pickCode: file.pickCode)
                     let items = results.filter { !$0.isDir && !$0.pickCode.isEmpty }.map { PlaybackSource.p115(title: $0.name, pickCode: $0.pickCode) }
                     playing = PlaybackQueue(source: source, items: items)
@@ -402,31 +554,42 @@ struct SearchView: View {
 
     @ViewBuilder
     private var animeSection: some View {
-        if !animeResults.isEmpty {
-            sectionTitle("在线动漫 · \(animeResults.count) 部")
+        let shouldShowSection = scope == .anime || animeSearch.loading || !animeSearch.error.isEmpty || !animeSearch.results.isEmpty
+        if shouldShowSection {
+            sectionTitle(animeHasSearched && !animeSearch.results.isEmpty ? "在线动漫 · \(animeSearch.results.count) 部" : "在线动漫")
 
-            ForEach(Array(animeResults.enumerated()), id: \.element.id) { index, item in
-                NavigationLink(value: AnimeDetailRoute(animeId: item.id)) {
-                    LibraryResultRow(
-                        posterURL: item.safePicURLString,
-                        title: item.name,
-                        meta: [item.year, item.area, item.continu].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "),
-                        detail: ["在线动漫", item.tags.prefix(2).joined(separator: " / ")].filter { !$0.isEmpty }.joined(separator: " · "),
-                        showsPlay: false
-                    )
+            if animeSearch.loading {
+                loadingRow(tint: Theme.accent)
+            } else if !animeSearch.error.isEmpty {
+                errorRow(animeSearch.error) {
+                    startSearch(force: true, target: .animeOnly)
                 }
-                .buttonStyle(.pressable(scale: 0.98))
-                .searchRow()
+            } else if !animeHasSearched {
+                promptRow("在在线动漫中搜索「\(query)」") {
+                    startSearch(force: true, target: .animeOnly)
+                    keyboard.resignField()
+                }
+            } else if animeSearch.results.isEmpty {
+                hintRow(icon: AppIcon.search.name, text: "在线动漫里没有找到相关内容。")
+            } else {
+                ForEach(Array(animeSearch.results.enumerated()), id: \.element.id) { index, item in
+                    Button {
+                        keyboard.resignField()
+                        detailRoute = .anime(item.id)
+                    } label: {
+                        LibraryResultRow(
+                            posterURL: item.safePicURLString,
+                            title: item.name,
+                            meta: [item.year, item.area, item.continu].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "),
+                            detail: ["在线动漫", item.tags.prefix(2).joined(separator: " / ")].filter { !$0.isEmpty }.joined(separator: " · "),
+                            showsPlay: false
+                        )
+                    }
+                    .buttonStyle(.pressable(scale: 0.98))
+                    .searchRow()
+                    .reveal(index, id: item.id)
+                }
             }
-        } else if isAnimeLoading {
-            HStack {
-                Spacer()
-                ProgressView()
-                    .tint(Theme.accent)
-                Spacer()
-            }
-            .padding(.vertical, 24)
-            .searchRow()
         }
     }
 
@@ -446,29 +609,123 @@ struct SearchView: View {
             .searchRow(top: 4, bottom: 12)
     }
 
-    // MARK: 请求
+    private func loadingRow(tint: Color? = nil) -> some View {
+        HStack {
+            Spacer()
+            if let tint {
+                ProgressView().tint(tint)
+            } else {
+                ProgressView()
+            }
+            Spacer()
+        }
+        .padding(.vertical, 24)
+        .searchRow()
+    }
 
-    private func startSearch() {
-        searchTask?.cancel()
+    private func errorRow(_ message: String, retry: @escaping () -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(message, image: AppIcon.alert.name)
+                .font(.subheadline)
+                .foregroundStyle(Theme.warning)
+            Button("重试", action: retry)
+                .font(.subheadline.weight(.semibold))
+                .buttonStyle(.borderless)
+        }
+        .searchRow(top: 4, bottom: 12)
+    }
+
+    private func promptRow(_ text: String, top: CGFloat = 4, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: Theme.Space.sm) {
+                Image(icon: .returnKey)
+                    .font(.scaled(14, weight: Theme.iconWeight))
+                    .foregroundStyle(Theme.accent)
+                Text(text)
+                    .font(Theme.Typo.row)
+                    .foregroundStyle(Theme.textSecondary)
+                    .multilineTextAlignment(.leading)
+                Spacer(minLength: 8)
+                Text("搜索")
+                    .font(Theme.Typo.meta.weight(.semibold))
+                    .foregroundStyle(Theme.accent)
+            }
+            .padding(.horizontal, Theme.Space.md + 2)
+            .padding(.vertical, Theme.Space.md)
+            .surfaceCard()
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.pressable(scale: 0.98))
+        .searchRow(top: top, bottom: 12)
+    }
+
+    // MARK: 请求与历史
+
+    private enum SearchTarget {
+        case all, cloudOnly, animeOnly
+    }
+
+    private func applyHistoryKeyword(_ item: String) {
+        Haptics.select()
+        lastTrimmedQuery = item
+        keyword = item
+        startSearch(force: false)
+        keyboard.resignField()
+    }
+
+    private func startSearch(force: Bool, target: SearchTarget = .all) {
         let text = query
         guard !text.isEmpty else { return }
 
-        searchTask = Task {
-            if scope != .library && scope != .anime && appState.isAuthenticated,
-               let direct = appState.directClient() {
-                await cloudSearch.search(text) { try await direct.search($0) }
-            }
+        if !InterfacePreview.active {
+            historyStore.record(text)
+        }
 
-            if scope == .all || scope == .anime {
-                isAnimeLoading = true
-                do {
-                    let res = try await AnimeClient.shared.search(keyword: text, limit: 20)
-                    self.animeResults = res.items
-                } catch {
-                    self.animeResults = []
+        let needCloud = (target == .all || target == .cloudOnly)
+            && cloudActive
+            && appState.isAuthenticated
+            && (force || cloudSearch.searchedKeyword != text)
+        let needAnime = (target == .all || target == .animeOnly)
+            && animeActive
+            && (force || animeSearch.searchedKeyword != text)
+
+        guard needCloud || needAnime else { return }
+
+        searchTask?.cancel()
+        let direct = needCloud ? appState.directClient() : nil
+        let cloudStore = cloudSearch
+        let animeStore = animeSearch
+
+        searchTask = Task { @MainActor in
+            async let cloudJob: Void = {
+                if let direct {
+                    await cloudStore.search(text) { try await direct.search($0) }
                 }
-                isAnimeLoading = false
-            }
+            }()
+            async let animeJob: Void = {
+                if needAnime {
+                    await animeStore.search(text) { try await AnimeClient.shared.search(keyword: $0, limit: 20).items }
+                }
+            }()
+            _ = await (cloudJob, animeJob)
+        }
+    }
+
+    private func refreshFallbackLibraryIfNeeded() async {
+        guard sharedLibrary == nil else {
+            fallbackLibrary = nil
+            return
+        }
+        let files = HomeLibrary.media(local: localStore, cloud: mediaLibrary, appState: appState)
+        let matches = metadataStore.metadataByMediaID
+        if files.count <= LibrarySnapshotStore.inlineLimit {
+            fallbackLibrary = LibrarySnapshotStore.make(files, matches)
+        } else {
+            let computed = await Task.detached(priority: .userInitiated) {
+                LibrarySnapshotStore.make(files, matches)
+            }.value
+            guard !Task.isCancelled else { return }
+            fallbackLibrary = computed
         }
     }
 

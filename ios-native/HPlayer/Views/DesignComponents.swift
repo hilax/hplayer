@@ -729,3 +729,53 @@ struct TagBadge: View {
         }
     }
 }
+
+// MARK: - 流式标签布局
+
+/// 自动换行的横向流式布局，用于搜索历史、标签列表等场景。
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? .infinity
+        let itemProposal = width.isFinite ? ProposedViewSize(width: width, height: nil) : .unspecified
+        var currentX: CGFloat = 0
+        var currentY: CGFloat = 0
+        var maxHeight: CGFloat = 0
+        var widest: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(itemProposal)
+            if currentX + size.width > width, currentX > 0 {
+                currentX = 0
+                currentY += maxHeight + spacing
+                maxHeight = 0
+            }
+            maxHeight = max(maxHeight, size.height)
+            currentX += size.width + spacing
+            widest = max(widest, currentX - spacing)
+        }
+
+        // 没给宽度时按实际最宽的一行算，不返回无限宽
+        return CGSize(width: proposal.width ?? widest, height: currentY + maxHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let itemProposal = bounds.width.isFinite ? ProposedViewSize(width: bounds.width, height: nil) : .unspecified
+        var currentX: CGFloat = bounds.minX
+        var currentY: CGFloat = bounds.minY
+        var maxHeight: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(itemProposal)
+            if currentX + size.width > bounds.maxX, currentX > bounds.minX {
+                currentX = bounds.minX
+                currentY += maxHeight + spacing
+                maxHeight = 0
+            }
+            subview.place(at: CGPoint(x: currentX, y: currentY), proposal: itemProposal)
+            maxHeight = max(maxHeight, size.height)
+            currentX += size.width + spacing
+        }
+    }
+}
