@@ -222,8 +222,9 @@ struct PlayerInfoTabBar: View {
                         ZStack {
                             Capsule().fill(Color.clear).frame(width: 18, height: 3)
                             if selection == tab {
+                                // 选中的下划线用主文字色，和标签栏、频道的选中规则一致
                                 Capsule()
-                                    .fill(Theme.prismGradient)
+                                    .fill(Theme.textPrimary)
                                     .frame(width: 18, height: 3)
                                     .matchedGeometryEffect(id: "underline", in: underline)
                             }
@@ -256,13 +257,18 @@ private struct DanmakuTabControls: View {
     var body: some View {
         HStack(spacing: 4) {
             Button(action: onCompose) {
-                Text("发弹幕…")
-                    .font(.scaled(13))
-                    .foregroundStyle(Theme.textTertiary)
-                    .lineLimit(1)
-                    .padding(.horizontal, 12)
-                    .frame(height: 30)
-                    .background(Theme.inputFill, in: Capsule())
+                HStack(spacing: 6) {
+                    Image(icon: .danmaku)
+                        .font(.scaled(13, weight: Theme.iconWeight))
+                    Text("发条弹幕")
+                        .font(.scaled(13))
+                        .lineLimit(1)
+                }
+                .foregroundStyle(Theme.textTertiary)
+                .padding(.horizontal, 12)
+                .frame(height: 34)
+                .background(Theme.surface, in: Capsule())
+                .overlay { Capsule().strokeBorder(Theme.hairline, lineWidth: 0.5) }
                     .frame(minHeight: 44)
                     .contentShape(Rectangle())
             }
@@ -273,7 +279,8 @@ private struct DanmakuTabControls: View {
                 Haptics.tap()
                 store.enabled.toggle()
             } label: {
-                DanmakuGlyph(enabled: store.enabled, size: 12, tint: Theme.textPrimary, enabledFill: Theme.accentFill, enabledTextColor: Theme.onAccentFill)
+                // 弹幕开着：主操作色（深色下白、浅色下墨黑），不用琥珀色
+                DanmakuGlyph(enabled: store.enabled, size: 12, tint: Theme.textPrimary, enabledFill: Theme.primaryAction, enabledTextColor: Theme.onPrimary)
                     .frame(width: 40, height: 44)
                     .contentShape(Rectangle())
             }

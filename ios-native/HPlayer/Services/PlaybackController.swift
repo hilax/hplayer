@@ -162,6 +162,10 @@ final class PlaybackController: ObservableObject {
     /// 内核报告的画面宽高比（宽 ÷ 高，已经算上像素宽高比和强制比例）；还没出画面时是 0。
     /// 换下一集时先留着上一集的值：同一部剧比例一样，竖屏小窗不用先弹回 16:9 再变回来。
     @Published private(set) var videoAspect: Double = 0
+    /// 竖屏信息页「文件信息」用：文件大小（字节，未知为 0）、视频 / 音频编码的简短名字（未知为空）
+    @Published private(set) var fileSize: Int64 = 0
+    @Published private(set) var videoCodecName = ""
+    @Published private(set) var audioCodecName = ""
     /// 画面那一块现在摆在播放区域的什么位置（由画面视图报告）。只给诊断信息和界面测试看，不参与界面刷新
     private(set) var pictureFrame = CGRect.zero
     /// 整块画面图层现在占的位置（含它自带的黑边，竖屏时两边会伸到小窗外）
@@ -463,6 +467,9 @@ final class PlaybackController: ObservableObject {
         ("video-params/w", MPV_FORMAT_INT64),
         ("video-params/sig-peak", MPV_FORMAT_DOUBLE),
         ("video-params/aspect", MPV_FORMAT_DOUBLE),
+        ("video-format", MPV_FORMAT_STRING),
+        ("audio-codec-name", MPV_FORMAT_STRING),
+        ("file-size", MPV_FORMAT_INT64),
         ("mute", MPV_FORMAT_FLAG),
         ("hwdec-current", MPV_FORMAT_STRING),
     ]
@@ -647,6 +654,9 @@ final class PlaybackController: ObservableObject {
             videoWidth = 0
             videoHeight = 0
             hdr = false
+            fileSize = 0
+            videoCodecName = ""
+            audioCodecName = ""
         }
     }
 
@@ -943,6 +953,19 @@ final class PlaybackController: ObservableObject {
         case .ratio235: return 2.35
         case .fit, .fill, .stretch: return videoAspect > 0 ? videoAspect : nil
         }
+    }
+
+    /// 内核给的编码名（h264、hevc、aac、eac3…）换成常见写法
+    static func codecName(_ raw: String) -> String {
+        let known = ["h264": "H.264", "hevc": "H.265", "h265": "H.265", "av1": "AV1", "vp9": "VP9", "vp8": "VP8",
+                     "mpeg4": "MPEG-4", "mpeg2video": "MPEG-2", "vc1": "VC-1", "wmv3": "WMV", "rv40": "RMVB",
+                     "aac": "AAC", "ac3": "AC-3", "eac3": "E-AC-3", "truehd": "TrueHD", "dts": "DTS", "flac": "FLAC",
+                     "mp3": "MP3", "opus": "Opus", "vorbis": "Vorbis", "alac": "ALAC"]
+        let key = raw.trimmingCharacters(in: .whitespaces).lowercased()
+        if key.isEmpty { return "" }
+        if let name = known[key] { return name }
+        if key.hasPrefix("pcm") { return "PCM" }
+        return key.uppercased()
     }
 
     /// 画面视图摆好位置后报告一次
@@ -1316,6 +1339,14 @@ final class PlaybackController: ObservableObject {
             // 换文件、关画面时内核会报空值（不走这里），所以上一集的比例一直留到下一集出画面
             guard value.isFinite, value > 0.1, value < 10, abs(value - videoAspect) > 0.002 else { return }
             videoAspect = value
+        case ("video-format", .string(let value)):
+            let name = Self.codecName(value)
+            if name != videoCodecName { videoCodecName = name }
+        case ("audio-codec-name", .string(let value)):
+            let name = Self.codecName(value)
+            if name != audioCodecName { audioCodecName = name }
+        case ("file-size", .int(let value)):
+            if value > 0, value != fileSize { fileSize = value }
         case ("mute", .flag(let value)):
             muted = value
         case ("hwdec-current", .string(let value)):
