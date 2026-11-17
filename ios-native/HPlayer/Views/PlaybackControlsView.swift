@@ -1783,7 +1783,8 @@ struct PlaybackControlsView: View {
         if let commentsVid {
             VStack(spacing: 0) {
                 PlayerInfoTabBar(selection: $infoTab, danmaku: danmaku, onComposeDanmaku: composeDanmaku) {
-                    showDanmakuSettings = true
+                    closeQuickMenu()
+                    withAnimation(reduceMotion ? nil : Motion.smooth) { showDanmakuSettings = true }
                 }
                 if infoTab == .comments {
                     AnimeCommentsView(vid: commentsVid, bottomInset: bottomInset)
@@ -1793,12 +1794,32 @@ struct PlaybackControlsView: View {
                         .transition(.opacity)
                 }
             }
-            .sheet(isPresented: $showDanmakuSettings) {
-                if let danmaku { DanmakuSettingsSheet(store: danmaku) }
+            // 弹幕设置是播放页自己的底部面板，只盖住信息区：上面的画面还露着，改了马上能看到效果
+            .overlay(alignment: .bottom) {
+                if showDanmakuSettings, let danmaku {
+                    ZStack(alignment: .bottom) {
+                        Theme.HUD.scrim
+                            .ignoresSafeArea()
+                            .contentShape(Rectangle())
+                            .onTapGesture { closeDanmakuSettings() }
+                            .accessibilityHidden(true)
+                            .transition(.opacity)
+                        DanmakuSettingsPanel(store: danmaku, bottomInset: bottomInset) { closeDanmakuSettings() }
+                            .gesture(DragGesture(minimumDistance: 12).onEnded { drag in
+                                if drag.translation.height > 60 { closeDanmakuSettings() }
+                            })
+                            .transition(.move(edge: .bottom))
+                    }
+                    .zIndex(5)
+                }
             }
         } else {
             introPage(bottomInset: bottomInset)
         }
+    }
+
+    private func closeDanmakuSettings() {
+        withAnimation(reduceMotion ? nil : Motion.smooth) { showDanmakuSettings = false }
     }
 
     private func introPage(bottomInset: CGFloat) -> some View {
