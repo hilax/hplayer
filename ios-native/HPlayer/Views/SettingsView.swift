@@ -228,7 +228,7 @@ struct SettingsView: View {
                 .accessibilityIdentifier("mine.messages")
             }
             NavigationLink(value: MineRoute.watchlist) {
-                LibraryActionRow(symbol: AppIcon.heart.name, title: "追番收藏",
+                LibraryActionRow(symbol: AppIcon.follow.name, title: "追番收藏",
                                  value: watchlist.items.isEmpty ? "" : "\(watchlist.items.count)")
             }
             .buttonStyle(.pressable(scale: 0.985))

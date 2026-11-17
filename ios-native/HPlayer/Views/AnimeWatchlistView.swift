@@ -30,7 +30,7 @@ struct AnimeWatchlistView: View {
     var body: some View {
         Group {
             if store.items.isEmpty {
-                EmptyStateView(icon: AppIcon.heart.name, title: "还没有追番",
+                EmptyStateView(icon: AppIcon.follow.name, title: "还没有追番",
                                message: "在动漫详情页点「追番」，有新一集时会在这里和首页提醒你。")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -42,7 +42,7 @@ struct AnimeWatchlistView: View {
                                     Button(role: .destructive) {
                                         withAnimation(Motion.smooth) { store.remove(id: item.id) }
                                     } label: {
-                                        Label("取消追番", image: AppIcon.heart.name)
+                                        Label("取消追番", image: AppIcon.followFill.name)
                                     }
                                 }
                                 .accessibilityIdentifier("watchlist.item.\(item.id)")

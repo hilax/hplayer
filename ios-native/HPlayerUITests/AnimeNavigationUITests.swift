@@ -34,7 +34,7 @@ final class AnimeNavigationUITests: XCTestCase {
         let watchedPredicate = NSPredicate(format: "label == %@", "取消追番")
         let watchedExpectation = XCTNSPredicateExpectation(predicate: watchedPredicate, object: watchlistButton)
         XCTAssertEqual(XCTWaiter.wait(for: [watchedExpectation], timeout: 5), .completed)
-        XCTAssertGreaterThan(watchlistButton.iconInkRatio(), 0.02, "Filled watchlist heart must draw visibly")
+        XCTAssertGreaterThan(watchlistButton.iconInkRatio(), 0.02, "Filled watchlist bookmark must draw visibly")
 
         app.navigationBars.buttons.element(boundBy: 0).tap()
         let mine = app.tabButton("我的")
@@ -99,7 +99,7 @@ final class AnimeNavigationUITests: XCTestCase {
             XCTAssertTrue(watchlist.isEnabled)
             // 右上角追番按钮要真的画出爱心（真机上出现过只剩玻璃圆）
             let ink = watchlist.iconInkRatio()
-            XCTAssertGreaterThan(ink, 0.02, "The watchlist button must draw its heart (\(style)); ink=\(ink)")
+            XCTAssertGreaterThan(ink, 0.02, "The watchlist button must draw its bookmark (\(style)); ink=\(ink)")
         }
         assertSameFrame(back.frame, backFrame, message: "Loading must not move or resize the back button")
         assertSameFrame(navigationBar.frame, barFrame, message: "Loading must not change the navigation bar height")
