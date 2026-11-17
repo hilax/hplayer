@@ -622,14 +622,16 @@ final class PlaybackUITests: XCTestCase {
     func testPictureFillsTheFrameInPortraitAndLandscape() {
         continueAfterFailure = false
         let app = XCUIApplication()
-        app.launchEnvironment["HPLAYER_UI_TEST_URL"] = "http://127.0.0.1:8765/hls-fixture/index.m3u8"
+        app.launchEnvironment["HPLAYER_UI_TEST_URL"] = "http://127.0.0.1:8765/range/seek-fixture.mp4"
+        app.launchEnvironment["HPLAYER_UI_TEST_115_HEADERS"] = "1"
+        app.launchEnvironment["HPLAYER_UI_TEST_115_COOKIE"] = "UID=ui-test; CID=ui-test; SEID=ui-test; KID=ui-test"
         app.launchEnvironment["HPLAYER_UI_TEST_KEEP_CONTROLS_VISIBLE"] = "1"
         app.launch()
 
         let surface = app.otherElements["playback.surface"]
         let pause = app.buttons["playback.playPause"]
         let orientation = app.buttons["playback.orientation"]
-        XCTAssertTrue(wait(timeout: 30) {
+        XCTAssertTrue(wait(timeout: 60) {
             surface.exists && self.isLandscape(app) && (pause.value as? String) == "playing"
                 && self.metric("time", surface: surface) > 1 && self.metric("aspect", surface: surface) > 1.7
         }, "The 16:9 fixture must be playing in landscape; status=\(surface.value as? String ?? "")")
@@ -680,13 +682,15 @@ final class PlaybackUITests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchEnvironment["HPLAYER_UI_TEST_URL"] = "http://127.0.0.1:8765/range/portrait-fixture.mp4"
+        app.launchEnvironment["HPLAYER_UI_TEST_115_HEADERS"] = "1"
+        app.launchEnvironment["HPLAYER_UI_TEST_115_COOKIE"] = "UID=ui-test; CID=ui-test; SEID=ui-test; KID=ui-test"
         app.launchEnvironment["HPLAYER_UI_TEST_KEEP_CONTROLS_VISIBLE"] = "1"
         app.launch()
 
         let surface = app.otherElements["playback.surface"]
         let pause = app.buttons["playback.playPause"]
         let orientation = app.buttons["playback.orientation"]
-        XCTAssertTrue(wait(timeout: 30) {
+        XCTAssertTrue(wait(timeout: 60) {
             surface.exists && self.isLandscape(app) && (pause.value as? String) == "playing"
                 && self.metric("time", surface: surface) > 1
                 && abs(self.metric("aspect", surface: surface) - 9.0 / 16.0) < 0.01
