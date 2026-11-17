@@ -24,7 +24,17 @@ enum RecycleConfirmation {
 struct RecycleKeyRequest: Identifiable {
     let id = UUID()
     let scope: RecycleScope
-    let message: String
+    let itemCount: Int
+    let containsFolder: Bool
+    /// 仅在已记住的密钥失效等需要说明原因的场景下预填；首次默认密钥试探失败时为空
+    let initialNotice: String
+}
+
+/// 回收站安全密钥提交结果
+enum SecurityKeySubmission {
+    case succeeded
+    case wrongKey(String)
+    case failed(String)
 }
 
 /// 回收站里一项的种类，决定缩略图位置显示什么图标
@@ -91,8 +101,8 @@ struct RecycleBinView: View {
                 if !InterfacePreview.active { await load() }
             }
             .sheet(item: $keyRequest) { request in
-                SecurityKeySheet(message: request.message) { key in
-                    performDelete(request.scope, key: key)
+                SecurityKeySheet(request: request) { key in
+                    await submitDeleteWithKey(request.scope, key: key)
                 }
             }
             .alert(confirmationTitle, isPresented: confirmationBinding, presenting: confirmation) { pending in
@@ -404,6 +414,7 @@ struct RecycleBinView: View {
         guard operation == nil, let client = appState.directClient() else { return }
         let sessionID = appState.sessionID
         let wasEverything = scope == .everything
+        let usedRememberedKey = !rememberedKey.isEmpty && key == rememberedKey
         operation = wasEverything ? "正在清空回收站…" : "正在彻底删除…"
         Task {
             var failure: Error?
@@ -416,35 +427,86 @@ struct RecycleBinView: View {
             guard sessionID == appState.sessionID else { return }
             if let failure {
                 Haptics.warning()
-                askForKeyOrReport(failure, scope: scope)
+                askForKeyOrReport(failure, scope: scope, usedRememberedKey: usedRememberedKey)
             } else {
-                rememberedKey = key
-                if wasEverything {
-                    items = []
-                    selection = []
-                    total = 0
-                    nextOffset = nil
-                    HUD.show("回收站已清空", .success)
-                } else {
-                    let count = scope.ids.count
-                    remove(Set(scope.ids))
-                    HUD.show("已彻底删除 \(count) 项", .success)
-                }
+                await finishDelete(scope, key: key)
             }
-            await load(silent: true)
         }
     }
 
+    private func submitDeleteWithKey(_ scope: RecycleScope, key: String) async -> SecurityKeySubmission {
+        guard let client = appState.directClient() else {
+            return .failed("115 登录已失效，请重新登录")
+        }
+        let sessionID = appState.sessionID
+        do {
+            try await client.deleteFromRecycleBin(scope.ids, securityKey: key)
+            guard sessionID == appState.sessionID else {
+                return .failed("登录状态已变更，请重试")
+            }
+            await finishDelete(scope, key: key)
+            return .succeeded
+        } catch let fileError as Direct115FileError {
+            guard sessionID == appState.sessionID else {
+                return .failed("登录状态已变更，请重试")
+            }
+            if case .needsSecurityKey(let text) = fileError {
+                return .wrongKey(text)
+            }
+            return .failed(fileError.localizedDescription)
+        } catch {
+            guard sessionID == appState.sessionID else {
+                return .failed("登录状态已变更，请重试")
+            }
+            return .failed(error.localizedDescription)
+        }
+    }
+
+    private func finishDelete(_ scope: RecycleScope, key: String) async {
+        rememberedKey = key
+        if scope == .everything {
+            items = []
+            selection = []
+            total = 0
+            nextOffset = nil
+            HUD.show("回收站已清空", .success)
+        } else {
+            let count = scope.ids.count
+            remove(Set(scope.ids))
+            HUD.show("已彻底删除 \(count) 项", .success)
+        }
+        await load(silent: true)
+    }
+
     /// 115 提示需要安全密钥时让用户输入，其他错误直接说明原因
-    private func askForKeyOrReport(_ failure: Error, scope: RecycleScope) {
+    private func askForKeyOrReport(_ failure: Error, scope: RecycleScope, usedRememberedKey: Bool) {
         if let fileError = failure as? Direct115FileError, case .needsSecurityKey(let text) = fileError {
+            if usedRememberedKey { rememberedKey = "" }
+            let notice = usedRememberedKey ? (text.isEmpty ? "已记住的安全密钥已失效，请重新输入。" : text) : ""
+            let summary = scopeSummary(for: scope)
             Task {
-                // 刚收起的面板还在动画里，稍等一下再弹出输入框
-                try? await Task.sleep(nanoseconds: 350_000_000)
-                keyRequest = RecycleKeyRequest(scope: scope, message: text)
+                // 确认弹窗收起或刚结束动画时稍作缓冲，再平滑弹出输入面板
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                keyRequest = RecycleKeyRequest(
+                    scope: scope,
+                    itemCount: summary.count,
+                    containsFolder: summary.containsFolder,
+                    initialNotice: notice
+                )
             }
         } else {
             problem = failure.localizedDescription
+        }
+    }
+
+    private func scopeSummary(for scope: RecycleScope) -> (count: Int, containsFolder: Bool) {
+        switch scope {
+        case .everything:
+            return (max(total, items.count), items.contains { $0.isDirectory })
+        case .selected(let ids):
+            let idSet = Set(ids)
+            let chosen = items.filter { idSet.contains($0.id) }
+            return (ids.count, chosen.contains { $0.isDirectory })
         }
     }
 
@@ -510,62 +572,281 @@ struct RecycleBinView: View {
 
 // MARK: - 安全密钥
 
-/// 115 开启了安全密钥时，彻底删除需要输入 6 位数字密钥。只在这次删除里使用，不会保存。
+/// 115 开启了安全密钥时，彻底删除需要输入 6 位数字密钥。只在当前页面生命周期内记住，不会持久化保存。
 struct SecurityKeySheet: View {
-    let message: String
-    let onConfirm: (String) -> Void
+    let request: RecycleKeyRequest
+    let onSubmit: (String) async -> SecurityKeySubmission
 
     @State private var key = ""
+    @State private var revealed = false
+    @State private var submitting = false
+    @State private var errorMessage: String
+    @State private var shakeFailed = false
     @FocusState private var focused: Bool
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    init(request: RecycleKeyRequest, onSubmit: @escaping (String) async -> SecurityKeySubmission) {
+        self.request = request
+        self.onSubmit = onSubmit
+        _errorMessage = State(initialValue: request.initialNotice)
+    }
 
     private var canConfirm: Bool { key.count == 6 }
 
     var body: some View {
-        VStack(spacing: 16) {
-            HStack {
-                Button("取消") { dismiss() }
-                    .font(.scaled(16))
-                    .foregroundStyle(Theme.textSecondary)
-                    .accessibilityIdentifier("library.recycle.key.cancel")
-                Spacer()
-                Text("输入安全密钥")
-                    .font(.scaled(17, weight: .semibold))
-                    .accessibilityAddTraits(.isHeader)
-                Spacer()
-                Color.clear.frame(width: 32, height: 1)
+        ScrollView {
+            VStack(spacing: 0) {
+                header
+                inputField
+                digitProgress
+                if !errorMessage.isEmpty {
+                    errorNotice
+                }
+                confirmButton
             }
-            Text(message.isEmpty ? "彻底删除需要 115 的 6 位数字安全密钥。" : message)
-                .font(.scaled(13))
+            .padding(.horizontal, Theme.Space.lg + Theme.Space.xs)
+            .padding(.top, Theme.Space.xl)
+            .padding(.bottom, Theme.Space.lg)
+        }
+        .scrollIndicators(.hidden)
+        .scrollDismissesKeyboard(.interactively)
+        .overlay(alignment: .topTrailing) {
+            SheetCloseButton()
+                .disabled(submitting)
+                .padding(.top, Theme.Space.md)
+                .padding(.trailing, Theme.Space.md)
+                .accessibilityIdentifier("library.recycle.key.cancel")
+        }
+        .background(Theme.surface.ignoresSafeArea())
+        .designSheet()
+        .presentationDetents([.medium, .large])
+        .interactiveDismissDisabled(submitting)
+        .animation(reduceMotion ? nil : Motion.smooth, value: errorMessage.isEmpty)
+        .task {
+            // 等弹层过渡动画完成后再聚焦键盘，避免弹出过程中与键盘动画打架或失焦
+            try? await Task.sleep(nanoseconds: reduceMotion ? 100_000_000 : 400_000_000)
+            if !Task.isCancelled && !submitting {
+                focused = true
+            }
+        }
+    }
+
+    // MARK: 版面
+
+    private var header: some View {
+        VStack(spacing: Theme.Space.sm) {
+            Image(icon: .key)
+                .font(.scaled(22, weight: Theme.iconWeight))
+                .foregroundStyle(Theme.danger)
+                .frame(width: 48, height: 48)
+                .background(Theme.danger.opacity(0.14), in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
+                .padding(.bottom, Theme.Space.xs)
+                .accessibilityHidden(true)
+            Text("输入安全密钥")
+                .font(.scaled(18, weight: .semibold))
+                .foregroundStyle(Theme.textPrimary)
+                .accessibilityAddTraits(.isHeader)
+            Text(scopeDescription)
+                .font(Theme.Typo.meta)
                 .foregroundStyle(Theme.textSecondary)
                 .multilineTextAlignment(.center)
+                .lineSpacing(3)
                 .fixedSize(horizontal: false, vertical: true)
-            SecureField("6 位数字安全密钥", text: $key)
-                .keyboardType(.numberPad)
-                .focused($focused)
-                .multilineTextAlignment(.center)
-                .font(.scaled(20, weight: .semibold, design: .monospaced))
-                .padding(.vertical, 14)
-                .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous))
-                .onChange(of: key) { value in
-                    let digits = String(value.filter { $0.isASCII && $0.isNumber }.prefix(6))
-                    if digits != value { key = digits }
-                }
-                .accessibilityIdentifier("library.recycle.key.field")
-            Button("彻底删除") {
-                let entered = key
-                dismiss()
-                onConfirm(entered)
-            }
-            .buttonStyle(DestructiveActionStyle())
-            .disabled(!canConfirm)
-            .accessibilityIdentifier("library.recycle.key.confirm")
-            Spacer(minLength: 0)
         }
-        .padding(16)
-        .background(Theme.surface.ignoresSafeArea())
-        .presentationDetents([.medium])
-        .presentationDragIndicator(.visible)
-        .onAppear { focused = true }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var scopeDescription: String {
+        switch request.scope {
+        case .everything:
+            if request.itemCount > 0 {
+                return "即将永久清空回收站全部 \(request.itemCount) 项，请输入 115 的 6 位数字安全密钥。"
+            }
+            return "即将永久清空回收站，请输入 115 的 6 位数字安全密钥。"
+        case .selected:
+            let extra = request.containsFolder ? "（含文件夹内文件）" : ""
+            return "即将永久删除所选 \(request.itemCount) 项\(extra)，请输入 115 的 6 位数字安全密钥。"
+        }
+    }
+
+    private var inputField: some View {
+        let hasError = !errorMessage.isEmpty
+        return HStack(spacing: 0) {
+            // 左侧清除键或等宽占位，保证居中的密钥输入视觉对称
+            Group {
+                if !key.isEmpty && !submitting {
+                    Button {
+                        Haptics.tap()
+                        key = ""
+                        errorMessage = ""
+                        focused = true
+                    } label: {
+                        Image(icon: .clear)
+                            .font(.scaled(16, weight: Theme.iconWeight))
+                            .foregroundStyle(Theme.textTertiary)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("清除密钥")
+                } else {
+                    Color.clear.frame(width: 44, height: 44)
+                }
+            }
+
+            Group {
+                if revealed {
+                    TextField("", text: $key, prompt: Text("6 位数字密钥").font(Theme.Typo.row).foregroundColor(Theme.textMuted))
+                } else {
+                    SecureField("", text: $key, prompt: Text("6 位数字密钥").font(Theme.Typo.row).foregroundColor(Theme.textMuted))
+                }
+            }
+            .keyboardType(.numberPad)
+            .textContentType(.oneTimeCode)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .submitLabel(.done)
+            .onSubmit(submit)
+            .focused($focused)
+            .disabled(submitting)
+            .multilineTextAlignment(.center)
+            .font(.scaled(22, weight: .semibold, design: .monospaced))
+            .foregroundStyle(Theme.textPrimary)
+            .tint(Theme.accent)
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .onChange(of: key) { value in
+                let digits = String(value.filter { $0.isASCII && $0.isNumber }.prefix(6))
+                if digits != value { key = digits }
+                if !digits.isEmpty && !errorMessage.isEmpty { errorMessage = "" }
+            }
+            .accessibilityLabel("安全密钥")
+            .accessibilityValue("已输入 \(key.count) 位，共 6 位")
+            .accessibilityIdentifier("library.recycle.key.field")
+
+            Button {
+                Haptics.tap()
+                let wasFocused = focused
+                revealed.toggle()
+                if wasFocused {
+                    Task { @MainActor in
+                        await Task.yield()
+                        focused = true
+                    }
+                }
+            } label: {
+                Image(icon: revealed ? .hidden : .eye)
+                    .font(.scaled(16, weight: Theme.iconWeight))
+                    .foregroundStyle(Theme.textTertiary)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(submitting)
+            .accessibilityLabel(revealed ? "隐藏安全密钥" : "显示安全密钥")
+        }
+        .padding(.horizontal, Theme.Space.xs)
+        .frame(minHeight: 52)
+        .fieldChrome(focused: focused && !hasError, enabled: !submitting)
+        .overlay {
+            if hasError {
+                RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
+                    .strokeBorder(Theme.danger, lineWidth: Theme.Stroke.rule)
+            }
+        }
+        .failureShake(shakeFailed)
+        .padding(.top, Theme.Space.lg + Theme.Space.xs)
+    }
+
+    private var digitProgress: some View {
+        HStack(spacing: Theme.Space.sm) {
+            HStack(spacing: 6) {
+                ForEach(0..<6, id: \.self) { index in
+                    let filled = index < key.count
+                    Capsule()
+                        .fill(filled ? (canConfirm ? Theme.success : Theme.accent) : Theme.track)
+                        .frame(width: filled ? 18 : 12, height: 4)
+                }
+            }
+            .animation(reduceMotion ? nil : Motion.snappy, value: key.count)
+            Text("\(key.count)/6")
+                .font(Theme.Typo.caption.monospacedDigit())
+                .foregroundStyle(canConfirm ? Theme.success : Theme.textTertiary)
+        }
+        .padding(.top, Theme.Space.sm + 2)
+        .accessibilityHidden(true)
+    }
+
+    private var errorNotice: some View {
+        HStack(spacing: Theme.Space.sm) {
+            Image(icon: .alert)
+                .font(.scaled(14, weight: Theme.iconWeight))
+            Text(errorMessage)
+                .font(Theme.Typo.meta)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .foregroundStyle(Theme.danger)
+        .padding(.horizontal, Theme.Space.md)
+        .padding(.vertical, Theme.Space.sm + 2)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.danger.opacity(0.10), in: RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous))
+        .padding(.top, Theme.Space.md)
+        .transition(.opacity)
+        .accessibilityIdentifier("library.recycle.key.error")
+    }
+
+    private var confirmButton: some View {
+        Button(action: submit) {
+            HStack(spacing: Theme.Space.sm) {
+                if submitting {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(Theme.textMuted)
+                }
+                Text(confirmTitle)
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(DestructiveActionStyle())
+        .disabled(!canConfirm || submitting)
+        .padding(.top, Theme.Space.lg + Theme.Space.xs)
+        .accessibilityIdentifier("library.recycle.key.confirm")
+    }
+
+    private var confirmTitle: String {
+        switch request.scope {
+        case .everything: return submitting ? "正在清空回收站…" : "清空回收站"
+        case .selected: return submitting ? "正在彻底删除…" : "彻底删除"
+        }
+    }
+
+    // MARK: 提交
+
+    private func submit() {
+        guard canConfirm, !submitting else { return }
+        let entered = key
+        submitting = true
+        shakeFailed = false
+        errorMessage = ""
+        Task {
+            let outcome = await onSubmit(entered)
+            guard !Task.isCancelled else { return }
+            submitting = false
+            switch outcome {
+            case .succeeded:
+                dismiss()
+            case .wrongKey(let message):
+                errorMessage = message.isEmpty ? "安全密钥错误，请重新输入" : message
+                key = ""
+                Haptics.warning()
+                shakeFailed = true
+                focused = true
+            case .failed(let message):
+                errorMessage = message.isEmpty ? "操作没有完成，请重试" : message
+                Haptics.warning()
+                shakeFailed = true
+            }
+        }
     }
 }
