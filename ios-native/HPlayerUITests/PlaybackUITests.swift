@@ -617,6 +617,101 @@ final class PlaybackUITests: XCTestCase {
                       "Playback should advance again after leaving the end; status=\(surface.value as? String ?? "")")
     }
 
+    /// 竖屏时 16:9 的片子要铺满小窗。以前画面只有小窗的 82% 宽（左右黑边），
+    /// 上下各露出一条垫在下面的小窗（画中画）图层，里面是开播时放进去的那一帧画面。
+    func testPictureFillsTheFrameInPortraitAndLandscape() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["HPLAYER_UI_TEST_URL"] = "http://127.0.0.1:8765/hls-fixture/index.m3u8"
+        app.launchEnvironment["HPLAYER_UI_TEST_KEEP_CONTROLS_VISIBLE"] = "1"
+        app.launch()
+
+        let surface = app.otherElements["playback.surface"]
+        let pause = app.buttons["playback.playPause"]
+        let orientation = app.buttons["playback.orientation"]
+        XCTAssertTrue(wait(timeout: 30) {
+            surface.exists && self.isLandscape(app) && (pause.value as? String) == "playing"
+                && self.metric("time", surface: surface) > 1 && self.metric("aspect", surface: surface) > 1.7
+        }, "The 16:9 fixture must be playing in landscape; status=\(surface.value as? String ?? "")")
+
+        // 横屏：整块画面图层就是整个窗口，16:9 的画面顶到上下边、左右居中
+        func assertFillsLandscape(_ note: String) {
+            let window = surface.frame
+            let status = surface.value as? String ?? ""
+            XCTAssertEqual(metric("canvasW", surface: surface), window.width, accuracy: 1, "\(note): \(status)")
+            XCTAssertEqual(metric("canvasH", surface: surface), window.height, accuracy: 1, "\(note): \(status)")
+            XCTAssertEqual(metric("pictureH", surface: surface), window.height, accuracy: 1, "\(note): \(status)")
+            XCTAssertEqual(metric("pictureW", surface: surface), window.height * 16 / 9, accuracy: 2, "\(note): \(status)")
+            XCTAssertEqual(metric("pictureX", surface: surface) + metric("pictureW", surface: surface) / 2,
+                           window.width / 2, accuracy: 1, "\(note): \(status)")
+        }
+        assertFillsLandscape("Landscape before rotating")
+        let landscape = surface.frame
+
+        orientation.tap()
+        XCTAssertTrue(wait { !self.isLandscape(app) && orientation.label == "横屏" }, "The player should turn to portrait")
+        XCTAssertTrue(wait {
+            let frame = surface.frame
+            return abs(frame.height - frame.width * 9 / 16) < 1.5
+                && abs(self.metric("pictureW", surface: surface) - frame.width) < 1
+                && abs(self.metric("pictureH", surface: surface) - frame.height) < 1.5
+        }, "A 16:9 video must fill a 16:9 inline frame; frame=\(surface.frame) status=\(surface.value as? String ?? "")")
+        let portrait = surface.frame
+        let status = surface.value as? String ?? ""
+        XCTAssertEqual(metric("pictureX", surface: surface), 0, accuracy: 1, "No bar on the left: \(status)")
+        XCTAssertEqual(metric("pictureY", surface: surface), 0, accuracy: 1, "Nothing shows above the picture: \(status)")
+        // 整块画面图层高度正好盖住小窗；它比视频宽出来的部分（自带的黑边）伸到小窗外面、被裁掉
+        XCTAssertEqual(metric("canvasH", surface: surface), portrait.height, accuracy: 1.5, status)
+        XCTAssertEqual(metric("canvasW", surface: surface), portrait.height * landscape.width / landscape.height,
+                       accuracy: 2, "The canvas keeps its landscape shape: \(status)")
+        XCTAssertLessThanOrEqual(metric("canvasX", surface: surface), 0.5, "The canvas covers the frame from the left edge: \(status)")
+        XCTAssertLessThan(portrait.height, app.windows.firstMatch.frame.height * 0.5)
+        snapshot("Portrait-picture-fills-frame")
+
+        orientation.tap()
+        XCTAssertTrue(wait { self.isLandscape(app) && orientation.label == "竖屏" }, "The player should turn back to landscape")
+        XCTAssertTrue(wait { abs(self.metric("canvasW", surface: surface) - surface.frame.width) < 1 },
+                      "The canvas must return to full size; status=\(surface.value as? String ?? "")")
+        assertFillsLandscape("Landscape after rotating back")
+    }
+
+    /// 竖拍的视频：小窗跟着变高，最高到正方形；画面立在正中、不放大，下面的信息页还在。
+    func testVerticalVideoGetsATallerFrameInPortrait() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["HPLAYER_UI_TEST_URL"] = "http://127.0.0.1:8765/range/portrait-fixture.mp4"
+        app.launchEnvironment["HPLAYER_UI_TEST_KEEP_CONTROLS_VISIBLE"] = "1"
+        app.launch()
+
+        let surface = app.otherElements["playback.surface"]
+        let pause = app.buttons["playback.playPause"]
+        let orientation = app.buttons["playback.orientation"]
+        XCTAssertTrue(wait(timeout: 30) {
+            surface.exists && self.isLandscape(app) && (pause.value as? String) == "playing"
+                && self.metric("time", surface: surface) > 1
+                && abs(self.metric("aspect", surface: surface) - 9.0 / 16.0) < 0.01
+        }, "The 9:16 fixture must be playing in landscape; status=\(surface.value as? String ?? "")")
+        let window = surface.frame
+        XCTAssertEqual(metric("pictureH", surface: surface), window.height, accuracy: 1, "Landscape: the picture is as tall as the screen")
+        XCTAssertEqual(metric("pictureW", surface: surface), window.height * 9 / 16, accuracy: 2)
+
+        orientation.tap()
+        XCTAssertTrue(wait { !self.isLandscape(app) && orientation.label == "横屏" }, "The player should turn to portrait")
+        XCTAssertTrue(wait {
+            let frame = surface.frame
+            return abs(frame.height - frame.width) < 1.5 && abs(self.metric("pictureH", surface: surface) - frame.height) < 1.5
+        }, "A vertical video gets a square inline frame; frame=\(surface.frame) status=\(surface.value as? String ?? "")")
+        let frame = surface.frame
+        let status = surface.value as? String ?? ""
+        XCTAssertEqual(metric("pictureW", surface: surface), frame.height * 9 / 16, accuracy: 2, "The picture keeps its shape: \(status)")
+        XCTAssertEqual(metric("pictureX", surface: surface) + metric("pictureW", surface: surface) / 2, frame.width / 2,
+                       accuracy: 1, "The picture stands in the middle: \(status)")
+        XCTAssertLessThanOrEqual(metric("canvasH", surface: surface), frame.height + 1.5, "The canvas is not enlarged: \(status)")
+        XCTAssertLessThanOrEqual(frame.height, app.windows.firstMatch.frame.height * 0.5 + 1)
+        XCTAssertTrue(app.buttons["playback.quality"].isHittable, "The info page stays below the taller frame")
+        snapshot("Portrait-vertical-video")
+    }
+
     /// 播放器在独立窗口里真横屏：播放器窗口宽大于高（播放期间主窗口是隐藏的，只有这一个窗口）
     private func isLandscape(_ app: XCUIApplication) -> Bool {
         let frame = app.windows.firstMatch.frame

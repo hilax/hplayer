@@ -297,8 +297,12 @@ struct PlaybackControlsView: View {
     @State private var showSignIn = false
     @AppStorage("player.autoPlayNext") private var autoPlayNext = true
 
-    /// 竖屏时顶部小窗播放器的高度（不含状态栏）
-    private static let inlineVideoHeight: CGFloat = 220
+    /// 竖屏时顶部小窗播放器的高度（不含状态栏）：跟着视频的比例走。
+    /// 16:9 和更宽的片子是 16:9 的框，画面铺满整个宽度；4:3、竖拍的片子框更高，最高到正方形。
+    private func inlineVideoHeight(in size: CGSize) -> CGFloat {
+        PlayerVideoGeometry.inlineHeight(width: size.width, screenHeight: size.height,
+                                         aspect: playback.displayAspect.map { CGFloat($0) })
+    }
     private static var isUITest: Bool { ProcessInfo.processInfo.environment["HPLAYER_UI_TEST_URL"] != nil }
     private static var testAutoNext: Bool {
         #if DEBUG
@@ -345,12 +349,15 @@ struct PlaybackControlsView: View {
                     VStack(spacing: 0) {
                         if !landscape { Color.black.frame(height: insets.top) }
                         // 画面区永远是深色：浅色模式下也不会变成白色的控制按钮
-                        videoLayer(landscape: landscape, insets: insets, width: layoutSize.width)
+                        videoLayer(landscape: landscape, insets: insets, width: layoutSize.width,
+                                   inlineHeight: inlineVideoHeight(in: layoutSize))
                             .environment(\.colorScheme, .dark)
                             .foregroundStyle(Color.white)
                         if !landscape { infoPage(bottomInset: insets.bottom) }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    // 出画面后才知道视频比例：小窗从默认的 16:9 变到实际比例时顺滑过渡，下面的内容跟着让开
+                    .animation(reduceMotion ? nil : Motion.smooth, value: playback.displayAspect)
                     // 竖屏快捷入口的菜单：贴着入口弹出，画在整页上面
                     .overlayPreferenceValue(QuickAnchorKey.self) { anchors in
                         if !landscape && !locked {
@@ -1490,7 +1497,7 @@ struct PlaybackControlsView: View {
     // MARK: 视频层（竖屏小窗 / 横屏全屏）
 
     @ViewBuilder
-    private func videoLayer(landscape: Bool, insets: EdgeInsets, width: CGFloat) -> some View {
+    private func videoLayer(landscape: Bool, insets: EdgeInsets, width: CGFloat, inlineHeight: CGFloat) -> some View {
         let hudInsets = landscape ? insets : EdgeInsets()
         let hudWidth = topHUDWidth(landscape: landscape, insets: hudInsets, width: width)
         ZStack {
@@ -1559,7 +1566,7 @@ struct PlaybackControlsView: View {
             hudLayer(insets: hudInsets, width: hudWidth)
                 .zIndex(6)
         }
-        .frame(maxWidth: .infinity, maxHeight: landscape ? .infinity : Self.inlineVideoHeight)
+        .frame(maxWidth: .infinity, maxHeight: landscape ? .infinity : inlineHeight)
         .clipped()
     }
 
@@ -1698,7 +1705,7 @@ struct PlaybackControlsView: View {
     }
 
     /// 「…」下面展开的定时关闭菜单：毛玻璃卡片，右边和按钮对齐；选项和横屏的定时关闭一致。
-    /// 画在整页上面（竖屏视频区只有 220 高，放不下五行），点卡片以外的地方收起。
+    /// 画在整页上面（竖屏视频区一般只有 220 左右高，放不下五行），点卡片以外的地方收起。
     private func sleepMenu(insets: EdgeInsets) -> some View {
         ZStack(alignment: .topTrailing) {
             Color.clear
@@ -2979,7 +2986,19 @@ struct PlaybackControlsView: View {
     }
 
     private var diagnosticStatus: String {
-        "\(lastAdjustment); brightness=\(String(format: "%.3f", brightnessLevel)); volume=\(String(format: "%.3f", systemVolume.level)); time=\(String(format: "%.3f", playback.engineTime)); rate=\(String(format: "%g", playback.effectiveRate)); avsync=\(String(format: "%.3f", playback.avSync ?? .nan)); boostAVSyncPeak=\(String(format: "%.3f", playback.boostAVSyncPeak ?? .nan)); buffering=\(playback.buffering ? 1 : 0); note=\(playback.statusNote); error=\(playback.error)"
+        "\(lastAdjustment); brightness=\(String(format: "%.3f", brightnessLevel)); volume=\(String(format: "%.3f", systemVolume.level)); time=\(String(format: "%.3f", playback.engineTime)); rate=\(String(format: "%g", playback.effectiveRate)); avsync=\(String(format: "%.3f", playback.avSync ?? .nan)); boostAVSyncPeak=\(String(format: "%.3f", playback.boostAVSyncPeak ?? .nan)); buffering=\(playback.buffering ? 1 : 0); \(pictureDiagnostics); note=\(playback.statusNote); error=\(playback.error)"
+    }
+
+    /// 视频那一块和整块画面图层在播放区域里的位置，界面测试用它确认画面铺满了小窗
+    private var pictureDiagnostics: String {
+        let picture = playback.pictureFrame
+        let canvas = playback.canvasFrame
+        let values: [(String, CGFloat)] = [
+            ("aspect", CGFloat(playback.displayAspect ?? 0)),
+            ("pictureX", picture.minX), ("pictureY", picture.minY), ("pictureW", picture.width), ("pictureH", picture.height),
+            ("canvasX", canvas.minX), ("canvasY", canvas.minY), ("canvasW", canvas.width), ("canvasH", canvas.height),
+        ]
+        return values.map { "\($0.0)=\(String(format: "%.2f", Double($0.1)))" }.joined(separator: "; ")
     }
 
     private func toggleControls() {
