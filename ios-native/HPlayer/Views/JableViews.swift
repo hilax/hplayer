@@ -231,6 +231,8 @@ struct JableTab: View {
     private static let heroCategory: JableCategory = .hot
     /// 一进来就取的分类（轮播 + 第一排货架），其余货架滑到可见时再取
     private static let eagerCategories: [JableCategory] = [.hot, .latest]
+    /// 首页上显示的货架：最新、热门、中字。月榜、有码、无码不放货架（无码仍可从上面的快捷入口进）
+    private static let shelfCategories: [JableCategory] = [.latest, .hot, .chineseSubtitle]
 
     var body: some View {
         GeometryReader { proxy in
@@ -310,7 +312,7 @@ struct JableTab: View {
         let cardWidth = min(260, ((width - Theme.contentInset - 24) / 1.7).rounded(.down))
         // 懒加载：滑到才建这一排，没滑到的分类不会排队去取网页
         return LazyVStack(alignment: .leading, spacing: Theme.Space.shelf) {
-            ForEach(JableCategory.allCases) { category in
+            ForEach(Self.shelfCategories) { category in
                 shelf(category, cardWidth: cardWidth)
             }
         }
