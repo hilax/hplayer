@@ -157,6 +157,7 @@ private struct MagnetLaunchWatch: View {
             },
             selectedID: controller.playingIndex.map { String($0) } ?? "",
             networkStatus: controller.usesCloud ? "" : controller.networkStatus,
+            networkRate: controller.usesCloud ? nil : Double(controller.swarm.downloadRate),
             onSelect: { id in
                 guard let index = UInt32(id), let file = controller.playlist.first(where: { $0.index == index }) else { return }
                 controller.play(file)

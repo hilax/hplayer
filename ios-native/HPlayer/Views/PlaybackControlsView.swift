@@ -226,6 +226,8 @@ struct PlaybackControlsView: View {
     var selectedQuality = ""
     /// 边下边播时的网络状态，例如「12 个节点 · 1.2 MB/s」
     var networkStatus = ""
+    /// 边下边播时节点的总下载速度（字节 / 秒）：横屏右上角的网速用它；nil 时用内核报告的下载速度
+    var networkRate: Double? = nil
     /// 在线动漫才有：弹幕和评论
     var danmaku: DanmakuStore? = nil
     var commentsVid: Int? = nil
@@ -502,7 +504,7 @@ struct PlaybackControlsView: View {
                     Text(title)
                         .font(.headline)
                         .lineLimit(1)
-                    statusBadges
+                    statusBadges(showsNetworkSpeed: !landscape)
                 }
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -510,10 +512,6 @@ struct PlaybackControlsView: View {
             .frame(width: topHUDShowing ? max(0, leadingWidth) : nil, alignment: .leading)
 
             Spacer(minLength: 8)
-
-            // 横屏时系统状态栏隐藏：右上角补一个当前时间和电量
-            PlayerStatusClock()
-                .padding(.trailing, 12)
 
             // 字幕和音轨在底栏右边已经有一个按钮，顶栏不再重复
             // 顶栏只在横屏出现；竖屏的「…」在视频区自己的控制层里
@@ -536,8 +534,9 @@ struct PlaybackControlsView: View {
     }
 
     /// 片名下面的小标签：画质、分辨率、HDR，再跟一行灰字说明解码和倍速
-    private var statusBadges: some View {
-        HStack(spacing: 6) {
+    private func statusBadges(showsNetworkSpeed: Bool) -> some View {
+        let line = statusText(showsNetworkSpeed: showsNetworkSpeed)
+        return HStack(spacing: 6) {
             ForEach(badges, id: \.self) { badge in
                 Text(badge)
                     .font(.caption2.weight(.bold))
@@ -545,8 +544,8 @@ struct PlaybackControlsView: View {
                     .padding(.vertical, 2)
                     .background(.white.opacity(Theme.Opacity.faint), in: RoundedRectangle(cornerRadius: Theme.Radius.badge, style: .continuous))
             }
-            if !statusLine.isEmpty {
-                Text(statusLine)
+            if !line.isEmpty {
+                Text(line)
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.white.opacity(Theme.Opacity.heavy))
                     .lineLimit(1)
@@ -566,12 +565,26 @@ struct PlaybackControlsView: View {
         return result
     }
 
-    private var statusLine: String {
+    private var statusLine: String { statusText(showsNetworkSpeed: true) }
+
+    /// `showsNetworkSpeed` 为 false（横屏）时去掉网速：横屏最上面的状态行已经显示了，这里只留节点数、已下载这些
+    private func statusText(showsNetworkSpeed: Bool) -> String {
         var parts: [String] = []
         if abs(playback.rate - 1) > 0.01 { parts.append("\(String(format: "%g", playback.rate))×") }
         if sleepTimer != .off { parts.append("定时 \(sleepTimer.title)") }
-        if !networkStatus.isEmpty { parts.append(networkStatus) }
+        if !networkStatus.isEmpty {
+            let detail = showsNetworkSpeed ? networkStatus
+                : networkStatus.components(separatedBy: " · ").filter { !$0.hasSuffix("/s") }.joined(separator: " · ")
+            if !detail.isEmpty { parts.append(detail) }
+        }
         return parts.joined(separator: " · ")
+    }
+
+    /// 横屏最上面状态行的网速：磁力边下边播用节点的总下载速度，其他网络视频用内核报告的下载速度；本机文件为 nil（只显示电量）
+    private var statusRowNetworkSpeed: Double? {
+        if let networkRate { return networkRate }
+        if playback.isLocalFile { return nil }
+        return playback.downloadSpeed
     }
 
     // MARK: 底部
@@ -1500,7 +1513,11 @@ struct PlaybackControlsView: View {
 
     @ViewBuilder
     private func videoLayer(landscape: Bool, insets: EdgeInsets, width: CGFloat, inlineHeight: CGFloat) -> some View {
-        let hudInsets = landscape ? insets : EdgeInsets()
+        // 横屏顶栏下移了一行状态的高度，手势提示跟着下移，不压住正中的时间
+        let hudInsets = landscape
+            ? EdgeInsets(top: insets.top + Self.landscapeStatusShift, leading: insets.leading,
+                         bottom: insets.bottom, trailing: insets.trailing)
+            : EdgeInsets()
         let hudWidth = topHUDWidth(landscape: landscape, insets: hudInsets, width: width)
         ZStack {
             Theme.playerBackground
@@ -1572,15 +1589,22 @@ struct PlaybackControlsView: View {
         .clipped()
     }
 
+    /// 横屏最上面一行状态（时间、网络、电量）占的高度：顶栏按钮比原来往下挪这么多
+    private static let landscapeStatusShift: CGFloat = 18
+
     private func landscapeControls(insets: EdgeInsets, width: CGFloat) -> some View {
         VStack(spacing: 0) {
+            // 系统状态栏在横屏时隐藏：时间在正中，网络类型、网速、电量在右上
+            PlayerStatusRow(networkSpeed: statusRowNetworkSpeed)
+                .padding(.bottom, 12 + Self.landscapeStatusShift - 6 - PlayerStatusRow.height)
             topBar(landscape: true, insets: insets, width: width)
             Spacer(minLength: 0)
             bottomBar(landscape: true)
         }
         .padding(.leading, max(insets.leading, 28))
         .padding(.trailing, max(insets.trailing, 28))
-        .padding(.top, max(insets.top, 12))
+        // 状态行顶边 6pt；顶栏按钮的顶边 = 原来的 12pt + 18pt
+        .padding(.top, max(insets.top, 6))
         .padding(.bottom, max(insets.bottom, 8))
         .background(alignment: .top) {
             LinearGradient(colors: [.black.opacity(Theme.Opacity.strong), .clear], startPoint: .top, endPoint: .bottom)

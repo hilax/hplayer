@@ -223,6 +223,8 @@ final class PlaybackController: ObservableObject {
     private let createdAt = Date()
 
     private var currentURL: URL?
+    /// 正在播的是本机文件（下载好的、导入的）：播放页右上角不显示网络和网速
+    var isLocalFile: Bool { currentURL?.isFileURL ?? false }
     private var currentDirect115 = false
     private var currentCookie = ""
     private var currentCustomHeaders: [String: String] = [:]
