@@ -4,6 +4,53 @@ import UIKit
 // 磁力聚合的三个下钻页面：女优页、片商页、磁力详情页。
 // 都是普通的逐层跳转（左上角返回上一层），版式见设计稿。
 
+// MARK: - 抬头大标题 ↔ 导航栏标题
+
+/// 女优页、片商页的抬头里已经有一个大名字，导航栏中间先不重复显示；大名字滚到导航栏下面后再淡入（和 App Store 一样）。
+/// 标题本身一直设着：再往下一层时返回键显示这一页的名字，长按返回键的列表、VoiceOver 也都能读到。
+enum HeaderTitleSpace {
+    static let name = "magnet.headerTitle"
+}
+
+private struct HeaderTitleBottomKey: PreferenceKey {
+    static var defaultValue: CGFloat = .infinity
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = min(value, nextValue()) }
+}
+
+extension View {
+    /// 标在抬头的大名字上：把它底边在滚动区里的位置报上去。
+    func reportsHeaderTitlePosition() -> some View {
+        background(
+            GeometryReader { proxy in
+                Color.clear.preference(key: HeaderTitleBottomKey.self,
+                                       value: proxy.frame(in: .named(HeaderTitleSpace.name)).maxY)
+            }
+        )
+    }
+
+    /// 设导航标题；大名字滚出可见区域（底边到了滚动区顶端以上）后，导航栏中间才显示它。
+    func collapsingHeaderTitle(_ title: String, visible: Binding<Bool>) -> some View {
+        self
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Text(title)
+                        .font(.headline)
+                        .foregroundStyle(Theme.textPrimary)
+                        .lineLimit(1)
+                        .opacity(visible.wrappedValue ? 1 : 0)
+                        .accessibilityHidden(!visible.wrappedValue)
+                }
+            }
+            .onPreferenceChange(HeaderTitleBottomKey.self) { bottom in
+                let show = bottom < 0
+                guard show != visible.wrappedValue else { return }
+                withAnimation(.easeInOut(duration: 0.18)) { visible.wrappedValue = show }
+            }
+    }
+}
+
 // MARK: - 女优作品列表页 (StarMoviesView)
 
 /// 女优页的作品范围。
@@ -74,6 +121,8 @@ struct StarMoviesView: View {
     @State private var isLoading = true
     @State private var errorText: String?
     @State private var paging = PagingState()
+    /// 抬头里的大名字滚出屏幕后，导航栏中间才显示名字
+    @State private var showsBarTitle = false
 
     private var shownStar: MagnetStarItem { detailedStar ?? star }
 
@@ -120,8 +169,8 @@ struct StarMoviesView: View {
             }
             .ignoresSafeArea()
         }
-        .navigationTitle("")
-        .navigationBarTitleDisplayMode(.inline)
+        .coordinateSpace(name: HeaderTitleSpace.name)
+        .collapsingHeaderTitle(shownStar.name, visible: $showsBarTitle)
         .onChange(of: mode) { _ in
             Task { await loadFirstPage() }
         }
@@ -142,6 +191,7 @@ struct StarMoviesView: View {
                 .font(.display(26))
                 .foregroundStyle(.primary)
                 .multilineTextAlignment(.center)
+                .reportsHeaderTitlePosition()
                 .padding(.top, 12)
 
             if let bio = shownStar.bio, !bio.isEmpty {
@@ -153,7 +203,7 @@ struct StarMoviesView: View {
             }
 
             favoriteButton
-                .padding(.top, 14)
+                .padding(.top, 10)
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 24)
@@ -180,7 +230,9 @@ struct StarMoviesView: View {
                 .frame(minHeight: 36)
                 .background(liked ? Theme.accentWash : Color.clear, in: Capsule())
                 .overlay { Capsule().strokeBorder(liked ? Color.clear : Theme.ruleStrong, lineWidth: Theme.Stroke.rule) }
-                .contentShape(Capsule())
+                // 胶囊看起来 36pt 高，点击区域上下各多 4pt，凑够 44
+                .padding(.vertical, 4)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.pressable(scale: 0.94))
         .accessibilityLabel(liked ? "取消喜欢" : "喜欢")
@@ -266,6 +318,7 @@ struct StudioMoviesView: View {
     @State private var isLoading = true
     @State private var errorText: String?
     @State private var paging = PagingState()
+    @State private var showsBarTitle = false
 
     var body: some View {
         ScrollView {
@@ -290,8 +343,8 @@ struct StudioMoviesView: View {
         }
         .scrollIndicators(.hidden)
         .background(Theme.pageBackground.ignoresSafeArea())
-        .navigationTitle("")
-        .navigationBarTitleDisplayMode(.inline)
+        .coordinateSpace(name: HeaderTitleSpace.name)
+        .collapsingHeaderTitle(studio.title, visible: $showsBarTitle)
         .task {
             guard movies.isEmpty, errorText == nil else { return }
             await loadFirstPage()
@@ -310,6 +363,7 @@ struct StudioMoviesView: View {
                 Text(studio.title)
                     .font(.display(26))
                     .foregroundStyle(.primary)
+                    .reportsHeaderTitlePosition()
                 Text(studio.codeHint)
                     .font(.caption)
                     .foregroundStyle(Theme.textSecondary)

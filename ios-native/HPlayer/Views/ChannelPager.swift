@@ -262,6 +262,8 @@ struct PagedHeader<FirstRow: View, SecondRow: View>: View {
             .animation(.easeInOut(duration: 0.2), value: onArtwork && progress < 0.6)
         }
         .frame(maxWidth: .infinity, alignment: .top)
+        // 头部两行是固定高度（44 + 38），字号最多放到 xxxLarge（约 1.35 倍），再大会撑破
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
     }
 }
 

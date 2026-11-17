@@ -99,7 +99,7 @@ final class HomeUITests: XCTestCase {
         // 2.0：磁力是一级 Tab。磁力聚合：搜索框 + 四个分类标签；专题是固定的片商入口，不依赖网络
         app.tabButton("磁力").tap()
         XCTAssertTrue(app.textFields["magnet.search"].waitForExistence(timeout: 5), "Magnet tab offers one search field")
-        XCTAssertTrue(app.buttons["magnet.linkPlayer"].exists, "Magnet tab offers the paste-a-link player")
+        XCTAssertFalse(app.buttons["magnet.linkPlayer"].exists, "Pasting a link goes through the search field; no separate link-player entry")
         XCTAssertTrue(app.buttons["magnet.history"].exists, "Magnet tab offers its play history")
         for key in ["latest", "topics", "actresses", "hot"] {
             XCTAssertTrue(app.buttons["magnet.category.\(key)"].exists, "Category tab \(key) exists")

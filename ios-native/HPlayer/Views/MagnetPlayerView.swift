@@ -8,7 +8,6 @@ struct MagnetPlayerView: View {
 
     @EnvironmentObject private var appState: AppState
     @StateObject private var controller = MagnetController()
-    @ObservedObject private var history = MagnetHistoryStore.shared
     @AppStorage("hplayer.magnet.cloudRelay") private var cloudRelay = true
     @State private var input = ""
     @State private var inputHint = ""
@@ -52,10 +51,6 @@ struct MagnetPlayerView: View {
                     }
                 }
 
-                if controller.phase == .idle || controller.phase == .failed {
-                    historySection
-                }
-
                 if controller.phase == .idle || controller.phase == .failed { tips }
             }
             .padding(.horizontal, Theme.contentInset)
@@ -77,14 +72,6 @@ struct MagnetPlayerView: View {
             ToolbarItemGroup(placement: .keyboard) {
                 Spacer()
                 Button("完成") { inputFocused = false }
-            }
-            ToolbarItem(placement: .primaryAction) {
-                NavigationLink {
-                    MagnetSearchView()
-                } label: {
-                    // 颜色跟随导航栏按键色，和返回键一致
-                    NavigationIcon(.search)
-                }
             }
             if !initialMagnet.isEmpty {
                 ToolbarItem(placement: .cancellationAction) {
@@ -162,20 +149,6 @@ struct MagnetPlayerView: View {
                 }
 
                 Spacer(minLength: 0)
-
-                NavigationLink {
-                    MagnetSearchView()
-                } label: {
-                    HStack(spacing: 5) {
-                        Image(appIconNamed: AppIcon.search.name)
-                        Text("在线搜番号")
-                    }
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(Theme.accent)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 7)
-                    .background(Theme.accent.opacity(0.12), in: Capsule())
-                }
             }
 
             if cloudAvailable {
@@ -224,6 +197,9 @@ struct MagnetPlayerView: View {
                     .padding(.horizontal, 12)
                     .frame(height: 30)
                     .background(Theme.surfaceRaised, in: Capsule())
+                    // 胶囊 30pt 高，点击区域 44
+                    .frame(minWidth: 44, minHeight: 44)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("更换磁力链接")
@@ -595,8 +571,12 @@ struct MagnetPlayerView: View {
                     Image(appIconNamed: AppIcon.more.name)
                         .font(.title3)
                         .foregroundStyle(.secondary)
-                        .frame(width: 32, height: 32)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
+                // 点击区域 44×44，图标位置和原来 32×32 时一样
+                .padding(.vertical, -6)
+                .padding(.trailing, -6)
                 .accessibilityLabel("更多")
             }
 
@@ -785,98 +765,6 @@ struct MagnetPlayerView: View {
                     .surfaceCard(cornerRadius: Theme.Radius.sheet)
             }
         }
-    }
-
-    // MARK: 最近播放
-
-    @ViewBuilder
-    private var historySection: some View {
-        if !history.items.isEmpty {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Text("最近播放")
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Button("清空") { history.removeAll() }
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.horizontal, 6)
-
-                VStack(spacing: 0) {
-                    ForEach(history.items.prefix(12)) { item in
-                        historyRow(item)
-                    }
-                }
-                .padding(.vertical, 6)
-                .surfaceCard(cornerRadius: Theme.Radius.sheet)
-
-                Text("长按可以复制链接或删除记录。")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .padding(.horizontal, 6)
-            }
-        }
-    }
-
-    private func historyRow(_ item: MagnetHistoryItem) -> some View {
-        Button {
-            guard let link = MagnetLink.parse(item.magnet) else { return }
-            input = item.magnet
-            inputHint = ""
-            showExtras = false
-            showOthers = false
-            controller.open(link)
-        } label: {
-            HStack(spacing: 12) {
-                Image(appIconNamed: AppIcon.history.name)
-                    .font(.scaled(14, weight: .semibold))
-                    .foregroundStyle(Theme.accent)
-                    .frame(width: 34, height: 34)
-                    .background(Theme.tileTint, in: RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous))
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(item.name)
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(.primary)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
-                    Text(historyDetail(item))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-                Spacer(minLength: 0)
-                Image(appIconNamed: AppIcon.forward.name)
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.tertiary)
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .contextMenu {
-            Button {
-                UIPasteboard.general.string = item.magnet
-            } label: {
-                Label("复制磁力链接", image: AppIcon.copy.name)
-            }
-            Button(role: .destructive) {
-                history.remove(item.infoHash)
-            } label: {
-                Label("删除记录", image: AppIcon.trash.name)
-            }
-        }
-    }
-
-    private func historyDetail(_ item: MagnetHistoryItem) -> String {
-        var parts: [String] = []
-        if let title = item.lastFileTitle, item.videoCount > 1 { parts.append("看到：\(title)") }
-        let size = formatSize(Int(clamping: item.totalSize))
-        if !size.isEmpty { parts.append(size) }
-        parts.append(item.updatedAt.formatted(.relative(presentation: .named)))
-        return parts.joined(separator: " · ")
     }
 
     // MARK: 说明

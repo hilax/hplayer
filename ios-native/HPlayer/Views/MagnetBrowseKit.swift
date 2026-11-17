@@ -366,11 +366,16 @@ struct MagnetListRow: View {
                             Text(date)
                                 .font(.scaled(12))
                                 .foregroundStyle(Theme.textTertiary)
+                                .lineLimit(1)
+                                .layoutPriority(1)
                         }
                     }
                 }
-                .frame(maxWidth: .infinity, minHeight: 96, maxHeight: 96, alignment: .topLeading)
+                // 不封顶高度：默认字号下和 96pt 高的封面对齐（女优与日期贴底），字号放大时行跟着变高，标题不会被截掉。
+                // maxHeight: .infinity 配合外层 fixedSize，让这一栏和封面一样高、Spacer 才能把底行推到底。
+                .frame(maxWidth: .infinity, minHeight: 96, maxHeight: .infinity, alignment: .topLeading)
             }
+            .fixedSize(horizontal: false, vertical: true)
             .contentShape(Rectangle())
         }
         .buttonStyle(.pressable(scale: 0.985))
@@ -386,7 +391,8 @@ struct MagnetCategoryTabs: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        HStack(spacing: 18) {
+        // 点击区域：每个标签左右各 6pt、整行 44pt 高，标签间的视觉间距仍是 18（6 + 6 + 6）
+        HStack(spacing: 6) {
             ForEach(MagnetCategory.allCases) { category in
                 let selected = selection == category
                 Button {
@@ -395,18 +401,20 @@ struct MagnetCategoryTabs: View {
                     withAnimation(reduceMotion ? nil : Motion.snappy) { selection = category }
                 } label: {
                     Text(category.title)
-                        .font(.scaled(selected ? 20 : 16, weight: selected ? .heavy : .medium))
+                        .font(.scaled(selected ? 20 : 16, weight: selected ? .bold : .medium))
                         .heroForeground(secondary: !selected)
-                        .frame(height: 40)
+                        .frame(height: 44)
                         .overlay(alignment: .bottom) {
                             if selected {
                                 Capsule()
                                     .fill(Theme.prismGradient)
                                     .frame(width: 18, height: 3)
                                     .matchedGeometryEffect(id: "magnet.category.underline", in: underline)
-                                    .offset(y: -1)
+                                    .offset(y: -3)
                             }
                         }
+                        .padding(.horizontal, 6)
+                        .frame(minWidth: 44)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -414,6 +422,7 @@ struct MagnetCategoryTabs: View {
                 .accessibilityIdentifier("magnet.category.\(category.rawValue)")
             }
         }
+        .padding(.leading, -6)
         .accessibilityElement(children: .contain)
     }
 }
@@ -448,10 +457,12 @@ struct MagnetSearchField: View {
                 } label: {
                     Image(appIconNamed: AppIcon.clear.name)
                         .foregroundStyle(Theme.textTertiary)
-                        .frame(width: 38, height: 38)
+                        .frame(width: 44, height: 44)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                // 点击区域 44×44，但不把搜索框撑高（头部这一行是固定 38pt）
+                .padding(.vertical, -3)
                 .accessibilityLabel("清除搜索")
             } else {
                 PasteButton(payloadType: String.self) { strings in
@@ -462,7 +473,8 @@ struct MagnetSearchField: View {
                 .buttonBorderShape(.roundedRectangle(radius: Theme.Radius.chip))
                 .tint(Theme.surfaceHigh)
                 .foregroundStyle(Theme.textPrimary)
-                .controlSize(.mini)
+                // 系统粘贴按钮的点击区域只能跟着按钮大小走：从 mini 放大到 small
+                .controlSize(.small)
                 .accessibilityIdentifier("magnet.paste")
             }
         }

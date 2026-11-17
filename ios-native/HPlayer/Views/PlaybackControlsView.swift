@@ -470,6 +470,8 @@ struct PlaybackControlsView: View {
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
             if brightnessAdjusted { ScreenBrightness.screen.brightness = CGFloat(brightnessLevel) }
         }
+        // 播放器控件都是固定尺寸，叠在画面上：字号最多放到 xxxLarge（约 1.35 倍），和以前的上限一致
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
     }
 
     private func edgeControlInset(safe: CGFloat, width: CGFloat) -> CGFloat {

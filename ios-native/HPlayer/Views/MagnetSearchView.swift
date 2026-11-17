@@ -53,7 +53,7 @@ func mergeUnique<T: Identifiable>(_ existing: [T], with new: [T]) -> (merged: [T
 /// 影片、女优、片商都是普通的逐层跳转（左上角返回上一层）；在磁力详情页点播放，
 /// 播放页盖在详情页上面，关掉就回到详情页。版式见 docs/ui-design-system.md「磁力聚合」。
 struct MagnetSearchView: View {
-    /// 作为「磁力」Tab 的根页面：隐藏系统导航栏，右上角提供「粘贴链接播放」和「播放记录」。
+    /// 作为「磁力」Tab 的根页面：隐藏系统导航栏，右上角提供「播放记录」。
     var isTabRoot = false
 
     init(isTabRoot: Bool = false) {
@@ -141,20 +141,13 @@ struct MagnetSearchView: View {
 
     // MARK: - 头部
 
-    /// 第一行：分类（最新 / 专题 / 女优 / 最热，和首页频道条同一个样子），右边「粘贴链接播放」和「播放记录」
+    /// 第一行：分类（最新 / 专题 / 女优 / 最热，和首页频道条同一个样子），右边「播放记录」。
+    /// 粘贴链接不再单独占一个入口：搜索框认出磁力链接 / 哈希就直接给出解析面板（右边自带粘贴按钮）。
     private var topRow: some View {
         HStack(spacing: 4) {
             MagnetCategoryTabs(selection: categorySelection)
             Spacer(minLength: 8)
             if isTabRoot {
-                NavigationLink {
-                    MagnetPlayerView()
-                } label: {
-                    topIcon(.link)
-                }
-                .buttonStyle(.pressable(scale: 0.88))
-                .accessibilityLabel("粘贴磁力链接播放")
-                .accessibilityIdentifier("magnet.linkPlayer")
                 NavigationLink {
                     MagnetHistoryView()
                 } label: {

@@ -62,6 +62,8 @@ struct DramaFeedView: View {
                 model.show(position)
             }
         }
+        // 全屏短剧的控件叠在画面上、尺寸固定：字号最多放到 xxxLarge
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
     }
 
     private func title(_ position: Int) -> String {

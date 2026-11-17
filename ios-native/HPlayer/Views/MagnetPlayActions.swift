@@ -138,11 +138,17 @@ struct MagnetPlayActions: View {
                         .foregroundStyle(Theme.textPrimary)
                         .lineLimit(1)
                     Spacer(minLength: 8)
-                    Button("取消") { relay.cancel(hash) }
-                        .font(Theme.Typo.meta)
-                        .foregroundStyle(Theme.textSecondary)
-                        .frame(minHeight: 36)
-                        .accessibilityIdentifier("\(identifierPrefix).cancel")
+                    Button { relay.cancel(hash) } label: {
+                        Text("取消")
+                            .font(Theme.Typo.meta)
+                            .foregroundStyle(Theme.textSecondary)
+                            .frame(minWidth: 44, minHeight: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    // 点击区域 44×44，这一行的高度不变
+                    .padding(.vertical, -4)
+                    .accessibilityIdentifier("\(identifierPrefix).cancel")
                 }
                 ThinProgressBar(fraction: fraction(status))
                 Text(isBT(status) ? "文件列表到了会自动开始播放，开头缓冲在播放器里进行。" : "准备好后会自动开始播放；离开这一页也会在后台继续，好了会提醒你。")
