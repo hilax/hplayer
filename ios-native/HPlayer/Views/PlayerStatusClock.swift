@@ -52,8 +52,6 @@ struct PlayerStatusRow: View {
             switch network.kind {
             case .wifi:
                 WiFiGlyph()
-                    .stroke(style: StrokeStyle(lineWidth: 1.7, lineCap: .round))
-                    .overlay(alignment: .bottom) { Circle().frame(width: 2.6, height: 2.6).offset(y: -0.2) }
                     .frame(width: 15, height: 11)
             case .cellular(let generation):
                 Text(generation)
@@ -62,15 +60,10 @@ struct PlayerStatusRow: View {
                 EmptyView()
             }
             if speed > 0 {
-                HStack(spacing: 2) {
-                    DownArrowGlyph()
-                        .stroke(style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
-                        .frame(width: 8, height: 10)
-                    Text(Self.speedText(speed))
-                        .font(.scaled(12, weight: .medium))
-                        .monospacedDigit()
-                }
-                .foregroundStyle(speed < Self.slowSpeed ? Theme.HUD.playerAccent : Color.white.opacity(0.82))
+                Text(Self.speedText(speed))
+                    .font(.scaled(12, weight: .medium))
+                    .monospacedDigit()
+                    .foregroundStyle(speed < Self.slowSpeed ? Theme.HUD.playerAccent : Color.white.opacity(0.82))
             }
         }
         .accessibilityIdentifier("playback.network")
@@ -111,28 +104,26 @@ struct PlayerStatusRow: View {
     }
 }
 
-/// Wi-Fi 的两道弧（下面的圆点由调用方叠上去）
-private struct WiFiGlyph: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        let center = CGPoint(x: rect.midX, y: rect.maxY - 1)
-        for radius in [rect.height * 0.92, rect.height * 0.56] {
-            path.addArc(center: center, radius: radius, startAngle: .degrees(-140), endAngle: .degrees(-40), clockwise: false)
+/// Wi-Fi 图标：底部一个圆点，上面两道同心弧，三者分开画（不连成一笔）。
+/// 弧以圆点为圆心、左右各张开 45°，和系统状态栏的 Wi-Fi 一个样子。
+private struct WiFiGlyph: View {
+    var body: some View {
+        Canvas { context, size in
+            let lineWidth: CGFloat = 1.6
+            let dotRadius: CGFloat = 1.3
+            let center = CGPoint(x: size.width / 2, y: size.height - dotRadius)
+            // 外弧的顶边贴着画布上沿（留出半个线宽），内弧在外弧和圆点中间
+            let outer = center.y - lineWidth / 2
+            for radius in [outer, outer * 0.56] {
+                var arc = Path()
+                arc.addArc(center: center, radius: radius,
+                           startAngle: .degrees(-135), endAngle: .degrees(-45), clockwise: false)
+                context.stroke(arc, with: .foreground, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+            }
+            let dot = CGRect(x: center.x - dotRadius, y: center.y - dotRadius, width: dotRadius * 2, height: dotRadius * 2)
+            context.fill(Path(ellipseIn: dot), with: .foreground)
         }
-        return path
-    }
-}
-
-/// 网速前面的向下小箭头
-private struct DownArrowGlyph: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        path.move(to: CGPoint(x: rect.midX, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.midX, y: rect.maxY))
-        path.move(to: CGPoint(x: rect.minX, y: rect.maxY - rect.width / 2))
-        path.addLine(to: CGPoint(x: rect.midX, y: rect.maxY))
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - rect.width / 2))
-        return path
+        .accessibilityHidden(true)
     }
 }
 
