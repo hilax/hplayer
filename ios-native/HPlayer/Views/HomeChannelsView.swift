@@ -76,6 +76,8 @@ struct HomeChannelsView: View {
                 }
             }
             .background(Theme.pageBackground.ignoresSafeArea())
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar(.hidden, for: .navigationBar)
         }
     }

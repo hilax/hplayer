@@ -43,7 +43,7 @@ struct HomeView: View {
     init(appState: AppState, initialSection: HomeSection = .home, initialChannel: HomeChannel = .recommend,
          library: MediaLibraryStore? = nil, local: LocalMediaStore? = nil,
          metadata: MediaMetadataStore? = nil, recents: RecentStore? = nil,
-         accountInfo: P115AccountInfoStore? = nil,
+         accountInfo: P115AccountInfoStore? = nil, navigation: HomeNavigation? = nil,
          sourceStatus: P115Status? = nil, sourceQuota: QuotaResponse? = nil,
          initialSearch: String = "", searchFiles: [P115File] = []) {
         _appState = ObservedObject(wrappedValue: appState)
@@ -57,6 +57,7 @@ struct HomeView: View {
         if let metadata { _metadataStore = StateObject(wrappedValue: metadata) }
         if let recents { _recents = StateObject(wrappedValue: recents) }
         if let accountInfo { _accountInfo = StateObject(wrappedValue: accountInfo) }
+        if let navigation { _navigation = StateObject(wrappedValue: navigation) }
         self.sourceStatus = sourceStatus; self.sourceQuota = sourceQuota
         self.initialSearch = initialSearch; self.searchFiles = searchFiles
     }
@@ -215,7 +216,10 @@ struct HomeView: View {
         ZStack {
             NavigationStack(path: $navigation.path) {
                 tabPages
+                    .navigationTitle("")
+                    .navigationBarTitleDisplayMode(.inline)
                     .toolbar(.hidden, for: .navigationBar)
+                    .stabilizeInlineNavigationBar()
                     .navigationDestination(for: PerformerListRoute.self) { _ in
                         PerformerGridView(groups: librarySnapshots.home.performers)
                     }

@@ -327,6 +327,7 @@ struct CloudTab: View {
         }, management: true, onOpenPage: { openPage($0) },
                       initialFiles: previewFiles(cid: crumb.cid))
         .navigationTitle(crumb.name)
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
     }
 

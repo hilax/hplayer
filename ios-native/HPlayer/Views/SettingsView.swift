@@ -47,6 +47,8 @@ struct SettingsView: View {
         .scrollIndicators(.hidden)
         .background(Theme.pageBackground.ignoresSafeArea())
         .overlay(alignment: .top) { CompactTitleBar(title: "我的", visible: titleAway) }
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .navigationBar)
         .designScreen("settings")
         .refreshable { await account.refresh() }
@@ -695,6 +697,8 @@ struct LicensesView: View {
         }
         .designScreen("licenses")
         .navigationTitle("开源许可")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
     }
 
     private func entryDetail(_ id: String) -> String {
@@ -729,6 +733,7 @@ private struct LicenseTextView: View {
         }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
         .task {
             text = (try? String(contentsOf: url, encoding: .utf8)) ?? "无法读取许可文件。"
         }

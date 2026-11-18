@@ -33,6 +33,7 @@ extension View {
         self
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar(.visible, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .principal) {
                     Text(title)
@@ -534,6 +535,7 @@ struct MagnetDetailView: View {
         }
         .navigationTitle(item.code)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
         .magnetPlayer(item: $playLaunch)
         // 打开详情页就让 BT 引擎热起来，并预取排在前几位的资源的种子信息，点「磁力播放」时更快
         .magnetEngineWarmup(prefetch: Array(magnets.prefix(3).map(\.magnetURL)))

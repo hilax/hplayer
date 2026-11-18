@@ -86,6 +86,7 @@ struct AnimeCommentsPage: View {
             .background(Theme.pageBackground.ignoresSafeArea())
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar(.visible, for: .navigationBar)
     }
 }
 

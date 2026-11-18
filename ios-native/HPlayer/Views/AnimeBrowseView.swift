@@ -71,6 +71,7 @@ struct AnimeBrowseView: View {
         .background(Theme.pageBackground.ignoresSafeArea())
         .navigationTitle(route.title)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
         .sheet(isPresented: $showsSheet) {
             AnimeFilterSheet(model: model, channels: store.channels, title: route.title)
                 .presentationDetents([.large])
