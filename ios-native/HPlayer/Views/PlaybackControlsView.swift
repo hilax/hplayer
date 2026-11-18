@@ -2422,7 +2422,8 @@ struct PlaybackControlsView: View {
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
-            .frame(width: innerWidth, minHeight: 44, alignment: .leading)
+            .frame(minHeight: 44)
+            .frame(width: innerWidth, alignment: .leading)
             .background(
                 selected ? (landscape ? Color.white.opacity(Theme.Opacity.faint) : Theme.tileTint) : Color.clear,
                 in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
