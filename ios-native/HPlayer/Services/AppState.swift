@@ -48,7 +48,7 @@ final class AppState: ObservableObject {
         !(cookie?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
     }
 
-    static func accountID(in cookie: String?) -> String? {
+    nonisolated static func accountID(in cookie: String?) -> String? {
         for part in (cookie ?? "").split(separator: ";") {
             let pair = part.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
             guard pair.count == 2, pair[0] == "UID",
