@@ -156,8 +156,14 @@ final class HomeNavigationTests: XCTestCase {
 
         // 返回一级页面后：导航栏又变回不接收点击，根页安全区不变
         navigation.path.removeLast(navigation.path.count)
-        try await Task.sleep(nanoseconds: 900_000_000)
-        XCTAssertFalse(bar.isUserInteractionEnabled, "\(label): bar must stop taking taps after popping back to root")
+        // 返回动画在模拟器上可能被二级页的加载拖慢：最多等 3 秒，条件满足就提前结束
+        for _ in 0..<30 {
+            if navController.viewControllers.count == 1, !bar.isUserInteractionEnabled { break }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        XCTAssertEqual(navController.viewControllers.count, 1, "\(label): pop back to root did not finish")
+        XCTAssertFalse(bar.isUserInteractionEnabled,
+                       "\(label): bar must stop taking taps after popping back to root (top is root: \(navController.topViewController === rootPage))")
         XCTAssertEqual(rootPage.view.safeAreaInsets.top, window.safeAreaInsets.top, accuracy: 1,
                        "\(label): root layout must be unchanged after popping back")
     }
