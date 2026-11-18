@@ -22,6 +22,8 @@ struct LibraryCleanupView: View {
                 content.tint(Theme.accent)
             }
             .navigationTitle("清理已失效文件")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar(.visible, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } }
             }

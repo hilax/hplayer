@@ -437,6 +437,9 @@ private struct NavigationBarStabilizer: UIViewControllerRepresentable {
     }
 
     final class ProbeController: UIViewController {
+        private var largeTitleObserver: NSKeyValueObservation?
+        private weak var observedBar: UINavigationBar?
+
         override func loadView() {
             let view = UIView()
             view.isHidden = true
@@ -454,10 +457,25 @@ private struct NavigationBarStabilizer: UIViewControllerRepresentable {
             stabilize()
         }
 
+        override func viewWillLayoutSubviews() {
+            super.viewWillLayoutSubviews()
+            stabilize()
+        }
+
         func stabilize() {
-            guard let nav = navigationController else { return }
-            if nav.navigationBar.prefersLargeTitles {
-                nav.navigationBar.prefersLargeTitles = false
+            guard let bar = navigationController?.navigationBar else { return }
+            if bar.prefersLargeTitles {
+                bar.prefersLargeTitles = false
+            }
+            if observedBar !== bar {
+                observedBar = bar
+                largeTitleObserver = bar.observe(\.prefersLargeTitles, options: [.new]) { [weak bar] _, _ in
+                    Task { @MainActor in
+                        if bar?.prefersLargeTitles == true {
+                            bar?.prefersLargeTitles = false
+                        }
+                    }
+                }
             }
         }
     }

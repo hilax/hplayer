@@ -49,6 +49,8 @@ struct CookieWebLoginView: View {
             if !error.isEmpty { DesignNotice(symbol: AppIcon.alert.name, text: error, warning: true) }
         }
         .navigationTitle("连接 115 网盘")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
         .designScreen("connect115")
         .sheet(isPresented: $showingWeb, onDismiss: finishWebSession) {
             NavigationStack {
