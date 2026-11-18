@@ -155,7 +155,7 @@ final class HomeNavigationTests: XCTestCase {
         }
 
         // 返回一级页面后：导航栏又变回不接收点击，根页安全区不变
-        navigation.path.removeAll()
+        navigation.path.removeLast(navigation.path.count)
         try await Task.sleep(nanoseconds: 900_000_000)
         XCTAssertFalse(bar.isUserInteractionEnabled, "\(label): bar must stop taking taps after popping back to root")
         XCTAssertEqual(rootPage.view.safeAreaInsets.top, window.safeAreaInsets.top, accuracy: 1,
