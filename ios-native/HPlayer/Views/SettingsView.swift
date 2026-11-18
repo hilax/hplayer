@@ -308,6 +308,8 @@ struct PlaybackSettingsView: View {
     @State private var readahead = ReadaheadLevel.saved
     @State private var subtitleStyle = SubtitleStyle.saved
     @State private var autoPictureInPicture = PictureInPictureSettings.automatic
+    @State private var autoOnlineSubtitle = OnlineSubtitlePrefs.autoMatchEnabled
+    @State private var onlineSourceSummary = OnlineSubtitlePrefs.summaryText
 
     var body: some View {
         ScrollView {
@@ -326,6 +328,19 @@ struct PlaybackSettingsView: View {
                         .tint(Theme.accentFill)
                         .accessibilityIdentifier("mine.playback.autoPiP")
                 }
+            }
+            SettingRow(icon: .autoMatch, title: "自动匹配在线字幕") {
+                Toggle("自动匹配在线字幕", isOn: $autoOnlineSubtitle)
+                    .labelsHidden()
+                    .tint(Theme.accentFill)
+                    .accessibilityIdentifier("mine.playback.autoOnlineSubtitle")
+            }
+            if autoOnlineSubtitle {
+                NavigationLink { OnlineSubtitleSourcesView() } label: {
+                    LibraryActionRow(symbol: AppIcon.network.name, title: "在线字幕来源", value: onlineSourceSummary)
+                }
+                .buttonStyle(.pressable(scale: 0.985))
+                .accessibilityIdentifier("mine.playback.onlineSubtitleSources")
             }
             SettingRow(icon: .subtitle, title: "字幕样式") {
                 SettingsMenuPicker(label: "字幕样式", selection: $subtitleStyle, options: SubtitleStyle.allCases,
@@ -358,11 +373,14 @@ struct PlaybackSettingsView: View {
             readahead = ReadaheadLevel.saved
             subtitleStyle = SubtitleStyle.saved
             autoPictureInPicture = PictureInPictureSettings.automatic
+            autoOnlineSubtitle = OnlineSubtitlePrefs.autoMatchEnabled
+            onlineSourceSummary = OnlineSubtitlePrefs.summaryText
         }
         .onChange(of: decoding) { VideoDecoding.saved = $0 }
         .onChange(of: readahead) { ReadaheadLevel.saved = $0 }
         .onChange(of: subtitleStyle) { SubtitleStyle.saved = $0 }
         .onChange(of: autoPictureInPicture) { PictureInPictureSettings.automatic = $0 }
+        .onChange(of: autoOnlineSubtitle) { OnlineSubtitlePrefs.autoMatchEnabled = $0 }
     }
 }
 

@@ -260,6 +260,9 @@ struct PlaybackControlsView: View {
     @State private var popover: PlayerPopover?
     /// 「更多」菜单里当前打开的二级页
     @State private var moreSection: MoreSection?
+    /// 字幕菜单里是否进入在线搜索二级列表
+    @State private var tracksSearching = false
+    @State private var onlineSubtitleQueryText = ""
     /// 选完一项后稍等一下再收起弹出层，让选中的那块玻璃先滑过去
     @State private var popoverCloseTask: Task<Void, Never>?
     @State private var hideTask: Task<Void, Never>?
@@ -742,6 +745,10 @@ struct PlaybackControlsView: View {
         popoverCloseTask?.cancel()
         let next: PlayerPopover? = popover == kind ? nil : kind
         moreSection = nil
+        tracksSearching = false
+        if next == .tracks {
+            onlineSubtitleQueryText = playback.onlineSubtitleSearchQuery
+        }
         if next != nil { diagnosticsCopier.reset() }
         withAnimation(next == nil ? popoverCloseAnimation : (reduceMotion ? .easeOut(duration: 0.15) : Self.popoverSpring)) {
             popover = next
@@ -755,6 +762,7 @@ struct PlaybackControlsView: View {
         guard delay > 0 else {
             withAnimation(popoverCloseAnimation) { popover = nil }
             moreSection = nil
+            tracksSearching = false
             revealControls()
             return
         }
@@ -952,56 +960,73 @@ struct PlaybackControlsView: View {
     // MARK: 弹出层 · 字幕与音轨
 
     /// 字幕、音轨、样式三栏横排：横屏宽而矮，三栏并排比一长串列表好找；选了不收起，可以连着选
+    @ViewBuilder
     private func tracksPopover(maxHeight: CGFloat) -> some View {
-        // 弹出层可用高度减去栏目标题（约 28）和上下留白（12），剩下的放选项
-        let rowsHeight = max(88, maxHeight - 40)
-        return HStack(alignment: .top, spacing: 0) {
-            trackColumn("字幕") {
-                HuggingScroll(maxHeight: rowsHeight) {
-                    VStack(spacing: 0) {
-                        popoverRow(title: "关闭", selected: playback.selectedSubtitle == nil) {
-                            playback.selectSubtitle(nil)
-                            revealControls()
+        if tracksSearching {
+            onlineSubtitleSearchPanel(landscape: true, width: 388, maxHeight: maxHeight)
+                .padding(6)
+        } else {
+            // 弹出层可用高度减去栏目标题（约 28）和上下留白（12），剩下的放选项
+            let rowsHeight = max(88, maxHeight - 40)
+            HStack(alignment: .top, spacing: 0) {
+                trackColumn("字幕") {
+                    VStack(alignment: .leading, spacing: 0) {
+                        HuggingScroll(maxHeight: rowsHeight) {
+                            VStack(alignment: .leading, spacing: 0) {
+                                onlineSubtitleEntryControls(landscape: true)
+
+                                popoverDivider
+
+                                popoverRow(title: "关闭", selected: playback.selectedSubtitle == nil) {
+                                    playback.selectSubtitle(nil)
+                                    revealControls()
+                                }
+                                ForEach(playback.subtitleTracks) { track in
+                                    popoverRow(title: track.title, detail: track.detail, selected: playback.selectedSubtitle == track.id) {
+                                        playback.selectSubtitle(track.id)
+                                        revealControls()
+                                    }
+                                }
+                                if playback.subtitleTracks.isEmpty {
+                                    popoverNote("这个视频没有内嵌字幕。可开启上方自动匹配或手动搜索在线字幕。", width: 176)
+                                }
+                                if playback.selectedSubtitle != nil {
+                                    popoverDivider
+                                    subtitleSyncControl(landscape: true)
+                                }
+                            }
+                            .frame(width: 196, alignment: .leading)
                         }
-                        ForEach(playback.subtitleTracks) { track in
-                            popoverRow(title: track.title, detail: track.detail, selected: playback.selectedSubtitle == track.id) {
-                                playback.selectSubtitle(track.id)
-                                revealControls()
+                    }
+                }
+                trackColumn("音轨", divided: true) {
+                    HuggingScroll(maxHeight: rowsHeight) {
+                        VStack(spacing: 0) {
+                            ForEach(playback.audioTracks) { track in
+                                popoverRow(title: track.title, detail: track.detail, selected: playback.selectedAudio == track.id) {
+                                    playback.selectAudio(track.id)
+                                    revealControls()
+                                }
+                            }
+                            if playback.audioTracks.isEmpty {
+                                popoverNote("视频加载后会在这里列出所有音轨。", width: 150)
                             }
                         }
-                        if playback.subtitleTracks.isEmpty {
-                            popoverNote("这个视频没有内嵌字幕。同一文件夹里同名的字幕文件会自动加载。", width: 150)
-                        }
                     }
                 }
-            }
-            trackColumn("音轨", divided: true) {
-                HuggingScroll(maxHeight: rowsHeight) {
+                trackColumn("样式", divided: true) {
                     VStack(spacing: 0) {
-                        ForEach(playback.audioTracks) { track in
-                            popoverRow(title: track.title, detail: track.detail, selected: playback.selectedAudio == track.id) {
-                                playback.selectAudio(track.id)
-                                revealControls()
-                            }
+                        ForEach(SubtitleStyle.allCases) { style in
+                            subtitleStyleRow(style)
                         }
-                        if playback.audioTracks.isEmpty {
-                            popoverNote("视频加载后会在这里列出所有音轨。", width: 150)
+                        if selectedSubtitleKeepsOwnStyle {
+                            popoverNote("特效和图形字幕会保留自带的样式。", width: 112)
                         }
                     }
                 }
             }
-            trackColumn("样式", divided: true) {
-                VStack(spacing: 0) {
-                    ForEach(SubtitleStyle.allCases) { style in
-                        subtitleStyleRow(style)
-                    }
-                    if selectedSubtitleKeepsOwnStyle {
-                        popoverNote("特效和图形字幕会保留自带的样式。", width: 112)
-                    }
-                }
-            }
+            .padding(6)
         }
-        .padding(6)
     }
 
     private func trackColumn<Content: View>(_ title: String, divided: Bool = false,
@@ -1949,7 +1974,7 @@ struct PlaybackControlsView: View {
         switch menu {
         case .quality: return 224
         case .speed: return 200
-        case .tracks: return 260
+        case .tracks: return 276
         case .aspect: return 266
         case .decoding: return 248
         }
@@ -2050,59 +2075,347 @@ struct PlaybackControlsView: View {
     }
 
     /// 字幕、音轨、字幕样式三段排在一列里；选了不收起，可以连着选
+    @ViewBuilder
     private func tracksMenu(width: CGFloat, maxHeight: CGFloat) -> some View {
-        quickMenuBody("字幕", width: width, maxHeight: maxHeight) {
-            menuRow("关闭字幕", selected: playback.selectedSubtitle == nil, id: "playback.subtitle.off") {
-                playback.selectSubtitle(nil)
-                revealControls()
-            } content: {
-                menuTitle("关闭", selected: playback.selectedSubtitle == nil)
-            }
-            ForEach(playback.subtitleTracks) { track in
-                menuRow(track.title, selected: playback.selectedSubtitle == track.id, id: "playback.subtitle.\(track.id)") {
-                    playback.selectSubtitle(track.id)
-                    revealControls()
-                } content: {
-                    menuTitle(track.title, detail: track.detail, selected: playback.selectedSubtitle == track.id, stacked: true)
-                }
-            }
-            if playback.subtitleTracks.isEmpty {
-                menuNote("这个视频没有内嵌字幕。同一文件夹里同名的字幕文件会自动加载。")
-            }
+        if tracksSearching {
+            onlineSubtitleSearchPanel(landscape: false, width: width, maxHeight: maxHeight)
+                .padding(6)
+                .frame(width: width)
+        } else {
+            quickMenuBody("字幕", width: width, maxHeight: maxHeight) {
+                onlineSubtitleEntryControls(landscape: false)
 
-            menuDivider
-            menuHeader("音轨")
-            ForEach(playback.audioTracks) { track in
-                menuRow(track.title, selected: playback.selectedAudio == track.id, id: "playback.audio.\(track.id)") {
-                    playback.selectAudio(track.id)
-                    revealControls()
-                } content: {
-                    menuTitle(track.title, detail: track.detail, selected: playback.selectedAudio == track.id, stacked: true)
-                }
-            }
-            if playback.audioTracks.isEmpty {
-                menuNote("视频加载后会在这里列出所有音轨。")
-            }
+                menuDivider
 
-            menuDivider
-            menuHeader("字幕样式")
-            ForEach(SubtitleStyle.allCases) { style in
-                menuRow("字幕样式：\(style.title)", selected: playback.subtitleStyle == style,
-                        id: "playback.subtitleStyle.\(style.id)") {
-                    playback.setSubtitleStyle(style)
+                menuRow("关闭字幕", selected: playback.selectedSubtitle == nil, id: "playback.subtitle.off") {
+                    playback.selectSubtitle(nil)
                     revealControls()
                 } content: {
-                    // 样式文字是白字，放在浅色菜单上要垫一块深色底才看得见
-                    SubtitleStyleLabel(style: style)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.black.opacity(Theme.Opacity.heavy), in: RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
+                    menuTitle("关闭", selected: playback.selectedSubtitle == nil)
                 }
-            }
-            if selectedSubtitleKeepsOwnStyle {
-                menuNote("特效和图形字幕会保留自带的样式。")
+                ForEach(playback.subtitleTracks) { track in
+                    menuRow(track.title, selected: playback.selectedSubtitle == track.id, id: "playback.subtitle.\(track.id)") {
+                        playback.selectSubtitle(track.id)
+                        revealControls()
+                    } content: {
+                        menuTitle(track.title, detail: track.detail, selected: playback.selectedSubtitle == track.id, stacked: true)
+                    }
+                }
+                if playback.subtitleTracks.isEmpty {
+                    menuNote("这个视频没有内嵌字幕。可开启上方自动匹配或手动搜索在线字幕。")
+                }
+
+                if playback.selectedSubtitle != nil {
+                    menuDivider
+                    subtitleSyncControl(landscape: false)
+                }
+
+                menuDivider
+                menuHeader("音轨")
+                ForEach(playback.audioTracks) { track in
+                    menuRow(track.title, selected: playback.selectedAudio == track.id, id: "playback.audio.\(track.id)") {
+                        playback.selectAudio(track.id)
+                        revealControls()
+                    } content: {
+                        menuTitle(track.title, detail: track.detail, selected: playback.selectedAudio == track.id, stacked: true)
+                    }
+                }
+                if playback.audioTracks.isEmpty {
+                    menuNote("视频加载后会在这里列出所有音轨。")
+                }
+
+                menuDivider
+                menuHeader("字幕样式")
+                ForEach(SubtitleStyle.allCases) { style in
+                    menuRow("字幕样式：\(style.title)", selected: playback.subtitleStyle == style,
+                            id: "playback.subtitleStyle.\(style.id)") {
+                        playback.setSubtitleStyle(style)
+                        revealControls()
+                    } content: {
+                        // 样式文字是白字，放在浅色菜单上要垫一块深色底才看得见
+                        SubtitleStyleLabel(style: style)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.black.opacity(Theme.Opacity.heavy), in: RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
+                    }
+                }
+                if selectedSubtitleKeepsOwnStyle {
+                    menuNote("特效和图形字幕会保留自带的样式。")
+                }
             }
         }
+    }
+
+    // MARK: 在线字幕与同步共享部件
+
+    private static let subtitleSyncSteps: [(label: String, delta: Double)] = [
+        ("-1s", -1), ("-0.5s", -0.5), ("+0.5s", 0.5), ("+1s", 1),
+    ]
+
+    private var onlineSubtitleEntryBadge: String {
+        if playback.onlineSubtitleSearching { return "匹配中" }
+        if playback.activeOnlineSubtitleID != nil { return "已挂载" }
+        if !playback.onlineSubtitles.isEmpty { return "\(playback.onlineSubtitles.count) 条" }
+        return ""
+    }
+
+    private func enterOnlineSubtitleSearch() {
+        if onlineSubtitleQueryText.isEmpty {
+            onlineSubtitleQueryText = playback.onlineSubtitleSearchQuery
+        }
+        withAnimation(reduceMotion ? nil : Motion.snappy) { tracksSearching = true }
+        if playback.onlineSubtitles.isEmpty && !playback.onlineSubtitleSearching {
+            playback.searchOnlineSubtitles(query: onlineSubtitleQueryText)
+        }
+    }
+
+    @ViewBuilder
+    private func onlineSubtitleEntryControls(landscape: Bool) -> some View {
+        let primaryColor: Color = landscape ? .white : .primary
+        let actionColor: Color = landscape ? Theme.accent : Theme.accentAlt
+        let badgeColor: Color = landscape ? .white.opacity(Theme.Opacity.strong) : Theme.textSecondary
+        let chevronColor: Color = landscape ? .white.opacity(Theme.Opacity.medium) : Theme.textMuted
+
+        HStack(spacing: 8) {
+            if !landscape {
+                Image(appIconNamed: AppIcon.autoMatch.name)
+                    .font(.scaled(15, weight: .medium))
+                    .foregroundStyle(Theme.textPrimary)
+                    .frame(width: 18)
+            }
+            Text(landscape ? "自动匹配" : "自动匹配在线字幕")
+                .font(.scaled(14, weight: .medium))
+                .foregroundStyle(primaryColor)
+                .lineLimit(1)
+            Spacer(minLength: 6)
+            Toggle("自动匹配在线字幕", isOn: Binding(
+                get: { playback.autoOnlineSubtitleEnabled },
+                set: { playback.setAutoOnlineSubtitleEnabled($0) }
+            ))
+            .labelsHidden()
+            .tint(Theme.accentFill)
+            .accessibilityIdentifier("playback.onlineSubtitle.auto")
+        }
+        .padding(.leading, landscape ? 12 : 8)
+        .padding(.trailing, 12)
+        .frame(maxWidth: .infinity, minHeight: landscape ? 40 : 44)
+
+        if landscape {
+            onlineSubtitleSearchButton(landscape: true, actionColor: actionColor, badgeColor: badgeColor, chevronColor: chevronColor)
+                .buttonStyle(.plain)
+        } else {
+            onlineSubtitleSearchButton(landscape: false, actionColor: actionColor, badgeColor: badgeColor, chevronColor: chevronColor)
+                .buttonStyle(MenuRowButtonStyle())
+        }
+    }
+
+    private func onlineSubtitleSearchButton(landscape: Bool, actionColor: Color, badgeColor: Color, chevronColor: Color) -> some View {
+        Button {
+            enterOnlineSubtitleSearch()
+        } label: {
+            HStack(spacing: 8) {
+                Image(appIconNamed: AppIcon.search.name)
+                    .font(.scaled(landscape ? 14 : 15, weight: .medium))
+                    .foregroundStyle(actionColor)
+                    .frame(width: landscape ? 16 : 18)
+                Text(landscape ? "搜在线 / 换条" : "搜索 / 换一条在线字幕…")
+                    .font(.scaled(14, weight: .medium))
+                    .foregroundStyle(actionColor)
+                    .lineLimit(1)
+                Spacer(minLength: 6)
+                if !onlineSubtitleEntryBadge.isEmpty {
+                    Text(onlineSubtitleEntryBadge)
+                        .font(.scaled(12))
+                        .foregroundStyle(badgeColor)
+                        .lineLimit(1)
+                }
+                Image(appIconNamed: AppIcon.forward.name)
+                    .font(.scaled(11, weight: .bold))
+                    .foregroundStyle(chevronColor)
+            }
+            .padding(.leading, landscape ? 12 : 8)
+            .padding(.trailing, 12)
+            .frame(maxWidth: .infinity, minHeight: landscape ? 40 : 44)
+            .contentShape(Rectangle())
+        }
+        .accessibilityIdentifier("playback.onlineSubtitle.search")
+    }
+
+    @ViewBuilder
+    private func subtitleSyncControl(landscape: Bool) -> some View {
+        let hasOffset = abs(playback.subtitleDelay) >= 0.05
+        let titleColor: Color = landscape ? .white : .primary
+        let buttonFill: Color = landscape ? Color.white.opacity(Theme.Opacity.faint) : Theme.tileTint
+        let buttonTextColor: Color = landscape ? .white : Theme.textPrimary
+        let offsetColor: Color = hasOffset ? (landscape ? Theme.accent : Theme.accentAlt) : (landscape ? Color.white.opacity(Theme.Opacity.strong) : Theme.textSecondary)
+
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text("字幕同步")
+                    .font(.scaled(12, weight: .semibold))
+                    .foregroundStyle(landscape ? Color.white.opacity(Theme.Opacity.strong) : Theme.textSecondary)
+                Spacer(minLength: 4)
+                Button {
+                    Haptics.select()
+                    playback.resetSubtitleDelay()
+                    revealControls()
+                } label: {
+                    Text(hasOffset ? "\(playback.subtitleDelayLabel) · 归零" : playback.subtitleDelayLabel)
+                        .font(.scaled(12, weight: hasOffset ? .semibold : .medium).monospacedDigit())
+                        .foregroundStyle(offsetColor)
+                }
+                .buttonStyle(.plain)
+                .disabled(!hasOffset)
+                .accessibilityIdentifier("playback.subtitle.syncReset")
+            }
+            HStack(spacing: 4) {
+                ForEach(Self.subtitleSyncSteps, id: \.label) { step in
+                    Button {
+                        Haptics.select()
+                        playback.nudgeSubtitleDelay(by: step.delta)
+                        revealControls()
+                    } label: {
+                        Text(landscape ? step.label.replacingOccurrences(of: "s", with: "") : step.label)
+                            .font(.scaled(12, weight: .medium).monospacedDigit())
+                            .foregroundStyle(buttonTextColor)
+                            .frame(maxWidth: .infinity, minHeight: 34)
+                            .background(buttonFill, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("字幕同步 \(step.label)")
+                    .accessibilityIdentifier("playback.subtitle.sync.\(step.label)")
+                }
+            }
+        }
+        .padding(.horizontal, landscape ? 12 : 8)
+        .padding(.vertical, 6)
+        .foregroundStyle(titleColor)
+    }
+
+    private func onlineSubtitleSearchPanel(landscape: Bool, width: CGFloat, maxHeight: CGFloat) -> some View {
+        let primaryColor: Color = landscape ? .white : .primary
+        let secondaryColor: Color = landscape ? .white.opacity(Theme.Opacity.strong) : Theme.textSecondary
+        let fieldFill: Color = landscape ? Color.white.opacity(Theme.Opacity.faint) : Theme.inputFill
+        let listHeight = max(88, maxHeight - 122)
+
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Button {
+                    withAnimation(reduceMotion ? nil : Motion.snappy) { tracksSearching = false }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(appIconNamed: AppIcon.back.name)
+                            .font(.scaled(13, weight: .bold))
+                        Text("在线字幕")
+                            .font(.scaled(15, weight: .semibold))
+                    }
+                    .foregroundStyle(primaryColor)
+                    .frame(minHeight: 36)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("playback.onlineSubtitle.back")
+                Spacer(minLength: 4)
+                if playback.onlineSubtitleSearching {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(Theme.accent)
+                }
+            }
+            .padding(.horizontal, 8)
+
+            HStack(spacing: 6) {
+                TextField("片名 / 剧集 / AV 番号", text: $onlineSubtitleQueryText)
+                    .font(.scaled(13))
+                    .foregroundStyle(primaryColor)
+                    .submitLabel(.search)
+                    .onSubmit {
+                        playback.searchOnlineSubtitles(query: onlineSubtitleQueryText)
+                    }
+                    .padding(.horizontal, 10)
+                    .frame(height: 34)
+                    .background(fieldFill, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
+                    .accessibilityIdentifier("playback.onlineSubtitle.query")
+                Button {
+                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                    playback.searchOnlineSubtitles(query: onlineSubtitleQueryText)
+                } label: {
+                    Text("搜索")
+                        .font(.scaled(13, weight: .semibold))
+                        .foregroundStyle(landscape ? Theme.onAccentFill : Theme.onPrimary)
+                        .padding(.horizontal, 12)
+                        .frame(height: 34)
+                        .background(landscape ? Theme.accentFill : Theme.primaryAction,
+                                    in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("playback.onlineSubtitle.submit")
+            }
+            .padding(.horizontal, 8)
+
+            if !playback.onlineSubtitleStatus.isEmpty {
+                Text(playback.onlineSubtitleStatus)
+                    .font(.scaled(12))
+                    .foregroundStyle(secondaryColor)
+                    .lineLimit(1)
+                    .padding(.horizontal, 10)
+            }
+
+            let innerWidth = width - 12
+            HuggingScroll(maxHeight: listHeight) {
+                VStack(alignment: .leading, spacing: 2) {
+                    if playback.onlineSubtitles.isEmpty && !playback.onlineSubtitleSearching {
+                        Text("未找到候选字幕，可尝试修改关键词（如仅输入片名或 AV 番号）。")
+                            .font(.scaled(12))
+                            .foregroundStyle(secondaryColor)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(width: innerWidth - 16, alignment: .leading)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 10)
+                    } else {
+                        ForEach(playback.onlineSubtitles) { candidate in
+                            let selected = playback.activeOnlineSubtitleID == candidate.id
+                            Button {
+                                Task { await playback.applyOnlineSubtitle(candidate) }
+                                revealControls()
+                            } label: {
+                                HStack(spacing: 8) {
+                                    Image(appIconNamed: AppIcon.check.name)
+                                        .font(.scaled(13, weight: .bold))
+                                        .foregroundStyle(Theme.accent)
+                                        .opacity(selected ? 1 : 0)
+                                        .frame(width: 16)
+                                        .accessibilityHidden(true)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(candidate.title)
+                                            .font(.scaled(13, weight: selected ? .semibold : .medium))
+                                            .foregroundStyle(selected ? Theme.accent : primaryColor)
+                                            .lineLimit(1)
+                                        Text(candidate.detailLine)
+                                            .font(.scaled(11))
+                                            .foregroundStyle(secondaryColor)
+                                            .lineLimit(1)
+                                    }
+                                    Spacer(minLength: 0)
+                                }
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 6)
+                                .frame(width: innerWidth, minHeight: 44, alignment: .leading)
+                                .background(
+                                    selected ? (landscape ? Color.white.opacity(Theme.Opacity.faint) : Theme.tileTint) : Color.clear,
+                                    in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
+                                )
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("playback.onlineSubtitle.candidate.\(candidate.source.rawValue)")
+                        }
+                    }
+                }
+                .frame(width: innerWidth, alignment: .leading)
+            }
+        }
+        .frame(width: width - 12, alignment: .leading)
     }
 
     /// 3×2 的比例格，每格一个小图示；下面一行是缩放和还原。选了不收起，方便接着调缩放
@@ -2972,6 +3285,10 @@ struct PlaybackControlsView: View {
         popoverCloseTask?.cancel()
         showSleepMenu = false
         showList = false
+        tracksSearching = false
+        if menu == .tracks {
+            onlineSubtitleQueryText = playback.onlineSubtitleSearchQuery
+        }
         withAnimation(reduceMotion ? .easeOut(duration: 0.12) : Self.popoverSpring) { quickMenu = menu }
     }
     /// 选完一项时可以稍等一下再收，让勾先亮起来
@@ -2979,6 +3296,7 @@ struct PlaybackControlsView: View {
         popoverCloseTask?.cancel()
         guard delay > 0 else {
             withAnimation(popoverCloseAnimation) { quickMenu = nil }
+            tracksSearching = false
             revealControls()
             return
         }

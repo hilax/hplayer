@@ -174,6 +174,13 @@ final class PlaybackController: ObservableObject {
     @Published private(set) var subtitleTracks: [MediaTrack] = []
     @Published private(set) var selectedAudio: Int?
     @Published private(set) var selectedSubtitle: Int?
+    @Published private(set) var onlineSubtitles: [OnlineSubtitleCandidate] = []
+    @Published private(set) var onlineSubtitleSearching = false
+    @Published private(set) var onlineSubtitleStatus = ""
+    @Published private(set) var onlineSubtitleSearchQuery = ""
+    @Published private(set) var activeOnlineSubtitleID: String?
+    @Published private(set) var autoOnlineSubtitleEnabled = OnlineSubtitlePrefs.autoMatchEnabled
+    @Published private(set) var subtitleDelay: Double = 0
     /// 例如「4K · HDR」
     @Published private(set) var videoBadges: [String] = []
     /// 自动重连时画面中间显示的说明
@@ -231,6 +238,16 @@ final class PlaybackController: ObservableObject {
     private var currentStreamID: String?
     private var currentPlaylistRenew: (() async throws -> URL)?
     private var currentEngineURL: URL?
+    private var currentTitle = ""
+    private var currentSubtitleIdentifier: String?
+    private var currentIMDBID: String?
+    private var currentIsAdultVideo = false
+    private var currentSkipRemoteHash = false
+    private var onlineSubtitleTask: Task<Void, Never>?
+    private var onlineSubtitleAutoHandledSession = -1
+    private var mountedOnlineTrackID: Int?
+    private var cachedFingerprint: VideoSubtitleFingerprint?
+    private var subtitleDelayHydratedSession = -1
     private var rawCacheSpeed: Int = 0
     private var healthyPlaybackSeconds: Int = 0
     private var openingSeconds: Int = 0
@@ -489,7 +506,12 @@ final class PlaybackController: ObservableObject {
         autoRecover: Bool = true,
         openTimeoutSeconds: UInt64 = 45,
         streamID: String? = nil,
-        playlistRenew: (() async throws -> URL)? = nil
+        playlistRenew: (() async throws -> URL)? = nil,
+        title: String = "",
+        subtitleIdentifier: String? = nil,
+        imdbID: String? = nil,
+        isAdultVideo: Bool = false,
+        skipRemoteHash: Bool = false
     ) {
         guard !closingPlayback else { return }
         session += 1
@@ -498,6 +520,31 @@ final class PlaybackController: ObservableObject {
             softwareFallbackNoticed = false
             pictureInPictureStillReady = false
             preferLargerPauseWait = false
+            currentTitle = title
+            currentSubtitleIdentifier = subtitleIdentifier
+            currentIMDBID = imdbID
+            currentIsAdultVideo = isAdultVideo
+            currentSkipRemoteHash = skipRemoteHash
+            onlineSubtitleTask?.cancel()
+            onlineSubtitleTask = nil
+            onlineSubtitleSearching = false
+            onlineSubtitles = []
+            onlineSubtitleStatus = ""
+            activeOnlineSubtitleID = nil
+            mountedOnlineTrackID = nil
+            cachedFingerprint = nil
+            onlineSubtitleAutoHandledSession = -1
+            subtitleDelay = 0
+            subtitleDelayHydratedSession = -1
+            autoOnlineSubtitleEnabled = OnlineSubtitlePrefs.autoMatchEnabled
+            onlineSubtitleSearchQuery = SubtitleQueryBuilder.build(
+                rawTitle: title,
+                streamURL: url,
+                fallbackIdentifier: subtitleIdentifier,
+                isAdultHint: isAdultVideo
+            ).displayQuery
+        } else if !title.isEmpty {
+            currentTitle = title
         }
         recoveryTask?.cancel()
         recoveryTask = nil
@@ -913,6 +960,16 @@ final class PlaybackController: ObservableObject {
         openTimeoutTask?.cancel()
         watchdogTask?.cancel()
         watchdogTask = nil
+        onlineSubtitleTask?.cancel()
+        onlineSubtitleTask = nil
+        onlineSubtitleSearching = false
+        onlineSubtitles = []
+        onlineSubtitleStatus = ""
+        mountedOnlineTrackID = nil
+        activeOnlineSubtitleID = nil
+        cachedFingerprint = nil
+        subtitleDelay = 0
+        subtitleDelayHydratedSession = -1
         pendingOpen = nil
         statusNote = ""
         engine?.command(["stop"])
@@ -1022,6 +1079,256 @@ final class PlaybackController: ObservableObject {
     /// id 为 nil 时关闭字幕
     func selectSubtitle(_ id: Int?) {
         engine?.set("sid", id.map(String.init) ?? "no")
+        if id == nil || id != mountedOnlineTrackID {
+            activeOnlineSubtitleID = nil
+        }
+    }
+
+    // MARK: 在线字幕与同步微调
+
+    var subtitleDelayLabel: String {
+        if abs(subtitleDelay) < 0.05 { return "0.0s" }
+        return String(format: "%+.1fs", subtitleDelay)
+    }
+
+    func nudgeSubtitleDelay(by delta: Double) {
+        setSubtitleDelay(subtitleDelay + delta)
+    }
+
+    func resetSubtitleDelay() {
+        setSubtitleDelay(0)
+    }
+
+    func setSubtitleDelay(_ seconds: Double) {
+        let rounded = (min(max(seconds, -60), 60) * 10).rounded() / 10
+        let normalized = abs(rounded) < 0.05 ? 0 : rounded
+        subtitleDelay = normalized
+        engine?.set("sub-delay", normalized)
+        if let key = currentOnlineSubtitleVideoKey {
+            OnlineSubtitleCache.shared.updateDelay(normalized, for: key)
+        }
+    }
+
+    func setAutoOnlineSubtitleEnabled(_ enabled: Bool) {
+        autoOnlineSubtitleEnabled = enabled
+        OnlineSubtitlePrefs.autoMatchEnabled = enabled
+        if enabled {
+            if activeOnlineSubtitleID == nil, loaded {
+                triggerOnlineSubtitleSearch(manualQuery: nil, autoMount: true)
+            }
+        } else {
+            onlineSubtitleTask?.cancel()
+            onlineSubtitleTask = nil
+            onlineSubtitleSearching = false
+        }
+    }
+
+    func searchOnlineSubtitles(query: String? = nil) {
+        let trimmed = query?.trimmingCharacters(in: .whitespacesAndNewlines)
+        triggerOnlineSubtitleSearch(manualQuery: (trimmed?.isEmpty == false) ? trimmed : nil, autoMount: false)
+    }
+
+    func applyOnlineSubtitle(_ candidate: OnlineSubtitleCandidate) async {
+        let activeSession = session
+        onlineSubtitleSearching = true
+        onlineSubtitleStatus = "正在下载字幕…"
+        let localFile: URL?
+        if let cached = OnlineSubtitleCache.shared.cachedFile(for: candidate) {
+            localFile = cached
+        } else if let text = await OnlineSubtitleService.shared.downloadSubtitleText(from: candidate) {
+            localFile = OnlineSubtitleCache.shared.saveSubtitleText(text, for: candidate)
+        } else {
+            localFile = nil
+        }
+        guard session == activeSession, !closingPlayback else { return }
+        onlineSubtitleSearching = false
+        guard let localFile else {
+            onlineSubtitleStatus = "字幕下载失败，请换一条"
+            notice = "在线字幕下载失败，请尝试其他候选"
+            return
+        }
+        mountSubtitleFile(localFile, candidate: candidate)
+        if let key = currentOnlineSubtitleVideoKey {
+            OnlineSubtitleCache.shared.rememberSelection(candidate, fileURL: localFile, delaySeconds: subtitleDelay, for: key)
+        }
+        onlineSubtitleStatus = "已挂载 · \(candidate.source.shortTitle)"
+        notice = "已挂载字幕：\(candidate.trackTitle)"
+    }
+
+    private var currentOnlineSubtitleVideoKey: String? {
+        guard let url = currentURL else { return nil }
+        return OnlineSubtitleCache.videoKey(streamID: currentStreamID, url: url, title: currentTitle)
+    }
+
+    private var shouldSkipAutomaticOnlineSubtitles: Bool {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["HPLAYER_ENABLE_ONLINE_SUBTITLE_TEST"] == "1" {
+            return false
+        }
+        if ProcessInfo.processInfo.environment["HPLAYER_DISABLE_AUTO_ONLINE_SUBTITLES"] == "1"
+            || ProcessInfo.processInfo.environment["HPLAYER_UI_TEST_URL"] != nil
+            || ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+            || NSClassFromString("XCTestCase") != nil {
+            return true
+        }
+        #endif
+        return false
+    }
+
+    private func handleFileLoadedForOnlineSubtitles() {
+        restoreSubtitleDelayIfNeeded()
+        restoreMountedOnlineSubtitleIfNeeded()
+        scheduleAutoOnlineSubtitleIfNeeded()
+    }
+
+    private func restoreSubtitleDelayIfNeeded() {
+        guard let engine else { return }
+        if subtitleDelayHydratedSession != session {
+            subtitleDelayHydratedSession = session
+            if let key = currentOnlineSubtitleVideoKey,
+               let saved = OnlineSubtitleCache.shared.savedDelay(for: key),
+               abs(saved) >= 0.05 {
+                subtitleDelay = saved
+            }
+        }
+        if abs(subtitleDelay) >= 0.05 {
+            engine.set("sub-delay", subtitleDelay)
+        }
+    }
+
+    private func restoreMountedOnlineSubtitleIfNeeded() {
+        guard let key = currentOnlineSubtitleVideoKey,
+              let activeID = activeOnlineSubtitleID,
+              let saved = OnlineSubtitleCache.shared.savedSelection(for: key),
+              saved.selection.candidate.id == activeID else { return }
+        let alreadyMounted = subtitleTracks.contains { $0.external && $0.title == saved.selection.candidate.trackTitle }
+        if !alreadyMounted {
+            mountSubtitleFile(saved.fileURL, candidate: saved.selection.candidate)
+        }
+    }
+
+    private func scheduleAutoOnlineSubtitleIfNeeded() {
+        guard autoOnlineSubtitleEnabled,
+              onlineSubtitleAutoHandledSession != session,
+              !shouldSkipAutomaticOnlineSubtitles,
+              currentURL != nil else { return }
+        onlineSubtitleAutoHandledSession = session
+        let activeSession = session
+        onlineSubtitleTask?.cancel()
+        onlineSubtitleTask = Task { @MainActor [weak self] in
+            // 等 mpv 完成轨道探测与文件大小上报
+            try? await Task.sleep(nanoseconds: 450_000_000)
+            guard let self, !Task.isCancelled, self.session == activeSession, !self.closingPlayback else { return }
+            guard self.autoOnlineSubtitleEnabled else { return }
+
+            // 已有内嵌或同目录中文字幕时不自动覆盖
+            if self.subtitleTracks.contains(where: Self.isChineseTrack) {
+                self.onlineSubtitleStatus = "视频已带中文字幕"
+                return
+            }
+
+            // 先检查本机是否记忆过该视频选用的在线字幕
+            if let key = self.currentOnlineSubtitleVideoKey,
+               let saved = OnlineSubtitleCache.shared.savedSelection(for: key) {
+                self.mountSubtitleFile(saved.fileURL, candidate: saved.selection.candidate)
+                if abs(saved.selection.delaySeconds) >= 0.05 {
+                    self.setSubtitleDelay(saved.selection.delaySeconds)
+                }
+                self.onlineSubtitleStatus = "已恢复 · \(saved.selection.candidate.source.shortTitle)"
+                self.notice = "已挂载缓存字幕：\(saved.selection.candidate.trackTitle)"
+                return
+            }
+
+            await self.performOnlineSubtitleSearch(manualQuery: nil, autoMount: true, expectedSession: activeSession)
+        }
+    }
+
+    private func triggerOnlineSubtitleSearch(manualQuery: String?, autoMount: Bool) {
+        let activeSession = session
+        onlineSubtitleTask?.cancel()
+        onlineSubtitleTask = Task { @MainActor [weak self] in
+            await self?.performOnlineSubtitleSearch(manualQuery: manualQuery, autoMount: autoMount, expectedSession: activeSession)
+        }
+    }
+
+    private func performOnlineSubtitleSearch(
+        manualQuery: String?,
+        autoMount: Bool,
+        expectedSession: Int
+    ) async {
+        guard let url = currentURL, session == expectedSession, !closingPlayback else { return }
+        onlineSubtitleSearching = true
+        onlineSubtitleStatus = "正在匹配在线字幕…"
+
+        let resolvedURL = currentEngineURL ?? url
+        let knownSize = fileSize > 0 ? fileSize : nil
+        let context = OnlineSubtitleContext(
+            rawTitle: currentTitle,
+            streamURL: resolvedURL,
+            knownFileSize: knownSize,
+            durationSeconds: duration > 0 ? duration : nil,
+            fallbackIdentifier: currentSubtitleIdentifier,
+            imdbID: currentIMDBID,
+            isAdultVideo: currentIsAdultVideo
+        )
+
+        var fingerprint = cachedFingerprint
+        if fingerprint == nil, manualQuery == nil, resolvedURL.isFileURL || (currentEngineURL != nil && !currentSkipRemoteHash) {
+            fingerprint = await VideoSubtitleFingerprint.compute(streamURL: resolvedURL, knownFileSize: knownSize)
+            if session == expectedSession { cachedFingerprint = fingerprint }
+        }
+        guard !Task.isCancelled, session == expectedSession, !closingPlayback else { return }
+
+        let result = await OnlineSubtitleService.shared.search(
+            context: context,
+            fingerprint: fingerprint,
+            manualQuery: manualQuery
+        )
+        guard !Task.isCancelled, session == expectedSession, !closingPlayback else { return }
+
+        onlineSubtitleSearchQuery = result.query
+        onlineSubtitles = result.candidates
+
+        if autoMount, let best = OnlineSubtitleService.autoPick(from: result.candidates) {
+            await applyOnlineSubtitle(best)
+            return
+        }
+
+        onlineSubtitleSearching = false
+        if result.candidates.isEmpty {
+            onlineSubtitleStatus = "暂未找到匹配字幕"
+        } else if autoMount {
+            onlineSubtitleStatus = "找到 \(result.candidates.count) 条，可手动选择"
+        } else {
+            onlineSubtitleStatus = "找到 \(result.candidates.count) 条字幕"
+        }
+    }
+
+    private func mountSubtitleFile(_ fileURL: URL, candidate: OnlineSubtitleCandidate) {
+        guard let engine else { return }
+        if let oldTrackID = mountedOnlineTrackID {
+            engine.command(["sub-remove", String(oldTrackID)])
+            mountedOnlineTrackID = nil
+        }
+        let status = engine.command(["sub-add", fileURL.path, "select", candidate.trackTitle, candidate.trackLanguageCode])
+        guard status >= 0 else { return }
+        refreshTracks()
+        if let currentID = engine.string("sid").flatMap(Int.init) {
+            mountedOnlineTrackID = currentID
+        } else if let matched = subtitleTracks.last(where: { $0.external && $0.title == candidate.trackTitle }) {
+            mountedOnlineTrackID = matched.id
+            selectSubtitle(matched.id)
+        }
+        activeOnlineSubtitleID = candidate.id
+        applySubtitleStyle(engine)
+    }
+
+    private static func isChineseTrack(_ track: MediaTrack) -> Bool {
+        let text = "\(track.title) \(track.detail)".lowercased()
+        let phrases = ["中文", "简", "繁", "国语", "双语", "chi", "zho", "chs", "cht", "zh-cn", "zh-tw", "zh-hk", "zh_cn", "zh_tw"]
+        if phrases.contains(where: { text.contains($0) }) { return true }
+        let tokens = text.split { !$0.isLetter && !$0.isNumber }.map(String.init)
+        return tokens.contains { $0 == "zh" || $0 == "sc" || $0 == "tc" || $0 == "cmn" }
     }
 
     /// 截一张当前画面，存进相册；返回是否成功
@@ -1204,6 +1511,7 @@ final class PlaybackController: ObservableObject {
             opening = false
             openTimeoutTask?.cancel()
             refreshTracks()
+            handleFileLoadedForOnlineSubtitles()
         case .playbackRestart:
             logEvent(hasPlayed
                 ? "开始播放 \(Self.clock(engineTime))"

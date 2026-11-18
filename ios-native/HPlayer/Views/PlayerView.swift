@@ -153,7 +153,7 @@ struct PlayerView: View {
         lastSavedAt = Date()
         do {
             switch source {
-            case .direct(_, let url):
+            case .direct(let title, let url):
                 guard isCurrentRequest(request, source: source, session: session), !Task.isCancelled else { return }
                 #if DEBUG
                 let use115Headers = ProcessInfo.processInfo.environment["HPLAYER_UI_TEST_115_HEADERS"] == "1"
@@ -163,12 +163,12 @@ struct PlayerView: View {
                 let testCookie = ""
                 #endif
                 guard await openAfterReveal(request, source: source, session: session) else { return }
-                playback.open(url, direct115: use115Headers, directCookie: testCookie, startTime: resume)
-            case .online(_, let url, let headers, let qualities, let currentQuality):
+                playback.open(url, direct115: use115Headers, directCookie: testCookie, startTime: resume, title: title)
+            case .online(let title, let url, let headers, let qualities, let currentQuality):
                 selectedQuality = !currentQuality.isEmpty ? currentQuality : (qualities.first?.title ?? "1080P 高清")
                 guard isCurrentRequest(request, source: source, session: session), !Task.isCancelled else { return }
                 guard await openAfterReveal(request, source: source, session: session) else { return }
-                playback.open(url, customHeaders: headers, startTime: resume)
+                playback.open(url, customHeaders: headers, startTime: resume, title: title)
             case .anime(let ref):
                 // 详情页记住最后看的一集：在播放器里切集、连播也算数
                 ref.rememberAsLastWatched()
@@ -178,26 +178,28 @@ struct PlayerView: View {
                 animeHeaders = resolved.headers
                 selectedQuality = resolved.qualityTitle
                 guard await openAfterReveal(request, source: source, session: session) else { return }
-                playback.open(resolved.url, customHeaders: resolved.headers, startTime: resume)
+                playback.open(resolved.url, customHeaders: resolved.headers, startTime: resume, title: ref.episodeTitle)
             case .drama(let ref):
                 ref.rememberAsLastWatched()
                 let dramaPlayback = try await DramaClient.shared.playback(videoId: ref.videoId, episode: ref.episode)
                 guard isCurrentRequest(request, source: source, session: session), !Task.isCancelled else { return }
                 guard await openAfterReveal(request, source: source, session: session) else { return }
-                playback.open(dramaPlayback.url, customHeaders: dramaPlayback.headers, startTime: resume)
+                playback.open(dramaPlayback.url, customHeaders: dramaPlayback.headers, startTime: resume, title: ref.episodeTitle)
             case .jable(let ref):
                 ref.rememberAsLastWatched()
                 let jablePlayback = try await JableClient.shared.resolvePlayback(videoId: ref.videoId)
                 guard isCurrentRequest(request, source: source, session: session), !Task.isCancelled else { return }
                 guard await openAfterReveal(request, source: source, session: session) else { return }
-                playback.open(jablePlayback.url, customHeaders: jablePlayback.headers, startTime: resume)
+                playback.open(jablePlayback.url, customHeaders: jablePlayback.headers, startTime: resume,
+                              title: ref.title, subtitleIdentifier: ref.videoId, isAdultVideo: true)
             case .missav(let ref):
                 ref.rememberAsLastWatched()
                 let missavPlayback = try await MissAVClient.shared.resolvePlayback(videoId: ref.videoId)
                 guard isCurrentRequest(request, source: source, session: session), !Task.isCancelled else { return }
                 guard await openAfterReveal(request, source: source, session: session) else { return }
-                playback.open(missavPlayback.url, customHeaders: missavPlayback.headers, startTime: resume)
-            case .p115(_, let pickCode):
+                playback.open(missavPlayback.url, customHeaders: missavPlayback.headers, startTime: resume,
+                              title: ref.title, subtitleIdentifier: ref.videoId, isAdultVideo: true)
+            case .p115(let title, let pickCode):
                 do {
                     guard let client = appState.directClient() else { throw APIError.server("请先登录 115") }
                     selectedQuality = "原画"
@@ -209,7 +211,7 @@ struct PlayerView: View {
                         guard await openAfterReveal(request, source: source, session: session) else { return }
                         playback.open(original, direct115: true, directCookie: client.cookie, startTime: resume,
                                       refreshURL: Self.originalRefresher(client, pickCode: pickCode),
-                                      streamID: "p115:\(pickCode)")
+                                      streamID: "p115:\(pickCode)", title: title, subtitleIdentifier: pickCode)
                         loading = false
                     } catch {
                         guard isCurrentRequest(request, source: source, session: session), !Task.isCancelled else { return }

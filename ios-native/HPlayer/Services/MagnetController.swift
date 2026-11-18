@@ -517,7 +517,12 @@ final class MagnetController: ObservableObject {
             preparing = false
             // 开头已经下好，后面边播边下；节点少时缓冲会慢一些，给播放器足够的等待时间
             // 边下边播等的是种子数据，慢一点很正常，不做「卡住自动重连」
-            playback.open(next.url, startTime: resume, autoRecover: false, openTimeoutSeconds: 120)
+            let videoTitle = file.title.isEmpty ? (catalog?.name ?? "") : file.title
+            let catalogHint = catalog?.name
+            let adultHint = SubtitleQueryBuilder.extractAVCode(from: videoTitle) != nil
+                || SubtitleQueryBuilder.extractAVCode(from: catalogHint ?? "") != nil
+            playback.open(next.url, startTime: resume, autoRecover: false, openTimeoutSeconds: 120,
+                          title: videoTitle, subtitleIdentifier: catalogHint, isAdultVideo: adultHint, skipRemoteHash: true)
         } catch is CancellationError {
             return
         } catch {
