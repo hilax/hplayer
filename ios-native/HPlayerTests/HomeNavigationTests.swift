@@ -94,7 +94,7 @@ final class HomeNavigationTests: XCTestCase {
                 .map { view in
                     let model = bar.convert(view.bounds, from: view)
                     let pres = presentationRect(for: view, in: bar)
-                    return ($0.text ?? "", model, pres)
+                    return (view.text ?? "", model, pres)
                 }
             samples.append(Snapshot(
                 t: ProcessInfo.processInfo.systemUptime - start,
