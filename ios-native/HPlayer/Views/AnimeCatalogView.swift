@@ -433,6 +433,7 @@ struct AnimeBrowseView: View {
         .background(Theme.pageBackground.ignoresSafeArea())
         .navigationTitle(route.title)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
         .task { if items.isEmpty { await reload() } }
     }
 

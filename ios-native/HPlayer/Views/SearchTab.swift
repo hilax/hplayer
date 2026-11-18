@@ -182,7 +182,10 @@ struct SearchView: View {
         // 只在外面写的话列表底部会被系统和上面的 keyboardHeight 各让一次。
         .ignoresSafeArea(.keyboard, edges: .bottom)
         .background(Theme.pageBackground.ignoresSafeArea())
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .navigationBar)
+        .stabilizeInlineNavigationBar()
         .task(id: snapshotKey) {
             await refreshFallbackLibraryIfNeeded()
         }

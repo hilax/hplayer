@@ -171,6 +171,7 @@ struct HomeLibraryScanView: View {
         .task(id: "\(metadata.revision)|\(library.revision)|\(local.files.count)|\(appState.libraryAccountID ?? "local")") { refreshMatched() }
         .navigationTitle("媒体库管理")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
     }
 
     private var unmatchedCount: Int { max(0, totalVideos - matchedVideos) }

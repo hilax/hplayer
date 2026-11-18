@@ -416,10 +416,51 @@ extension View {
     /// 返回键、关闭、完成、取消和右上角按钮就统一成 Theme.navigationButton。
     func navigationButtonTint() -> some View { tint(Theme.navigationButton) }
 
+    /// 锁定所在 UINavigationController 为内联小标题（关闭大标题模式），避免从隐藏导航栏的一级页推入二级页时标题与按钮发生高度/位置跳动。
+    func stabilizeInlineNavigationBar() -> some View {
+        background(NavigationBarStabilizer())
+    }
+
     /// 次要文字：普通页面用主题灰，铺了封面色的首页用半透明白。
     func secondaryTextStyle() -> some View { modifier(TintAwareForeground(tertiary: false)) }
     /// 三级文字（数量、注释）：同上。
     func tertiaryTextStyle() -> some View { modifier(TintAwareForeground(tertiary: true)) }
+}
+
+private struct NavigationBarStabilizer: UIViewControllerRepresentable {
+    func makeUIViewController(context: Context) -> ProbeController {
+        ProbeController()
+    }
+
+    func updateUIViewController(_ uiViewController: ProbeController, context: Context) {
+        uiViewController.stabilize()
+    }
+
+    final class ProbeController: UIViewController {
+        override func loadView() {
+            let view = UIView()
+            view.isHidden = true
+            view.isUserInteractionEnabled = false
+            self.view = view
+        }
+
+        override func didMove(toParent parent: UIViewController?) {
+            super.didMove(toParent: parent)
+            stabilize()
+        }
+
+        override func viewWillAppear(_ animated: Bool) {
+            super.viewWillAppear(animated)
+            stabilize()
+        }
+
+        func stabilize() {
+            guard let nav = navigationController else { return }
+            if nav.navigationBar.prefersLargeTitles {
+                nav.navigationBar.prefersLargeTitles = false
+            }
+        }
+    }
 }
 
 // MARK: - 字体
