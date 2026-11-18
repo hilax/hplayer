@@ -72,14 +72,23 @@ final class AnimeBrowseFilterTests: XCTestCase {
     }
 
     func testSettingAndClearingFields() {
-        var filter = AnimeBrowseFilter.newRelease
-        XCTAssertNotNil(filter.year)
-        XCTAssertEqual(filter.status, .ongoing)
+        var filter = AnimeBrowseFilter(year: "2025", status: .ongoing)
         filter = filter.setting(.status, to: AnimeEndState.ended.rawValue).setting(.channel, to: "7")
         XCTAssertEqual(filter.status, .ended)
         XCTAssertEqual(filter.channelId, 7)
         filter.clear(.year)
         XCTAssertNil(filter.year)
         XCTAssertEqual(filter.value(for: .channel), "7")
+    }
+
+    func testPopularNewReleasesIncludesAllYearsAndStatuses() {
+        let route = AnimeBrowseRoute.newReleases
+        let model = AnimeBrowseModel(route: route)
+        XCTAssertFalse(route.allowsFiltering)
+        XCTAssertEqual(model.sort, "hits")
+        XCTAssertTrue(model.filter.serverParameters.isEmpty)
+        XCTAssertTrue(model.filter.admits(item(1, year: "2019", isend: 1), knownYears: []))
+        XCTAssertTrue(model.filter.admits(item(2, year: "2026", isend: 0), knownYears: []))
+        XCTAssertTrue(AnimeBrowseRoute(channelId: nil, title: "最多播放", sort: "hits").allowsFiltering)
     }
 }

@@ -11,6 +11,29 @@ final class AnimeNavigationUITests: XCTestCase {
         exerciseDetailNavigation(style: "light", fails: true)
     }
 
+    func testPopularNewReleasesShowsSortWithoutFilters() {
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchEnvironment["HPLAYER_DESIGN_SCREEN"] = "home"
+        app.launch()
+        defer { app.terminate() }
+
+        let allPopular = app.buttons["home.trending.all"].firstMatch
+        XCTAssertTrue(allPopular.waitForExistence(timeout: 25))
+        for _ in 0..<8 where !allPopular.isHittable { app.swipeUp() }
+        XCTAssertTrue(allPopular.isHittable)
+        allPopular.tap()
+
+        XCTAssertTrue(app.navigationBars["热门新番"].waitForExistence(timeout: 10))
+        let popularSort = app.buttons["anime.sort.hits"]
+        XCTAssertTrue(popularSort.exists)
+        XCTAssertTrue(popularSort.isSelected)
+        XCTAssertFalse(app.buttons["anime.filter.open"].exists)
+        XCTAssertFalse(app.buttons["anime.filter.year.all"].exists)
+        XCTAssertFalse(app.buttons["anime.filter.status.all"].exists)
+    }
+
     /// 从「我的 → 追番收藏」点卡片能正常再次进入动漫详情页，且我的页不再有重复铃铛按钮。
     func testOpeningAnimeDetailFromMineWatchlist() {
         continueAfterFailure = false

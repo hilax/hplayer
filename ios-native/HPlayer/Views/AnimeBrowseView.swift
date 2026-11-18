@@ -2,8 +2,8 @@ import SwiftUI
 
 // MARK: - 动漫列表页
 
-/// 一个频道（或全部）的完整列表：顶部是排序（最新上架 / 最多播放）和「筛选」按钮，
-/// 下面几行横滑的筛选条（频道 / 类型 / 年份 / 地区 / 状态，单选），再下面是至少三列的海报网格，滑到底自动翻页。
+/// 一个频道（或全部）的完整列表：顶部可排序，支持筛选的页面还会显示筛选按钮和快捷筛选条。
+/// 海报网格滑到底自动翻页。
 /// 往下滑过筛选区后，顶部收成一条摘要栏，点它回到顶部；「筛选」打开面板，可以一次改完。
 /// 从动漫频道货架的「全部」、快捷入口，首页热门新番的「全部」推进来。
 struct AnimeBrowseView: View {
@@ -24,13 +24,14 @@ struct AnimeBrowseView: View {
     }
 
     private var options: AnimeFilterOptions {
-        AnimeFilterOptions.make(channels: store.channels, baseChannelId: model.baseChannelId,
-                                selectedChannelId: model.filter.channelId)
+        guard route.allowsFiltering else { return AnimeFilterOptions() }
+        return AnimeFilterOptions.make(channels: store.channels, baseChannelId: model.baseChannelId,
+                                       selectedChannelId: model.filter.channelId)
     }
 
     var body: some View {
         let options = self.options
-        let rows = AnimeBrowseRows.make(options: options, filter: model.filter)
+        let rows = route.allowsFiltering ? AnimeBrowseRows.make(options: options, filter: model.filter) : []
         GeometryReader { proxy in
             let metrics = Self.metrics(width: proxy.size.width)
             ScrollViewReader { reader in
@@ -39,9 +40,11 @@ struct AnimeBrowseView: View {
                         header(rows: rows, options: options)
                             .id(Self.topID)
                             .background {
-                                GeometryReader { geometry in
-                                    Color.clear.preference(key: BrowseHeaderBottomKey.self,
-                                                           value: geometry.frame(in: .named(Self.space)).maxY)
+                                if route.allowsFiltering {
+                                    GeometryReader { geometry in
+                                        Color.clear.preference(key: BrowseHeaderBottomKey.self,
+                                                               value: geometry.frame(in: .named(Self.space)).maxY)
+                                    }
                                 }
                             }
                         content(metrics)
@@ -57,7 +60,7 @@ struct AnimeBrowseView: View {
                     withAnimation(reduceMotion ? nil : Motion.quick) { headerHidden = hidden }
                 }
                 .overlay(alignment: .top) {
-                    if headerHidden {
+                    if route.allowsFiltering, headerHidden {
                         compactBar(options: options) {
                             withAnimation(reduceMotion ? nil : Motion.snappy) {
                                 reader.scrollTo(Self.topID, anchor: .top)
@@ -77,7 +80,7 @@ struct AnimeBrowseView: View {
                 .presentationDetents([.large])
                 .designSheet()
         }
-        .task { await store.loadIfNeeded() }
+        .task { if route.allowsFiltering { await store.loadIfNeeded() } }
         .task(id: options.years) { model.knownYears = options.years }
         .task { await model.loadIfNeeded() }
     }
@@ -93,20 +96,22 @@ struct AnimeBrowseView: View {
                     }
                 }
                 Spacer(minLength: 8)
-                filterButton(compact: false)
+                if route.allowsFiltering { filterButton(compact: false) }
             }
             .padding(.horizontal, Theme.contentInset)
             .padding(.top, 4)
             .padding(.bottom, 6)
 
-            VStack(alignment: .leading, spacing: 2) {
-                ForEach(rows) { row in
-                    BrowseChipRow(row: row) { value in
-                        model.set(row.field) { $0 = $0.setting(row.field, to: value) }
+            if !rows.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(rows) { row in
+                        BrowseChipRow(row: row) { value in
+                            model.set(row.field) { $0 = $0.setting(row.field, to: value) }
+                        }
                     }
                 }
+                .padding(.top, 2)
             }
-            .padding(.top, 2)
 
             HStack(spacing: 8) {
                 Text(summaryText(options: options))
@@ -114,9 +119,7 @@ struct AnimeBrowseView: View {
                     .foregroundStyle(Theme.textTertiary)
                     .lineLimit(1)
                 Spacer(minLength: 8)
-                if model.hasPreset && !model.isAtPreset {
-                    textAction("恢复默认", identifier: "anime.filter.restore") { model.restorePreset() }
-                } else if !model.filter.isEmpty && !model.hasPreset {
+                if !model.filter.isEmpty {
                     textAction("清除筛选", identifier: "anime.filter.clear") { model.clearAll() }
                 }
             }

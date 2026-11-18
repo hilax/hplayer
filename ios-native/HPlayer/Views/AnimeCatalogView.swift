@@ -78,17 +78,16 @@ final class AnimeHomeStore: ObservableObject {
 
 // MARK: - 动漫频道
 
-/// 打开一个动漫列表页：某个频道、或全部（channelId 为 nil），带初始排序和默认筛选条件。
+/// 打开某个频道或全部动漫的列表，指定初始排序和是否显示筛选。
 struct AnimeBrowseRoute: Hashable {
     var channelId: Int?
     var title: String
     var sort = "addtime"
-    /// 进来时已经选好的条件（热门新番 = 今年 + 连载中），页面上可以改，也能一键恢复
-    var preset = AnimeBrowseFilter()
+    var allowsFiltering = true
 
-    /// 热门新番的「全部」：今年、连载中、按播放量排
+    /// 热门新番的「全部」按播放量排，年份和连载状态不限。
     static var newReleases: AnimeBrowseRoute {
-        AnimeBrowseRoute(channelId: nil, title: "热门新番", sort: "hits", preset: .newRelease)
+        AnimeBrowseRoute(channelId: nil, title: "热门新番", sort: "hits", allowsFiltering: false)
     }
 }
 

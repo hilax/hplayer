@@ -22,11 +22,6 @@ struct AnimeBrowseFilter: Hashable {
     var area: String? = nil
     var status: AnimeEndState? = nil
 
-    /// 热门新番：今年 + 连载中（配合「最多播放」排序）
-    static var newRelease: AnimeBrowseFilter {
-        AnimeBrowseFilter(year: String(Calendar.current.component(.year, from: Date())), status: .ongoing)
-    }
-
     var isEmpty: Bool { activeFields.isEmpty }
 
     /// 已经设了值的项，按页面上从上到下的顺序

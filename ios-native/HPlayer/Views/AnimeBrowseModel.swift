@@ -8,7 +8,7 @@ import Combine
 @MainActor
 final class AnimeBrowseModel: ObservableObject {
     @Published private(set) var sort: String
-    @Published private(set) var filter: AnimeBrowseFilter
+    @Published private(set) var filter = AnimeBrowseFilter()
     @Published private(set) var items: [AnimeVideoItem] = []
     /// 服务端给的、可信的总数；不可信时为 nil
     @Published private(set) var trustedTotal: Int?
@@ -25,9 +25,6 @@ final class AnimeBrowseModel: ObservableObject {
 
     /// 列表页本身的频道（日漫页就是日漫）；nil 是「全部」类列表
     let baseChannelId: Int?
-    /// 进来时的默认条件（热门新番 = 今年 + 连载中）
-    let presetFilter: AnimeBrowseFilter
-    let presetSort: String
     /// 年份选项，判断「更早」这类年份时用；由页面在选项变化时传进来
     var knownYears: [String] = []
 
@@ -41,15 +38,10 @@ final class AnimeBrowseModel: ObservableObject {
 
     init(route: AnimeBrowseRoute) {
         baseChannelId = route.channelId
-        presetFilter = route.preset
-        presetSort = route.sort
         sort = route.sort
-        filter = route.preset
     }
 
     var channelId: Int? { filter.channelId ?? baseChannelId }
-    var isAtPreset: Bool { filter == presetFilter && sort == presetSort }
-    var hasPreset: Bool { !presetFilter.isEmpty }
 
     // MARK: 改条件
 
@@ -81,14 +73,6 @@ final class AnimeBrowseModel: ObservableObject {
     func clearAll() {
         guard !filter.isEmpty else { return }
         filter = AnimeBrowseFilter()
-        lastChanged = nil
-        Task { await reload() }
-    }
-
-    func restorePreset() {
-        guard !isAtPreset else { return }
-        filter = presetFilter
-        sort = presetSort
         lastChanged = nil
         Task { await reload() }
     }
