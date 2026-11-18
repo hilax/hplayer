@@ -443,13 +443,12 @@ final class OnlineSubtitleTests: XCTestCase {
         XCTAssertFalse(PlaybackController.shouldComputeSubtitleFingerprint(for: URL(string: "http://127.0.0.1:18080/stream/115")!))
         XCTAssertFalse(PlaybackController.shouldComputeSubtitleFingerprint(for: URL(string: "https://cdn.example.com/movie.mkv")!))
 
-        // 验证字幕视觉观感调优参数：稍微增大基础字号、上移底边距、彻底修复透明底因 sub-blur 发虚
+        // 验证字幕视觉观感调优参数：默认全局 sub-scale 提升至 1.26、彻底修复透明底因 sub-blur 发虚
+        XCTAssertEqual(SubtitleStyle.defaultSubScale, "1.26")
         let baseScale = try XCTUnwrap(Double(SubtitleStyle.defaultSubScale))
         let largeScale = try XCTUnwrap(Double(SubtitleStyle.large.overrides["sub-scale"] ?? ""))
-        XCTAssertGreaterThan(baseScale, 1.05)
+        XCTAssertEqual(baseScale, 1.26, accuracy: 0.001)
         XCTAssertGreaterThan(largeScale, baseScale)
-        XCTAssertLessThan(try XCTUnwrap(Int(SubtitleStyle.defaultSubPos)), 100)
-        XCTAssertGreaterThanOrEqual(try XCTUnwrap(Int(SubtitleStyle.defaultSubMarginY)), 34)
         XCTAssertEqual(SubtitleStyle.soft.overrides["sub-blur"], "0", "透明底不得启用 sub-blur，避免无粗描边时将文字本体高斯模糊")
         XCTAssertNotNil(SubtitleStyle.soft.overrides["sub-shadow-offset"])
     }

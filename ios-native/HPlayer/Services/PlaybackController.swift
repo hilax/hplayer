@@ -69,10 +69,8 @@ enum SubtitleStyle: String, CaseIterable, Identifiable {
         set { UserDefaults.standard.set(newValue.rawValue, forKey: key) }
     }
 
-    /// 默认略微放大字号并适当上移底边距，兼顾手机横竖屏观感与安全区留白
-    static let defaultSubScale = "1.18"
-    static let defaultSubPos = "94"
-    static let defaultSubMarginY = "36"
+    /// 默认全局字幕缩放倍率（保持 mpv 原生垂直位置不变）
+    static let defaultSubScale = "1.26"
 
     /// 样式会改到的 mpv 字幕选项。没写到的项用内核默认值，所以「描边」就是原来的样子
     static let optionKeys = ["sub-border-style", "sub-outline-size", "sub-outline-color", "sub-shadow-offset",
@@ -87,7 +85,7 @@ enum SubtitleStyle: String, CaseIterable, Identifiable {
                     "sub-shadow-offset": "0"]
         case .large:
             return ["sub-border-style": "opaque-box", "sub-outline-size": "3", "sub-outline-color": "#A0000000",
-                    "sub-shadow-offset": "0", "sub-scale": "1.45"]
+                    "sub-shadow-offset": "0", "sub-scale": "1.52"]
         case .outline:
             return [:]
         case .soft:
@@ -461,8 +459,6 @@ final class PlaybackController: ObservableObject {
             ("subs-fallback", "yes"),
             ("slang", "zh,chi,zho,chs,sc,cht,tc,en,eng"),
             ("sub-scale", SubtitleStyle.defaultSubScale),
-            ("sub-pos", SubtitleStyle.defaultSubPos),
-            ("sub-margin-y", SubtitleStyle.defaultSubMarginY),
             ("screenshot-format", "jpg"),
             // 网络：115 偶发卡顿时 15 秒触发一次底层重试，更早切换或重连
             ("network-timeout", "15"),
