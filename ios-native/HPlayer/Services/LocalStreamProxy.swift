@@ -175,6 +175,15 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
         }
     }
 
+    /// 这个本机地址现在实际连的上游地址（换过新地址就是新的）。线路测速用它测「正在播放」的那条。
+    func activeUpstream(for localURL: URL) -> URL? {
+        queue.sync {
+            guard let target = resolve(path: localURL.path) else { return nil }
+            let key = renewalKey(streamID: target.streamID, upstream: target.url)
+            return renewals[key]?.current ?? target.url
+        }
+    }
+
     private static func localURL(for upstream: URL, port: UInt16, profile: String) -> URL? {
         let encoded = Data(upstream.absoluteString.utf8).base64EncodedString()
             .replacingOccurrences(of: "+", with: "-")

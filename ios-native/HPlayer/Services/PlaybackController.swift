@@ -261,6 +261,9 @@ final class PlaybackController: ObservableObject {
     private var preferLargerPauseWait = false
     private static let minHealthyCacheSpeedBytes = 32 * 1024
     private var urlRefresher: (() async throws -> URL)?
+    /// 115 线路测速（播放器「更多」里）
+    @Published private(set) var lineSpeed: LineSpeedState = .idle
+    private var lineSpeedTask: Task<Void, Never>?
     private var watchdogEnabled = true
     private var openTimeoutSeconds: UInt64 = 45
     /// 这次 open 之后有没有真正播出来过（自动重连不清零）
@@ -531,6 +534,7 @@ final class PlaybackController: ObservableObject {
     ) {
         guard !closingPlayback else { return }
         session += 1
+        cancelLineSpeedTest()
         currentTorrentStream = isTorrentStream
         if !preservingPosition {
             playedThisSession = false
@@ -995,6 +999,7 @@ final class PlaybackController: ObservableObject {
         captureResumeFrame()
         // 换集也会先 stop：小窗不关，下一集接着在小窗里播
         session += 1
+        cancelLineSpeedTest()
         cancelAddressResolution()
         recoveryTask?.cancel()
         recoveryTask = nil
@@ -2090,9 +2095,61 @@ final class PlaybackController: ObservableObject {
             lines.append("—— 中转记录（上游出错与重试）——")
             lines += relayLog
         }
+        if case .finished(let results) = lineSpeed, !results.isEmpty {
+            lines.append("—— 115 线路测速 ——")
+            lines += results.map(\.reportLine)
+        }
         lines.append("—— 内核日志 ——")
         lines += logLines
         return lines.joined(separator: "\n")
+    }
+
+    // MARK: 115 线路测速
+
+    /// 正在播放 115 原画时可以测线路速度（转码画质是 m3u8 分片，不测）
+    var canTestLineSpeed: Bool {
+        guard currentDirect115, urlRefresher != nil, let streamID = currentStreamID else { return false }
+        return streamID.hasPrefix("p115:") && !streamID.contains(":hls:")
+    }
+
+    /// 依次测「正在播放」的地址和几个新要的 115 地址。测的时候先暂停播放（少抢带宽），测完自动继续。
+    func startLineSpeedTest() {
+        guard canTestLineSpeed, let refresher = urlRefresher else { return }
+        cancelLineSpeedTest()
+        var headers = ["User-Agent": Direct115Client.userAgent, "Referer": "https://115.com/"]
+        let cookie = Self.cookieHeader(currentCookie)
+        if !cookie.isEmpty { headers["Cookie"] = cookie }
+        let playingAddress = currentEngineURL.flatMap { LocalStreamProxy.shared.activeUpstream(for: $0) } ?? currentURL
+        let currentSession = session
+        let pausedForTest = playing
+        if pausedForTest { toggle() }
+        lineSpeed = .running(step: "准备测速…", results: [])
+        logEvent("开始测 115 线路速度")
+        lineSpeedTask = Task { @MainActor [weak self] in
+            let results = await LineSpeedTester.run(current: playingAddress, freshAddress: refresher, headers: headers,
+                                                    newAddresses: 3) { step, partial in
+                guard let self, self.session == currentSession, !Task.isCancelled else { return }
+                self.lineSpeed = .running(step: step, results: partial)
+            }
+            guard let self, !Task.isCancelled, self.session == currentSession else { return }
+            self.lineSpeed = .finished(results: results)
+            self.lineSpeedTask = nil
+            for result in results { self.logEvent("测速 \(result.reportLine)") }
+            // 测之前在播、测的时候用户没有自己点播放：恢复播放
+            if pausedForTest, !self.playing, self.userPaused { self.toggle() }
+        }
+    }
+
+    private func cancelLineSpeedTest() {
+        lineSpeedTask?.cancel()
+        lineSpeedTask = nil
+        if lineSpeed != .idle { lineSpeed = .idle }
+    }
+
+    /// 复制出去的测速结果
+    var lineSpeedReport: String {
+        guard case .finished(let results) = lineSpeed else { return "" }
+        return (["HPlayer 115 线路测速（\(currentTitle)）"] + results.map(\.reportLine)).joined(separator: "\n")
     }
 
     /// 出错提示里的「重试」：从原位置重新打开（会先换新地址）

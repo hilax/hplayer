@@ -51,13 +51,14 @@ private enum PlayerPopover: Hashable {
 
 /// 「更多」菜单里的二级页
 private enum MoreSection: Hashable {
-    case decoding, readahead, sleep
+    case decoding, readahead, sleep, lineSpeed
 
     var title: String {
         switch self {
         case .decoding: return "解码"
         case .readahead: return "提前缓存"
         case .sleep: return "定时关闭"
+        case .lineSpeed: return "115 线路测速"
         }
     }
 }
@@ -854,7 +855,7 @@ struct PlaybackControlsView: View {
         case .aspect:
             aspectPopover.fixedSize().playerGlass(cornerRadius: Theme.Radius.sheet)
         case .more:
-            morePopover.fixedSize().playerGlass(cornerRadius: Theme.Radius.sheet)
+            morePopover(maxHeight: maxHeight).fixedSize().playerGlass(cornerRadius: Theme.Radius.sheet)
         case .episodes:
             EmptyView()
         }
@@ -1260,7 +1261,7 @@ struct PlaybackControlsView: View {
     // MARK: 弹出层 · 更多
 
     /// 和系统菜单一样：解码、提前缓存、定时关闭点进去是二级页，左上角返回；最后是复制诊断信息
-    private var morePopover: some View {
+    private func morePopover(maxHeight: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             if let section = moreSection {
                 Button {
@@ -1282,11 +1283,17 @@ struct PlaybackControlsView: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel("返回")
                 popoverDivider
-                moreOptions(section)
+                moreOptions(section, maxHeight: maxHeight)
             } else {
                 moreRow(.decoder, title: "解码", value: playback.decoding.title, id: "decoding") { openMoreSection(.decoding) }
                 moreRow(.download, title: "提前缓存", value: playback.readahead.title, id: "readahead") { openMoreSection(.readahead) }
                 moreRow(.sleepTimer, title: "定时关闭", value: sleepTimer.title, id: "sleep") { openMoreSection(.sleep) }
+                if playback.canTestLineSpeed {
+                    moreRow(.network, title: "线路测速", value: lineSpeedValue, id: "lineSpeed") {
+                        openMoreSection(.lineSpeed)
+                        if case .idle = playback.lineSpeed { playback.startLineSpeedTest() }
+                    }
+                }
                 if playback.pictureInPictureSupported {
                     HStack(spacing: 10) {
                         Image(icon: .pictureInPicture)
@@ -1367,7 +1374,7 @@ struct PlaybackControlsView: View {
     }
 
     @ViewBuilder
-    private func moreOptions(_ section: MoreSection) -> some View {
+    private func moreOptions(_ section: MoreSection, maxHeight: CGFloat) -> some View {
         switch section {
         case .decoding:
             ForEach(VideoDecoding.allCases) { option in
@@ -1391,7 +1398,110 @@ struct PlaybackControlsView: View {
                     openMoreSection(nil)
                 }
             }
+        case .lineSpeed:
+            // 结果有好几条：横屏放不下时可以滚动
+            HuggingScroll(maxHeight: maxHeight - 60) {
+                // 固定宽度：长文字在这个宽度里换行，不把弹层撑宽（弹层本身 256，左右各留 6）
+                VStack(alignment: .leading, spacing: 0) { lineSpeedContent }
+                    .frame(width: 244, alignment: .leading)
+            }
         }
+    }
+
+    // MARK: 115 线路测速
+
+    /// 「更多」里线路测速那一行右边的字
+    private var lineSpeedValue: String {
+        switch playback.lineSpeed {
+        case .idle: return ""
+        case .running: return "测速中"
+        case .finished(let results):
+            guard let best = results.filter({ $0.error == nil }).map(\.peakSpeed).max() else { return "失败" }
+            return "最快 \(LineSpeedResult.speed(best))"
+        }
+    }
+
+    @ViewBuilder
+    private var lineSpeedContent: some View {
+        switch playback.lineSpeed {
+        case .idle:
+            popoverNote("依次测正在播放的地址和 3 个新要的 115 地址，每条下几秒，看首字节时间、平均和峰值速度。测的时候会先暂停播放。", width: 220)
+            lineSpeedButton(title: "开始测速", icon: .network, id: "playback.lineSpeed.start") { playback.startLineSpeedTest() }
+        case .running(let step, let results):
+            ForEach(results) { lineSpeedRow($0, fastest: nil) }
+            HStack(spacing: 10) {
+                ProgressView().tint(.white)
+                    .frame(width: 22)
+                Text(step)
+                    .font(.scaled(13))
+                    .foregroundStyle(.white.opacity(Theme.Opacity.strong))
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+        case .finished(let results):
+            let fastest = results.filter { $0.error == nil }.max { $0.peakSpeed < $1.peakSpeed }?.id
+            ForEach(results) { lineSpeedRow($0, fastest: fastest) }
+            popoverNote("测的时候播放器自己的缓冲可能还在下载，数字会偏低一些；主要看几条线路之间的差别。", width: 220)
+            popoverDivider
+            lineSpeedButton(title: "重新测速", icon: .refresh, id: "playback.lineSpeed.retry") { playback.startLineSpeedTest() }
+            lineSpeedButton(title: diagnosticsCopier.isCopied("lineSpeed") ? "已复制测速结果" : "复制测速结果",
+                            icon: .copy, id: "playback.lineSpeed.copy") {
+                diagnosticsCopier.copy(playback.lineSpeedReport, key: "lineSpeed")
+            }
+        }
+    }
+
+    /// 一条线路：名称和主机，下面一行是首字节、平均、峰值；最快的那条用强调色
+    private func lineSpeedRow(_ result: LineSpeedResult, fastest: Int?) -> some View {
+        let isFastest = result.id == fastest
+        return VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                Text(result.label)
+                    .font(.scaled(14, weight: .semibold))
+                    .foregroundStyle(isFastest ? Theme.accent : Color.white)
+                if !result.shortHost.isEmpty {
+                    Text(result.shortHost)
+                        .font(.scaled(11))
+                        .foregroundStyle(.white.opacity(Theme.Opacity.medium))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                if isFastest {
+                    Text("最快")
+                        .font(.scaled(11, weight: .semibold))
+                        .foregroundStyle(Theme.accent)
+                }
+            }
+            Text(result.summary)
+                .font(.scaled(12).monospacedDigit())
+                .foregroundStyle(result.error == nil ? Color.white.opacity(Theme.Opacity.strong) : Theme.danger)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+    }
+
+    private func lineSpeedButton(title: String, icon: AppIcon, id: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(appIconNamed: icon.name)
+                    .font(.scaled(16))
+                    .foregroundStyle(.white.opacity(Theme.Opacity.heavy))
+                    .frame(width: 22)
+                Text(title)
+                    .font(.scaled(15, weight: .medium))
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier(id)
     }
 
     // MARK: 弹出层里的通用部件
