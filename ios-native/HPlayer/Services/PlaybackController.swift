@@ -69,6 +69,11 @@ enum SubtitleStyle: String, CaseIterable, Identifiable {
         set { UserDefaults.standard.set(newValue.rawValue, forKey: key) }
     }
 
+    /// 默认略微放大字号并适当上移底边距，兼顾手机横竖屏观感与安全区留白
+    static let defaultSubScale = "1.18"
+    static let defaultSubPos = "94"
+    static let defaultSubMarginY = "36"
+
     /// 样式会改到的 mpv 字幕选项。没写到的项用内核默认值，所以「描边」就是原来的样子
     static let optionKeys = ["sub-border-style", "sub-outline-size", "sub-outline-color", "sub-shadow-offset",
                              "sub-back-color", "sub-blur", "sub-scale"]
@@ -82,12 +87,13 @@ enum SubtitleStyle: String, CaseIterable, Identifiable {
                     "sub-shadow-offset": "0"]
         case .large:
             return ["sub-border-style": "opaque-box", "sub-outline-size": "3", "sub-outline-color": "#A0000000",
-                    "sub-shadow-offset": "0", "sub-scale": "1.3"]
+                    "sub-shadow-offset": "0", "sub-scale": "1.45"]
         case .outline:
             return [:]
         case .soft:
-            // 不描边，只留一圈柔和的投影
-            return ["sub-outline-size": "0", "sub-shadow-offset": "2", "sub-back-color": "#B4000000", "sub-blur": "0.6"]
+            // 显式关闭 sub-blur（无描边时模糊会连文字本身一并糊掉），改用微弱暗影护边 + 清晰投影保证透明底通透锐利
+            return ["sub-border-style": "outline-and-shadow", "sub-outline-size": "0.9", "sub-outline-color": "#59000000",
+                    "sub-shadow-offset": "2", "sub-back-color": "#99000000", "sub-blur": "0"]
         }
     }
 }
@@ -454,6 +460,9 @@ final class PlaybackController: ObservableObject {
             ("sub-auto", "fuzzy"),
             ("subs-fallback", "yes"),
             ("slang", "zh,chi,zho,chs,sc,cht,tc,en,eng"),
+            ("sub-scale", SubtitleStyle.defaultSubScale),
+            ("sub-pos", SubtitleStyle.defaultSubPos),
+            ("sub-margin-y", SubtitleStyle.defaultSubMarginY),
             ("screenshot-format", "jpg"),
             // 网络：115 偶发卡顿时 15 秒触发一次底层重试，更早切换或重连
             ("network-timeout", "15"),
