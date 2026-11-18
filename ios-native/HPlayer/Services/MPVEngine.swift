@@ -33,6 +33,9 @@ final class MPVEngine {
     private let outputLock = NSLock()
     private let queue = DispatchQueue(label: "app.hplayer.mpv.events", qos: .userInitiated)
     private let queueIdentity = DispatchSpecificKey<Bool>()
+    private let commandLock = NSLock()
+    private var commandContinuations: [UInt64: CheckedContinuation<Int32, Never>] = [:]
+    private var nextCommandID: UInt64 = 1
     /// 在主线程调用
     var onEvent: ((Event) -> Void)?
 
@@ -75,14 +78,22 @@ final class MPVEngine {
     }
 
     func destroy() {
-        guard let mpv = handle else { return }
         // 渲染上下文必须在内核销毁之前释放
         outputLock.lock()
         let output = softwareOutput
         softwareOutput = nil
         outputLock.unlock()
         output?.shutdown()
+
+        commandLock.lock()
+        guard let mpv = handle else {
+            commandLock.unlock()
+            cancelAllCommandContinuations()
+            return
+        }
         handle = nil
+        commandLock.unlock()
+
         mpv_set_wakeup_callback(mpv, nil, nil)
         // 最后一个引用可能由 drainEvents 的闭包释放；这时已经在事件队列上。
         if DispatchQueue.getSpecific(key: queueIdentity) == true {
@@ -90,6 +101,7 @@ final class MPVEngine {
         } else {
             queue.sync { mpv_terminate_destroy(mpv) }
         }
+        cancelAllCommandContinuations()
     }
 
     // MARK: 属性
@@ -152,6 +164,56 @@ final class MPVEngine {
             buffer.baseAddress!.withMemoryRebound(to: UnsafePointer<CChar>?.self, capacity: buffer.count) {
                 mpv_command(handle, $0)
             }
+        }
+    }
+
+    /// 异步入队命令（不在调用线程同步等待 mpv 解析执行），避免 sub-add 等操作阻塞主线程渲染与 UI。
+    @discardableResult
+    func commandAsync(_ args: [String]) async -> Int32 {
+        await withCheckedContinuation { continuation in
+            var pointers: [UnsafeMutablePointer<CChar>?] = args.map { strdup($0) }
+            pointers.append(nil)
+            defer { pointers.forEach { free($0) } }
+
+            commandLock.lock()
+            guard let handle = self.handle else {
+                commandLock.unlock()
+                continuation.resume(returning: -1)
+                return
+            }
+            let commandID = nextCommandID
+            nextCommandID &+= 1
+            if nextCommandID == 0 { nextCommandID = 1 }
+            commandContinuations[commandID] = continuation
+            let status = pointers.withUnsafeMutableBufferPointer { buffer -> Int32 in
+                buffer.baseAddress!.withMemoryRebound(to: UnsafePointer<CChar>?.self, capacity: buffer.count) {
+                    mpv_command_async(handle, commandID, $0)
+                }
+            }
+            if status < 0 {
+                let removed = commandContinuations.removeValue(forKey: commandID)
+                commandLock.unlock()
+                removed?.resume(returning: status)
+                return
+            }
+            commandLock.unlock()
+        }
+    }
+
+    private func completeCommand(id: UInt64, status: Int32) {
+        commandLock.lock()
+        let continuation = commandContinuations.removeValue(forKey: id)
+        commandLock.unlock()
+        continuation?.resume(returning: status)
+    }
+
+    private func cancelAllCommandContinuations() {
+        commandLock.lock()
+        let pending = Array(commandContinuations.values)
+        commandContinuations.removeAll()
+        commandLock.unlock()
+        for continuation in pending {
+            continuation.resume(returning: -1)
         }
     }
 
@@ -291,8 +353,15 @@ final class MPVEngine {
                 guard let event = mpv_wait_event(handle, 0) else { break }
                 let id = event.pointee.event_id
                 if id == MPV_EVENT_NONE { break }
+                if id == MPV_EVENT_COMMAND_REPLY {
+                    completeCommand(id: event.pointee.reply_userdata, status: event.pointee.error)
+                    continue
+                }
                 if let converted = Self.convert(event.pointee) { collected.append(converted) }
-                if id == MPV_EVENT_SHUTDOWN { break }
+                if id == MPV_EVENT_SHUTDOWN {
+                    cancelAllCommandContinuations()
+                    break
+                }
             }
             guard !collected.isEmpty else { return }
             DispatchQueue.main.async { [weak self] in

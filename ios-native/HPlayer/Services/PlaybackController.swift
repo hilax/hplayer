@@ -346,8 +346,11 @@ final class PlaybackController: ObservableObject {
                 Task { @MainActor [weak self] in self?.engine?.set("vid", "auto") }
             },
         ]
-        // 清理上次没清掉的缓存文件、量一下能用多少空间：都要访问磁盘，放到后台做，不挡着播放页出现
+        // 清理上次没清掉的缓存文件、量一下能用多少空间、预热内置字幕字体：放到后台做，不挡着播放页出现
         PlayerDiskCache.prepare()
+        PlayerDiskCache.queue.async {
+            _ = SubtitleFontManager.prepareSubtitleFontDirectory()
+        }
     }
 
     deinit {
@@ -381,9 +384,15 @@ final class PlaybackController: ObservableObject {
     private func createEngineInBackground(layer: CAMetalLayer) {
         guard !creatingEngine else { return }
         creatingEngine = true
-        let options = engineOptions()
+        var options = engineOptions()
         let began = Date()
         PlayerDiskCache.queue.async { [weak self] in
+            if let fontDir = SubtitleFontManager.prepareSubtitleFontDirectory() {
+                options.append(("sub-fonts-dir", fontDir.path))
+                options.append(("sub-font", SubtitleFontManager.defaultFontName))
+                options.append(("osd-fonts-dir", fontDir.path))
+                options.append(("osd-font", SubtitleFontManager.defaultFontName))
+            }
             let created = MPVEngine(options: options, layer: layer)
             Task { @MainActor [weak self] in
                 self?.engineDidCreate(created, layer: layer, began: began)
@@ -1175,7 +1184,13 @@ final class PlaybackController: ObservableObject {
             notice = "在线字幕下载失败，请尝试其他候选"
             return
         }
-        mountSubtitleFile(localFile, candidate: candidate)
+        let mounted = await mountSubtitleFile(localFile, candidate: candidate, expectedSession: activeSession)
+        guard mounted, session == activeSession, !closingPlayback else {
+            if session == activeSession, !closingPlayback {
+                onlineSubtitleStatus = "字幕挂载失败，请换一条"
+            }
+            return
+        }
         if let key = currentOnlineSubtitleVideoKey {
             OnlineSubtitleCache.shared.rememberSelection(candidate, fileURL: localFile, delaySeconds: subtitleDelay, for: key)
         }
@@ -1231,7 +1246,14 @@ final class PlaybackController: ObservableObject {
               saved.selection.candidate.id == activeID else { return }
         let alreadyMounted = subtitleTracks.contains { $0.external && $0.title == saved.selection.candidate.trackTitle }
         if !alreadyMounted {
-            mountSubtitleFile(saved.fileURL, candidate: saved.selection.candidate)
+            let activeSession = session
+            Task { @MainActor [weak self] in
+                _ = await self?.mountSubtitleFile(
+                    saved.fileURL,
+                    candidate: saved.selection.candidate,
+                    expectedSession: activeSession
+                )
+            }
         }
     }
 
@@ -1258,17 +1280,28 @@ final class PlaybackController: ObservableObject {
             // 先检查本机是否记忆过该视频选用的在线字幕
             if let key = self.currentOnlineSubtitleVideoKey,
                let saved = OnlineSubtitleCache.shared.savedSelection(for: key) {
-                self.mountSubtitleFile(saved.fileURL, candidate: saved.selection.candidate)
-                if abs(saved.selection.delaySeconds) >= 0.05 {
-                    self.setSubtitleDelay(saved.selection.delaySeconds)
+                if await self.mountSubtitleFile(
+                    saved.fileURL,
+                    candidate: saved.selection.candidate,
+                    expectedSession: activeSession
+                ) {
+                    if abs(saved.selection.delaySeconds) >= 0.05 {
+                        self.setSubtitleDelay(saved.selection.delaySeconds)
+                    }
+                    self.onlineSubtitleStatus = "已恢复 · \(saved.selection.candidate.source.shortTitle)"
+                    self.notice = "已挂载缓存字幕：\(saved.selection.candidate.trackTitle)"
                 }
-                self.onlineSubtitleStatus = "已恢复 · \(saved.selection.candidate.source.shortTitle)"
-                self.notice = "已挂载缓存字幕：\(saved.selection.candidate.trackTitle)"
                 return
             }
 
             await self.performOnlineSubtitleSearch(manualQuery: nil, autoMount: true, expectedSession: activeSession)
         }
+    }
+
+    /// 仅对本地磁盘文件（且未要求跳过远端 Hash）计算 4 段 Hash 指纹，
+    /// 避免播放远程流/代理流时并发 Range 请求抢占主播放通道造成卡顿掉帧。
+    static func shouldComputeSubtitleFingerprint(for url: URL, skipRemoteHash: Bool = false) -> Bool {
+        url.isFileURL && !skipRemoteHash
     }
 
     private func triggerOnlineSubtitleSearch(manualQuery: String?, autoMount: Bool) {
@@ -1301,7 +1334,7 @@ final class PlaybackController: ObservableObject {
         )
 
         var fingerprint = cachedFingerprint
-        if fingerprint == nil, manualQuery == nil, resolvedURL.isFileURL || (currentEngineURL != nil && !currentSkipRemoteHash) {
+        if fingerprint == nil, manualQuery == nil, Self.shouldComputeSubtitleFingerprint(for: resolvedURL, skipRemoteHash: currentSkipRemoteHash) {
             fingerprint = await VideoSubtitleFingerprint.compute(streamURL: resolvedURL, knownFileSize: knownSize)
             if session == expectedSession { cachedFingerprint = fingerprint }
         }
@@ -1332,14 +1365,23 @@ final class PlaybackController: ObservableObject {
         }
     }
 
-    private func mountSubtitleFile(_ fileURL: URL, candidate: OnlineSubtitleCandidate) {
-        guard let engine else { return }
+    private func mountSubtitleFile(
+        _ fileURL: URL,
+        candidate: OnlineSubtitleCandidate,
+        expectedSession: Int
+    ) async -> Bool {
+        guard let engine, session == expectedSession, !closingPlayback else { return false }
         if let oldTrackID = mountedOnlineTrackID {
-            engine.command(["sub-remove", String(oldTrackID)])
             mountedOnlineTrackID = nil
+            _ = await engine.commandAsync(["sub-remove", String(oldTrackID)])
+            guard session == expectedSession, !closingPlayback, self.engine === engine else { return false }
         }
-        let status = engine.command(["sub-add", fileURL.path, "select", candidate.trackTitle, candidate.trackLanguageCode])
-        guard status >= 0 else { return }
+        let status = await engine.commandAsync([
+            "sub-add", fileURL.path, "select", candidate.trackTitle, candidate.trackLanguageCode,
+        ])
+        guard status >= 0, session == expectedSession, !closingPlayback, self.engine === engine else {
+            return false
+        }
         refreshTracks()
         if let currentID = engine.string("sid").flatMap(Int.init) {
             mountedOnlineTrackID = currentID
@@ -1349,6 +1391,7 @@ final class PlaybackController: ObservableObject {
         }
         activeOnlineSubtitleID = candidate.id
         applySubtitleStyle(engine)
+        return true
     }
 
     private static func isChineseTrack(_ track: MediaTrack) -> Bool {

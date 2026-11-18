@@ -1,4 +1,5 @@
 import CoreFoundation
+import CoreText
 import CryptoKit
 import Foundation
 
@@ -473,36 +474,170 @@ enum SubtitleQueryBuilder {
 
 // MARK: - 字幕文本编码转换与合法性校验
 
+// MARK: - 开源 CJK 字幕字体管理
+
+/// 把随包内置的思源黑体（Noto Sans SC，SIL OFL 1.1）注册到进程级 CoreText，
+/// 并复制到只包含字体文件的独立缓存目录供 mpv / libass 直接加载，避免 iOS 沙盒缺字与回退卡顿。
+enum SubtitleFontManager {
+    static let defaultFontName = "Noto Sans SC"
+    static let bundledFontFileName = "NotoSansSC-Regular"
+    static let bundledFontExtension = "otf"
+    static let directoryName = "HPlayerSubtitleFonts"
+
+    private static let lock = NSLock()
+    private static var preparedDirectory: URL?
+    private static var registeredFontURLs: Set<URL> = []
+
+    static func bundledFontURL(in bundle: Bundle = .main) -> URL? {
+        bundle.url(forResource: bundledFontFileName, withExtension: bundledFontExtension)
+            ?? bundle.url(forResource: bundledFontFileName, withExtension: bundledFontExtension, subdirectory: "SubtitleFonts")
+    }
+
+    @discardableResult
+    static func prepareSubtitleFontDirectory(
+        in bundle: Bundle = .main,
+        cacheRoot: URL? = nil
+    ) -> URL? {
+        guard let sourceURL = bundledFontURL(in: bundle) else { return nil }
+        registerProcessFontIfNeeded(at: sourceURL)
+
+        let targetFileName = "\(bundledFontFileName).\(bundledFontExtension)"
+        if cacheRoot == nil {
+            lock.lock()
+            let cached = preparedDirectory
+            lock.unlock()
+            if let cached,
+               FileManager.default.fileExists(atPath: cached.appendingPathComponent(targetFileName).path) {
+                return cached
+            }
+        }
+
+        let fm = FileManager.default
+        guard let root = cacheRoot ?? fm.urls(for: .cachesDirectory, in: .userDomainMask).first else {
+            return nil
+        }
+        let fontDir = root.appendingPathComponent(directoryName, isDirectory: true)
+        try? fm.createDirectory(at: fontDir, withIntermediateDirectories: true)
+
+        if let existing = try? fm.contentsOfDirectory(at: fontDir, includingPropertiesForKeys: nil) {
+            for item in existing where item.lastPathComponent != targetFileName {
+                try? fm.removeItem(at: item)
+            }
+        }
+
+        let targetURL = fontDir.appendingPathComponent(targetFileName)
+        let sourceSize = (try? fm.attributesOfItem(atPath: sourceURL.path)[.size] as? NSNumber)?.int64Value
+        let targetSize = (try? fm.attributesOfItem(atPath: targetURL.path)[.size] as? NSNumber)?.int64Value
+        if !fm.fileExists(atPath: targetURL.path) || (sourceSize != nil && sourceSize != targetSize) {
+            if let data = try? Data(contentsOf: sourceURL, options: .mappedIfSafe) {
+                try? data.write(to: targetURL, options: .atomic)
+            } else {
+                try? fm.removeItem(at: targetURL)
+                try? fm.copyItem(at: sourceURL, to: targetURL)
+            }
+        }
+
+        guard fm.fileExists(atPath: targetURL.path) else { return nil }
+        registerProcessFontIfNeeded(at: targetURL)
+        if cacheRoot == nil {
+            lock.lock()
+            preparedDirectory = fontDir
+            lock.unlock()
+        }
+        return fontDir
+    }
+
+    private static func registerProcessFontIfNeeded(at url: URL) {
+        let standardized = url.standardizedFileURL
+        lock.lock()
+        let alreadyRegistered = registeredFontURLs.contains(standardized)
+        if !alreadyRegistered {
+            registeredFontURLs.insert(standardized)
+        }
+        lock.unlock()
+        guard !alreadyRegistered else { return }
+        var error: Unmanaged<CFError>?
+        _ = CTFontManagerRegisterFontsForURL(standardized as CFURL, .process, &error)
+    }
+}
+
 enum SubtitleTextDecoder {
+    private static let commonChineseScalars: Set<Unicode.Scalar> = Set(
+        ("的一是在不了有和人这中大为上个国我以要他时来用们生到作地于出就分对成会可主发年动同工也能下过子说产种面而方后多定行学法所民得经十三之进着等部度家电力里如水化高自二理起小物现实加量都两体制机当使点从业本去把性好应开它合还因由其些然前外天政四日那社义事平形相全表间样与关各重新线内数正心反你明看原又么利比或但质气第向道命此变条只没结解问意建月公无系军很情者最立代想已通并提直题党程展五果料象员革位入常文总次品式活设及管特件长求老头基资边流路级少图山统接知较将组见计别她手角期根论运农指几九区强放决西被干做必战先回则任取据处队南给色光门即保治北造百规热领七海口东导器压志世金增争济阶油思术极交受联什认六共权收证改清己美再采转更单风切打白教速花带安场身车例真务具万每目至达走积示议声报斗完类八离华名确才科张信马节话米整空元况今集温传土许步群广石记需段研界拉林律叫且究观越织装影算低持音众书布复容儿须际商非验连断深难近矿千周委素技备半办青省列习响约支般史感劳便团往酸历市克何除消构府称太准精值号率族维划选标写存候毛亲快效斯院查江型眼王按格养易置派层片始却专状育厂京识适属圆包火住调满县局照参红细引听该铁价严" +
+         "這為說國時過產面經動會學們來發對進開關問實沒樣給看還讓與無麼體畫邊聽嗎呢啊吧見長從電門車東風書問認話請買賣頭車親愛快樂點後點兒" +
+         "，。！？：；“”‘’（）【】《》")
+            .unicodeScalars
+    )
+
+    private static let blurClampRegex = try? NSRegularExpression(pattern: #"\\(blur|be)([0-9]+(?:\.[0-9]+)?)"#)
+    private static let fontTagRegex = try? NSRegularExpression(pattern: #"\\fn[^\\}]+"#)
+
     /// 将下载的字幕原始字节自适应解码为标准字符串（兼容 UTF-8 / UTF-16 / GB18030 / Big5 / Shift-JIS）。
     static func decode(_ data: Data) -> String? {
         guard !data.isEmpty, data.count <= 10 * 1024 * 1024 else { return nil }
         // 拒绝 ZIP 等压缩包二进制与 HTML 错误页
         if data.count >= 2, data[0] == 0x50, data[1] == 0x4B { return nil }
 
-        // 若有明显 UTF-16 BOM 优先尝试 UTF-16
-        if data.count >= 2, (data[0] == 0xFF && data[1] == 0xFE) || (data[0] == 0xFE && data[1] == 0xFF) {
-            if let text = String(data: data, encoding: .utf16), looksLikeSubtitle(text) {
-                return stripBOM(text)
+        // 1. UTF-8 BOM
+        if data.count >= 3, data[0] == 0xEF, data[1] == 0xBB, data[2] == 0xBF {
+            let body = data.dropFirst(3)
+            if let text = String(data: body, encoding: .utf8) {
+                let clean = cleanDecodedControlChars(stripBOM(text))
+                if looksLikeSubtitle(clean) { return clean }
             }
         }
 
-        let candidates: [String.Encoding] = [
-            .utf8,
-            String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue))),
-            String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.big5.rawValue))),
-            .shiftJIS,
-            .utf16LittleEndian,
-            .utf16BigEndian,
-            .isoLatin1,
-        ]
+        // 2. UTF-16 BOM
+        if data.count >= 2, (data[0] == 0xFF && data[1] == 0xFE) || (data[0] == 0xFE && data[1] == 0xFF) {
+            if let text = String(data: data, encoding: .utf16) {
+                let clean = cleanDecodedControlChars(stripBOM(text))
+                if looksLikeSubtitle(clean) { return clean }
+            }
+        }
 
-        for encoding in candidates {
-            if let text = String(data: data, encoding: encoding) {
-                let clean = stripBOM(text)
-                if looksLikeSubtitle(clean) {
-                    return clean
-                }
+        // 3. 无 BOM UTF-16LE / UTF-16BE 检测：优先拦截防止被 .utf8 吞入一堆 \0
+        if let probableUTF16 = detectUTF16WithoutBOM(data),
+           let text = String(data: data, encoding: probableUTF16) {
+            let clean = cleanDecodedControlChars(stripBOM(text))
+            if looksLikeSubtitle(clean) { return clean }
+        }
+
+        // 4. 标准无 BOM UTF-8（拒绝含 NUL 字节和大量替换符的结果）
+        if !data.prefix(2048).contains(0),
+           let utf8 = String(data: data, encoding: .utf8) {
+            let clean = stripBOM(utf8)
+            if !clean.contains("\u{FFFD}"), looksLikeSubtitle(clean) {
+                return cleanDecodedControlChars(clean)
+            }
+        }
+
+        // 5. 多字节 CJK 竞争评分（避免范围更广的 GB18030 无条件吞掉 Big5 繁体导致乱码）
+        let gb18030 = String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue)))
+        let big5 = String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.big5.rawValue)))
+        let cjkCandidates: [String.Encoding] = [gb18030, big5, .shiftJIS]
+
+        var bestCJK: (text: String, score: Int)?
+        for encoding in cjkCandidates {
+            guard let decoded = String(data: data, encoding: encoding) else { continue }
+            let clean = cleanDecodedControlChars(stripBOM(decoded))
+            guard looksLikeSubtitle(clean) else { continue }
+            let score = scoreCJKSubtitleReadability(clean, encodingIsShiftJIS: encoding == .shiftJIS)
+            if let current = bestCJK {
+                if score > current.score { bestCJK = (clean, score) }
+            } else {
+                bestCJK = (clean, score)
+            }
+        }
+        if let bestCJK {
+            return bestCJK.text
+        }
+
+        // 6. 其余 UTF-16LE/BE 与西文兜底
+        for encoding: String.Encoding in [.utf16LittleEndian, .utf16BigEndian, .windowsCP1252, .isoLatin1] {
+            guard let text = String(data: data, encoding: encoding) else { continue }
+            let clean = cleanDecodedControlChars(stripBOM(text))
+            if looksLikeSubtitle(clean) {
+                return clean
             }
         }
         return nil
@@ -522,6 +657,190 @@ enum SubtitleTextDecoder {
             return true
         }
         return trimmed.range(of: #"\d{1,2}:\d{2}:\d{2}[,.]\d{2,3}"#, options: .regularExpression) != nil
+    }
+
+    /// 为 mpv/libass 播放准备干净文本：规范换行并清理 ASS 内嵌大二进制字体与缺失桌面字体声明。
+    static func sanitizeForPlayback(
+        _ text: String,
+        format: String,
+        defaultFontName: String = SubtitleFontManager.defaultFontName
+    ) -> String {
+        var normalized = cleanDecodedControlChars(stripBOM(text))
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+
+        let lowerExt = format.trimmingCharacters(in: CharacterSet.alphanumerics.inverted).lowercased()
+        let lowerHead = String(normalized.prefix(1024)).lowercased()
+        let isASS = lowerExt == "ass" || lowerExt == "ssa"
+            || lowerHead.contains("[script info]")
+            || lowerHead.contains("[v4+ styles]")
+            || lowerHead.contains("[v4 styles]")
+
+        guard isASS else { return normalized }
+        normalized = sanitizeASSSubtitle(normalized, defaultFontName: defaultFontName)
+        return normalized
+    }
+
+    private static func sanitizeASSSubtitle(_ text: String, defaultFontName: String) -> String {
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        var output: [String] = []
+        output.reserveCapacity(lines.count)
+
+        var section = ""
+        var fontNameColumn = 1
+
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("[") && trimmed.hasSuffix("]") {
+                section = trimmed.lowercased()
+                if section == "[fonts]" || section == "[graphics]" {
+                    continue
+                }
+                if section == "[v4+ styles]" || section == "[v4 styles]" {
+                    fontNameColumn = 1
+                }
+                output.append(line)
+                continue
+            }
+
+            if section == "[fonts]" || section == "[graphics]" {
+                continue
+            }
+
+            if (section == "[v4+ styles]" || section == "[v4 styles]") {
+                if let range = trimmed.range(of: "format:", options: [.caseInsensitive, .anchored]) {
+                    let cols = trimmed[range.upperBound...]
+                        .split(separator: ",", omittingEmptySubsequences: false)
+                        .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+                    if let idx = cols.firstIndex(of: "fontname") {
+                        fontNameColumn = idx
+                    }
+                    output.append(line)
+                    continue
+                }
+                if let range = trimmed.range(of: "style:", options: [.caseInsensitive, .anchored]) {
+                    let prefix = String(trimmed[..<range.upperBound])
+                    let body = String(trimmed[range.upperBound...])
+                    let leadingSpaces = body.prefix { $0 == " " || $0 == "\t" }
+                    let trimmedBody = body.dropFirst(leadingSpaces.count)
+                    var fields = trimmedBody.split(separator: ",", omittingEmptySubsequences: false).map(String.init)
+                    if fields.indices.contains(fontNameColumn) {
+                        fields[fontNameColumn] = defaultFontName
+                    }
+                    output.append(prefix + String(leadingSpaces) + fields.joined(separator: ","))
+                    continue
+                }
+            }
+
+            if trimmed.lowercased().hasPrefix("dialogue:") {
+                output.append(sanitizeASSDialogueTags(in: line, defaultFontName: defaultFontName))
+                continue
+            }
+
+            output.append(line)
+        }
+        return output.joined(separator: "\n")
+    }
+
+    private static func sanitizeASSDialogueTags(in line: String, defaultFontName: String) -> String {
+        guard line.contains("{") else { return line }
+        var result = ""
+        result.reserveCapacity(line.count)
+        var cursor = line.startIndex
+
+        while let open = line[cursor...].firstIndex(of: "{") {
+            result.append(contentsOf: line[cursor..<open])
+            guard let close = line[open...].firstIndex(of: "}") else {
+                result.append(contentsOf: line[open...])
+                return result
+            }
+            var tagBlock = String(line[open...close])
+            if tagBlock.contains(#"\fn"#), let fontTagRegex {
+                let mutable = NSMutableString(string: tagBlock)
+                let matches = fontTagRegex.matches(in: tagBlock, range: NSRange(location: 0, length: mutable.length))
+                for match in matches.reversed() {
+                    mutable.replaceCharacters(in: match.range, with: "\\fn\(defaultFontName)")
+                }
+                tagBlock = mutable as String
+            }
+            if (tagBlock.contains(#"\blur"#) || tagBlock.contains(#"\be"#)), let blurClampRegex {
+                let mutable = NSMutableString(string: tagBlock)
+                let matches = blurClampRegex.matches(in: tagBlock, range: NSRange(location: 0, length: mutable.length))
+                for match in matches.reversed() {
+                    guard match.numberOfRanges >= 3 else { continue }
+                    let cmd = mutable.substring(with: match.range(at: 1))
+                    let valStr = mutable.substring(with: match.range(at: 2))
+                    if let value = Double(valStr), value > 4.0 {
+                        mutable.replaceCharacters(in: match.range, with: "\\\(cmd)4")
+                    }
+                }
+                tagBlock = mutable as String
+            }
+            result.append(tagBlock)
+            cursor = line.index(after: close)
+        }
+        result.append(contentsOf: line[cursor...])
+        return result
+    }
+
+    private static func detectUTF16WithoutBOM(_ data: Data) -> String.Encoding? {
+        let sampleCount = min(data.count, 1024)
+        guard sampleCount >= 8 else { return nil }
+        var evenZeros = 0
+        var oddZeros = 0
+        let pairs = sampleCount / 2
+        for i in 0..<pairs {
+            if data[i * 2] == 0 { evenZeros += 1 }
+            if data[i * 2 + 1] == 0 { oddZeros += 1 }
+        }
+        let evenRatio = Double(evenZeros) / Double(pairs)
+        let oddRatio = Double(oddZeros) / Double(pairs)
+        if oddRatio >= 0.25 && evenRatio <= 0.05 { return .utf16LittleEndian }
+        if evenRatio >= 0.25 && oddRatio <= 0.05 { return .utf16BigEndian }
+        return nil
+    }
+
+    private static func scoreCJKSubtitleReadability(_ text: String, encodingIsShiftJIS: Bool) -> Int {
+        var score = 0
+        var nonASCIICount = 0
+        var kanaCount = 0
+
+        for scalar in text.unicodeScalars where nonASCIICount < 6000 {
+            let v = scalar.value
+            if v <= 0x7F {
+                if v < 0x20 && v != 0x09 && v != 0x0A && v != 0x0D {
+                    score -= 25
+                }
+                continue
+            }
+            nonASCIICount += 1
+            if v == 0xFFFD || (0xE000...0xF8FF).contains(v) {
+                score -= 30
+            } else if commonChineseScalars.contains(scalar) {
+                score += 6
+            } else if (0x3040...0x30FF).contains(v) {
+                kanaCount += 1
+                score += 3
+            } else if (0x4E00...0x9FFF).contains(v) {
+                score += 1
+            } else if (0x3400...0x4DBF).contains(v) || (0xFF61...0xFF9F).contains(v) {
+                // CJK 扩展 A 与半角片假名常在错误解码的 GBK/Big5/Shift-JIS 乱码中高频出现
+                score -= 4
+            } else if (0x0400...0x04FF).contains(v) || (0x2500...0x257F).contains(v) {
+                // GBK/Shift-JIS 错解时常落在俄文字母或制表符区域
+                score -= 5
+            }
+        }
+
+        if encodingIsShiftJIS && nonASCIICount > 20 && kanaCount * 10 < nonASCIICount {
+            // 日文文本几乎必然包含至少 10% 假名，纯中文误用 Shift-JIS 会掉入生僻汉字与制表符
+            score -= 80
+        }
+        return score
+    }
+
+    private static func cleanDecodedControlChars(_ text: String) -> String {
+        text.replacingOccurrences(of: "\u{0000}", with: "")
     }
 
     private static func stripBOM(_ text: String) -> String {
@@ -545,9 +864,11 @@ final class OnlineSubtitleCache {
     private let directory: URL
     private let indexURL: URL
     private let delaysURL: URL
+    private let versionMarkerURL: URL
     private var selections: [String: CachedSelection] = [:]
     private var delays: [String: Double] = [:]
     private static let maxStoredFiles = 80
+    private static let versionMarkerName = ".format-v2"
 
     init(directory: URL? = nil) {
         let dir = directory ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
@@ -555,8 +876,10 @@ final class OnlineSubtitleCache {
         self.directory = dir
         self.indexURL = dir.appendingPathComponent("selections.json")
         self.delaysURL = dir.appendingPathComponent("delays.json")
+        self.versionMarkerURL = dir.appendingPathComponent(Self.versionMarkerName)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         loadIndex()
+        migrateCacheVersionIfNeeded()
     }
 
     static func videoKey(streamID: String?, url: URL, title: String) -> String {
@@ -575,8 +898,9 @@ final class OnlineSubtitleCache {
     func saveSubtitleText(_ text: String, for candidate: OnlineSubtitleCandidate) -> URL? {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let ext = sanitizedExtension(candidate.format)
+        let sanitized = SubtitleTextDecoder.sanitizeForPlayback(text, format: ext)
         let target = directory.appendingPathComponent("\(candidateKey(candidate)).\(ext)")
-        guard let data = text.data(using: .utf8) else { return nil }
+        guard let data = sanitized.data(using: .utf8) else { return nil }
         do {
             try data.write(to: target, options: .atomic)
             trimOldFilesIfNeeded()
@@ -631,7 +955,7 @@ final class OnlineSubtitleCache {
 
     var cachedFileCount: Int {
         guard let files = try? FileManager.default.contentsOfDirectory(atPath: directory.path) else { return 0 }
-        return files.filter { $0 != "selections.json" && $0 != "delays.json" }.count
+        return files.filter { !Self.isMetadataFile($0) }.count
     }
 
     var cachedByteCount: Int64 {
@@ -639,7 +963,7 @@ final class OnlineSubtitleCache {
             return 0
         }
         var total: Int64 = 0
-        for url in urls where url.lastPathComponent != "selections.json" && url.lastPathComponent != "delays.json" {
+        for url in urls where !Self.isMetadataFile(url.lastPathComponent) {
             let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
             total += Int64(size)
         }
@@ -649,8 +973,27 @@ final class OnlineSubtitleCache {
     func clearAll() {
         try? FileManager.default.removeItem(at: directory)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try? Data().write(to: versionMarkerURL, options: .atomic)
         selections = [:]
         delays = [:]
+    }
+
+    private static func isMetadataFile(_ name: String) -> Bool {
+        name == "selections.json" || name == "delays.json" || name == versionMarkerName
+    }
+
+    private func migrateCacheVersionIfNeeded() {
+        guard !FileManager.default.fileExists(atPath: versionMarkerURL.path) else { return }
+        if let urls = try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) {
+            for url in urls where !Self.isMetadataFile(url.lastPathComponent) {
+                try? FileManager.default.removeItem(at: url)
+            }
+        }
+        if !selections.isEmpty {
+            selections = [:]
+            saveIndex()
+        }
+        try? Data().write(to: versionMarkerURL, options: .atomic)
     }
 
     private func candidateKey(_ candidate: OnlineSubtitleCandidate) -> String {
@@ -692,7 +1035,7 @@ final class OnlineSubtitleCache {
         guard let urls = try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: keys) else {
             return
         }
-        let subtitleFiles = urls.filter { $0.lastPathComponent != "selections.json" && $0.lastPathComponent != "delays.json" }
+        let subtitleFiles = urls.filter { !Self.isMetadataFile($0.lastPathComponent) }
         guard subtitleFiles.count > Self.maxStoredFiles else { return }
         let sorted = subtitleFiles.sorted {
             let d0 = (try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast

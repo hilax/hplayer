@@ -1,4 +1,6 @@
 import CoreFoundation
+import CoreGraphics
+import CoreText
 import CryptoKit
 import XCTest
 @testable import HPlayer
@@ -343,5 +345,102 @@ final class OnlineSubtitleTests: XCTestCase {
         player.resetSubtitleDelay()
         XCTAssertEqual(player.subtitleDelay, 0, accuracy: 0.01)
         XCTAssertEqual(player.subtitleDelayLabel, "0.0s")
+    }
+
+    func testBundledCJKFontIsIsolatedAndCoversChineseAndJapaneseGlyphs() throws {
+        let bundledURL = try XCTUnwrap(SubtitleFontManager.bundledFontURL(in: .main), "应用包内必须包含 NotoSansSC-Regular.otf")
+        let size = try XCTUnwrap((try? bundledURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize)
+        XCTAssertGreaterThan(size, 1_000_000)
+
+        let tempRoot = FileManager.default.temporaryDirectory.appendingPathComponent("hplayer-font-dir-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tempRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempRoot) }
+
+        // 预先写入杂项文件，验证隔离字体目录仅保留目标字体避免 libass 误扫
+        let strayDir = tempRoot.appendingPathComponent(SubtitleFontManager.directoryName, isDirectory: true)
+        try FileManager.default.createDirectory(at: strayDir, withIntermediateDirectories: true)
+        try Data("junk".utf8).write(to: strayDir.appendingPathComponent("unrelated.txt"))
+
+        let preparedDir = try XCTUnwrap(SubtitleFontManager.prepareSubtitleFontDirectory(in: .main, cacheRoot: tempRoot))
+        let items = try FileManager.default.contentsOfDirectory(atPath: preparedDir.path)
+        XCTAssertEqual(items, ["\(SubtitleFontManager.bundledFontFileName).\(SubtitleFontManager.bundledFontExtension)"])
+
+        let provider = try XCTUnwrap(CGDataProvider(url: preparedDir.appendingPathComponent(items[0]) as CFURL))
+        let cgFont = try XCTUnwrap(CGFont(provider))
+        let ctFont = CTFontCreateWithGraphicsFont(cgFont, 24, nil, nil)
+
+        let sampleChars = Array("你好世界繁體中文電影字幕あいうえおカキクケコABC123".utf16)
+        var glyphs = [CGGlyph](repeating: 0, count: sampleChars.count)
+        let allMapped = CTFontGetGlyphsForCharacters(ctFont, sampleChars, &glyphs, sampleChars.count)
+        XCTAssertTrue(allMapped, "内置字体应完整覆盖简体、繁体、日文假名与英数字形，不得出现缺字方框")
+    }
+
+    func testDecoderDisambiguatesBig5NoBOMUTF16AndSanitizesASS() throws {
+        // 1. 验证 Big5 繁体字幕不被 GB18030 超集吞掉而产出乱码
+        let big5Encoding = String.Encoding(
+            rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.big5.rawValue))
+        )
+        let traditionalSample = "1\r\n00:00:01,000 --> 00:00:04,000\r\n這就是繁體中文電影字幕測試，聽見嗎？\r\n"
+        let big5Data = try XCTUnwrap(traditionalSample.data(using: big5Encoding))
+        let decodedBig5 = try XCTUnwrap(SubtitleTextDecoder.decode(big5Data))
+        XCTAssertTrue(decodedBig5.contains("這就是繁體中文電影字幕測試"), "实际输出: \(decodedBig5)")
+
+        // 2. 验证无 BOM 的 UTF-16LE 不会落入 .utf8 混入 \0
+        let rawUTF16 = "1\n00:00:02,000 --> 00:00:05,000\n无BOM测试ABC\n"
+        let noBOMData = try XCTUnwrap(rawUTF16.data(using: .utf16LittleEndian))
+        let decodedNoBOM = try XCTUnwrap(SubtitleTextDecoder.decode(noBOMData))
+        XCTAssertFalse(decodedNoBOM.contains("\u{0000}"))
+        XCTAssertTrue(decodedNoBOM.contains("无BOM测试ABC"))
+
+        // 3. 验证 ASS 清理 [Fonts]/[Graphics]、桌面缺失字体替换为 Noto Sans SC 以及超重模糊限幅
+        let heavyASS = """
+        [Script Info]
+        Title: Heavy
+        [V4+ Styles]
+        Format: Name, Fontname, Fontsize, PrimaryColour, Alignment
+        Style: Default,微软雅黑,20,&H00FFFFFF,2
+        Style: Eng,Arial,14,&H00CCCCCC,2
+        [Fonts]
+        fontname: broken-win.ttf
+        AABBCCDDEEFFGG
+        [Graphics]
+        filename: logo.png
+        00112233
+        [Events]
+        Format: Layer, Start, End, Style, Text
+        Dialogue: 0,0:00:01.00,0:00:03.00,Default,{\\fn方正黑体\\blur18\\fs22}测试对话
+        """
+        let clean = SubtitleTextDecoder.sanitizeForPlayback(heavyASS, format: "ass")
+        XCTAssertFalse(clean.contains("[Fonts]"))
+        XCTAssertFalse(clean.contains("[Graphics]"))
+        XCTAssertFalse(clean.contains("AABBCCDDEEFFGG"))
+        XCTAssertFalse(clean.contains("微软雅黑"))
+        XCTAssertFalse(clean.contains("Arial"))
+        XCTAssertFalse(clean.contains("方正黑体"))
+        XCTAssertTrue(clean.contains("Style: Default,Noto Sans SC,20,&H00FFFFFF,2"))
+        XCTAssertTrue(clean.contains("Style: Eng,Noto Sans SC,14,&H00CCCCCC,2"))
+        XCTAssertTrue(clean.contains(#"{\fnNoto Sans SC\blur4\fs22}测试对话"#), "实际输出: \(clean)")
+    }
+
+    @MainActor
+    func testCacheMigrationAndRemoteStreamFingerprintGuard() throws {
+        // 验证旧缓存（无 .format-v2 标记）会清理旧字幕文件但保留用户字幕同步偏移 delays
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("hplayer-cache-mig-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        try Data("stale ass".utf8).write(to: dir.appendingPathComponent("old.ass"))
+        let savedDelays = try JSONEncoder().encode(["sid|115:test": -1.2])
+        try savedDelays.write(to: dir.appendingPathComponent("delays.json"))
+
+        let cache = OnlineSubtitleCache(directory: dir)
+        XCTAssertEqual(cache.cachedFileCount, 0)
+        XCTAssertEqual(cache.savedDelay(for: "sid|115:test") ?? 0, -1.2, accuracy: 0.01)
+
+        // 验证只有本地 file:// URL 会发起指纹读取，HTTP/本地代理流不触发并发 Range 请求
+        XCTAssertTrue(PlaybackController.shouldComputeSubtitleFingerprint(for: URL(fileURLWithPath: "/tmp/movie.mkv")))
+        XCTAssertFalse(PlaybackController.shouldComputeSubtitleFingerprint(for: URL(fileURLWithPath: "/tmp/movie.mkv"), skipRemoteHash: true))
+        XCTAssertFalse(PlaybackController.shouldComputeSubtitleFingerprint(for: URL(string: "http://127.0.0.1:18080/stream/115")!))
+        XCTAssertFalse(PlaybackController.shouldComputeSubtitleFingerprint(for: URL(string: "https://cdn.example.com/movie.mkv")!))
     }
 }
