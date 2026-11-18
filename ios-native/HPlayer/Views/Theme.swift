@@ -454,8 +454,9 @@ extension View {
     /// 不用 `.toolbar(.hidden)` 的原因：根页藏起导航栏、二级页再显示时，系统让整条导航栏跟着新页面单独滑进来，
     /// 它走的距离只有页面的约 88%，推入时先偏出去、最后再回正（真机录屏逐帧量过）。
     /// 导航栏一直在，推入时就只是返回键和标题在原地出现，不会整条偏移。
-    func rootNavigationBar(_ state: RootNavigationBarState) -> some View {
-        modifier(RootNavigationBarModifier(state: state))
+    /// `depth` 是导航栈当前的层数（有路径时传 path.count）：层数一变就在推入 / 返回动画结束后再确认一次设置。
+    func rootNavigationBar(_ state: RootNavigationBarState, depth: Int = 0) -> some View {
+        modifier(RootNavigationBarModifier(state: state, depth: depth))
     }
 
     /// iOS 26 的导航栏会在滚动视图顶边加一层渐隐（scroll edge effect）；隐形导航栏下面不要它
@@ -471,6 +472,7 @@ extension View {
 
 private struct RootNavigationBarModifier: ViewModifier {
     @ObservedObject var state: RootNavigationBarState
+    let depth: Int
 
     func body(content: Content) -> some View {
         let system = state.showsSystemBar
@@ -480,7 +482,7 @@ private struct RootNavigationBarModifier: ViewModifier {
             .toolbar(.visible, for: .navigationBar)
             .toolbarBackground(system ? .automatic : .hidden, for: .navigationBar)
             .topScrollEdgeEffectHidden(!system)
-            .background(RootNavigationBarHost(showsSystemBar: system))
+            .background(RootNavigationBarHost(showsSystemBar: system, depth: depth))
     }
 }
 
@@ -488,6 +490,7 @@ private struct RootNavigationBarModifier: ViewModifier {
 /// 并始终关掉大标题（从根页推入时标题高度不跳）。
 private struct RootNavigationBarHost: UIViewControllerRepresentable {
     let showsSystemBar: Bool
+    let depth: Int
 
     func makeUIViewController(context: Context) -> Controller {
         Controller()
@@ -496,12 +499,19 @@ private struct RootNavigationBarHost: UIViewControllerRepresentable {
     func updateUIViewController(_ controller: Controller, context: Context) {
         controller.showsSystemBar = showsSystemBar
         controller.apply()
-        // 导航路径刚变时，导航控制器要到下一轮才真正推入 / 弹出
+        // 导航路径刚变时，导航控制器要到下一轮才真正推入 / 弹出；动画结束后再确认几次（apply 可以重复调用）
         DispatchQueue.main.async { [weak controller] in controller?.apply() }
+        if controller.lastDepth != depth {
+            controller.lastDepth = depth
+            for delay in [0.1, 0.35, 0.7] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak controller] in controller?.apply() }
+            }
+        }
     }
 
     final class Controller: UIViewController {
         var showsSystemBar = false
+        var lastDepth = 0
         private var largeTitleObserver: NSKeyValueObservation?
         private weak var observedBar: UINavigationBar?
 
@@ -510,11 +520,6 @@ private struct RootNavigationBarHost: UIViewControllerRepresentable {
             view.isHidden = true
             view.isUserInteractionEnabled = false
             self.view = view
-        }
-
-        override func didMove(toParent parent: UIViewController?) {
-            super.didMove(toParent: parent)
-            apply()
         }
 
         override func viewWillAppear(_ animated: Bool) {
@@ -552,8 +557,42 @@ private struct RootNavigationBarHost: UIViewControllerRepresentable {
             return nil
         }
 
+        override func didMove(toParent parent: UIViewController?) {
+            super.didMove(toParent: parent)
+            if parent == nil {
+                // 页面不用了：把挂在根页上的探针也拿掉
+                appearanceProbe?.detach()
+                appearanceProbe = nil
+                probeTarget = nil
+            }
+            apply()
+        }
+
+        /// 挂在根页（导航控制器的直接子控制器）上的探针。SwiftUI 不一定把出现 / 消失转发给这个控制器，
+        /// 返回一级页面后就没人把导航栏改回「不接收点击」；挂在根页上的子控制器一定能收到。
+        private var appearanceProbe: AppearanceProbe?
+        private weak var probeTarget: UIViewController?
+
+        private func attachProbeIfNeeded(to page: UIViewController) {
+            guard probeTarget !== page else { return }
+            probeTarget = page
+            appearanceProbe?.detach()
+            let probe = AppearanceProbe()
+            probe.onAppearanceChange = { [weak self] in self?.apply() }
+            appearanceProbe = probe
+            // 不在布局过程中改根页的视图层级
+            DispatchQueue.main.async { [weak probe, weak page] in
+                guard let probe, let page, probe.parent == nil else { return }
+                page.addChild(probe)
+                probe.view.frame = .zero
+                page.view.addSubview(probe.view)
+                probe.didMove(toParent: page)
+            }
+        }
+
         func apply() {
             guard let nav = navigationController, let page else { return }
+            attachProbeIfNeeded(to: page)
             let bar = nav.navigationBar
 
             if bar.prefersLargeTitles { bar.prefersLargeTitles = false }
@@ -580,6 +619,48 @@ private struct RootNavigationBarHost: UIViewControllerRepresentable {
                 bar.isUserInteractionEnabled = interactive
             }
         }
+    }
+}
+
+/// 看不见的子控制器：根页出现 / 消失（推入、返回、滑动返回取消）时回调
+private final class AppearanceProbe: UIViewController {
+    var onAppearanceChange: (() -> Void)?
+
+    override func loadView() {
+        let view = UIView()
+        view.isHidden = true
+        view.isUserInteractionEnabled = false
+        self.view = view
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        onAppearanceChange?()
+        // 滑动返回途中取消、或动画结束时再确认一次
+        transitionCoordinator?.animate(alongsideTransition: nil) { [weak self] _ in self?.onAppearanceChange?() }
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        onAppearanceChange?()
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        onAppearanceChange?()
+        transitionCoordinator?.animate(alongsideTransition: nil) { [weak self] _ in self?.onAppearanceChange?() }
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        onAppearanceChange?()
+    }
+
+    func detach() {
+        guard parent != nil else { return }
+        willMove(toParent: nil)
+        view.removeFromSuperview()
+        removeFromParent()
     }
 }
 

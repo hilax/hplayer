@@ -220,7 +220,7 @@ struct HomeView: View {
                 tabPages
                     // 一级页面的导航栏一直显示但隐形，推入二级页时不会整条滑偏（见 rootNavigationBar）
                     .environment(\.rootNavigationBarState, rootBar)
-                    .rootNavigationBar(rootBar)
+                    .rootNavigationBar(rootBar, depth: navigation.path.count)
                     .navigationDestination(for: PerformerListRoute.self) { _ in
                         PerformerGridView(groups: librarySnapshots.home.performers)
                     }
