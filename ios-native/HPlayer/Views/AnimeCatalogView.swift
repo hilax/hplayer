@@ -78,11 +78,18 @@ final class AnimeHomeStore: ObservableObject {
 
 // MARK: - 动漫频道
 
-/// 打开一个动漫列表页：某个频道、或全部（channelId 为 nil），带初始排序。
+/// 打开一个动漫列表页：某个频道、或全部（channelId 为 nil），带初始排序和默认筛选条件。
 struct AnimeBrowseRoute: Hashable {
     var channelId: Int?
     var title: String
     var sort = "addtime"
+    /// 进来时已经选好的条件（热门新番 = 今年 + 连载中），页面上可以改，也能一键恢复
+    var preset = AnimeBrowseFilter()
+
+    /// 热门新番的「全部」：今年、连载中、按播放量排
+    static var newReleases: AnimeBrowseRoute {
+        AnimeBrowseRoute(channelId: nil, title: "热门新番", sort: "hits", preset: .newRelease)
+    }
 }
 
 /// 动漫频道：顶部是热播轮播（频道条、搜索框在频道容器的固定头部里；轮播位置一直留着，数据到了再填），
@@ -189,7 +196,7 @@ struct AnimeCatalogView: View {
         return VStack(alignment: .leading, spacing: Theme.Space.shelf) {
             VStack(alignment: .leading, spacing: 10) {
                 ShelfHeader(title: "热门新番", identifier: "anime.shelf.trending", inset: 0) {
-                    NavigationLink(value: AnimeBrowseRoute(channelId: nil, title: "热门新番", sort: "hits")) {
+                    NavigationLink(value: AnimeBrowseRoute.newReleases) {
                         ShelfLinkLabel(text: "全部")
                             .frame(minWidth: 44, minHeight: 44, alignment: .trailing)
                     }
@@ -345,207 +352,5 @@ struct AnimePosterSkeleton: View {
                 .frame(width: width * 0.48, height: 10)
         }
         .frame(width: width, alignment: .topLeading)
-    }
-}
-
-// MARK: - 动漫列表页
-
-/// 一个频道（或全部）的完整列表：顶部排序胶囊（最新上架 / 最多播放）+ 至少三列的海报网格，滑到底自动翻页。
-/// 从动漫频道货架的「全部」、快捷入口，首页热门新番的「更多」推进来。
-struct AnimeBrowseView: View {
-    let route: AnimeBrowseRoute
-
-    @State private var sort: String
-    @State private var items: [AnimeVideoItem] = []
-    @State private var currentPage = 1
-    @State private var totalCount = 0
-    @State private var hasMore = true
-    @State private var isReloading = false
-    @State private var isLoadingMore = false
-    @State private var errorMessage: String?
-    /// 每次重新拉取都 +1，迟到的旧请求（换排序前发出的下一页）直接丢弃，免得内容串了
-    @State private var generation = 0
-    @Namespace private var sortSpace
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    private let pageSize = 18
-
-    init(route: AnimeBrowseRoute) {
-        self.route = route
-        _sort = State(initialValue: route.sort)
-    }
-
-    var body: some View {
-        GeometryReader { proxy in
-            let metrics = Self.metrics(width: proxy.size.width)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    // 接口只支持 channel / sort / limit / page。sort 实测 addtime 与 weight 顺序一样，
-                    // 所以第二个选项用 hits（按播放量）；其他值服务端不认，退回按 id 排。
-                    HStack(spacing: 2) {
-                        sortPill(title: "最新上架", value: "addtime")
-                        sortPill(title: "最多播放", value: "hits")
-                        Spacer(minLength: 8)
-                        if totalCount > 0 {
-                            Text("共 \(totalCount) 部")
-                                .font(.caption)
-                                .foregroundStyle(Theme.textTertiary)
-                                .padding(.trailing, 4)
-                        }
-                    }
-                    .padding(.horizontal, Theme.contentInset - 4)
-
-                    if isReloading && items.isEmpty {
-                        LazyVGrid(columns: columns(metrics), alignment: .leading, spacing: 16) {
-                            ForEach(0..<9, id: \.self) { _ in AnimePosterSkeleton(width: metrics.cell) }
-                        }
-                        .padding(.horizontal, Theme.contentInset)
-                        .accessibilityLabel("正在加载")
-                    } else if items.isEmpty {
-                        emptyOrError
-                    } else {
-                        LazyVGrid(columns: columns(metrics), alignment: .leading, spacing: 16) {
-                            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                                AnimeDetailLink(animeId: item.id) {
-                                    AnimePosterCard(item: item, width: metrics.cell)
-                                }
-                                .prefetchArtwork(after: index, in: items, count: metrics.columns * 3) { $0.safePicURLString }
-                                .gridCardEntrance()
-                                .onAppear {
-                                    if item.id == items.last?.id { Task { await loadNextPage() } }
-                                }
-                            }
-                        }
-                        .padding(.horizontal, Theme.contentInset)
-                        // 不对整组 id 做插入动画：会和分页加载叠在一起，行会跳
-                        .transaction { $0.animation = nil }
-                        .id("anime-browse-\(sort)")
-
-                        footer
-                    }
-                }
-                .padding(.top, 8)
-                .padding(.bottom, 40)
-            }
-            .scrollIndicators(.hidden)
-            .refreshable { await reload() }
-        }
-        .background(Theme.pageBackground.ignoresSafeArea())
-        .navigationTitle(route.title)
-        .navigationBarTitleDisplayMode(.inline)
-        .task { if items.isEmpty { await reload() } }
-    }
-
-    private func sortPill(title: String, value: String) -> some View {
-        SelectionPill(title: title, selected: sort == value, namespace: sortSpace) {
-            guard sort != value else { return }
-            withAnimation(reduceMotion ? nil : Motion.snappy) { sort = value }
-            Task { await reload() }
-        }
-        .accessibilityIdentifier("anime.sort.\(value)")
-    }
-
-    @ViewBuilder private var emptyOrError: some View {
-        Group {
-            if let errorMessage {
-                EmptyStateView(icon: AppIcon.alert.name, title: "没有加载出来", message: errorMessage,
-                               actionTitle: "重新加载") {
-                    Task { await reload() }
-                }
-            } else {
-                EmptyStateView(icon: AppIcon.video.name, title: "暂时没有番剧",
-                               message: "这里还没有内容，换个分类看看。")
-            }
-        }
-        .frame(maxWidth: .infinity, minHeight: 320)
-    }
-
-    @ViewBuilder private var footer: some View {
-        Group {
-            if isLoadingMore {
-                ProgressView().tint(Theme.textSecondary)
-            } else if !hasMore {
-                Text("已经到底了")
-                    .font(.caption)
-                    .foregroundStyle(Theme.textTertiary)
-            }
-        }
-        .frame(maxWidth: .infinity, minHeight: 56)
-    }
-
-    // MARK: 网格尺寸
-
-    private struct Metrics {
-        let columns: Int
-        let cell: CGFloat
-        let spacing: CGFloat
-    }
-
-    /// 和片库同一套算法：至少三列、按屏宽算出固定列宽（flexible 列在外层 ScrollView 里会被图片撑得忽宽忽窄）
-    private static func metrics(width: CGFloat) -> Metrics {
-        let spacing: CGFloat = 10
-        let available = max(width - Theme.contentInset * 2, 200)
-        let columns = max(3, Int((available + spacing) / (118 + spacing)))
-        let cell = floor((available - spacing * CGFloat(columns - 1)) / CGFloat(columns))
-        return Metrics(columns: columns, cell: cell, spacing: spacing)
-    }
-
-    private func columns(_ metrics: Metrics) -> [GridItem] {
-        Array(repeating: GridItem(.fixed(metrics.cell), spacing: metrics.spacing, alignment: .top), count: metrics.columns)
-    }
-
-    // MARK: 加载
-
-    @MainActor private func reload() async {
-        generation += 1
-        let current = generation
-        isReloading = true
-        isLoadingMore = false
-        hasMore = true
-        errorMessage = nil
-        items = []
-        defer { if current == generation { isReloading = false } }
-        do {
-            let result = try await AnimeClient.shared.fetchVideoList(channel: route.channelId, sort: sort, limit: pageSize, page: 1)
-            guard current == generation else { return }
-            items = Self.unique(result.items)
-            totalCount = result.total
-            currentPage = 1
-            hasMore = !items.isEmpty && items.count < totalCount && result.items.count >= pageSize
-        } catch {
-            guard current == generation else { return }
-            errorMessage = error.localizedDescription
-            hasMore = false
-        }
-    }
-
-    @MainActor private func loadNextPage() async {
-        guard !isReloading, !isLoadingMore, hasMore else { return }
-        let current = generation
-        let nextPage = currentPage + 1
-        isLoadingMore = true
-        defer { if current == generation { isLoadingMore = false } }
-        do {
-            let result = try await AnimeClient.shared.fetchVideoList(channel: route.channelId, sort: sort, limit: pageSize, page: nextPage)
-            guard current == generation else { return }
-            // 按上线时间排序时，翻页过程中新番插入会让下一页重复返回上一页的条目；过滤掉重复 id
-            let existing = Set(items.map(\.id))
-            let additions = Self.unique(result.items).filter { !existing.contains($0.id) }
-            if additions.isEmpty || result.items.isEmpty {
-                hasMore = false
-                return
-            }
-            items.append(contentsOf: additions)
-            currentPage = nextPage
-            if items.count >= totalCount || result.items.count < pageSize { hasMore = false }
-        } catch {
-            guard current == generation else { return }
-            hasMore = false
-        }
-    }
-
-    private static func unique(_ items: [AnimeVideoItem]) -> [AnimeVideoItem] {
-        var seen = Set<Int>()
-        return items.filter { seen.insert($0.id).inserted }
     }
 }

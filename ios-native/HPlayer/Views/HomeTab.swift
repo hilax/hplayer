@@ -536,7 +536,7 @@ struct HomeTab: View {
         return VStack(alignment: .leading, spacing: 10) {
             ShelfHeader(title: "热门新番", identifier: "home.shelf.trending", inset: 0) {
                 // 「更多」推进完整的热门列表（按播放量），不跳到动漫频道
-                NavigationLink(value: AnimeBrowseRoute(channelId: nil, title: "热门新番", sort: "hits")) {
+                NavigationLink(value: AnimeBrowseRoute.newReleases) {
                     ShelfLinkLabel(text: "全部")
                         .frame(minWidth: 44, minHeight: 44, alignment: .trailing)
                 }

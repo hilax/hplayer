@@ -161,11 +161,19 @@ final class AnimeClient {
         try await request(path: "/app/banners")
     }
 
-    /// 视频列表（支持分类与排序）
-    func fetchVideoList(channel: Int? = nil, sort: String = "weight", limit: Int = 18, page: Int = 1) async throws -> AnimeVideoListResult {
+    /// 视频列表（支持分类与排序）。`filters` 是额外的筛选参数（type / year / area / isend），
+    /// 服务端认不认要看返回的条目——列表页会自己核对（见 AnimeFilterSupport）。
+    func fetchVideoList(channel: Int? = nil, sort: String = "weight", limit: Int = 18, page: Int = 1,
+                        filters: [(name: String, value: String)] = []) async throws -> AnimeVideoListResult {
         var queryItems: [String] = ["sort=\(sort)", "limit=\(limit)", "page=\(page)"]
         if let channel {
             queryItems.append("channel=\(channel)")
+        }
+        var allowed = CharacterSet.urlQueryAllowed
+        allowed.remove(charactersIn: "&=+?#")
+        for filter in filters {
+            guard let value = filter.value.addingPercentEncoding(withAllowedCharacters: allowed) else { continue }
+            queryItems.append("\(filter.name)=\(value)")
         }
         let path = "/app/video/list?" + queryItems.joined(separator: "&")
         return try await request(path: path)
