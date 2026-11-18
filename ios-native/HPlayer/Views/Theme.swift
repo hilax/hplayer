@@ -463,9 +463,14 @@ private struct NavigationBarStabilizer: UIViewControllerRepresentable {
         }
 
         func stabilize() {
-            guard let bar = navigationController?.navigationBar else { return }
+            guard let nav = navigationController else { return }
+            let bar = nav.navigationBar
             if bar.prefersLargeTitles {
                 bar.prefersLargeTitles = false
+            }
+            if let rootItem = nav.viewControllers.first?.navigationItem,
+               rootItem.largeTitleDisplayMode != .never {
+                rootItem.largeTitleDisplayMode = .never
             }
             if observedBar !== bar {
                 observedBar = bar

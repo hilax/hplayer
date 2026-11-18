@@ -225,15 +225,6 @@ final class TabBarUITests: XCTestCase {
             XCTAssertTrue(entry.isHittable, "\(title): the secondary-page entry must be visible")
             let before = entry.frame
             entry.tap()
-            if !usingGesture {
-                for step in 0..<3 {
-                    let shot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
-                    shot.name = "PushMid-\(screen)-\(step)"
-                    shot.lifetime = .keepAlways
-                    add(shot)
-                    Thread.sleep(forTimeInterval: 0.06)
-                }
-            }
             XCTAssertTrue(app.navigationBars.firstMatch.waitForExistence(timeout: 10))
             XCTAssertFalse(tab.isHittable, "\(title): secondary pages cover the whole tab root")
 

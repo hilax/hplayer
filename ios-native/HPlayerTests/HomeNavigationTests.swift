@@ -37,45 +37,15 @@ final class HomeNavigationTests: XCTestCase {
         }
 
         for section in HomeSection.tabs {
-            try await assertStablePush(from: section, in: scene)
+            try await assertStablePush(from: section, useOfflineRoute: true, in: scene)
         }
-    }
-
-    /// 对照实验：复现 Pass 1 修复前（外层 NavigationStack + TabView 未锁定 .inline 与 prefersLargeTitles = false）推入二级页的原始帧时间线，供 CI 日志对比。
-    @MainActor
-    func testBaselineUnstabilizedNavigationBarReport() async throws {
-        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-        guard let scene = scenes.first else {
-            throw XCTSkip("No UIWindowScene available")
-        }
-
-        let navPath = BindingBox()
-        let host = BaselineUnfixedHost(box: navPath)
-
-        let window = UIWindow(windowScene: scene)
-        window.frame = scene.coordinateSpace.bounds
-        window.rootViewController = UIHostingController(rootView: host)
-        window.makeKeyAndVisible()
-        defer {
-            window.isHidden = true
-            window.rootViewController = nil
-        }
-
-        try await Task.sleep(nanoseconds: 500_000_000)
-        let navController = try XCTUnwrap(findNavigationController(in: window.rootViewController))
-        print("BASELINE prefersLargeTitles before push = \(navController.navigationBar.prefersLargeTitles)")
-
-        let samples = await capturePushFrames(navController: navController, frameLimit: 55) {
-            navPath.push?()
-        }
-        let timeline = formatTimeline(samples.filter { !$0.barHidden && $0.barFrame.height > 1 }, limit: 35)
-        let settledDump = describeSubviews(of: navController.navigationBar, in: navController.navigationBar, depth: 0)
-        print("=== BASELINE UNFIXED Timeline ===\n\(timeline)\n=== BASELINE Settled Subviews ===\n\(settledDump)\n=== End BASELINE ===")
+        try await assertStablePush(from: .home, useOfflineRoute: false, in: scene)
+        try await assertStablePush(from: .magnet, useOfflineRoute: false, in: scene)
     }
 
     @MainActor
-    private func assertStablePush(from section: HomeSection, in scene: UIWindowScene) async throws {
-        let suite = "hplayer.nav-test.\(section.identifier)"
+    private func assertStablePush(from section: HomeSection, useOfflineRoute: Bool, in scene: UIWindowScene) async throws {
+        let suite = "hplayer.nav-test.\(section.identifier).\(useOfflineRoute)"
         let defaults = UserDefaults(suiteName: suite)!
         defaults.removePersistentDomain(forName: suite)
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -115,64 +85,71 @@ final class HomeNavigationTests: XCTestCase {
             window.rootViewController = nil
         }
 
-        // 先等首屏（含 HomeTab / MagnetTab 初始渲染与后台任务触发）完全稳定，避免主线程忙碌吞掉动画前段帧
-        try await Task.sleep(nanoseconds: 850_000_000)
+        // 先等首屏（含 HomeTab / MagnetTab 初始渲染与后台任务）完全稳定，避免主线程忙碌吞掉动画前段帧
+        try await Task.sleep(nanoseconds: 1_100_000_000)
 
         let navController = try XCTUnwrap(findNavigationController(in: window.rootViewController),
                                           "\(section.title): expected UINavigationController")
         XCTAssertFalse(navController.navigationBar.prefersLargeTitles,
                        "\(section.title): prefersLargeTitles must stay disabled")
+        XCTAssertEqual(navController.viewControllers.first?.navigationItem.largeTitleDisplayMode, .never,
+                       "\(section.title): root navigationItem must lock .never largeTitleDisplayMode")
 
+        let label = useOfflineRoute ? "\(section.title)/offline" : "\(section.title)/native"
         let samples = await capturePushFrames(navController: navController, frameLimit: 55) {
-            switch section {
-            case .home:
-                navigation.path.append(AnimeBrowseRoute(channelId: nil, title: "热门新番", sort: "hits"))
-            case .magnet:
-                navigation.path.append(MineRoute.page(.downloads))
-            case .cloud:
+            if useOfflineRoute {
                 navigation.path.append(CloudRoute.page(.offline))
-            case .mine, .search:
-                navigation.path.append(MineRoute.page(.localVideos))
+            } else {
+                switch section {
+                case .home:
+                    navigation.path.append(AnimeBrowseRoute(channelId: nil, title: "热门新番", sort: "hits"))
+                case .magnet:
+                    navigation.path.append(MineRoute.page(.downloads))
+                case .cloud:
+                    navigation.path.append(CloudRoute.page(.offline))
+                case .mine, .search:
+                    navigation.path.append(MineRoute.page(.localVideos))
+                }
             }
         }
 
         let settled = try XCTUnwrap(samples.last)
-        XCTAssertFalse(settled.barHidden, "\(section.title): bar should be visible on secondary page")
+        XCTAssertFalse(settled.barHidden, "\(label): bar should be visible on secondary page")
         XCTAssertFalse(navController.navigationBar.prefersLargeTitles,
-                       "\(section.title): prefersLargeTitles must remain disabled after push")
+                       "\(label): prefersLargeTitles must remain disabled after push")
 
         let visibleSamples = samples.filter { !$0.barHidden && $0.barFrame.height > 1 }
-        XCTAssertFalse(visibleSamples.isEmpty, "\(section.title): expected visible navigation bar frames")
-        XCTAssertFalse(settled.elements.isEmpty, "\(section.title): expected tracked navigation bar elements")
+        XCTAssertFalse(visibleSamples.isEmpty, "\(label): expected visible navigation bar frames")
+        XCTAssertFalse(settled.elements.isEmpty, "\(label): expected tracked navigation bar elements")
 
         let timeline = formatTimeline(visibleSamples, limit: 35)
         let firstDump = describeSubviews(of: navController.navigationBar, in: navController.navigationBar, depth: 0)
-        print("=== NavBar Timeline [\(section.title)] (visible=\(visibleSamples.count)/\(samples.count)) ===\n\(timeline)\n=== Settled Subviews ===\n\(firstDump)\n=== End [\(section.title)] ===")
+        print("=== NavBar Timeline [\(label)] (visible=\(visibleSamples.count)/\(samples.count)) ===\n\(timeline)\n=== Settled Subviews ===\n\(firstDump)\n=== End [\(label)] ===")
 
         for s in visibleSamples {
-            XCTAssertEqual(s.barCount, 1, "\(section.title): expected single UINavigationBar.\n\(timeline)")
+            XCTAssertEqual(s.barCount, 1, "\(label): expected single UINavigationBar.\n\(timeline)")
             XCTAssertEqual(s.barFrame.minY, settled.barFrame.minY, accuracy: 1.5,
-                           "\(section.title): barFrame.minY jumped during push.\n\(timeline)")
+                           "\(label): barFrame.minY jumped during push.\n\(timeline)")
             XCTAssertEqual(s.barFrame.height, settled.barFrame.height, accuracy: 1.5,
-                           "\(section.title): barFrame.height jumped during push.\n\(timeline)")
+                           "\(label): barFrame.height jumped during push.\n\(timeline)")
             if let pres = s.barPres {
                 XCTAssertEqual(pres.minY, settled.barFrame.minY, accuracy: 1.5,
-                               "\(section.title): bar presentation minY jumped during push.\n\(timeline)")
+                               "\(label): bar presentation minY jumped during push.\n\(timeline)")
                 XCTAssertEqual(pres.height, settled.barFrame.height, accuracy: 1.5,
-                               "\(section.title): bar presentation height jumped during push.\n\(timeline)")
+                               "\(label): bar presentation height jumped during push.\n\(timeline)")
             }
 
             for target in settled.elements {
                 guard let current = s.elements.first(where: { $0.key == target.key }) else { continue }
                 XCTAssertEqual(current.model.minY, target.model.minY, accuracy: 1.5,
-                               "\(section.title): \(target.key) model minY shifted at t=\(String(format: "%.3f", s.t)).\n\(timeline)")
+                               "\(label): \(target.key) model minY shifted at t=\(String(format: "%.3f", s.t)).\n\(timeline)")
                 XCTAssertEqual(current.model.minX, target.model.minX, accuracy: 1.5,
-                               "\(section.title): \(target.key) model minX shifted at t=\(String(format: "%.3f", s.t)).\n\(timeline)")
+                               "\(label): \(target.key) model minX shifted at t=\(String(format: "%.3f", s.t)).\n\(timeline)")
                 if let presRect = current.pres {
                     XCTAssertEqual(presRect.minY, target.model.minY, accuracy: 1.5,
-                                   "\(section.title): \(target.key) pres minY shifted at t=\(String(format: "%.3f", s.t)).\n\(timeline)")
+                                   "\(label): \(target.key) pres minY shifted at t=\(String(format: "%.3f", s.t)).\n\(timeline)")
                     XCTAssertEqual(presRect.minX, target.model.minX, accuracy: 1.5,
-                                   "\(section.title): \(target.key) pres minX shifted at t=\(String(format: "%.3f", s.t)).\n\(timeline)")
+                                   "\(label): \(target.key) pres minX shifted at t=\(String(format: "%.3f", s.t)).\n\(timeline)")
                 }
             }
         }
@@ -221,9 +198,7 @@ final class HomeNavigationTests: XCTestCase {
                 }
             }
             linkObj.add(to: .main, forMode: .common)
-            withAnimation {
-                action()
-            }
+            action()
         }
     }
 
@@ -376,47 +351,5 @@ final class HomeNavigationTests: XCTestCase {
         navigation.path.append(PerformerRoute(id: "actor", name: "演员"))
         XCTAssertTrue(navigation.cloudRoutes.isEmpty)
         XCTAssertEqual(navigation.path.count, 1)
-    }
-}
-
-private final class BindingBox {
-    var push: (() -> Void)?
-}
-
-private struct BaselineUnfixedHost: View {
-    let box: BindingBox
-    @State private var path = NavigationPath()
-
-    var body: some View {
-        NavigationStack(path: $path) {
-            TabView {
-                ScrollView {
-                    VStack {
-                        Text("Baseline Root")
-                            .padding(.top, 20)
-                    }
-                    .frame(maxWidth: .infinity)
-                }
-                .toolbar(.hidden, for: .navigationBar)
-                .tabItem { Text("Tab") }
-            }
-            .toolbar(.hidden, for: .navigationBar)
-            .navigationDestination(for: Int.self) { _ in
-                List {
-                    Text("Secondary Item")
-                }
-                .navigationTitle("离线下载")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar(.visible, for: .navigationBar)
-                .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button("添加") {}
-                    }
-                }
-            }
-        }
-        .onAppear {
-            box.push = { path.append(1) }
-        }
     }
 }
