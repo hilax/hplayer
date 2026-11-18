@@ -552,6 +552,50 @@ final class LocalStreamProxyTests: XCTestCase {
         XCTAssertEqual(ScriptedUpstream.receivedRanges(), ["bytes=0-\(total - 1)", "bytes=\(cut)-\(total - 1)"])
     }
 
+    func testAddressRefreshWaitsWithinDeadlineAndYieldsToLatestRange() async throws {
+        let original = try XCTUnwrap(URL(string: "https://example.com/original.mp4"))
+        let fresh = try XCTUnwrap(URL(string: "https://example.com/refreshed.mp4"))
+        let full = pattern(5000)
+        let (addresses, releaseAddress) = AsyncStream<URL>.makeStream()
+        defer { releaseAddress.finish() }
+        let refreshing = expectation(description: "address refresh started")
+        ScriptedUpstream.install([
+            .reply(status: 403, headers: [:], body: Data()),
+            .hold(status: 206, headers: ["Content-Type": "video/mp4", "Content-Range": "bytes 2000-4999/5000", "Content-Length": "3000"], body: Data(full[2000..<2500])),
+            .reply(status: 206, headers: ["Content-Type": "video/mp4", "Content-Range": "bytes 0-4999/5000", "Content-Length": "5000"], body: full),
+        ])
+        let proxy = LocalStreamProxy(protocolClasses: [ScriptedUpstream.self])
+        proxy.setStallTimeoutForTesting(0)
+        let relayed = await proxy.localURL(for: original, headers: [:], streamID: "p115:seek", renew: {
+            refreshing.fulfill()
+            return await addresses.first(where: { _ in true }) ?? fresh
+        })
+        let local = try XCTUnwrap(relayed)
+        let older = try openStream(local, range: "bytes=0-4999")
+        defer { close(older) }
+        await fulfillment(of: [refreshing], timeout: 2)
+        XCTAssertTrue(proxy.isRecovering(for: local))
+        XCTAssertFalse(proxy.isRecovering(for: local, at: ProcessInfo.processInfo.systemUptime + 10))
+
+        let newer = try openStream(local, range: "bytes=2000-4999")
+        defer { close(newer) }
+        _ = try readUntil(newer, bodyBytes: 500)
+        XCTAssertFalse(proxy.isRecovering(for: local), "A superseded Range must not delay recovery for the latest seek")
+        releaseAddress.yield(fresh)
+        releaseAddress.finish()
+        for _ in 0..<100 {
+            if proxy.problemHistoryLines.contains(where: { $0.contains("已换新地址") }) { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertEqual(ScriptedUpstream.receivedRanges(), ["bytes=0-4999", "bytes=2000-4999"])
+        XCTAssertFalse(proxy.problemHistoryLines.contains { $0.contains("旧连接先停在 2500 字节") })
+
+        shutdown(newer, SHUT_RDWR)
+        let response = try readToEnd(older)
+        XCTAssertEqual(Data(response.suffix(full.count)), full)
+        XCTAssertEqual(ScriptedUpstream.receivedURLs(), [original, original, fresh])
+    }
+
     /// m3u8 转码播放期间分片（.ts）返回 403：重拉最新 m3u8 列表，匹配同一分片的新签名地址重下，不能把 m3u8 文本塞给 .ts 请求。
     func testRefreshesM3U8PlaylistSegmentsWhenSegmentReturns403() async throws {
         let master1 = try XCTUnwrap(URL(string: "https://v.115.com/master1.m3u8"))

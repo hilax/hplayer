@@ -338,6 +338,7 @@ final class PlaybackUITests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchEnvironment["HPLAYER_UI_TEST_URL"] = "http://127.0.0.1:8765/stall/seek-fixture.mp4"
+        app.launchEnvironment["HPLAYER_UI_TEST_115_HEADERS"] = "1"
         app.launchEnvironment["HPLAYER_UI_TEST_KEEP_CONTROLS_VISIBLE"] = "1"
         // 预读调小，跳转时一定会发出新的网络请求
         app.launchEnvironment["HPLAYER_UI_TEST_PREFETCH_KB"] = "256"

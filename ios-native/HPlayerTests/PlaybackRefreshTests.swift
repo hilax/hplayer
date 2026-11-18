@@ -17,6 +17,57 @@ final class PlaybackRefreshTests: XCTestCase {
         return player
     }
 
+    func test115WaitsForPlaybackStartAfterLoadingTheFile() throws {
+        let player = PlaybackController()
+        defer { player.stop() }
+        player.open(try XCTUnwrap(URL(string: "https://example.com/original.mkv")), direct115: true, autoRecover: false)
+
+        player.receiveEventForTesting(.playbackRestart)
+        XCTAssertFalse(player.hasPlayed, "An event from the previous file cannot mark this file as started")
+        player.receiveEventForTesting(.fileLoaded)
+        XCTAssertFalse(player.hasPlayed)
+        XCTAssertTrue(player.buffering)
+
+        player.receiveEventForTesting(.playbackRestart)
+        XCTAssertTrue(player.hasPlayed)
+        XCTAssertFalse(player.buffering)
+    }
+
+    func test115ReopensAtLatestSeekWithOneAddressRequest() async throws {
+        let player = PlaybackController()
+        let url = try XCTUnwrap(URL(string: "https://example.com/original.mkv"))
+        let (addresses, releaseAddress) = AsyncStream<URL>.makeStream()
+        let refreshing = expectation(description: "address refresh started")
+        var refreshCount = 0
+        defer { releaseAddress.finish(); player.stop() }
+        player.open(url, direct115: true, refreshURL: {
+            refreshCount += 1
+            if refreshCount == 1 { refreshing.fulfill() }
+            return await addresses.first(where: { _ in true }) ?? url
+        })
+        player.receiveEventForTesting(.fileLoaded)
+        player.receiveEventForTesting(.playbackRestart)
+        player.receiveEventForTesting(.property("duration", .double(300)))
+        player.receiveEventForTesting(.property("seekable", .flag(true)))
+        player.receiveEventForTesting(.property("time-pos", .double(10)))
+
+        player.retry()
+        await fulfillment(of: [refreshing], timeout: 2)
+        player.seek(to: 180)
+        player.seek(to: 70)
+        player.receiveEventForTesting(.playbackRestart)
+        player.receiveEventForTesting(.property("time-pos", .double(180)))
+        releaseAddress.yield(url)
+        releaseAddress.finish()
+
+        for _ in 0..<100 {
+            if player.diagnostics.contains("打开 example.com，从 01:10") { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertEqual(refreshCount, 1)
+        XCTAssertTrue(player.diagnostics.contains("打开 example.com，从 01:10"), player.diagnostics)
+    }
+
     func testFramePositionUpdatesDoNotRefreshThePlayerEveryFrame() throws {
         let player = try playingController()
         var refreshes = 0

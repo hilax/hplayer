@@ -43,6 +43,9 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
     fileprivate var chunkSize: Int64 = 4 * 1_048_576
     /// 单次上游请求停滞（0 字节）超时时间；比 URLSession 默认 30s 更早触发重连或换节点。
     fileprivate var stallTimeout: TimeInterval = 6.0
+    /// 从本机中转开始续传算起，给当前请求一个恢复窗口。播放器在此期间保留 mpv 的缓冲。
+    /// 常规断流在 6 秒发现，恢复窗口仍留在 mpv 的 15 秒读超时以内。
+    fileprivate static let recoveryGrace: TimeInterval = 7.0
     /// 停滞检测最低有效速率门槛（8 KB/s）；低于该速率持续数秒则判定节点卡死。
     fileprivate var minHealthySpeed: Double = 8 * 1024
     /// 115 的下载地址有时效，过期（或被 115 收回）后上游回 403。登记了换地址办法的视频，
@@ -168,10 +171,24 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
             guard let target = resolve(path: localURL.path) else { return false }
             let key = target.streamID ?? target.url.absoluteString
             let candidates = connections.values
-                .filter { $0.matchesStreamKey(key) && $0.canRefreshUpstream }
+                .filter { $0.matchesStreamKey(key) && $0.matchesProfile(target.profile) && $0.canRefreshUpstream }
                 .sorted { $0.serial > $1.serial }
             guard let active = candidates.first else { return false }
             return active.forceRefreshUpstream()
+        }
+    }
+
+    /// 查询当前播放会话的中转请求。原画只看最新的 Range，HLS 则可能有多个分片在读。
+    func isRecovering(for localURL: URL, at uptime: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Bool {
+        queue.sync {
+            guard localURL.host == "127.0.0.1", localURL.port == Int(port),
+                  let target = resolve(path: localURL.path) else { return false }
+            let key = target.streamID ?? target.url.absoluteString
+            let active = connections.values.filter { $0.matchesProfile(target.profile) && $0.isActiveMediaRequest }
+            if playlistEntries[key] != nil {
+                return active.contains { $0.isRecovering(at: uptime) }
+            }
+            return active.filter { $0.matchesStreamKey(key) }.max { $0.serial < $1.serial }?.isRecovering(at: uptime) == true
         }
     }
 
@@ -1065,6 +1082,8 @@ private final class ProxyConnection {
     private var retryProgressMark: Int64 = 0
     private var renewProgressMark: Int64 = 0
     private var retryWork: DispatchWorkItem?
+    private var renewalID: UUID?
+    private var recoveryWindow: (deadline: TimeInterval, bytes: Int64)?
 
     // 分段滑动窗口与停滞检测
     private var clientRangeStart: Int64?
@@ -1094,6 +1113,8 @@ private final class ProxyConnection {
         explicitStreamID == key || originalURL?.absoluteString == key
     }
 
+    fileprivate func matchesProfile(_ id: String) -> Bool { profile == id }
+
     private var isPlaylistChildStream: Bool {
         guard let originalURL, let key = renewalKey else { return false }
         return proxy.isPlaylistChild(url: originalURL, forKey: key)
@@ -1108,14 +1129,27 @@ private final class ProxyConnection {
     }
 
     /// 这条连接的下载正在进行（或者马上要重发）
-    fileprivate var holdsUpstream: Bool { !closed && (task != nil || retryWork != nil) }
+    fileprivate var holdsUpstream: Bool { !closed && (task != nil || retryWork != nil || renewalID != nil) }
 
     fileprivate var isYielding: Bool { !closed && yielded }
 
     fileprivate var isClientAlive: Bool { !closed && connectionReady }
 
+    fileprivate var isActiveMediaRequest: Bool { isClientAlive && !isHead && !yielded && !bodyComplete && holdsUpstream }
+
+    fileprivate func isRecovering(at uptime: TimeInterval) -> Bool {
+        guard let recoveryWindow else { return false }
+        return uptime < recoveryWindow.deadline
+    }
+
+    private func beginRecovery() {
+        // 多次重试共用一次期限。只有实际收到足量文件数据，下一次断流才重新计时。
+        if let recoveryWindow, deliveredBody - recoveryWindow.bytes < 65_536 { return }
+        recoveryWindow = (ProcessInfo.processInfo.systemUptime + LocalStreamProxy.recoveryGrace, deliveredBody)
+    }
+
     fileprivate var canRefreshUpstream: Bool {
-        guard !closed, !isHead, !isPlaylist else { return false }
+        guard !closed, !isHead, !isPlaylist, renewalID == nil else { return false }
         if !headersSent { return task != nil || retryWork != nil }
         return bodyEnd != nil && !bodyComplete && (task != nil || retryWork != nil || yielded)
     }
@@ -1131,6 +1165,7 @@ private final class ProxyConnection {
     @discardableResult
     fileprivate func forceRefreshUpstream() -> Bool {
         guard canRefreshUpstream else { return false }
+        beginRecovery()
         let resumeAt: Int64? = headersSent ? (bodyStart + deliveredBody) : nil
         retryWork?.cancel()
         retryWork = nil
@@ -1147,26 +1182,13 @@ private final class ProxyConnection {
 
         if let key = renewalKey, let orig = originalURL, let failed = upstreamURL, proxy.canRenew(forKey: key) {
             if isPlaylistChildStream {
-                proxy.renewPlaylistSegment(forKey: key, originalSegment: orig, failed: failed) { [weak self] fresh in
-                    guard let self, !self.closed else { return }
-                    if let fresh {
-                        self.upstreamURL = fresh
-                        self.baseRequest?.url = fresh
-                    }
-                    self.relaunch(resumingAt: resumeAt)
-                }
+                proxy.renewPlaylistSegment(forKey: key, originalSegment: orig, failed: failed,
+                                           completion: resumeAfterRenewal(at: resumeAt, allowSameURL: true))
                 return true
             }
             if proxy.needsNewAddress(forKey: key, failed: failed, ignoreCooldown: true) {
                 proxy.note("主动切换 115 下载线路" + (resumeAt.map { "（从 \($0) 字节续传）" } ?? ""))
-                proxy.renew(forKey: key, failed: failed) { [weak self] fresh in
-                    guard let self, !self.closed else { return }
-                    if let fresh {
-                        self.upstreamURL = fresh
-                        self.baseRequest?.url = fresh
-                    }
-                    self.relaunch(resumingAt: resumeAt)
-                }
+                proxy.renew(forKey: key, failed: failed, completion: resumeAfterRenewal(at: resumeAt, allowSameURL: true))
                 return true
             }
             let current = proxy.currentUpstream(forKey: key, fallback: orig)
@@ -1178,12 +1200,13 @@ private final class ProxyConnection {
         return true
     }
 
-    /// 把上游下载停掉，给同一个视频的新连接腾位置。只停已经在传内容、能续传的；其余的不动。
+    /// 把能续传的下载或正在换地址的请求挂起，给同一个视频的新连接腾位置。
     fileprivate func yieldUpstream() {
-        guard !closed, !yielded, headersSent, !isHead, !isPlaylist, bodyEnd != nil, !bodyComplete else { return }
-        guard task != nil || retryWork != nil else { return }
+        guard isActiveMediaRequest, !isPlaylist else { return }
+        guard headersSent ? bodyEnd != nil : renewalID != nil else { return }
         retryWork?.cancel()
         retryWork = nil
+        renewalID = nil
         stopStallTimer()
         if let task {
             proxy.detach(task)
@@ -1204,8 +1227,14 @@ private final class ProxyConnection {
             finish()
             return
         }
-        proxy.note("接着下旧连接，从 \(bodyStart + deliveredBody) 字节开始")
-        relaunch(resumingAt: bodyStart + deliveredBody)
+        if let key = renewalKey, let original = originalURL {
+            let current = proxy.currentUpstream(forKey: key, fallback: original)
+            upstreamURL = current
+            baseRequest?.url = current
+        }
+        let offset = headersSent ? bodyStart + deliveredBody : nil
+        proxy.note("接着下旧连接" + (offset.map { "，从 \($0) 字节开始" } ?? ""))
+        relaunch(resumingAt: offset)
     }
 
     func start() {
@@ -1635,6 +1664,7 @@ private final class ProxyConnection {
         }
         let delay = delays[retryCount]
         retryCount += 1
+        beginRecovery()
         proxy.note("\(detail)；\(delay) 秒后第 \(retryCount) 次重试" + (resume.map { "，从 \($0) 字节接着下" } ?? ""))
         if let running { proxy.detach(running) }
         task = nil
@@ -1665,6 +1695,7 @@ private final class ProxyConnection {
                 proxy.note("\(detail)；m3u8 分片刷新和等待均未成功")
                 return false
             }
+            beginRecovery()
             if let running { proxy.detach(running) }
             task = nil
             stopStallTimer()
@@ -1672,16 +1703,8 @@ private final class ProxyConnection {
             if needRefresh {
                 renewCount += 1
                 proxy.note("\(detail)，m3u8 分片可能过期，刷新列表\(tail)")
-                proxy.renewPlaylistSegment(forKey: key, originalSegment: original, failed: failed) { [weak self] fresh in
-                    guard let self, !self.closed else { return }
-                    guard let fresh else {
-                        if self.headersSent { self.close() } else { self.respond(status: 403, text: "Forbidden") }
-                        return
-                    }
-                    self.upstreamURL = fresh
-                    self.baseRequest?.url = fresh
-                    self.relaunch(resumingAt: resumeAt)
-                }
+                proxy.renewPlaylistSegment(forKey: key, originalSegment: original, failed: failed,
+                                           completion: resumeAfterRenewal(at: resumeAt))
             } else {
                 let delay = waits[refusalWaits]
                 refusalWaits += 1
@@ -1705,6 +1728,7 @@ private final class ProxyConnection {
             proxy.note("\(detail)；换地址、等待重试都没成功")
             return false
         }
+        beginRecovery()
         if let running { proxy.detach(running) }
         task = nil
         stopStallTimer()
@@ -1719,16 +1743,7 @@ private final class ProxyConnection {
             renewCount += 1
             renewProgressMark = deliveredBody
             proxy.note("\(detail)，地址可能过期了，换新地址\(tail)")
-            proxy.renew(forKey: key, failed: failed) { [weak self] fresh in
-                guard let self, !self.closed else { return }
-                guard let fresh else {
-                    if self.headersSent { self.close() } else { self.respond(status: 403, text: "Forbidden") }
-                    return
-                }
-                self.upstreamURL = fresh
-                self.baseRequest?.url = fresh
-                self.relaunch(resumingAt: resumeAt)
-            }
+            proxy.renew(forKey: key, failed: failed, completion: resumeAfterRenewal(at: resumeAt))
         } else {
             let delay = waits[refusalWaits]
             refusalWaits += 1
@@ -1746,9 +1761,27 @@ private final class ProxyConnection {
         return true
     }
 
+    private func resumeAfterRenewal(at offset: Int64?, allowSameURL: Bool = false) -> (URL?) -> Void {
+        let id = UUID()
+        renewalID = id
+        return { [weak self] fresh in
+            // A newer Range can take over while the address API is in flight.
+            guard let self, !self.closed, self.renewalID == id else { return }
+            self.renewalID = nil
+            if let fresh {
+                self.upstreamURL = fresh
+                self.baseRequest?.url = fresh
+            } else if !allowSameURL {
+                if self.headersSent { self.close() } else { self.respond(status: 403, text: "Forbidden") }
+                return
+            }
+            self.relaunch(resumingAt: offset)
+        }
+    }
+
     private func relaunch(resumingAt start: Int64?) {
         retryWork = nil
-        guard !closed, var request = baseRequest else { return }
+        guard !closed, !yielded, var request = baseRequest else { return }
         if let start {
             let endBound: Int64?
             if chunkingActive, proxy.chunkSize > 0 {
@@ -1882,6 +1915,7 @@ private final class ProxyConnection {
         guard !closed else { return }
         closed = true
         connectionReady = false
+        renewalID = nil
         stopStallTimer()
         retryWork?.cancel()
         retryWork = nil

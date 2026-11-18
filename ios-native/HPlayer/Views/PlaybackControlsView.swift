@@ -224,6 +224,7 @@ struct PlaybackControlsView: View {
     var selectedID = ""
     var qualities: [PlaybackChoice] = []
     var selectedQuality = ""
+    var qualityStatus: String?
     /// 边下边播时的网络状态，例如「12 个节点 · 1.2 MB/s」
     var networkStatus = ""
     /// 边下边播时节点的总下载速度（字节 / 秒）：横屏右上角的网速用它；nil 时用内核报告的下载速度
@@ -232,6 +233,7 @@ struct PlaybackControlsView: View {
     var danmaku: DanmakuStore? = nil
     var commentsVid: Int? = nil
     var onSelect: (String) -> Void = { _ in }
+    var onOpenQuality: () -> Void = { }
     var onQuality: (String) -> Void = { _ in }
     var onRetry: () -> Void = { }
     var onClose: () -> Void
@@ -749,6 +751,7 @@ struct PlaybackControlsView: View {
         if next == .tracks {
             onlineSubtitleQueryText = playback.onlineSubtitleSearchQuery
         }
+        if next == .quality { onOpenQuality() }
         if next != nil { diagnosticsCopier.reset() }
         withAnimation(next == nil ? popoverCloseAnimation : (reduceMotion ? .easeOut(duration: 0.15) : Self.popoverSpring)) {
             popover = next
@@ -881,6 +884,7 @@ struct PlaybackControlsView: View {
                     }
                 }
             }
+            if let qualityStatus { popoverNote(qualityStatus) }
         }
         .padding(6)
     }
@@ -2056,6 +2060,7 @@ struct PlaybackControlsView: View {
                     }
                 }
             }
+            if let qualityStatus { menuNote(qualityStatus) }
         }
     }
 
@@ -3305,6 +3310,7 @@ struct PlaybackControlsView: View {
         if menu == .tracks {
             onlineSubtitleQueryText = playback.onlineSubtitleSearchQuery
         }
+        if menu == .quality { onOpenQuality() }
         withAnimation(reduceMotion ? .easeOut(duration: 0.12) : Self.popoverSpring) { quickMenu = menu }
     }
     /// 选完一项时可以稍等一下再收，让勾先亮起来

@@ -11,6 +11,10 @@ struct PlayerView: View {
     @State private var loading = true
     @State private var error = ""
     @State private var directQualities: [Direct115Stream] = []
+    @State private var directQualitiesFetchedAt: TimeInterval?
+    @State private var directQualityListTask: Task<Void, Never>?
+    @State private var directQualityListError: String?
+    @State private var directQualityListID = UUID()
     /// 动漫这一集解析出的画质档位和请求头。current 始终保持集数引用不变，
     /// 换画质只重开流，不改 current——改了 id 就变，选集会认不出当前集，还会再触发一次加载。
     @State private var animeQualities: [PlaybackQualityItem] = []
@@ -36,15 +40,18 @@ struct PlayerView: View {
             selectedID: current.id,
             qualities: qualityChoices,
             selectedQuality: selectedQuality,
+            qualityStatus: directQualityStatus,
             danmaku: animeRef == nil ? nil : danmaku,
             commentsVid: animeRef?.animeId,
             onSelect: { id in
                 guard let selected = playlist.first(where: { $0.id == id }), selected != current else { return }
                 saveProgress(force: true)
                 playback.stop()
+                resetDirectQualities()
                 requestID = UUID()
                 current = selected
             },
+            onOpenQuality: { loadDirectQualities() },
             onQuality: { id in requestQuality(id) },
             onRetry: {
                 let source = current
@@ -64,14 +71,26 @@ struct PlayerView: View {
             saveProgress(force: false)
             if animeRef != nil { danmaku.update(time: time) }
         }
+        .onChange(of: playback.hasPlayed) { started in
+            if started, !loading, selectedQuality == "原画", directQualitiesFetchedAt == nil {
+                loadDirectQualities()
+            }
+        }
         .onChange(of: appState.sessionID) { _ in
             guard case .p115 = current else { return }
             requestID = UUID()
             playback.stop()
+            resetDirectQualities()
             loading = false
             error = "115 登录已变更，请重新打开视频"
         }
-        .onDisappear { saveProgress(force: true); visible = false; requestID = UUID(); playback.stop() }
+        .onDisappear {
+            saveProgress(force: true)
+            visible = false
+            requestID = UUID()
+            resetDirectQualities()
+            playback.stop()
+        }
     }
 
     private var animeRef: AnimeEpisodeRef? {
@@ -128,6 +147,56 @@ struct PlayerView: View {
         }
     }
 
+    private var directQualityStatus: String? {
+        guard case .p115 = current else { return nil }
+        if directQualityListTask != nil { return "正在获取转码画质…" }
+        if directQualityListError != nil { return "暂时无法获取转码画质" }
+        return nil
+    }
+
+    private var directQualitiesAreFresh: Bool {
+        // 签名地址只在同一部视频、同一次登录里短时复用。上游拒绝时中转仍会自动刷新。
+        guard let fetched = directQualitiesFetchedAt else { return false }
+        return ProcessInfo.processInfo.systemUptime - fetched < 45
+    }
+
+    private func resetDirectQualities() {
+        directQualityListID = UUID()
+        directQualityListTask?.cancel()
+        directQualityListTask = nil
+        directQualityListError = nil
+        directQualitiesFetchedAt = nil
+        directQualities = []
+    }
+
+    @discardableResult
+    private func loadDirectQualities() -> Task<Void, Never>? {
+        guard visible, !directQualitiesAreFresh, case .p115(_, let pickCode) = current,
+              let client = appState.directClient() else { return nil }
+        if let directQualityListTask { return directQualityListTask }
+        let request = directQualityListID
+        let source = current
+        let session = appState.sessionID
+        directQualityListError = nil
+        let task = Task { @MainActor in
+            let result: Result<[Direct115Stream], Error>
+            do { result = .success(try await client.streams(pickCode: pickCode)) }
+            catch { result = .failure(error) }
+            guard visible, !Task.isCancelled, directQualityListID == request,
+                  current == source, appState.sessionID == session else { return }
+            directQualityListTask = nil
+            switch result {
+            case .success(let streams):
+                directQualities = streams
+                directQualitiesFetchedAt = ProcessInfo.processInfo.systemUptime
+            case .failure(let error):
+                directQualityListError = error.localizedDescription
+            }
+        }
+        directQualityListTask = task
+        return task
+    }
+
     /// 记播放历史会让首页「继续观看」重新排一遍；放到播放页进场动画走完之后再记，
     /// 免得首页在后面整页重算，和打开播放页抢主线程。
     private func recordWhenPresented(_ source: PlaybackSource) {
@@ -146,7 +215,8 @@ struct PlayerView: View {
         let request = UUID()
         requestID = request
         let session = appState.sessionID
-        loading = true; error = ""; directQualities = []; animeQualities = []; animeHeaders = [:]; selectedQuality = ""
+        resetDirectQualities()
+        loading = true; error = ""; animeQualities = []; animeHeaders = [:]; selectedQuality = ""
         defer { if isCurrentRequest(request, source: source, session: session) { loading = false } }
         let resume = tracksHistory ? RecentStore.shared.position(for: source) : nil
         if tracksHistory { recordWhenPresented(source) }
@@ -200,41 +270,20 @@ struct PlayerView: View {
                 playback.open(missavPlayback.url, customHeaders: missavPlayback.headers, startTime: resume,
                               title: ref.title, subtitleIdentifier: ref.videoId, isAdultVideo: true)
             case .p115(let title, let pickCode):
+                guard let client = appState.directClient() else { throw APIError.server("请先登录 115") }
+                selectedQuality = "原画"
                 do {
-                    guard let client = appState.directClient() else { throw APIError.server("请先登录 115") }
-                    selectedQuality = "原画"
-                    // 默认播原画：直接读原文件，不经过 115 转码，画质和音轨都是原样
-                    var originalError: Error?
-                    do {
-                        let original = try await client.originalURL(pickCode: pickCode)
-                        PlayerWindowController.shared.note("拿到原画地址")
-                        guard await openAfterReveal(request, source: source, session: session) else { return }
-                        playback.open(original, direct115: true, directCookie: client.cookie, startTime: resume,
-                                      refreshURL: Self.originalRefresher(client, pickCode: pickCode),
-                                      streamID: "p115:\(pickCode)", title: title, subtitleIdentifier: pickCode)
-                        loading = false
-                    } catch {
-                        guard isCurrentRequest(request, source: source, session: session), !Task.isCancelled else { return }
-                        originalError = error
-                    }
-                    // 原画打开后稍等首帧加载（最多 1.5s）再去拉转码画质列表，避免与起播探测争抢弱网连接。
-                    if originalError == nil {
-                        for _ in 0..<15 {
-                            if playback.hasLoaded || Task.isCancelled || !isCurrentRequest(request, source: source, session: session) { break }
-                            try? await Task.sleep(nanoseconds: 100_000_000)
-                        }
-                        guard isCurrentRequest(request, source: source, session: session), !Task.isCancelled else { return }
-                    }
-                    // 转码画质只作为手动选项，原画失败时不要悄悄切换画质。
-                    var streams: [Direct115Stream] = []
-                    do { streams = try await client.streams(pickCode: pickCode) } catch {
-                        if let originalError { throw originalError }
-                    }
+                    let original = try await client.originalURL(pickCode: pickCode)
+                    PlayerWindowController.shared.note("拿到原画地址")
+                    guard await openAfterReveal(request, source: source, session: session) else { return }
+                    playback.open(original, direct115: true, directCookie: client.cookie, startTime: resume,
+                                  refreshURL: Self.originalRefresher(client, pickCode: pickCode),
+                                  streamID: "p115:\(pickCode)", title: title, subtitleIdentifier: pickCode)
+                    // 转码列表由首次播放事件或用户打开菜单触发。
+                } catch {
                     guard isCurrentRequest(request, source: source, session: session), !Task.isCancelled else { return }
-                    directQualities = streams
-                    if let originalError {
-                        throw APIError.server("原画无法打开：\(originalError.localizedDescription)。请重试或手动选择其他画质")
-                    }
+                    loadDirectQualities()
+                    throw APIError.server("原画无法打开：\(error.localizedDescription)。请重试或手动选择其他画质")
                 }
             }
         } catch {
@@ -320,7 +369,7 @@ struct PlayerView: View {
             return request
         }
 
-        guard case .p115(_, let pickCode) = source,
+        guard case .p115(let title, let pickCode) = source,
               let client = appState.directClient() else { return nil }
         // 原画已经打开时无需重新发请求，也让尚在获取的转码菜单继续完成。
         if id == "direct-original", selectedQuality == "原画", !loading,
@@ -342,20 +391,22 @@ struct PlayerView: View {
         defer { if isCurrentRequest(request, source: source, session: session) { loading = false } }
         do {
             if let requestedStream {
-                let refreshed = try await client.streams(pickCode: pickCode)
+                if let task = loadDirectQualities() { await task.value }
                 guard isCurrentRequest(request, source: source, session: session), !Task.isCancelled else { return nil }
-                guard let fresh = refreshed.first(where: { $0.title == requestedStream.title }) else { throw APIError.server("该画质暂不可用") }
-                directQualities = refreshed; selectedQuality = fresh.title
-                let refresher = Self.streamRefresher(client, pickCode: pickCode, title: fresh.title)
-                playback.open(fresh.url, direct115: true, directCookie: client.cookie, preservingPosition: preservePosition, startTime: savedPosition,
-                              refreshURL: refresher, streamID: "p115:\(pickCode):hls:\(fresh.title)", playlistRenew: refresher)
+                guard directQualitiesAreFresh else { throw APIError.server(directQualityListError ?? "该画质暂不可用") }
+                let url = try Direct115Stream.url(forQuality: requestedStream.title, in: directQualities)
+                selectedQuality = requestedStream.title
+                let refresher = Self.streamRefresher(client, pickCode: pickCode, title: requestedStream.title)
+                playback.open(url, direct115: true, directCookie: client.cookie, preservingPosition: preservePosition, startTime: savedPosition,
+                              refreshURL: refresher, streamID: "p115:\(pickCode):hls:\(requestedStream.title)", playlistRenew: refresher,
+                              title: title, subtitleIdentifier: pickCode)
             } else {
                 let original = try await client.originalURL(pickCode: pickCode)
                 guard isCurrentRequest(request, source: source, session: session), !Task.isCancelled else { return nil }
                 selectedQuality = "原画"
                 playback.open(original, direct115: true, directCookie: client.cookie, preservingPosition: preservePosition, startTime: savedPosition,
                               refreshURL: Self.originalRefresher(client, pickCode: pickCode),
-                              streamID: "p115:\(pickCode)")
+                              streamID: "p115:\(pickCode)", title: title, subtitleIdentifier: pickCode)
             }
             return request
         } catch {

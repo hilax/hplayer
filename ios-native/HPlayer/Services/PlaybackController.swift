@@ -274,13 +274,14 @@ final class PlaybackController: ObservableObject {
     private var boostDesyncSince: TimeInterval?
     private var lastBoostReduction = -Double.infinity
     private var loaded = false
-    /// 视频是否已经完成头信息加载（用于播放页错峰获取画质菜单）
+    /// 视频是否已经完成头信息加载
     var hasLoaded: Bool { loaded }
     private var opening = false
     private var pausedForCache = false
     private var seeking = false
     private var eofReached = false
-    private var hasPlayed = false
+    @Published private(set) var hasPlayed = false
+    private var awaitingStartup: Bool { !loaded || (currentDirect115 && !hasPlayed) }
     private var pendingSeek: Double?
     private var pendingSeekStarted = Date.distantPast
     /// A requested position is not confirmed until mpv has restarted playback for the seek.
@@ -669,7 +670,8 @@ final class PlaybackController: ObservableObject {
         openTimeoutTask?.cancel()
         openTimeoutTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: timeout * 1_000_000_000)
-            guard let self, !Task.isCancelled, self.session == currentSession, !self.loaded, self.error.isEmpty else { return }
+            guard let self, !Task.isCancelled, self.session == currentSession, self.awaitingStartup,
+                  !(self.loaded && self.userPaused), self.error.isEmpty else { return }
             if self.watchdogEnabled {
                 self.recover(reason: "视频加载超时")
             } else {
@@ -701,7 +703,7 @@ final class PlaybackController: ObservableObject {
         lastConfirmedUptime = nil
         discardedPlaybackPosition = false
         loaded = false
-        hasPlayed = false
+        if hasPlayed { hasPlayed = false }
         pausedForCache = false
         seeking = false
         eofReached = false
@@ -841,7 +843,8 @@ final class PlaybackController: ObservableObject {
                 recover(reason: "")
             } else {
                 engine?.set("pause", false)
-                if pauseElapsed >= 90, urlRefresher != nil, let engineURL = currentEngineURL {
+                if pauseElapsed >= 90, urlRefresher != nil, let engineURL = currentEngineURL,
+                   !LocalStreamProxy.shared.isRecovering(for: engineURL) {
                     LocalStreamProxy.shared.refreshActiveUpstream(for: engineURL)
                 }
             }
@@ -863,23 +866,23 @@ final class PlaybackController: ObservableObject {
         ended = false
         eofReached = false
         eofDuringSeek = false
-        if recoveryTask != nil || (!loaded && !opening) {
-            // 连接已经断了或正在重连：直接从新的目标位置重新打开
-            recoveryTask?.cancel()
-            recoveryTask = nil
-            recoveryAttempts = []
-            pendingSeek = target
-            pendingSeekStarted = Date()
-            seekAwaitingRestart = true
-            seekObservedTime = nil
-            recover(reason: "")
-            return
-        }
         pendingSeek = target
         pendingSeekStarted = Date()
         seekAwaitingRestart = true
         seekObservedTime = nil
         noDataSeconds = 0
+        if recoveryTask != nil || (!loaded && !opening) {
+            // 115 正在换地址时，让这次请求继续。地址就绪后会从最新的目标位置打开。
+            if currentDirect115, recoveryTask != nil {
+                updateFlags()
+                return
+            }
+            recoveryTask?.cancel()
+            recoveryTask = nil
+            recoveryAttempts = []
+            recover(reason: "")
+            return
+        }
         // Keep fast keyframe seeks away from the tail: sparse indexes can snap
         // past the requested position and immediately hit EOF.
         let far = abs(target - engineTime) > 60 && (duration <= 0 || target < duration - 30)
@@ -1587,14 +1590,18 @@ final class PlaybackController: ObservableObject {
             if !loaded { logEvent("文件已加载（距播放页创建 \(Self.milliseconds(since: createdAt)) 毫秒）") }
             loaded = true
             opening = false
-            openTimeoutTask?.cancel()
+            if !currentDirect115 || userPaused { openTimeoutTask?.cancel() }
             refreshTracks()
             handleFileLoadedForOnlineSubtitles()
         case .playbackRestart:
+            if currentDirect115 {
+                guard loaded, recoveryTask == nil else { return }
+                openTimeoutTask?.cancel()
+            }
             logEvent(hasPlayed
                 ? "开始播放 \(Self.clock(engineTime))"
                 : "开始播放 \(Self.clock(engineTime))（出画面，距播放页创建 \(Self.milliseconds(since: createdAt)) 毫秒）")
-            hasPlayed = true
+            if !hasPlayed { hasPlayed = true }
             playedThisSession = true
             seekAwaitingRestart = false
             if let observed = seekObservedTime {
@@ -1776,7 +1783,7 @@ final class PlaybackController: ObservableObject {
             ended = true
         } else if watchdogEnabled, !userPaused {
             // 没到结尾却「播完」了：多半是网络断了，从断开的位置接着连
-            recover(reason: "网络连接断了")
+            if !loaded || !waitForDirect115Recovery() { recover(reason: "网络连接断了") }
         }
     }
 
@@ -1812,7 +1819,7 @@ final class PlaybackController: ObservableObject {
     }
 
     private func settlePendingSeek(at time: Double) {
-        guard let pending = pendingSeek, !seekAwaitingRestart, !seeking, !pausedForCache, !eofReached,
+        guard let pending = pendingSeek, recoveryTask == nil, !seekAwaitingRestart, !seeking, !pausedForCache, !eofReached,
               time.isFinite, time >= 0 else { return }
         let offset = time - pending
         // A fast keyframe seek can land before its target. A later old position
@@ -1849,14 +1856,16 @@ final class PlaybackController: ObservableObject {
         let tolerance = seekUsesKeyframes ? 30.0 : 20.0
         guard let pending = pendingSeek, !seekAwaitingRestart, watchdogEnabled, recoveryTask == nil, !seeking,
               Date().timeIntervalSince(pendingSeekStarted) > 5, abs(time - pending) > tolerance else { return }
+        guard !waitForDirect115Recovery() else { return }
         pendingSeek = nil
         resumePoint = pending
         recover(reason: "跳转没有成功")
     }
 
     private func updateFlags() {
+        let waitingForFirstFrame = currentDirect115 && loaded && !hasPlayed && !userPaused
         let newBuffering = error.isEmpty && !ended && (recoveryTask != nil || opening || pausedForCache
-            || ((seeking || pendingSeek != nil) && !userPaused))
+            || waitingForFirstFrame || ((seeking || pendingSeek != nil) && !userPaused))
         if newBuffering != buffering { buffering = newBuffering }
         let newPlaying = !userPaused && error.isEmpty && !ended
             && (loaded || opening || recoveryTask != nil)
@@ -1952,17 +1961,17 @@ final class PlaybackController: ObservableObject {
 
         guard watchdogEnabled, recoveryTask == nil, currentURL != nil, error.isEmpty, !userPaused, !ended else { return }
 
-        // 起播卡住（尚未 fileLoaded）：不等 45 秒总超时，6 秒先由中转静默切节点，14 秒未果直接重开
-        if !loaded {
+        // 115 的起播监测持续到播放开始，中转负责先尝试续传。
+        if awaitingStartup {
             openingSeconds += 1
-            if openingSeconds >= 6, noDataSeconds >= 6, !tier1RefreshAttemptedInStall,
+            if !currentDirect115, openingSeconds >= 6, noDataSeconds >= 6, !tier1RefreshAttemptedInStall,
                let engineURL = currentEngineURL, LocalStreamProxy.shared.refreshActiveUpstream(for: engineURL) {
                 tier1RefreshAttemptedInStall = true
                 statusNote = "连接缓慢，正在切换节点…"
                 return
             }
             if noDataSeconds >= 14 || (openingSeconds >= 18 && rawCacheSpeed < Self.minHealthyCacheSpeedBytes) {
-                recover(reason: "起播超时")
+                if !waitForDirect115Recovery() { recover(reason: "起播超时") }
             }
             return
         }
@@ -1971,19 +1980,19 @@ final class PlaybackController: ObservableObject {
         // With keep-open, a failed seek can leave an EOF without end-file, even
         // while the demuxer keeps downloading. Do not wait for a no-data timeout.
         if eofReached, engine?.flag("eof-reached") != false {
-            recover(reason: pendingSeek == nil ? "网络连接断了" : "跳转未完成")
+            if !waitForDirect115Recovery() { recover(reason: pendingSeek == nil ? "网络连接断了" : "跳转未完成") }
             return
         }
         // A failed seek need not leave seeking/cache/EOF set. Retain the pending
         // target until it is confirmed, and recover even when those flags clear.
         if pendingSeek != nil, Date().timeIntervalSince(pendingSeekStarted) >= 7, noDataSeconds >= 5 {
-            recover(reason: "跳转后网络没有响应")
+            if !waitForDirect115Recovery() { recover(reason: "跳转后网络没有响应") }
             return
         }
         // Tier-1 静默切节点：缓冲停住 5 秒（或播放中余量不足 6 秒且断流 6 秒）先由中转无缝续传，保留 mpv 本地缓存
         let lowBufferStall = playing && !pausedForCache && !seeking && cachedSeconds < 6
             && (duration <= 0 || currentTime + cachedSeconds < duration - 5) && noDataSeconds >= 6
-        if (hasPlayed && (pausedForCache || seeking) && noDataSeconds >= 5) || lowBufferStall {
+        if !currentDirect115, (hasPlayed && (pausedForCache || seeking) && noDataSeconds >= 5) || lowBufferStall {
             if !tier1RefreshAttemptedInStall, let engineURL = currentEngineURL,
                LocalStreamProxy.shared.refreshActiveUpstream(for: engineURL) {
                 tier1RefreshAttemptedInStall = true
@@ -1994,9 +2003,16 @@ final class PlaybackController: ObservableObject {
         }
         // Tier-2 兜底重开：中转节点刷新仍未恢复，才停掉重连
         let reopenThreshold = tier1RefreshAttemptedInStall ? 10 : 8
-        if hasPlayed, pausedForCache || seeking, noDataSeconds >= reopenThreshold {
+        if hasPlayed, pausedForCache || seeking, noDataSeconds >= reopenThreshold, !waitForDirect115Recovery() {
             recover(reason: "网络卡住了")
         }
+    }
+
+    private func waitForDirect115Recovery() -> Bool {
+        guard currentDirect115, let engineURL = currentEngineURL,
+              LocalStreamProxy.shared.isRecovering(for: engineURL) else { return false }
+        if statusNote.isEmpty { statusNote = "正在恢复连接…" }
+        return true
     }
 
     /// 停掉卡住的连接，换（新）地址从原位置重新打开；连续恢复期间保留已攒下的重连额度（稳定播放 25 秒自动重置）。
@@ -2037,7 +2053,8 @@ final class PlaybackController: ObservableObject {
             if let refresher, let fresh = try? await refresher() { target = fresh }
             guard let self, !Task.isCancelled, self.session == currentSession else { return }
             self.recoveryTask = nil
-            self.start(target, direct115: direct115, cookie: cookie, customHeaders: customHeaders, position: position, keepPlaying: !self.userPaused, keepDuration: true)
+            self.start(target, direct115: direct115, cookie: cookie, customHeaders: customHeaders,
+                       position: self.pendingSeek ?? position, keepPlaying: !self.userPaused, keepDuration: true)
         }
         updateFlags()
     }
