@@ -2374,41 +2374,12 @@ struct PlaybackControlsView: View {
                             .padding(.vertical, 10)
                     } else {
                         ForEach(playback.onlineSubtitles) { candidate in
-                            let selected = playback.activeOnlineSubtitleID == candidate.id
-                            Button {
-                                Task { await playback.applyOnlineSubtitle(candidate) }
-                                revealControls()
-                            } label: {
-                                HStack(spacing: 8) {
-                                    Image(appIconNamed: AppIcon.check.name)
-                                        .font(.scaled(13, weight: .bold))
-                                        .foregroundStyle(Theme.accent)
-                                        .opacity(selected ? 1 : 0)
-                                        .frame(width: 16)
-                                        .accessibilityHidden(true)
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(candidate.title)
-                                            .font(.scaled(13, weight: selected ? .semibold : .medium))
-                                            .foregroundStyle(selected ? Theme.accent : primaryColor)
-                                            .lineLimit(1)
-                                        Text(candidate.detailLine)
-                                            .font(.scaled(11))
-                                            .foregroundStyle(secondaryColor)
-                                            .lineLimit(1)
-                                    }
-                                    Spacer(minLength: 0)
-                                }
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 6)
-                                .frame(width: innerWidth, minHeight: 44, alignment: .leading)
-                                .background(
-                                    selected ? (landscape ? Color.white.opacity(Theme.Opacity.faint) : Theme.tileTint) : Color.clear,
-                                    in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
-                                )
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityIdentifier("playback.onlineSubtitle.candidate.\(candidate.source.rawValue)")
+                            onlineSubtitleCandidateRow(
+                                candidate,
+                                selected: playback.activeOnlineSubtitleID == Optional(candidate.id),
+                                landscape: landscape,
+                                innerWidth: innerWidth
+                            )
                         }
                     }
                 }
@@ -2416,6 +2387,50 @@ struct PlaybackControlsView: View {
             }
         }
         .frame(width: width - 12, alignment: .leading)
+    }
+
+    private func onlineSubtitleCandidateRow(
+        _ candidate: OnlineSubtitleCandidate,
+        selected: Bool,
+        landscape: Bool,
+        innerWidth: CGFloat
+    ) -> some View {
+        let primaryColor: Color = landscape ? .white : .primary
+        let secondaryColor: Color = landscape ? .white.opacity(Theme.Opacity.strong) : Theme.textSecondary
+        return Button {
+            Task { await playback.applyOnlineSubtitle(candidate) }
+            revealControls()
+        } label: {
+            HStack(spacing: 8) {
+                Image(appIconNamed: AppIcon.check.name)
+                    .font(.scaled(13, weight: .bold))
+                    .foregroundStyle(Theme.accent)
+                    .opacity(selected ? 1 : 0)
+                    .frame(width: 16)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(candidate.title)
+                        .font(.scaled(13, weight: selected ? .semibold : .medium))
+                        .foregroundStyle(selected ? (landscape ? Theme.accent : Theme.accentAlt) : primaryColor)
+                        .lineLimit(1)
+                    Text(candidate.detailLine)
+                        .font(.scaled(11))
+                        .foregroundStyle(secondaryColor)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .frame(width: innerWidth, minHeight: 44, alignment: .leading)
+            .background(
+                selected ? (landscape ? Color.white.opacity(Theme.Opacity.faint) : Theme.tileTint) : Color.clear,
+                in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("playback.onlineSubtitle.candidate.\(candidate.source.rawValue)")
     }
 
     /// 3×2 的比例格，每格一个小图示；下面一行是缩放和还原。选了不收起，方便接着调缩放
