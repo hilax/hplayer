@@ -131,7 +131,7 @@ final class HomeNavigationTests: XCTestCase {
                 navigation.path.append(MineRoute.page(.downloads))
             case .cloud:
                 navigation.path.append(CloudRoute.page(.offline))
-            case .settings:
+            case .mine, .search:
                 navigation.path.append(MineRoute.page(.localVideos))
             }
         }
