@@ -156,6 +156,8 @@ struct MagnetEngineSmoke {
         expect(uri.contains("&dht=router.bittorrent.com:6881"), "adds DHT bootstrap node")
         expect(uri.components(separatedBy: "&tr=").count - 1 == PublicTrackers.builtIn.count + 1, "adds public trackers")
         expect(PublicTrackers.builtIn.allSatisfy { MagnetLink.isValidTracker($0) }, "built-in trackers are valid")
+        let bloatedTrackers = (0..<400).map { "udp://tracker\($0).example.org:6969/announce" }
+        expect(rich.engineURI(publicTrackers: bloatedTrackers).utf8.count <= 16 * 1024, "engineURI fits native limit")
         print("Magnet link parsing passed")
     }
 }

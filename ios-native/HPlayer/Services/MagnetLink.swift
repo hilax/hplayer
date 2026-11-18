@@ -35,13 +35,15 @@ struct MagnetLink: Equatable, Sendable {
         return "\(infoHash.prefix(6))…\(infoHash.suffix(6))".uppercased()
     }
 
-    /// DHT 引导节点。引擎默认只有 dht.libtorrent.org 一个，第一次使用时找节点会很慢。
+    /// DHT 引导节点。引擎默认只有 dht.libtorrent.org 一个，多补充几个稳定节点加快首次找节点速度。
     static let dhtBootstrapNodes = [
         "router.bittorrent.com:6881",
         "router.utorrent.com:6881",
         "dht.transmissionbt.com:6881",
         "dht.libtorrent.org:25401",
         "dht.aelitis.com:6881",
+        "router.silotis.us:6881",
+        "dht.anacrolix.link:42069",
     ]
 
     // MARK: 识别
@@ -213,15 +215,25 @@ struct MagnetLink: Equatable, Sendable {
             parts.append("dn=\(Self.strictEncode(displayName))")
         }
         var seen = Set<String>()
-        for tracker in trackers + extraTrackers where seen.insert(tracker.lowercased()).inserted {
+        for tracker in trackers where seen.insert(tracker.lowercased()).inserted {
             parts.append("tr=\(Self.strictEncode(tracker))")
         }
         for extra in extras {
             parts.append(extra.value.isEmpty ? extra.name : "\(extra.name)=\(extra.value)")
         }
-        for node in dhtNodes {
-            parts.append("dht=\(node)")
+        let nodeParts = dhtNodes.map { "dht=\($0)" }
+        // 确保补充公共 Tracker 和 DHT 节点后不超过引擎 16 KiB 的磁力链接长度限制
+        var usedBytes = "magnet:?".utf8.count
+            + parts.reduce(0) { $0 + $1.utf8.count + 1 }
+            + nodeParts.reduce(0) { $0 + $1.utf8.count + 1 }
+        let maxBytes = 15 * 1024
+        for tracker in extraTrackers where seen.insert(tracker.lowercased()).inserted {
+            let entry = "tr=\(Self.strictEncode(tracker))"
+            guard usedBytes + entry.utf8.count + 1 <= maxBytes else { break }
+            parts.append(entry)
+            usedBytes += entry.utf8.count + 1
         }
+        parts.append(contentsOf: nodeParts)
         return "magnet:?" + parts.joined(separator: "&")
     }
 
@@ -244,7 +256,7 @@ struct MagnetLink: Equatable, Sendable {
 }
 
 /// 公共 Tracker 列表。很多磁力链接只有哈希没有 Tracker，只能靠 DHT 慢慢找节点；
-/// 补上这些 Tracker 后通常几秒内就能拿到节点。列表每天最多在线更新一次，失败时使用内置列表。
+/// 补上这些 Tracker 后通常几秒内就能拿到节点。列表每天最多在线并发更新一次，失败时使用内置列表。
 enum PublicTrackers {
     static let builtIn = [
         "udp://tracker.opentrackr.org:1337/announce",
@@ -264,7 +276,17 @@ enum PublicTrackers {
         "udp://retracker01-msk-virt.corbina.net:80/announce",
         "udp://bt.ktrackers.com:6666/announce",
         "udp://isk.richardsw.club:6969/announce",
+        "udp://tracker.bittorrent.pw:1337/announce",
         "udp://tracker.bittor.pw:1337/announce",
+        "udp://tracker.tryhackx.org:6969/announce",
+        "udp://evan.im:6969/announce",
+        "udp://martin-gebhardt.eu:25/announce",
+        "udp://wepzone.net:6969/announce",
+        "udp://bandito.byterunner.io:6969/announce",
+        "udp://d40969.acod.regrucolo.ru:6969/announce",
+        "udp://1c.premierzal.ru:6969/announce",
+        "udp://leet-tracker.moe:1337/announce",
+        "udp://run.publictracker.xyz:6969/announce",
         "http://tracker.opentrackr.org:1337/announce",
         "http://tracker.bt4g.com:2095/announce",
         "https://tracker.gbitt.info:443/announce",
@@ -272,16 +294,84 @@ enum PublicTrackers {
         "https://tracker.zhuqiy.top:443/announce",
         "http://bt.okmp3.ru:2710/announce",
         "http://open.acgnxtracker.com:80/announce",
+        "https://tracker.moeblog.cn:443/announce",
+        "https://tracker.yemek.in:443/announce",
+        "http://tracker.mywaifu.best:6969/announce",
+        "http://t.overflow.biz:6969/announce",
     ]
 
     private static let cacheKey = "hplayer.magnet.trackers"
     private static let cacheDateKey = "hplayer.magnet.trackersDate"
-    private static let limit = 40
+    private static let limit = 60
     private static let sources = [
         "https://cf.trackerslist.com/best.txt",
+        "https://cf.trackerslist.com/best_ip.txt",
         "https://cdn.jsdelivr.net/gh/ngosang/trackerslist@master/trackers_best.txt",
+        "https://cdn.jsdelivr.net/gh/ngosang/trackerslist@master/trackers_best_ip.txt",
+        "https://fastly.jsdelivr.net/gh/ngosang/trackerslist@master/trackers_best.txt",
         "https://ngosang.github.io/trackerslist/trackers_best.txt",
     ]
+
+    private actor Coordinator {
+        private var inflight: Task<Void, Never>?
+
+        func refreshIfNeeded() async {
+            let defaults = UserDefaults.standard
+            let hasCache = !(defaults.stringArray(forKey: PublicTrackers.cacheKey) ?? []).isEmpty
+            if hasCache,
+               let last = defaults.object(forKey: PublicTrackers.cacheDateKey) as? Date,
+               Date().timeIntervalSince(last) < 24 * 3600 {
+                return
+            }
+            if let existing = inflight {
+                await existing.value
+                return
+            }
+            let task = Task {
+                let collected = await fetchAllSources()
+                guard collected.count >= 5 else { return }
+                let storage = UserDefaults.standard
+                storage.set(Array(collected.prefix(PublicTrackers.limit)), forKey: PublicTrackers.cacheKey)
+                storage.set(Date(), forKey: PublicTrackers.cacheDateKey)
+            }
+            inflight = task
+            await task.value
+            inflight = nil
+        }
+
+        private func fetchAllSources() async -> [String] {
+            let fetchedLists = await withTaskGroup(of: [String].self) { group in
+                for source in PublicTrackers.sources {
+                    group.addTask {
+                        guard let url = URL(string: source) else { return [] }
+                        var request = URLRequest(url: url)
+                        request.timeoutInterval = 4
+                        guard let (data, response) = try? await URLSession.shared.data(for: request),
+                              (response as? HTTPURLResponse)?.statusCode == 200,
+                              let text = String(data: data, encoding: .utf8) else {
+                            return []
+                        }
+                        return text
+                            .split(whereSeparator: { $0.isNewline })
+                            .map { $0.trimmingCharacters(in: .whitespaces) }
+                            .filter { MagnetLink.isValidTracker($0) }
+                    }
+                }
+                var merged: [String] = []
+                var seen = Set<String>()
+                for await list in group {
+                    for tracker in list where seen.insert(tracker.lowercased()).inserted {
+                        merged.append(tracker)
+                        if merged.count >= PublicTrackers.limit { break }
+                    }
+                }
+                return merged
+            }
+            return fetchedLists
+        }
+    }
+
+    private static let coordinator = Coordinator()
 
     /// 当前使用的列表：在线更新到的排在前面，再补上内置列表
     static var current: [String] {
@@ -296,23 +386,24 @@ enum PublicTrackers {
     }
 
     static func refreshIfNeeded() async {
-        let defaults = UserDefaults.standard
-        if let last = defaults.object(forKey: cacheDateKey) as? Date, Date().timeIntervalSince(last) < 24 * 3600 { return }
-        for source in sources {
-            guard let url = URL(string: source) else { continue }
-            var request = URLRequest(url: url)
-            request.timeoutInterval = 8
-            guard let result = try? await URLSession.shared.data(for: request) else { continue }
-            let (data, response) = result
-            guard (response as? HTTPURLResponse)?.statusCode == 200, let text = String(data: data, encoding: .utf8) else { continue }
-            let trackers = text
-                .split(whereSeparator: { $0.isNewline })
-                .map { $0.trimmingCharacters(in: .whitespaces) }
-                .filter { MagnetLink.isValidTracker($0) }
-            guard trackers.count >= 5 else { continue }
-            defaults.set(Array(trackers.prefix(limit)), forKey: cacheKey)
-            defaults.set(Date(), forKey: cacheDateKey)
-            return
+        await coordinator.refreshIfNeeded()
+    }
+
+    /// 首次尚无在线缓存时，最多等一小会儿让并发拉取落地；已有缓存时立即返回并在后台刷新。
+    static func ensureFresh(timeoutSeconds: TimeInterval = 1.2) async -> [String] {
+        let cached = UserDefaults.standard.stringArray(forKey: cacheKey) ?? []
+        if !cached.isEmpty {
+            Task { await refreshIfNeeded() }
+            return current
         }
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { await refreshIfNeeded() }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(max(0.1, timeoutSeconds) * 1_000_000_000))
+            }
+            _ = await group.next()
+            group.cancelAll()
+        }
+        return current
     }
 }

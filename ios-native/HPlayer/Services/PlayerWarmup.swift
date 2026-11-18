@@ -19,6 +19,7 @@ enum PlayerWarmup {
         started = true
         lock.unlock()
         guard first else { return }
+        PlayerDiskCache.prepare()
         queue.async {
             let session = AVAudioSession.sharedInstance()
             _ = session.category
@@ -40,6 +41,8 @@ enum PlayerDiskCache {
 
     private static let lock = NSLock()
     private static var measuredLimit: Int?
+    private static var cleanedOnce = false
+    private static var lastMeasuredAt = Date.distantPast
 
     static var directory: URL {
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
@@ -49,15 +52,27 @@ enum PlayerDiskCache {
         return directory
     }
 
-    /// 清理上次没清掉的缓存文件（例如 App 被系统结束），再重新量一下手机的剩余空间
+    /// 首次启动时清理上次没清掉的缓存文件（例如 App 被系统结束），再按需重算可用空间；
+    /// 避免每次打开播放页都在串行队列上阻塞 MPVEngine 初始化。
     static func prepare() {
         queue.async {
-            let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
-            files.forEach { try? FileManager.default.removeItem(at: $0) }
-            let value = measure()
             lock.lock()
-            measuredLimit = value
+            let shouldClean = !cleanedOnce
+            cleanedOnce = true
+            let shouldMeasure = measuredLimit == nil || Date().timeIntervalSince(lastMeasuredAt) >= 60
             lock.unlock()
+
+            if shouldClean {
+                let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
+                files.forEach { try? FileManager.default.removeItem(at: $0) }
+            }
+            if shouldMeasure {
+                let value = measure()
+                lock.lock()
+                measuredLimit = value
+                lastMeasuredAt = Date()
+                lock.unlock()
+            }
         }
     }
 

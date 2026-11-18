@@ -243,6 +243,7 @@ final class PlaybackController: ObservableObject {
     private var currentIMDBID: String?
     private var currentIsAdultVideo = false
     private var currentSkipRemoteHash = false
+    private var currentTorrentStream = false
     private var onlineSubtitleTask: Task<Void, Never>?
     private var onlineSubtitleAutoHandledSession = -1
     private var mountedOnlineTrackID: Int?
@@ -511,10 +512,12 @@ final class PlaybackController: ObservableObject {
         subtitleIdentifier: String? = nil,
         imdbID: String? = nil,
         isAdultVideo: Bool = false,
-        skipRemoteHash: Bool = false
+        skipRemoteHash: Bool = false,
+        isTorrentStream: Bool = false
     ) {
         guard !closingPlayback else { return }
         session += 1
+        currentTorrentStream = isTorrentStream
         if !preservingPosition {
             playedThisSession = false
             softwareFallbackNoticed = false
@@ -598,6 +601,19 @@ final class PlaybackController: ObservableObject {
         PlayerAudioSession.activate()
 
         engine.set("hwdec", hwdecOption)
+        if currentTorrentStream {
+            // 本机 BT 引擎已在 HPlayerMagnet/pieces 做了持久化分片缓存并支持 16KB 块级流式吐出：
+            // 放宽超时以对齐底层 60 秒片块等待，避免 15 秒误切断本地流，并适当缩短探测与内存预读窗口
+            engine.set("network-timeout", "60")
+            engine.set("stream-lavf-o", "reconnect=0")
+            engine.set("demuxer-lavf-probesize", "1572864")
+            engine.set("cache-pause-wait", "2.0")
+        } else {
+            engine.set("network-timeout", "15")
+            engine.set("stream-lavf-o", "reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=4")
+            engine.set("demuxer-lavf-probesize", "4194304")
+            engine.set("cache-pause-wait", preferLargerPauseWait ? "2.5" : "1")
+        }
         applyCacheOptions(engine)
         engine.set("hls-bitrate", "max")
         if let ua = customHeaders["User-Agent"] {
@@ -721,6 +737,17 @@ final class PlaybackController: ObservableObject {
             return
         }
         #endif
+        if currentTorrentStream {
+            engine.set("cache-on-disk", false)
+            let seconds = min(readahead.rawValue, 60)
+            engine.set("demuxer-readahead-secs", "\(seconds)")
+            engine.set("cache-secs", "\(seconds)")
+            engine.set("demuxer-max-bytes", "96MiB")
+            engine.set("demuxer-max-back-bytes", "32MiB")
+            return
+        }
+        engine.set("cache-on-disk", true)
+        engine.set("demuxer-max-back-bytes", "256MiB")
         // 用手机流量时最多只往前存 1 分钟，免得白白多下
         let seconds = expensiveNetwork ? min(readahead.rawValue, ReadaheadLevel.oneMinute.rawValue) : readahead.rawValue
         engine.set("demuxer-readahead-secs", "\(seconds)")
@@ -979,6 +1006,7 @@ final class PlaybackController: ObservableObject {
         opening = false
         userPaused = false
         currentURL = nil
+        currentTorrentStream = false
     }
 
     // MARK: 设置
@@ -1367,8 +1395,10 @@ final class PlaybackController: ObservableObject {
 
     private func reopenInPlace() {
         guard let url = currentURL else { return }
-        open(url, direct115: currentDirect115, directCookie: currentCookie, preservingPosition: true,
-             refreshURL: urlRefresher, autoRecover: watchdogEnabled, openTimeoutSeconds: openTimeoutSeconds)
+        open(url, direct115: currentDirect115, directCookie: currentCookie, customHeaders: currentCustomHeaders,
+             preservingPosition: true, refreshURL: urlRefresher, autoRecover: watchdogEnabled,
+             openTimeoutSeconds: openTimeoutSeconds, streamID: currentStreamID,
+             playlistRenew: currentPlaylistRenew, isTorrentStream: currentTorrentStream)
     }
 
     // MARK: 小窗播放
@@ -1977,7 +2007,7 @@ final class PlaybackController: ObservableObject {
         errorDetail = proxyProblem.isEmpty ? Self.shortReason(from: logLines) : proxyProblem
         error = resumePoint > 1
             ? "\(reason)，自动重连几次都没成功。点「重试」会从 \(Self.clock(resumePoint)) 接着播放。"
-            : "\(reason)，请点「重试」，或换一个画质。"
+            : (currentTorrentStream ? "\(reason)，请点「重试」，或换一个节点较多的链接。" : "\(reason)，请点「重试」，或换一个画质。")
         updateFlags()
     }
 

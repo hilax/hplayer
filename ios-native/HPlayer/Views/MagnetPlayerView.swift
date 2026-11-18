@@ -287,7 +287,12 @@ struct MagnetPlayerView: View {
                 }
             }
 
-            if !controller.usesCloud && controller.elapsed >= 25 {
+            if !controller.usesCloud && !controller.resolveHint.isEmpty {
+                Text(controller.resolveHint)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if !controller.usesCloud && controller.elapsed >= 25 {
                 Text("冷门资源找节点会久一些，可以继续等待；超过两分半会提示你。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -327,7 +332,13 @@ struct MagnetPlayerView: View {
     private var peersDetail: String {
         let swarm = controller.swarm
         if swarm.connected > 0 { return "已连接 \(swarm.connected) 个" }
-        if swarm.connecting > 0 { return "正在连接 \(swarm.connecting) 个" }
+        if swarm.connecting > 0 { return "已发现 \(max(swarm.known, swarm.connecting)) 个 · 正在连接 \(swarm.connecting) 个" }
+        if swarm.trackerPeers + swarm.dhtPeers > 0 {
+            return "已发现 \(swarm.trackerPeers + swarm.dhtPeers) 个节点"
+        }
+        if swarm.trackerReplies + swarm.dhtReplies > 0 {
+            return "正在向 Tracker/DHT 寻址"
+        }
         return "搜索中"
     }
 

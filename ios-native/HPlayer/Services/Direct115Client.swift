@@ -39,6 +39,20 @@ struct Direct115Client {
         return P115Status(configured: true, userId: id, userName: Self.string(data["user_name"]), vip: Self.integer(data["vip"]), error: nil, message: nil)
     }
 
+    /// 进程内按 Cookie 缓存用户编号，避免每次提交离线任务都额外发一次用户信息请求。
+    func cachedUserID() async throws -> Int {
+        if protocolClasses == nil, let cached = Direct115SessionCache.shared.userID(for: cookie) {
+            return cached
+        }
+        guard let id = try await user().userId, id > 0 else {
+            throw APIError.server("115 登录状态无效，请重新登录")
+        }
+        if protocolClasses == nil {
+            Direct115SessionCache.shared.storeUserID(id, for: cookie)
+        }
+        return id
+    }
+
     func quota() async throws -> QuotaResponse {
         let json = try await jsonRequest("https://webapi.115.com/user/space")
         let data = json["data"] as? [String: Any] ?? [:]
@@ -258,5 +272,85 @@ private final class RedirectGuard: NSObject, URLSessionTaskDelegate {
         var next = request
         if host != "115.com" && !host.hasSuffix(".115.com") { next.setValue(nil, forHTTPHeaderField: "Cookie") }
         completionHandler(next)
+    }
+}
+
+/// 进程内按登录 Cookie 隔离的 115 短时会话缓存（userID 与最近预取的原画直链）。
+final class Direct115SessionCache: @unchecked Sendable {
+    static let shared = Direct115SessionCache()
+
+    private struct CachedURL {
+        let url: URL
+        let expiresAt: Date
+    }
+
+    private let lock = NSLock()
+    private var userIDs: [String: Int] = [:]
+    private var userOrder: [String] = []
+    private var originalURLs: [String: CachedURL] = [:]
+    private var urlOrder: [String] = []
+    private let originalURLTTL: TimeInterval = 45
+
+    func userID(for cookie: String) -> Int? {
+        lock.lock()
+        defer { lock.unlock() }
+        return userIDs[cookie]
+    }
+
+    func storeUserID(_ id: Int, for cookie: String) {
+        guard id > 0, !cookie.isEmpty else { return }
+        lock.lock()
+        defer { lock.unlock() }
+        userIDs[cookie] = id
+        userOrder.removeAll { $0 == cookie }
+        userOrder.append(cookie)
+        if userOrder.count > 16, let evicted = userOrder.first {
+            userOrder.removeFirst()
+            userIDs.removeValue(forKey: evicted)
+        }
+    }
+
+    func originalURL(cookie: String, pickCode: String, now: Date = Date()) -> URL? {
+        let key = "\(cookie)|\(pickCode)"
+        lock.lock()
+        defer { lock.unlock() }
+        guard let entry = originalURLs[key] else { return nil }
+        if entry.expiresAt <= now {
+            originalURLs.removeValue(forKey: key)
+            urlOrder.removeAll { $0 == key }
+            return nil
+        }
+        return entry.url
+    }
+
+    func storeOriginalURL(_ url: URL, cookie: String, pickCode: String, now: Date = Date()) {
+        guard !cookie.isEmpty, !pickCode.isEmpty else { return }
+        let key = "\(cookie)|\(pickCode)"
+        lock.lock()
+        defer { lock.unlock() }
+        originalURLs[key] = CachedURL(url: url, expiresAt: now.addingTimeInterval(originalURLTTL))
+        urlOrder.removeAll { $0 == key }
+        urlOrder.append(key)
+        if urlOrder.count > 64, let evicted = urlOrder.first {
+            urlOrder.removeFirst()
+            originalURLs.removeValue(forKey: evicted)
+        }
+    }
+
+    func invalidateOriginalURL(cookie: String, pickCode: String) {
+        let key = "\(cookie)|\(pickCode)"
+        lock.lock()
+        defer { lock.unlock() }
+        originalURLs.removeValue(forKey: key)
+        urlOrder.removeAll { $0 == key }
+    }
+
+    func reset() {
+        lock.lock()
+        defer { lock.unlock() }
+        userIDs.removeAll()
+        userOrder.removeAll()
+        originalURLs.removeAll()
+        urlOrder.removeAll()
     }
 }

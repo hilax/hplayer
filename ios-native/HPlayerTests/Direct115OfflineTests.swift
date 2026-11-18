@@ -205,6 +205,94 @@ final class Direct115OfflineTests: XCTestCase {
         XCTAssertTrue(query.contains("limit=1"))
         XCTAssertTrue(query.contains("cid=5"))
     }
+
+    func testOfflineTaskQueriesRemainingPagesConcurrentlyAndStopsWhenNoMore() async throws {
+        RoutedURLProtocol.install { request in
+            let query = request.url?.query ?? ""
+            if query.contains("page=1") {
+                return .json(["state": true, "count": 90, "page_count": 3, "tasks": [self.rawTask("other", status: 2, percent: 100)]])
+            }
+            if query.contains("page=2") {
+                return .json(["state": true, "count": 90, "page_count": 3, "tasks": [self.rawTask("other2", status: 2, percent: 100)]])
+            }
+            return .json(["state": true, "count": 90, "page_count": 3, "tasks": [self.rawTask("target", status: 2, percent: 100)]])
+        }
+        let found = try await client().offlineTask(infoHash: "TARGET")
+        XCTAssertEqual(found?.infoHash, "target")
+        XCTAssertEqual(RoutedURLProtocol.requests().count, 3)
+
+        RoutedURLProtocol.install { _ in
+            .json(["state": true, "count": 1, "page_count": 1, "tasks": [self.rawTask("only", status: 2, percent: 100)]])
+        }
+        let missed = try await client().offlineTask(infoHash: "missing")
+        XCTAssertNil(missed)
+        XCTAssertEqual(RoutedURLProtocol.requests().count, 1)
+    }
+
+    func testOfflineVideosCollectsNestedDirectories() async throws {
+        RoutedURLProtocol.install { request in
+            let url = request.url?.absoluteString ?? ""
+            if url.contains("cid=900") {
+                return .json(["state": true, "cid": "900", "data": [
+                    ["fid": "1", "n": "root.mp4", "s": 1000, "pc": "pc0", "isv": 1],
+                    ["cid": "901", "n": "Season1"],
+                    ["cid": "902", "n": "Specials"],
+                ]])
+            }
+            if url.contains("cid=901") {
+                return .json(["state": true, "cid": "901", "data": [
+                    ["fid": "2", "n": "ep01.mkv", "s": 2000, "pc": "pc1", "isv": 1],
+                ]])
+            }
+            if url.contains("cid=902") {
+                return .json(["state": true, "cid": "902", "data": [
+                    ["fid": "3", "n": "sp01.mp4", "s": 500, "pc": "pc2", "isv": 1],
+                ]])
+            }
+            return .json(["state": false])
+        }
+        let task = Direct115Client.parseTask(rawTask("abc", status: 2, percent: 100))
+        let videos = try await client().offlineVideos(for: task)
+        XCTAssertEqual(Set(videos.map(\.file.pickCode)), ["pc0", "pc1", "pc2"])
+        XCTAssertEqual(videos.first { $0.file.pickCode == "pc1" }?.folder, "Season1")
+        XCTAssertEqual(videos.first { $0.file.pickCode == "pc2" }?.folder, "Specials")
+    }
+
+    func testSessionCacheIsolatesCookiesAndExpiresOriginalURLs() throws {
+        let cache = Direct115SessionCache()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        cache.storeUserID(101, for: "UID=101_a")
+        cache.storeUserID(202, for: "UID=202_b")
+        XCTAssertEqual(cache.userID(for: "UID=101_a"), 101)
+        XCTAssertEqual(cache.userID(for: "UID=202_b"), 202)
+
+        let url = try XCTUnwrap(URL(string: "https://cdn.example.com/file.mp4"))
+        cache.storeOriginalURL(url, cookie: "UID=101_a", pickCode: "pc1", now: now)
+        XCTAssertEqual(cache.originalURL(cookie: "UID=101_a", pickCode: "pc1", now: now.addingTimeInterval(30)), url)
+        XCTAssertNil(cache.originalURL(cookie: "UID=202_b", pickCode: "pc1", now: now.addingTimeInterval(30)))
+        XCTAssertNil(cache.originalURL(cookie: "UID=101_a", pickCode: "pc1", now: now.addingTimeInterval(46)))
+
+        cache.storeOriginalURL(url, cookie: "UID=101_a", pickCode: "pc2", now: now)
+        cache.invalidateOriginalURL(cookie: "UID=101_a", pickCode: "pc2")
+        XCTAssertNil(cache.originalURL(cookie: "UID=101_a", pickCode: "pc2", now: now))
+    }
+
+    func testMagnetCloudVideoCacheIsolatesAccountsAndExpires() {
+        let suiteName = "hplayer.test.cloudCache.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let cache = MagnetCloudVideoCache(defaults: defaults, storageKey: "testCache")
+        let file = P115File(id: "1", parentId: "0", name: "movie.mkv", isDir: false, kind: "video",
+                            size: 1024, pickCode: "pc1", sha1: "", updatedAt: "", thumbUrl: "")
+        let videos = [Direct115CloudVideo(file: file, folder: "")]
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+
+        cache.save(infoHash: "ABCDEF", cookie: "UID=111_dev", name: "Movie", totalSize: 1024, videos: videos, now: now)
+        XCTAssertEqual(cache.get(infoHash: "abcdef", cookie: "UID=111_dev", now: now.addingTimeInterval(60))?.videos, videos)
+        XCTAssertNil(cache.get(infoHash: "abcdef", cookie: "UID=222_dev", now: now.addingTimeInterval(60)))
+        XCTAssertNil(cache.get(infoHash: "abcdef", cookie: "UID=111_dev", now: now.addingTimeInterval(15 * 24 * 3600)))
+    }
 }
 
 final class OfflineLinksTests: XCTestCase {

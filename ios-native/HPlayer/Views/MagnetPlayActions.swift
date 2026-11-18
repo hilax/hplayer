@@ -281,24 +281,28 @@ private struct MagnetCloudReadyModifier: ViewModifier {
 }
 
 extension View {
-    /// 页面开着时让 BT 引擎先跑起来（DHT 先热），并在后台预取最可能被点的那个资源的种子信息。
-    /// 页面真正被移除时才放开引擎（引擎空闲 20 秒后自己关）。
+    /// 页面开着时让 BT 引擎先跑起来（DHT 先热），并在后台预取排在最前面的几个资源的种子信息。
+    /// 页面真正被移除时才放开引擎（引擎长时间空闲后自己关）。
     func magnetEngineWarmup(prefetch magnet: String?) -> some View {
-        modifier(MagnetEngineWarmupModifier(magnet: magnet))
+        modifier(MagnetEngineWarmupModifier(magnets: magnet.map { [$0] } ?? []))
+    }
+
+    func magnetEngineWarmup(prefetch magnets: [String]) -> some View {
+        modifier(MagnetEngineWarmupModifier(magnets: magnets))
     }
 }
 
 private struct MagnetEngineWarmupModifier: ViewModifier {
-    let magnet: String?
+    let magnets: [String]
     @StateObject private var warmup = MagnetEngineWarmup()
 
     func body(content: Content) -> some View {
         content
             .onAppear {
                 warmup.start()
-                warmup.prefetch(magnet)
+                warmup.prefetch(magnets)
             }
-            .onChange(of: magnet) { next in warmup.prefetch(next) }
+            .onChange(of: magnets) { next in warmup.prefetch(next) }
     }
 }
 
@@ -318,10 +322,11 @@ private final class MagnetEngineWarmup: ObservableObject {
         }
     }
 
-    func prefetch(_ magnet: String?) {
-        guard held, let magnet, !magnet.isEmpty, !prefetched.contains(magnet) else { return }
-        prefetched.insert(magnet)
-        MagnetEngineHost.shared.prefetch(magnet)
+    func prefetch(_ magnets: [String]) {
+        guard held else { return }
+        let fresh = magnets.filter { !$0.isEmpty && prefetched.insert($0).inserted }
+        guard !fresh.isEmpty else { return }
+        MagnetEngineHost.shared.prefetch(fresh, limit: 3)
     }
 
     deinit {

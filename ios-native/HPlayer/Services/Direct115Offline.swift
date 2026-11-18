@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// 115 云下载（离线下载）任务
@@ -76,7 +77,7 @@ enum Direct115OfflineClearScope: Int {
 }
 
 /// 离线完成后找到的视频，folder 是相对于下载结果的文件夹路径
-struct Direct115CloudVideo {
+struct Direct115CloudVideo: Codable, Equatable {
     let file: P115File
     let folder: String
 }
@@ -176,13 +177,25 @@ extension Direct115Client {
         throw lastError
     }
 
-    /// 在离线任务列表里找这个资源（最多看前 3 页）
+    /// 在离线任务列表里找这个资源（第 1 页优先；未命中时并发查第 2、3 页）
     func offlineTask(infoHash: String) async throws -> Direct115OfflineTask? {
         let target = infoHash.lowercased()
-        for page in 1...3 {
-            let tasks = try await offlineTasks(page: page)
+        let first = try await offlinePage(1)
+        if let task = first.tasks.first(where: { $0.infoHash == target }) { return task }
+        guard first.hasMore else { return nil }
+
+        let client = self
+        let remainingPages = first.pageCount >= 3 || first.pageCount == 0 ? [2, 3] : [2]
+        let pages = try await withThrowingTaskGroup(of: (Int, [Direct115OfflineTask]).self) { group in
+            for page in remainingPages {
+                group.addTask { (page, try await client.offlineTasks(page: page)) }
+            }
+            var collected: [(Int, [Direct115OfflineTask])] = []
+            for try await result in group { collected.append(result) }
+            return collected.sorted { $0.0 < $1.0 }
+        }
+        for (_, tasks) in pages {
             if let task = tasks.first(where: { $0.infoHash == target }) { return task }
-            if tasks.isEmpty { break }
         }
         return nil
     }
@@ -272,7 +285,7 @@ extension Direct115Client {
         return Self.parseFolderTrail(json)
     }
 
-    /// 离线完成后找出里面的视频：结果是文件夹就往下找（最多三层），是单个文件就按名称搜索
+    /// 离线完成后找出里面的视频：结果是文件夹就分批并发往下找（最多三层），是单个文件就按名称搜索
     func offlineVideos(for task: Direct115OfflineTask) async throws -> [Direct115CloudVideo] {
         var videos: [Direct115CloudVideo] = []
         if !task.fileID.isEmpty, task.fileID.allSatisfy(\.isNumber), let root = try? await folderEntries(task.fileID) {
@@ -286,14 +299,29 @@ extension Direct115Client {
             }
             var visited = 0
             while !queue.isEmpty, visited < 30 {
-                let next = queue.removeFirst()
-                visited += 1
-                guard let entries = try? await folderEntries(next.cid) else { continue }
-                for entry in entries {
-                    if entry.isDir, next.depth < 3 {
-                        queue.append((entry.id, "\(next.path)/\(entry.name)", next.depth + 1))
-                    } else if entry.isVideo, !entry.pickCode.isEmpty {
-                        videos.append(Direct115CloudVideo(file: entry, folder: next.path))
+                let capacity = min(4, 30 - visited)
+                let batch = Array(queue.prefix(capacity))
+                queue.removeFirst(batch.count)
+                visited += batch.count
+
+                let client = self
+                let fetched = await withTaskGroup(of: (Int, [P115File]?).self) { group in
+                    for (offset, item) in batch.enumerated() {
+                        group.addTask { (offset, try? await client.folderEntries(item.cid)) }
+                    }
+                    var results: [(Int, [P115File]?)] = []
+                    for await result in group { results.append(result) }
+                    return results.sorted { $0.0 < $1.0 }
+                }
+                for (offset, entries) in fetched {
+                    guard let entries else { continue }
+                    let parent = batch[offset]
+                    for entry in entries {
+                        if entry.isDir, parent.depth < 3 {
+                            queue.append((entry.id, "\(parent.path)/\(entry.name)", parent.depth + 1))
+                        } else if entry.isVideo, !entry.pickCode.isEmpty {
+                            videos.append(Direct115CloudVideo(file: entry, folder: parent.path))
+                        }
                     }
                 }
             }
@@ -310,7 +338,14 @@ extension Direct115Client {
 
     /// 原文件下载地址，用来播放还没有转码的视频，也用来下载到手机。
     /// 地址和请求时的 User-Agent 绑定，播放器、下载器要用同一个。
-    func originalURL(pickCode: String) async throws -> URL {
+    func originalURL(pickCode: String, useCache: Bool = true) async throws -> URL {
+        if useCache, protocolClasses == nil,
+           let cached = Direct115SessionCache.shared.originalURL(cookie: cookie, pickCode: pickCode) {
+            return cached
+        }
+        if !useCache, protocolClasses == nil {
+            Direct115SessionCache.shared.invalidateOriginalURL(cookie: cookie, pickCode: pickCode)
+        }
         let (json, key) = try await encryptedPost("https://proapi.115.com/app/chrome/downurl", payload: ["pickcode": pickCode], userAgent: Self.userAgent)
         guard Self.succeeded(json), let text = json["data"] as? String, !text.isEmpty else {
             let message = Self.errorMessage(json)
@@ -324,6 +359,9 @@ extension Direct115Client {
             guard let info = value as? [String: Any] else { continue }
             let address = (info["url"] as? [String: Any]).map { Self.text($0["url"]) } ?? Self.text(info["url"])
             if let url = URL(string: address), url.scheme?.lowercased() == "https" || url.scheme?.lowercased() == "http" {
+                if protocolClasses == nil {
+                    Direct115SessionCache.shared.storeOriginalURL(url, cookie: cookie, pickCode: pickCode)
+                }
                 return url
             }
         }
@@ -549,5 +587,104 @@ extension Direct115Client {
         if let value = value as? String { return value }
         if let value = value as? NSNumber { return value.stringValue }
         return ""
+    }
+}
+
+/// 按 115 账号隔离的已离线视频列表缓存。
+/// 下次再播已经在 115 下好的磁力资源时直接取回视频和 pickCode，用 1 次原画地址校验即可起播，
+/// 省去重复 `user()`、`addOfflineTask()`、`offlineTask()` 翻页和目录递归扫描；文件被删时自动失效并回退重查。
+final class MagnetCloudVideoCache: @unchecked Sendable {
+    static let shared = MagnetCloudVideoCache()
+
+    struct Entry: Codable, Equatable {
+        let key: String
+        let infoHash: String
+        let name: String
+        let totalSize: Int
+        let videos: [Direct115CloudVideo]
+        var updatedAt: Date
+    }
+
+    private let defaults: UserDefaults
+    private let storageKey: String
+    private let lock = NSLock()
+    private let maxEntries = 120
+    private let ttl: TimeInterval = 14 * 24 * 3600
+    private var entries: [String: Entry] = [:]
+
+    init(defaults: UserDefaults = .standard, storageKey: String = "hplayer.magnet.cloudVideoCache") {
+        self.defaults = defaults
+        self.storageKey = storageKey
+        if let data = defaults.data(forKey: storageKey),
+           let decoded = try? JSONDecoder().decode([Entry].self, from: data) {
+            for entry in decoded {
+                entries[entry.key] = entry
+            }
+        }
+    }
+
+    func get(infoHash: String, cookie: String, now: Date = Date()) -> Entry? {
+        let key = Self.cacheKey(infoHash: infoHash, cookie: cookie)
+        lock.lock()
+        defer { lock.unlock() }
+        guard var entry = entries[key] else { return nil }
+        if now.timeIntervalSince(entry.updatedAt) > ttl || entry.videos.isEmpty {
+            entries.removeValue(forKey: key)
+            persistLocked()
+            return nil
+        }
+        entry.updatedAt = now
+        entries[key] = entry
+        return entry
+    }
+
+    func save(infoHash: String, cookie: String, name: String, totalSize: Int, videos: [Direct115CloudVideo], now: Date = Date()) {
+        guard !infoHash.isEmpty, !cookie.isEmpty, !videos.isEmpty else { return }
+        let normalized = infoHash.lowercased()
+        let key = Self.cacheKey(infoHash: normalized, cookie: cookie)
+        let entry = Entry(key: key, infoHash: normalized, name: name, totalSize: totalSize, videos: videos, updatedAt: now)
+        lock.lock()
+        defer { lock.unlock() }
+        entries[key] = entry
+        if entries.count > maxEntries {
+            let sortedKeys = entries.values.sorted { $0.updatedAt > $1.updatedAt }.prefix(maxEntries).map(\.key)
+            let keep = Set(sortedKeys)
+            entries = entries.filter { keep.contains($0.key) }
+        }
+        persistLocked()
+    }
+
+    func remove(infoHash: String, cookie: String) {
+        let key = Self.cacheKey(infoHash: infoHash, cookie: cookie)
+        lock.lock()
+        defer { lock.unlock() }
+        guard entries.removeValue(forKey: key) != nil else { return }
+        persistLocked()
+    }
+
+    func clear() {
+        lock.lock()
+        defer { lock.unlock() }
+        entries.removeAll()
+        defaults.removeObject(forKey: storageKey)
+    }
+
+    private func persistLocked() {
+        let list = Array(entries.values.sorted { $0.updatedAt > $1.updatedAt }.prefix(maxEntries))
+        if let data = try? JSONEncoder().encode(list) {
+            defaults.set(data, forKey: storageKey)
+        }
+    }
+
+    static func cacheKey(infoHash: String, cookie: String) -> String {
+        "\(accountScope(for: cookie))|\(infoHash.lowercased())"
+    }
+
+    private static func accountScope(for cookie: String) -> String {
+        if let account = AppState.accountID(in: cookie) {
+            return account
+        }
+        let digest = SHA256.hash(data: Data(cookie.utf8))
+        return "hash:" + digest.prefix(8).map { String(format: "%02x", $0) }.joined()
     }
 }

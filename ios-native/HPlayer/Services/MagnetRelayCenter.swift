@@ -148,6 +148,7 @@ final class MagnetRelayCenter: ObservableObject {
         if let status = statuses[hash], status.isWorking { return }
         removeJob(hash)
         let controller = MagnetController()
+        controller.autoPlaysSingleMain = false
         controller.activate()
         controller.configureCloud(client: nil, enabled: false)
         statuses[hash] = .connecting(0)
@@ -207,9 +208,6 @@ final class MagnetRelayCenter: ObservableObject {
                 markDownloaded(hash)
                 // 结果（文件列表、115 播放地址）留在控制器里；BT 引擎这时用不上，先放掉
                 controller.deactivate()
-            } else if controller.playerVisible {
-                // 只有一个正片时控制器会自己开播；这时还没有播放窗口，先停下，等播放窗口接手再播
-                controller.closePlayer()
             }
             if watching[hash] != nil {
                 readyToOpen = ReadyItem(hash: hash, mode: job.mode)

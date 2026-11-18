@@ -1,11 +1,13 @@
 import Combine
 import Foundation
+import Network
+import UIKit
 
 /// 所有磁力页面共用一个 BT 引擎。
 ///
 /// 进入磁力页面时就启动引擎，DHT 在用户粘贴链接的这段时间里先热起来；
-/// 页面都关闭 20 秒后再关引擎，关闭时引擎会把 DHT 节点表和已解析的种子信息存到本机，
-/// 下次打开同一个链接可以直接读到文件列表。
+/// 前台切换页面期间保持 3 分钟温热，退入后台或长时间空闲后再关闭引擎，
+/// 关闭时引擎会把 DHT 节点表和已解析的种子信息存到本机，下次打开同一个链接可以直接读到文件列表。
 @MainActor
 final class MagnetEngineHost {
     static let shared = MagnetEngineHost()
@@ -17,17 +19,55 @@ final class MagnetEngineHost {
     private var users = 0
     /// 每个资源（信息哈希，小写）拿种子信息的任务：预取和真正播放共用同一个，不重复向引擎添加
     private var metadataTasks: [String: Task<String, Error>] = [:]
+    private let networkMonitor = NWPathMonitor()
+    private var expensiveNetwork = false
+    private var inBackground = false
+
+    private init() {
+        networkMonitor.pathUpdateHandler = { [weak self] path in
+            let expensive = path.isExpensive
+            Task { @MainActor [weak self] in self?.expensiveNetwork = expensive }
+        }
+        networkMonitor.start(queue: DispatchQueue(label: "app.hplayer.magnet.network"))
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.handleBackgroundChange(true) }
+        }
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.handleBackgroundChange(false) }
+        }
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.users == 0 else { return }
+                await self.shutdownIfIdle()
+            }
+        }
+    }
 
     var isRunning: Bool { runningEngine != nil }
 
     /// 拿到这个磁力的种子 ID（种子信息已就绪，可以列文件）。
     /// 同一个资源只解析一次：详情页的预取、卡片上的「磁力播放」、播放窗口都等同一个任务。
-    func metadataTask(infoHash: String, uri: String) -> Task<String, Error> {
-        let key = infoHash.lowercased()
+    func metadataTask(link: MagnetLink) -> Task<String, Error> {
+        let key = link.infoHash.lowercased()
         if let existing = metadataTasks[key] { return existing }
         let task = Task<String, Error> { [weak self] in
             guard let self else { throw CancellationError() }
-            let engine = try await self.engine()
+            async let engineTask = self.engine()
+            async let trackersTask = PublicTrackers.ensureFresh(timeoutSeconds: 1.2)
+            let (engine, trackers) = try await (engineTask, trackersTask)
+            let uri = link.engineURI(publicTrackers: trackers)
             return try await engine.addMagnet(uri)
         }
         metadataTasks[key] = task
@@ -40,11 +80,21 @@ final class MagnetEngineHost {
         return task
     }
 
-    /// 详情页打开时先在后台解析排在最前面的资源：点「磁力播放」时文件列表往往已经到了。
-    /// 只拿种子信息（几百 KB），不下载视频内容。
+    /// 详情页打开时先在后台解析排在最前面的几个资源的种子信息，点「磁力播放」时文件列表往往已经到了。
+    /// 引擎在此阶段只拉取几百 KB 元数据，不下载视频内容。
+    func prefetch(_ magnets: [String], limit: Int = 3) {
+        var seen = Set<String>()
+        var count = 0
+        for magnet in magnets {
+            guard let link = MagnetLink.parse(magnet), seen.insert(link.infoHash.lowercased()).inserted else { continue }
+            _ = metadataTask(link: link)
+            count += 1
+            if count >= limit { break }
+        }
+    }
+
     func prefetch(_ magnet: String) {
-        guard let link = MagnetLink.parse(magnet) else { return }
-        _ = metadataTask(infoHash: link.infoHash, uri: link.engineURI(publicTrackers: PublicTrackers.current))
+        prefetch([magnet], limit: 1)
     }
 
     func acquire() {
@@ -56,9 +106,24 @@ final class MagnetEngineHost {
     func release() {
         users = max(0, users - 1)
         guard users == 0 else { return }
+        scheduleIdleShutdown(seconds: inBackground ? 15 : 180)
+    }
+
+    private func handleBackgroundChange(_ background: Bool) {
+        inBackground = background
+        guard users == 0 else { return }
+        if background {
+            scheduleIdleShutdown(seconds: 15)
+        } else {
+            idleShutdown?.cancel()
+            idleShutdown = nil
+        }
+    }
+
+    private func scheduleIdleShutdown(seconds: UInt64) {
         idleShutdown?.cancel()
         idleShutdown = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 20_000_000_000)
+            try? await Task.sleep(nanoseconds: seconds * 1_000_000_000)
             guard !Task.isCancelled else { return }
             await self?.shutdownIfIdle()
         }
@@ -68,9 +133,10 @@ final class MagnetEngineHost {
         if let runningEngine { return runningEngine }
         if let creating { return try await creating.value }
         let previousShutdown = shuttingDown
+        let expensive = expensiveNetwork
         let task = Task<NuvioEngine, Error> {
             await previousShutdown?.value
-            return try await NuvioEngine.create(configuration: try Self.configuration())
+            return try await NuvioEngine.create(configuration: try Self.configuration(expensiveNetwork: expensive))
         }
         creating = task
         do {
@@ -98,7 +164,7 @@ final class MagnetEngineHost {
         await task.value
     }
 
-    private static func configuration() throws -> NuvioEngineConfiguration {
+    private static func configuration(expensiveNetwork: Bool) throws -> NuvioEngineConfiguration {
         guard let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else {
             throw APIError.server("无法创建本机缓存")
         }
@@ -113,13 +179,15 @@ final class MagnetEngineHost {
             .volumeAvailableCapacityForImportantUsage ?? 0
         let gigabyte: UInt64 = 1024 * 1024 * 1024
         let diskCache: UInt64 = free > 12 * 1024 * 1024 * 1024 ? 2 * gigabyte : gigabyte
+        // Wi-Fi 下适度放宽上传以提升 BitTorrent 节点互换与 unchoke 速率，蜂窝网络下保持克制
+        let uploadLimit: UInt64 = expensiveNetwork ? 256 * 1024 : 2 * 1024 * 1024
         return NuvioEngineConfiguration(
             dataDirectory: data,
             cacheDirectory: pieces,
             memoryCacheCapacityBytes: 64 * 1024 * 1024,
             diskCacheCapacityBytes: diskCache,
             torrentProfile: .fast,
-            uploadMode: .limited(bytesPerSecond: 512 * 1024),
+            uploadMode: .limited(bytesPerSecond: uploadLimit),
             // 默认 30 秒没有读取就回收数据流，暂停久一点再继续会播不了；放宽到 30 分钟
             streamInactivityTimeoutMilliseconds: 30 * 60 * 1000
         )
@@ -168,6 +236,10 @@ final class MagnetController: ObservableObject {
         var known = 0
         var seeds = 0
         var downloadRate: UInt64 = 0
+        var trackerReplies = 0
+        var dhtReplies = 0
+        var trackerPeers = 0
+        var dhtPeers = 0
     }
 
     let playback = PlaybackController()
@@ -178,7 +250,10 @@ final class MagnetController: ObservableObject {
     @Published private(set) var catalog: MagnetCatalog?
     @Published private(set) var error = ""
     @Published private(set) var elapsed = 0
+    @Published private(set) var resolveHint = ""
     @Published private(set) var swarm = Swarm()
+    /// 只有一个正片时是否自动进入播放状态（卡片后台预解析设为 false，改在后台静默预热流）
+    var autoPlaysSingleMain = true
 
     @Published var playerVisible = false
     @Published private(set) var playingIndex: UInt32?
@@ -205,6 +280,9 @@ final class MagnetController: ObservableObject {
     private let history = MagnetHistoryStore.shared
     private var torrentID: String?
     private var stream: NuvioStream?
+    private var prewarmTask: Task<NuvioStream?, Never>?
+    private var prewarmTargetIndex: UInt32?
+    private var prewarmedStream: NuvioStream?
     private var resolveTask: Task<Void, Never>?
     private var playTask: Task<Void, Never>?
     private var monitorTask: Task<Void, Never>?
@@ -288,10 +366,14 @@ final class MagnetController: ObservableObject {
         playerVisible = false
         let oldStream = stream
         stream = nil
+        let oldPrewarm = consumePrewarmForStop(excludingID: oldStream?.id)
         let host = self.host
         Task {
             if let oldStream, host.isRunning, let engine = try? await host.engine() {
                 try? await engine.stopStream(oldStream.id)
+            }
+            if let oldPrewarm, host.isRunning, let engine = try? await host.engine() {
+                try? await engine.stopStream(oldPrewarm.id)
             }
             host.release()
         }
@@ -319,6 +401,7 @@ final class MagnetController: ObservableObject {
         torrentID = nil
         error = ""
         elapsed = 0
+        resolveHint = ""
         phase = .resolving
         step = engineReady ? .peers : .engine
         if cloudEnabled {
@@ -334,9 +417,8 @@ final class MagnetController: ObservableObject {
             cloudTask?.cancel()
             cloudTask = nil
             cloud = .off
-            let uri = newLink.engineURI(publicTrackers: PublicTrackers.current)
             resolveTask = Task { [weak self] in
-                await self?.resolve(newLink, uri: uri)
+                await self?.resolve(newLink)
             }
         }
     }
@@ -366,19 +448,20 @@ final class MagnetController: ObservableObject {
         catalog = nil
         torrentID = nil
         error = ""
+        resolveHint = ""
         resolveStarted = nil
         elapsed = 0
         phase = .idle
     }
 
-    private func resolve(_ link: MagnetLink, uri: String) async {
+    private func resolve(_ link: MagnetLink) async {
         do {
             let engine = try await host.engine()
             engineReady = true
             guard !Task.isCancelled else { return }
             if step < .peers { step = .peers }
             // 详情页可能已经在预取这个资源：直接等那份结果，不重复添加
-            let pending = host.metadataTask(infoHash: link.infoHash, uri: uri)
+            let pending = host.metadataTask(link: link)
             let id = try await Self.withTimeout(seconds: 150, message: Self.timeoutMessage) {
                 try await awaitCancellable(pending)
             }
@@ -393,9 +476,15 @@ final class MagnetController: ObservableObject {
             step = .done
             phase = .ready
             resolveStarted = nil
+            resolveHint = ""
             history.recordResolved(link: link, catalog: catalog)
-            // 只有一个正片时直接开始播放
-            if catalog.main.count == 1 { play(catalog.main[0]) }
+            if autoPlaysSingleMain {
+                // 只有一个正片时直接开始播放
+                if catalog.main.count == 1 { play(catalog.main[0]) }
+            } else if let prewarmPick = preferredBTFile(in: catalog, infoHash: link.infoHash) {
+                // 卡片接力等待打开窗口期间，提前调用 prepareStream 让底层开始调度片头与片尾关键块
+                startPrewarm(torrentID: id, fileIndex: prewarmPick.index)
+            }
         } catch is CancellationError {
             return
         } catch {
@@ -485,14 +574,100 @@ final class MagnetController: ObservableObject {
         playError = ""
         playingIndex = nil
         playback.stop()
-        if let old = stream {
-            stream = nil
+        let oldStream = stream
+        stream = nil
+        let oldPrewarm = consumePrewarmForStop(excludingID: oldStream?.id)
+        let host = self.host
+        Task {
+            if let oldStream, host.isRunning, let engine = try? await host.engine() {
+                try? await engine.stopStream(oldStream.id)
+            }
+            if let oldPrewarm, host.isRunning, let engine = try? await host.engine() {
+                try? await engine.stopStream(oldPrewarm.id)
+            }
+        }
+    }
+
+    private func preferredBTFile(in catalog: MagnetCatalog, infoHash: String) -> MagnetFile? {
+        if let index = history.item(for: infoHash)?.lastFileIndex,
+           let last = catalog.allVideos.first(where: { $0.historyIndex == index }),
+           last.isPlayable {
+            return last
+        }
+        return catalog.main.count == 1 ? catalog.main[0] : nil
+    }
+
+    private func startPrewarm(torrentID: String, fileIndex: UInt32) {
+        if prewarmTargetIndex == fileIndex, prewarmedStream != nil || prewarmTask != nil { return }
+        if let old = consumePrewarmForStop(excludingID: stream?.id) {
             let host = self.host
             Task {
                 guard host.isRunning, let engine = try? await host.engine() else { return }
                 try? await engine.stopStream(old.id)
             }
         }
+        prewarmTargetIndex = fileIndex
+        let host = self.host
+        prewarmTask = Task { [weak self] in
+            guard let engine = try? await host.engine(), !Task.isCancelled else { return nil }
+            guard let prepared = try? await engine.prepareStream(torrentID: torrentID, fileIndex: fileIndex) else { return nil }
+            if Task.isCancelled {
+                try? await engine.stopStream(prepared.id)
+                return nil
+            }
+            self?.finishPrewarm(prepared, torrentID: torrentID, fileIndex: fileIndex)
+            return prepared
+        }
+    }
+
+    private func finishPrewarm(_ prepared: NuvioStream, torrentID: String, fileIndex: UInt32) {
+        guard self.torrentID == torrentID, prewarmTargetIndex == fileIndex, !Task.isCancelled else {
+            let host = self.host
+            Task {
+                guard host.isRunning, let engine = try? await host.engine() else { return }
+                try? await engine.stopStream(prepared.id)
+            }
+            return
+        }
+        prewarmedStream = prepared
+    }
+
+    private func consumePrewarmForStop(excludingID: String?) -> NuvioStream? {
+        prewarmTask?.cancel()
+        prewarmTask = nil
+        prewarmTargetIndex = nil
+        let existing = prewarmedStream
+        prewarmedStream = nil
+        guard let existing, existing.id != excludingID else { return nil }
+        return existing
+    }
+
+    private func takePrewarmedStream(for fileIndex: UInt32, engine: NuvioEngine) async -> NuvioStream? {
+        if prewarmTargetIndex == fileIndex {
+            if let ready = prewarmedStream, ready.fileIndex == fileIndex {
+                prewarmedStream = nil
+                prewarmTask = nil
+                prewarmTargetIndex = nil
+                return ready
+            }
+            if let running = prewarmTask {
+                let resolved = await running.value
+                prewarmTask = nil
+                prewarmTargetIndex = nil
+                prewarmedStream = nil
+                if let resolved, resolved.fileIndex == fileIndex {
+                    if Task.isCancelled {
+                        try? await engine.stopStream(resolved.id)
+                        return nil
+                    }
+                    return resolved
+                }
+            }
+        }
+        if let unused = consumePrewarmForStop(excludingID: stream?.id) {
+            try? await engine.stopStream(unused.id)
+        }
+        return nil
     }
 
     private func prepare(_ file: MagnetFile, torrentID: String, resume: Double?) async {
@@ -501,28 +676,36 @@ final class MagnetController: ObservableObject {
             playback.stop(detach: false)
             // 这部资源在「继续观看」里的封面：暂停、换集、退出时截下的画面
             if let link { playback.resumeFrameKey = PlaybackFrameStore.key(forMagnet: link.infoHash) }
-            if let old = stream {
+            let reusable = await takePrewarmedStream(for: file.index, engine: engine)
+            if let old = stream, old.id != reusable?.id {
                 stream = nil
                 try? await engine.stopStream(old.id)
             }
-            guard !Task.isCancelled else { return }
-            let next = try await engine.prepareStream(torrentID: torrentID, fileIndex: file.index)
+            guard !Task.isCancelled else {
+                if let reusable { try? await engine.stopStream(reusable.id) }
+                return
+            }
+            let next: NuvioStream
+            if let reusable {
+                next = reusable
+            } else {
+                next = try await engine.prepareStream(torrentID: torrentID, fileIndex: file.index)
+            }
             guard !Task.isCancelled else {
                 try? await engine.stopStream(next.id)
                 return
             }
             stream = next
-            try await waitForHead(of: next, engine: engine)
-            guard !Task.isCancelled else { return }
             preparing = false
-            // 开头已经下好，后面边播边下；节点少时缓冲会慢一些，给播放器足够的等待时间
-            // 边下边播等的是种子数据，慢一点很正常，不做「卡住自动重连」
+            // 直接把本机回环流交给 mpv 探测与播放：NuvioEngine 底层按 16KB 块流式吐出，
+            // 并由 mpv 直接发起头/尾索引及续播点 Range 请求，避免按整片 SHA1 校验块干等两段阻塞。
             let videoTitle = file.title.isEmpty ? (catalog?.name ?? "") : file.title
             let catalogHint = catalog?.name
             let adultHint = SubtitleQueryBuilder.extractAVCode(from: videoTitle) != nil
                 || SubtitleQueryBuilder.extractAVCode(from: catalogHint ?? "") != nil
-            playback.open(next.url, startTime: resume, autoRecover: false, openTimeoutSeconds: 120,
-                          title: videoTitle, subtitleIdentifier: catalogHint, isAdultVideo: adultHint, skipRemoteHash: true)
+            playback.open(next.url, startTime: resume, autoRecover: false, openTimeoutSeconds: 180,
+                          title: videoTitle, subtitleIdentifier: catalogHint, isAdultVideo: adultHint,
+                          skipRemoteHash: true, isTorrentStream: true)
         } catch is CancellationError {
             return
         } catch {
@@ -532,50 +715,39 @@ final class MagnetController: ObservableObject {
         }
     }
 
-    /// 等文件开头下好再交给播放器。
-    /// 先发一个范围请求让引擎优先下载开头；大种子的分块可能有好几 MB，节点慢时要多等一会儿。
-    private func waitForHead(of stream: NuvioStream, engine: NuvioEngine) async throws {
-        let target = min(stream.fileSize, 512 * 1024)
-        guard target > 0 else { return }
-        let url = stream.url
-        let trigger = Task.detached {
-            var request = URLRequest(url: url)
-            request.setValue("bytes=0-\(target - 1)", forHTTPHeaderField: "Range")
-            request.timeoutInterval = 300
-            _ = try? await URLSession.shared.data(for: request)
-        }
-        defer { trigger.cancel() }
-        let started = Date()
-        while true {
-            try Task.checkCancellation()
-            let stats = try await engine.currentStreamStats(stream.id)
-            fileProgress = stats.fileProgress
-            if stats.contiguousReadyBytes >= target { return }
-            if Date().timeIntervalSince(started) > 240 {
-                throw APIError.server("4 分钟内没能下载到视频开头，节点可能太少或太慢。可以重试，或换一集、换一个链接。")
-            }
-            try await Task.sleep(nanoseconds: 400_000_000)
-        }
-    }
-
     // MARK: 状态
 
     /// 播放器顶部显示的网络状态
     var networkStatus: String {
+        if !playback.hasLoaded, swarm.connected == 0 {
+            if swarm.connecting > 0 {
+                return "正在连接节点（\(swarm.connecting) 个尝试中）…"
+            }
+            if swarm.known > 0 {
+                return "已发现 \(swarm.known) 个节点，正在连接…"
+            }
+            return "正在连接节点…"
+        }
         var parts = ["\(swarm.connected) 个节点"]
         let rate = formatSize(Int(clamping: swarm.downloadRate))
-        if !rate.isEmpty { parts.append("\(rate)/s") }
+        if !rate.isEmpty {
+            parts.append("\(rate)/s")
+        } else if !playback.hasLoaded {
+            parts.append("正在缓冲开头")
+        }
         if fileProgress >= 0.01 { parts.append("已下载 \(Int(fileProgress * 100))%") }
         return parts.joined(separator: " · ")
     }
 
     /// 准备播放时的提示
     var preparingText: String {
-        if swarm.connected == 0 { return "正在连接节点…" }
+        if swarm.connected == 0 {
+            return swarm.connecting > 0 ? "正在连接节点（\(swarm.connecting) 个尝试中）…" : "正在连接节点…"
+        }
         let rate = formatSize(Int(clamping: swarm.downloadRate))
         return rate.isEmpty
-            ? "正在下载视频开头 · \(swarm.connected) 个节点"
-            : "正在下载视频开头 · \(swarm.connected) 个节点 · \(rate)/s"
+            ? "正在准备视频流 · \(swarm.connected) 个节点"
+            : "正在准备视频流 · \(swarm.connected) 个节点 · \(rate)/s"
     }
 
     private func startMonitor() {
@@ -600,9 +772,24 @@ final class MagnetController: ObservableObject {
                 connecting: Int(stats.connectingPeers),
                 known: Int(stats.knownPeers),
                 seeds: Int(stats.connectedSeeds),
-                downloadRate: stats.downloadRateBytesPerSecond
+                downloadRate: stats.downloadRateBytesPerSecond,
+                trackerReplies: Int(stats.trackerReplyEvents),
+                dhtReplies: Int(stats.dhtReplyEvents),
+                trackerPeers: Int(stats.trackerPeersReturned),
+                dhtPeers: Int(stats.dhtPeersReturned)
             )
             if phase == .resolving, step == .peers, stats.connectedPeers > 0 { step = .metadata }
+        }
+        if phase == .resolving && !usesCloud {
+            if elapsed >= 25 && swarm.connected == 0 && swarm.known == 0 && (swarm.trackerReplies + swarm.dhtReplies) >= 4 {
+                resolveHint = "Tracker 与 DHT 暂未返回做种节点，冷门或无源资源较难解析；可以换一条磁力或改用「115 播放」。"
+            } else if elapsed >= 20 && swarm.connected == 0 && swarm.known > 0 {
+                resolveHint = "已找到 \(swarm.known) 个候选节点但尚未连上，节点可能已离线或网络受限，仍在尝试…"
+            } else if elapsed >= 25 {
+                resolveHint = "冷门资源找节点会久一些，可以继续等待；超过两分半会提示你。"
+            } else {
+                resolveHint = ""
+            }
         }
         if let stream, !preparing, let stats = try? await engine.currentStreamStats(stream.id) {
             fileProgress = stats.fileProgress
@@ -715,8 +902,36 @@ final class MagnetController: ObservableObject {
 
     private func runCloud(_ link: MagnetLink, client: Direct115Client) async {
         do {
+            // 1. 优先命中本机按账号隔离的已离线视频缓存：1 次原画直链请求即可验证并预热直链，秒开播放
+            if let cached = MagnetCloudVideoCache.shared.get(infoHash: link.infoHash, cookie: client.cookie),
+               let primary = preferredCloudVideo(from: cached.videos, infoHash: link.infoHash, name: cached.name, totalSize: cached.totalSize) {
+                cloud = .downloading(100)
+                do {
+                    _ = try await client.originalURL(pickCode: primary.file.pickCode, useCache: false)
+                    guard !Task.isCancelled, cloudClient?.cookie == client.cookie else { return }
+                    let task = Direct115OfflineTask(
+                        infoHash: link.infoHash,
+                        name: cached.name,
+                        size: cached.totalSize,
+                        status: .done,
+                        percent: 100,
+                        fileID: "",
+                        folderID: ""
+                    )
+                    cloudFinished(cached.videos, task: task, link: link, client: client)
+                    return
+                } catch Direct115FileError.notLoggedIn {
+                    throw Direct115FileError.notLoggedIn
+                } catch let urlError as URLError where urlError.code == .notConnectedToInternet || urlError.code == .timedOut || urlError.code == .networkConnectionLost {
+                    throw urlError
+                } catch {
+                    // 文件可能已被从 115 网盘删除：清理缓存，无缝回退重提离线
+                    MagnetCloudVideoCache.shared.remove(infoHash: link.infoHash, cookie: client.cookie)
+                }
+            }
+
             if cloudUserID == 0 {
-                let userID = try await client.user().userId ?? 0
+                let userID = try await client.cachedUserID()
                 guard !Task.isCancelled, cloudClient?.cookie == client.cookie else { return }
                 cloudUserID = userID
             }
@@ -725,7 +940,9 @@ final class MagnetController: ObservableObject {
             guard !Task.isCancelled else { return }
             cloud = .downloading(0)
             let started = Date()
-            var interval: UInt64 = 1_000_000_000
+            // 热门秒离线通常 0.2~0.5 秒就绪：前几轮缩短等待，之后逐级退避至 6 秒
+            let intervals: [UInt64] = [350_000_000, 600_000_000, 1_000_000_000, 1_800_000_000, 3_000_000_000, 4_500_000_000, 6_000_000_000]
+            var pollIndex = 0
             var failures = 0
             while !Task.isCancelled {
                 var found: Direct115OfflineTask?
@@ -742,10 +959,11 @@ final class MagnetController: ObservableObject {
                     case .done:
                         cloud = .downloading(100)
                         let videos = try await client.offlineVideos(for: task)
-                        guard !Task.isCancelled else { return }
-                        cloudFinished(videos, task: task, link: link)
+                        guard !Task.isCancelled, cloudClient?.cookie == client.cookie else { return }
+                        cloudFinished(videos, task: task, link: link, client: client)
                         return
                     case .failed:
+                        MagnetCloudVideoCache.shared.remove(infoHash: link.infoHash, cookie: client.cookie)
                         cloudFailed("115 也没能下载这个资源，可能已经没有来源了。")
                         return
                     case .waiting, .downloading:
@@ -756,8 +974,9 @@ final class MagnetController: ObservableObject {
                     cloudFailed("115 离线超过 30 分钟还没完成，可以稍后到 115 的云下载里查看。")
                     return
                 }
-                try await Task.sleep(nanoseconds: interval)
-                interval = min(interval + 1_000_000_000, 6_000_000_000)
+                let sleepNs = intervals[min(pollIndex, intervals.count - 1)]
+                pollIndex += 1
+                try await Task.sleep(nanoseconds: sleepNs)
             }
         } catch is CancellationError {
             return
@@ -767,8 +986,33 @@ final class MagnetController: ObservableObject {
         }
     }
 
+    private func preferredCloudVideo(
+        from videos: [Direct115CloudVideo],
+        infoHash: String,
+        name: String,
+        totalSize: Int
+    ) -> Direct115CloudVideo? {
+        guard !videos.isEmpty else { return nil }
+        let probeCatalog = MagnetCatalog(cloudVideos: videos, name: name, totalSize: UInt64(max(totalSize, 0)))
+        if let index = history.item(for: infoHash)?.lastFileIndex,
+           let last = probeCatalog.allVideos.first(where: { $0.historyIndex == index }),
+           last.isPlayable,
+           let matched = videos.first(where: { $0.file.pickCode == last.pickCode }) {
+            return matched
+        }
+        let candidates = (probeCatalog.main.isEmpty ? probeCatalog.allVideos : probeCatalog.main).filter(\.isPlayable)
+        if let best = candidates.max(by: { $0.size < $1.size }),
+           let matched = videos.first(where: { $0.file.pickCode == best.pickCode }) {
+            return matched
+        }
+        return videos.first
+    }
+
     /// 115 离线没成功。只用 115 解析时，整个解析就算失败，页面显示原因和重试
     private func cloudFailed(_ message: String) {
+        if let link, let cookie = cloudClient?.cookie {
+            MagnetCloudVideoCache.shared.remove(infoHash: link.infoHash, cookie: cookie)
+        }
         cloud = .failed(message)
         guard cloudEnabled, catalog == nil, resolveTask == nil else { return }
         error = message
@@ -776,13 +1020,20 @@ final class MagnetController: ObservableObject {
         resolveStarted = nil
     }
 
-    private func cloudFinished(_ videos: [Direct115CloudVideo], task: Direct115OfflineTask, link: MagnetLink) {
+    private func cloudFinished(_ videos: [Direct115CloudVideo], task: Direct115OfflineTask, link: MagnetLink, client: Direct115Client) {
         guard self.link?.infoHash == link.infoHash else { return }
         guard !videos.isEmpty else {
             cloudFailed("115 离线完成了，但里面没有找到能播放的视频。")
             return
         }
         let name = task.name.isEmpty ? (catalog?.name ?? link.displayName ?? link.shortHash) : task.name
+        MagnetCloudVideoCache.shared.save(
+            infoHash: link.infoHash,
+            cookie: client.cookie,
+            name: name,
+            totalSize: task.size,
+            videos: videos
+        )
         cloudCatalog = MagnetCatalog(cloudVideos: videos, name: name, totalSize: UInt64(max(task.size, 0)))
         cloud = .ready
         // 正在用 BT 看的时候不打断，页面上会提示可以改用 115

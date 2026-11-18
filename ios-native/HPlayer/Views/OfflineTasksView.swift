@@ -893,10 +893,7 @@ struct OfflineAddSheet: View {
         focused = false
         Task {
             do {
-                let status = try await client.user()
-                guard let userID = status.userId, userID > 0 else {
-                    throw Direct115OfflineError.server("没能确认 115 账号，请重新登录后再试")
-                }
+                let userID = try await client.cachedUserID()
                 let summary = try await client.addOfflineTasks(links, userID: userID, folderID: folderID)
                 submitting = false
                 if summary.failures.isEmpty {

@@ -265,7 +265,7 @@ struct PlayerView: View {
 
     /// 自动重连时换新的 115 原画地址：旧地址可能已过期，或者连接被 115 限制
     private static func originalRefresher(_ client: Direct115Client, pickCode: String) -> () async throws -> URL {
-        { try await client.originalURL(pickCode: pickCode) }
+        { try await client.originalURL(pickCode: pickCode, useCache: false) }
     }
 
     /// 自动重连时换新的 115 转码地址，按画质名称找回同一档
