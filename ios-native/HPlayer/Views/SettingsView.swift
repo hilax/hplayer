@@ -49,7 +49,6 @@ struct SettingsView: View {
         .overlay(alignment: .top) { CompactTitleBar(title: "我的", visible: titleAway) }
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar(.hidden, for: .navigationBar)
         .designScreen("settings")
         .refreshable { await account.refresh() }
         .task { await account.refreshIfNeeded() }

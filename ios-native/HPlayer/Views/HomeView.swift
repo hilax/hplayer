@@ -13,6 +13,8 @@ struct HomeView: View {
     @StateObject private var scanner = CloudLibraryScanner()
     @StateObject private var accountInfo = P115AccountInfoStore()
     @StateObject private var navigation = HomeNavigation()
+    /// 一级页面导航栏的状态（网盘根目录多选时要显示正常导航栏）
+    @StateObject private var rootBar = RootNavigationBarState()
     /// 首页和片库共用的分组结果，在这里算一次，两个页面直接读。
     @StateObject private var librarySnapshots = LibrarySnapshotStore()
     /// 标记过「不在精选中显示」的影片，变化时精选要重新挑。
@@ -216,10 +218,9 @@ struct HomeView: View {
         ZStack {
             NavigationStack(path: $navigation.path) {
                 tabPages
-                    .navigationTitle("")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar(.hidden, for: .navigationBar)
-                    .stabilizeInlineNavigationBar()
+                    // 一级页面的导航栏一直显示但隐形，推入二级页时不会整条滑偏（见 rootNavigationBar）
+                    .environment(\.rootNavigationBarState, rootBar)
+                    .rootNavigationBar(rootBar)
                     .navigationDestination(for: PerformerListRoute.self) { _ in
                         PerformerGridView(groups: librarySnapshots.home.performers)
                     }

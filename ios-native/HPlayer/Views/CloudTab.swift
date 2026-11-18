@@ -275,7 +275,6 @@ struct CloudTab: View {
         .overlay(alignment: .top) { CompactTitleBar(title: "网盘", visible: titleAway) }
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar(.hidden, for: .navigationBar)
         .designScreen("library-empty")
     }
 

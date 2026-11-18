@@ -90,19 +90,29 @@ final class HomeNavigationTests: XCTestCase {
 
         let navController = try XCTUnwrap(findNavigationController(in: window.rootViewController),
                                           "\(section.title): expected UINavigationController")
-        XCTAssertFalse(navController.navigationBar.prefersLargeTitles,
-                       "\(section.title): prefersLargeTitles must stay disabled")
-        XCTAssertEqual(navController.viewControllers.first?.navigationItem.largeTitleDisplayMode, .never,
+        let bar = navController.navigationBar
+        let rootPage = try XCTUnwrap(navController.viewControllers.first, "\(section.title): expected root page")
+
+        // 一级页面：系统导航栏一直显示但隐形——不拦截点击、安全区和「隐藏导航栏」时一样、没有大标题
+        XCTAssertFalse(navController.isNavigationBarHidden,
+                       "\(section.title): root keeps the system bar shown (transparent) so pushes don't slide it in")
+        XCTAssertFalse(bar.isUserInteractionEnabled,
+                       "\(section.title): transparent root bar must let taps through to the page")
+        XCTAssertEqual(rootPage.view.safeAreaInsets.top, window.safeAreaInsets.top, accuracy: 1,
+                       "\(section.title): root layout must not shift down by the bar height")
+        XCTAssertFalse(bar.prefersLargeTitles, "\(section.title): prefersLargeTitles must stay disabled")
+        XCTAssertEqual(rootPage.navigationItem.largeTitleDisplayMode, .never,
                        "\(section.title): root navigationItem must lock .never largeTitleDisplayMode")
 
         let label = useOfflineRoute ? "\(section.title)/offline" : "\(section.title)/native"
+        let settledBefore = bar.frame
         let samples = await capturePushFrames(navController: navController, frameLimit: 55) {
             if useOfflineRoute {
                 navigation.path.append(CloudRoute.page(.offline))
             } else {
                 switch section {
                 case .home:
-                    navigation.path.append(AnimeBrowseRoute(channelId: nil, title: "热门新番", sort: "hits"))
+                    navigation.path.append(AnimeBrowseRoute.newReleases)
                 case .magnet:
                     navigation.path.append(MineRoute.page(.downloads))
                 case .cloud:
@@ -115,44 +125,41 @@ final class HomeNavigationTests: XCTestCase {
 
         let settled = try XCTUnwrap(samples.last)
         XCTAssertFalse(settled.barHidden, "\(label): bar should be visible on secondary page")
-        XCTAssertFalse(navController.navigationBar.prefersLargeTitles,
-                       "\(label): prefersLargeTitles must remain disabled after push")
-
-        let visibleSamples = samples.filter { !$0.barHidden && $0.barFrame.height > 1 }
-        XCTAssertFalse(visibleSamples.isEmpty, "\(label): expected visible navigation bar frames")
+        XCTAssertTrue(bar.isUserInteractionEnabled, "\(label): bar must be tappable on secondary page (back button)")
+        XCTAssertFalse(bar.prefersLargeTitles, "\(label): prefersLargeTitles must remain disabled after push")
         XCTAssertFalse(settled.elements.isEmpty, "\(label): expected tracked navigation bar elements")
 
-        let timeline = formatTimeline(visibleSamples, limit: 35)
-        let firstDump = describeSubviews(of: navController.navigationBar, in: navController.navigationBar, depth: 0)
-        print("=== NavBar Timeline [\(label)] (visible=\(visibleSamples.count)/\(samples.count)) ===\n\(timeline)\n=== Settled Subviews ===\n\(firstDump)\n=== End [\(label)] ===")
+        let timeline = formatTimeline(samples, limit: 35)
+        let firstDump = describeSubviews(of: bar, in: bar, depth: 0)
+        print("=== NavBar Timeline [\(label)] (frames=\(samples.count)) ===\n\(timeline)\n=== Settled Subviews ===\n\(firstDump)\n=== End [\(label)] ===")
 
-        for s in visibleSamples {
+        // 真机录屏里的问题：导航栏整条跟着新页面滑进来，而且只走页面的约 88%，先偏出去再回正。
+        // 导航栏一直显示后，推入过程中它不应该被隐藏，也不应该横向 / 纵向移动或变高。
+        for s in samples {
+            XCTAssertFalse(s.barHidden, "\(label): bar must stay shown during the push (frame #\(s.index)).\n\(timeline)")
             XCTAssertEqual(s.barCount, 1, "\(label): expected single UINavigationBar.\n\(timeline)")
-            XCTAssertEqual(s.barFrame.minY, settled.barFrame.minY, accuracy: 1.5,
+            XCTAssertEqual(s.barFrame.minX, settledBefore.minX, accuracy: 1,
+                           "\(label): bar slid horizontally during push (frame #\(s.index)).\n\(timeline)")
+            XCTAssertEqual(s.barFrame.minY, settledBefore.minY, accuracy: 1.5,
                            "\(label): barFrame.minY jumped during push.\n\(timeline)")
-            XCTAssertEqual(s.barFrame.height, settled.barFrame.height, accuracy: 1.5,
+            XCTAssertEqual(s.barFrame.height, settledBefore.height, accuracy: 1.5,
                            "\(label): barFrame.height jumped during push.\n\(timeline)")
             if let pres = s.barPres {
-                XCTAssertEqual(pres.minY, settled.barFrame.minY, accuracy: 1.5,
+                XCTAssertEqual(pres.minX, settledBefore.minX, accuracy: 1,
+                               "\(label): bar presentation slid horizontally during push (frame #\(s.index)).\n\(timeline)")
+                XCTAssertEqual(pres.minY, settledBefore.minY, accuracy: 1.5,
                                "\(label): bar presentation minY jumped during push.\n\(timeline)")
-                XCTAssertEqual(pres.height, settled.barFrame.height, accuracy: 1.5,
+                XCTAssertEqual(pres.height, settledBefore.height, accuracy: 1.5,
                                "\(label): bar presentation height jumped during push.\n\(timeline)")
             }
-
-            for target in settled.elements {
-                guard let current = s.elements.first(where: { $0.key == target.key }) else { continue }
-                XCTAssertEqual(current.model.minY, target.model.minY, accuracy: 1.5,
-                               "\(label): \(target.key) model minY shifted at t=\(String(format: "%.3f", s.t)).\n\(timeline)")
-                XCTAssertEqual(current.model.minX, target.model.minX, accuracy: 1.5,
-                               "\(label): \(target.key) model minX shifted at t=\(String(format: "%.3f", s.t)).\n\(timeline)")
-                if let presRect = current.pres {
-                    XCTAssertEqual(presRect.minY, target.model.minY, accuracy: 1.5,
-                                   "\(label): \(target.key) pres minY shifted at t=\(String(format: "%.3f", s.t)).\n\(timeline)")
-                    XCTAssertEqual(presRect.minX, target.model.minX, accuracy: 1.5,
-                                   "\(label): \(target.key) pres minX shifted at t=\(String(format: "%.3f", s.t)).\n\(timeline)")
-                }
-            }
         }
+
+        // 返回一级页面后：导航栏又变回不接收点击，根页安全区不变
+        navigation.path.removeAll()
+        try await Task.sleep(nanoseconds: 900_000_000)
+        XCTAssertFalse(bar.isUserInteractionEnabled, "\(label): bar must stop taking taps after popping back to root")
+        XCTAssertEqual(rootPage.view.safeAreaInsets.top, window.safeAreaInsets.top, accuracy: 1,
+                       "\(label): root layout must be unchanged after popping back")
     }
 
     @MainActor
@@ -190,7 +197,8 @@ final class HomeNavigationTests: XCTestCase {
                     elements: elements
                 ))
                 count += 1
-                if count >= frameLimit {
+                // 模拟器不刷新时也要结束，不让测试一直挂着
+                if count >= frameLimit || ProcessInfo.processInfo.systemUptime - start > 3 {
                     link?.invalidate()
                     link = nil
                     target.onTick = nil

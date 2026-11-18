@@ -118,9 +118,10 @@ struct MagnetSearchView: View {
             }
         }
         .background(Theme.pageBackground.ignoresSafeArea())
-        .navigationTitle(isTabRoot ? "磁力" : "磁力聚合")
+        // 一级页面的系统导航栏是隐形的（HomeView 统一处理），不能带标题
+        .navigationTitle(isTabRoot ? "" : "磁力聚合")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar(isTabRoot ? .hidden : .visible, for: .navigationBar)
+        .toolbar(.visible, for: .navigationBar)
         .magnetPlayer(item: $playLaunch)
         // 链接面板上点了 115 播放 / 磁力播放：准备好后直接打开播放器
         .magnetCloudReady(hashes: detectedLink.map { [$0.infoHash] } ?? []) { _, mode in

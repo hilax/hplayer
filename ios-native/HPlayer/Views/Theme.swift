@@ -416,27 +416,92 @@ extension View {
     /// 返回键、关闭、完成、取消和右上角按钮就统一成 Theme.navigationButton。
     func navigationButtonTint() -> some View { tint(Theme.navigationButton) }
 
-    /// 锁定所在 UINavigationController 为内联小标题（关闭大标题模式），避免从隐藏导航栏的一级页推入二级页时标题与按钮发生高度/位置跳动。
-    func stabilizeInlineNavigationBar() -> some View {
-        background(NavigationBarStabilizer())
-    }
-
     /// 次要文字：普通页面用主题灰，铺了封面色的首页用半透明白。
     func secondaryTextStyle() -> some View { modifier(TintAwareForeground(tertiary: false)) }
     /// 三级文字（数量、注释）：同上。
     func tertiaryTextStyle() -> some View { modifier(TintAwareForeground(tertiary: true)) }
 }
 
-private struct NavigationBarStabilizer: UIViewControllerRepresentable {
-    func makeUIViewController(context: Context) -> ProbeController {
-        ProbeController()
+// MARK: - 一级页面的导航栏
+
+/// 一级页面（导航栈的根页）的系统导航栏状态。网盘根目录进入多选模式时要一条真正的导航栏（全选 / 完成），
+/// 其余时候根页的导航栏都是「隐形」的。
+@MainActor
+final class RootNavigationBarState: ObservableObject {
+    /// true：显示正常的系统导航栏（可点、内容让出导航栏高度）
+    @Published var showsSystemBar = false
+
+    /// 只用来做隐形导航栏、从不切换的导航栈（比如搜索页）共用这一个
+    static let transparent = RootNavigationBarState()
+}
+
+private struct RootNavigationBarStateKey: EnvironmentKey {
+    static let defaultValue: RootNavigationBarState? = nil
+}
+
+extension EnvironmentValues {
+    /// 所在导航栈根页的导航栏状态；不在 HomeView 的一级页面里时为 nil
+    var rootNavigationBarState: RootNavigationBarState? {
+        get { self[RootNavigationBarStateKey.self] }
+        set { self[RootNavigationBarStateKey.self] = newValue }
+    }
+}
+
+extension View {
+    /// 一级页面用：系统导航栏一直显示，但透明、没有标题、不拦截点击，并把它占的顶部安全区抵消掉，
+    /// 根页的布局和「隐藏导航栏」时一模一样。
+    ///
+    /// 不用 `.toolbar(.hidden)` 的原因：根页藏起导航栏、二级页再显示时，系统让整条导航栏跟着新页面单独滑进来，
+    /// 它走的距离只有页面的约 88%，推入时先偏出去、最后再回正（真机录屏逐帧量过）。
+    /// 导航栏一直在，推入时就只是返回键和标题在原地出现，不会整条偏移。
+    func rootNavigationBar(_ state: RootNavigationBarState) -> some View {
+        modifier(RootNavigationBarModifier(state: state))
     }
 
-    func updateUIViewController(_ uiViewController: ProbeController, context: Context) {
-        uiViewController.stabilize()
+    /// iOS 26 的导航栏会在滚动视图顶边加一层渐隐（scroll edge effect）；隐形导航栏下面不要它
+    @ViewBuilder
+    fileprivate func topScrollEdgeEffectHidden(_ hidden: Bool) -> some View {
+        if #available(iOS 26.0, *) {
+            self.scrollEdgeEffectHidden(hidden, for: .top)
+        } else {
+            self
+        }
+    }
+}
+
+private struct RootNavigationBarModifier: ViewModifier {
+    @ObservedObject var state: RootNavigationBarState
+
+    func body(content: Content) -> some View {
+        let system = state.showsSystemBar
+        content
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar(.visible, for: .navigationBar)
+            .toolbarBackground(system ? .automatic : .hidden, for: .navigationBar)
+            .topScrollEdgeEffectHidden(!system)
+            .background(RootNavigationBarHost(showsSystemBar: system))
+    }
+}
+
+/// 在 UIKit 那一层处理根页的导航栏：抵消导航栏占的安全区、根页在最上面时让导航栏不接收点击，
+/// 并始终关掉大标题（从根页推入时标题高度不跳）。
+private struct RootNavigationBarHost: UIViewControllerRepresentable {
+    let showsSystemBar: Bool
+
+    func makeUIViewController(context: Context) -> Controller {
+        Controller()
     }
 
-    final class ProbeController: UIViewController {
+    func updateUIViewController(_ controller: Controller, context: Context) {
+        controller.showsSystemBar = showsSystemBar
+        controller.apply()
+        // 导航路径刚变时，导航控制器要到下一轮才真正推入 / 弹出
+        DispatchQueue.main.async { [weak controller] in controller?.apply() }
+    }
+
+    final class Controller: UIViewController {
+        var showsSystemBar = false
         private var largeTitleObserver: NSKeyValueObservation?
         private weak var observedBar: UINavigationBar?
 
@@ -449,38 +514,70 @@ private struct NavigationBarStabilizer: UIViewControllerRepresentable {
 
         override func didMove(toParent parent: UIViewController?) {
             super.didMove(toParent: parent)
-            stabilize()
+            apply()
         }
 
         override func viewWillAppear(_ animated: Bool) {
             super.viewWillAppear(animated)
-            stabilize()
+            apply()
+        }
+
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            apply()
+        }
+
+        override func viewWillDisappear(_ animated: Bool) {
+            super.viewWillDisappear(animated)
+            apply()
+        }
+
+        override func viewDidDisappear(_ animated: Bool) {
+            super.viewDidDisappear(animated)
+            apply()
         }
 
         override func viewWillLayoutSubviews() {
             super.viewWillLayoutSubviews()
-            stabilize()
+            apply()
         }
 
-        func stabilize() {
-            guard let nav = navigationController else { return }
-            let bar = nav.navigationBar
-            if bar.prefersLargeTitles {
-                bar.prefersLargeTitles = false
+        /// 自己所在的那一页：导航控制器的直接子控制器
+        private var page: UIViewController? {
+            var current: UIViewController = self
+            while let parent = current.parent {
+                if parent is UINavigationController { return current }
+                current = parent
             }
-            if let rootItem = nav.viewControllers.first?.navigationItem,
-               rootItem.largeTitleDisplayMode != .never {
-                rootItem.largeTitleDisplayMode = .never
+            return nil
+        }
+
+        func apply() {
+            guard let nav = navigationController, let page else { return }
+            let bar = nav.navigationBar
+
+            if bar.prefersLargeTitles { bar.prefersLargeTitles = false }
+            if page.navigationItem.largeTitleDisplayMode != .never {
+                page.navigationItem.largeTitleDisplayMode = .never
             }
             if observedBar !== bar {
                 observedBar = bar
-                largeTitleObserver = bar.observe(\.prefersLargeTitles, options: [.new]) { [weak bar] _, _ in
-                    Task { @MainActor in
-                        if bar?.prefersLargeTitles == true {
-                            bar?.prefersLargeTitles = false
-                        }
-                    }
+                // 系统偶尔会把大标题开回来；在主线程同步关掉，不留一帧
+                largeTitleObserver = bar.observe(\.prefersLargeTitles, options: [.new]) { bar, _ in
+                    if bar.prefersLargeTitles { bar.prefersLargeTitles = false }
                 }
+            }
+
+            let transparent = !showsSystemBar
+            // 导航栏显示时，根页的安全区顶部会多出导航栏的高度；隐形时把它减回去，根页布局不变
+            let inset: CGFloat = transparent && !nav.isNavigationBarHidden ? -bar.frame.height : 0
+            if abs(page.additionalSafeAreaInsets.top - inset) > 0.5 {
+                page.additionalSafeAreaInsets.top = inset
+            }
+            // 根页在最上面时，隐形导航栏盖在根页顶部的频道条、标题上：不接收点击，让点击落到下面的页面
+            let interactive = !(nav.topViewController === page && transparent)
+            if bar.isUserInteractionEnabled != interactive {
+                bar.isUserInteractionEnabled = interactive
             }
         }
     }

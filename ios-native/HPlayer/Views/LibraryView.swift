@@ -78,6 +78,8 @@ struct DirectoryView: View {
 
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var mediaLibrary: MediaLibraryStore
+    /// 一级页面导航栏的状态：根目录多选时要正常的系统导航栏
+    @Environment(\.rootNavigationBarState) private var rootBar
     @AppStorage("hplayer.library.sortKey") private var sortKey: FileSortKey = .name
     @AppStorage("hplayer.library.sortAscending") private var ascending = true
     @AppStorage("hplayer.library.foldersFirst") private var foldersFirst = true
@@ -133,8 +135,11 @@ struct DirectoryView: View {
         content
             .background(Theme.pageBackground.ignoresSafeArea())
             .designScreen(selecting ? "files-select" : (isRoot ? "library" : "files"))
-            // 根页用自己的标题栏；进入选择模式时才显示导航栏（全选 / 完成）
-            .toolbar(isRoot && !selecting ? .hidden : .visible, for: .navigationBar)
+            // 根页用自己的标题栏，系统导航栏是隐形的（HomeView 统一处理）；进入选择模式时换回正常导航栏（全选 / 完成）
+            .toolbar(.visible, for: .navigationBar)
+            .onAppear { if isRoot { rootBar?.showsSystemBar = selecting } }
+            .onDisappear { if isRoot { rootBar?.showsSystemBar = false } }
+            .onChange(of: selecting) { value in if isRoot { rootBar?.showsSystemBar = value } }
             .navigationBarTitleDisplayMode(.inline)
             .navigationBarBackButtonHidden(selecting)
             .safeAreaInset(edge: .bottom, spacing: 0) {
