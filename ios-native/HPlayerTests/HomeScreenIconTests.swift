@@ -27,32 +27,41 @@ final class HomeScreenIconTests: XCTestCase {
             let icons = try XCTUnwrap(info[family] as? [String: Any], family)
             let primary = try XCTUnwrap(icons["CFBundlePrimaryIcon"] as? [String: Any])
             XCTAssertEqual(primary["CFBundleIconName"] as? String, "AppIcon")
-            let primaryFiles = try XCTUnwrap(primary["CFBundleIconFiles"] as? [String], "Missing primary CFBundleIconFiles in \(family)")
-            XCTAssertTrue(primaryFiles.contains("AppIcon60x60"), "Primary icon must declare AppIcon60x60 in \(family)")
 
             let alternates = try XCTUnwrap(icons["CFBundleAlternateIcons"] as? [String: Any])
             for icon in HomeScreenIcon.allCases {
                 if let name = icon.alternateName {
                     let entry = try XCTUnwrap(alternates[name] as? [String: Any], "Missing \(name) in \(family)")
-                    XCTAssertEqual(entry["CFBundleIconName"] as? String, name, "Missing CFBundleIconName for \(name) in \(family)")
+                    XCTAssertNil(entry["CFBundleIconName"], "Alternate icon \(name) should use CFBundleIconFiles instead of Assets.car CFBundleIconName")
                     let files = try XCTUnwrap(entry["CFBundleIconFiles"] as? [String], "Missing CFBundleIconFiles for \(name) in \(family)")
-                    XCTAssertTrue(files.contains("\(name)60x60"), "Missing \(name)60x60 file entry in \(family)")
+                    XCTAssertTrue(files.contains(name), "Missing \(name) file entry in \(family)")
                 }
                 XCTAssertNotNil(UIImage(named: icon.previewName, in: bundle, compatibleWith: nil), "Missing \(icon.previewName)")
             }
             let legacyPrism = try XCTUnwrap(alternates["AppIconPrism"] as? [String: Any], "Keep the alternate used by earlier builds")
-            XCTAssertEqual(legacyPrism["CFBundleIconName"] as? String, "AppIconPrism")
+            XCTAssertNil(legacyPrism["CFBundleIconName"])
+            let legacyFiles = try XCTUnwrap(legacyPrism["CFBundleIconFiles"] as? [String])
+            XCTAssertTrue(legacyFiles.contains("AppIconPrism"))
         }
 
-        // 确认主图标与所有备选图标在 .app 根目录均存在实体 @2x / @3x PNG，防止 iOS 18/26 切换图标后回退为空白网格。
-        let requiredNames = ["AppIcon", "AppIconPrism"] + HomeScreenIcon.allCases.compactMap(\.alternateName)
-        for name in requiredNames {
-            for suffix in ["60x60@2x", "60x60@3x", "76x76@2x~ipad", "83.5x83.5@2x~ipad"] {
-                let url = bundle.bundleURL.appendingPathComponent("\(name)\(suffix).png")
+        // 确认所有备选图标在 .app 根目录均存在轻量实体 @2x / @3x 与 iPad PNG，避免回退为空白网格。
+        let requiredAlternates = ["AppIconPrism"] + HomeScreenIcon.allCases.compactMap(\.alternateName)
+        let expectedSuffixes: [(String, Int)] = [
+            ("@2x.png", 120),
+            ("@3x.png", 180),
+            ("@2x~ipad.png", 152),
+            ("-83.5@2x~ipad.png", 167),
+        ]
+        for name in requiredAlternates {
+            for (suffix, pixels) in expectedSuffixes {
+                let url = bundle.bundleURL.appendingPathComponent("\(name)\(suffix)")
                 XCTAssertTrue(FileManager.default.fileExists(atPath: url.path),
-                              "Missing bundled root PNG \(name)\(suffix).png")
+                              "Missing bundled root PNG \(name)\(suffix)")
                 let data = try Data(contentsOf: url)
-                XCTAssertNotNil(UIImage(data: data), "Corrupted root icon PNG \(name)\(suffix).png")
+                let image = try XCTUnwrap(UIImage(data: data), "Corrupted root icon PNG \(name)\(suffix)")
+                let cg = try XCTUnwrap(image.cgImage)
+                XCTAssertEqual(cg.width, pixels, "\(name)\(suffix) width")
+                XCTAssertEqual(cg.height, pixels, "\(name)\(suffix) height")
             }
         }
     }
