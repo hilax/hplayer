@@ -395,4 +395,44 @@ final class PlaybackEndTests: XCTestCase {
 
         XCTAssertEqual(player.recoveryCountForTesting, 0, "稳定播放 25 秒后必须归零连续失败计数，保证长片后续还能自动恢复")
     }
+
+    func testGradualSubThresholdCacheGrowthDoesNotTriggerFalseStallRecovery() throws {
+        let player = PlaybackController()
+        defer { player.stop() }
+        player.open(try XCTUnwrap(URL(string: "https://example.com/video.mkv")), autoRecover: true)
+        player.receiveEventForTesting(.fileLoaded)
+        player.receiveEventForTesting(.property("duration", .double(300)))
+        player.receiveEventForTesting(.property("seekable", .flag(true)))
+        player.receiveEventForTesting(.playbackRestart)
+        player.receiveEventForTesting(.property("time-pos", .double(25)))
+        player.receiveEventForTesting(.property("paused-for-cache", .flag(true)))
+
+        // 模拟高码率视频每秒内多次细碎回调（每次只涨 0.08s < 0.25s，但整秒累计涨 0.40s >= 0.25s）
+        var cacheSeconds = 0.0
+        for _ in 0..<10 {
+            for _ in 0..<5 {
+                cacheSeconds += 0.08
+                player.receiveEventForTesting(.property("demuxer-cache-duration", .double(cacheSeconds)))
+            }
+            player.checkHealthForTesting()
+        }
+
+        XCTAssertEqual(player.recoveryCountForTesting, 0, "整秒累计缓冲持续上涨时不得误判为卡死并触发重连或切节点")
+    }
+
+    func testBufferingResumeClearsTransientStatusNoteWithoutPlaybackRestart() throws {
+        let player = PlaybackController()
+        defer { player.stop() }
+        player.open(try XCTUnwrap(URL(string: "https://example.com/video.mkv")), autoRecover: true)
+        player.receiveEventForTesting(.fileLoaded)
+        player.receiveEventForTesting(.property("duration", .double(300)))
+        player.receiveEventForTesting(.property("seekable", .flag(true)))
+        player.receiveEventForTesting(.playbackRestart)
+        player.receiveEventForTesting(.property("time-pos", .double(25)))
+        player.receiveEventForTesting(.property("paused-for-cache", .flag(true)))
+        player.receiveEventForTesting(.property("paused-for-cache", .flag(false)))
+
+        XCTAssertEqual(player.statusNote, "")
+        XCTAssertFalse(player.buffering)
+    }
 }

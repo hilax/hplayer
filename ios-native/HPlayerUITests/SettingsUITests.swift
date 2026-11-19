@@ -42,10 +42,12 @@ final class SettingsUITests: XCTestCase {
         XCTAssertTrue(ocean.isEnabled)
         ocean.tap()
         XCTAssertTrue(wait { ocean.isSelected }, "Selection must follow the tap immediately, before any system callback")
-        let notice = app.descendants(matching: .any)["settings.appIcon.notice"]
-        XCTAssertTrue(notice.waitForExistence(timeout: 5), "The redesigned in-app confirmation should appear")
         dismissIconChangeAlert(in: app)
-        XCTAssertTrue(wait { ocean.isSelected }, "The system should switch to the requested alternate")
+        XCTAssertTrue(wait { ocean.isSelected && ocean.isEnabled }, "The system should switch to the requested alternate")
+        XCTAssertFalse(app.descendants(matching: .any)["settings.appIcon.notice"].exists,
+                       "Legacy custom notice card should be removed to prevent duplicate alerts")
+        XCTAssertFalse(app.descendants(matching: .any)["hud.toast"].exists,
+                       "Successful icon change should not stack a duplicate toast over the system alert")
 
         let restore = app.buttons["settings.appIcon.restoreDefault"]
         for _ in 0..<6 {
@@ -67,10 +69,16 @@ final class SettingsUITests: XCTestCase {
         XCTAssertFalse(restore.isEnabled)
     }
 
-    func testConfirmationNoticeUndoRestoresPreviousIcon() {
+    func testIconSwitchHasNoDuplicatePopupAndPreviewBackdropCanToggle() {
         continueAfterFailure = false
         let app = launchIconTestApp()
         openIconSettings(in: app)
+
+        let backdropToggle = app.buttons["settings.appIcon.previewBackdrop"]
+        XCTAssertTrue(backdropToggle.waitForExistence(timeout: 5), "Home screen preview should allow dark/light backdrop toggle")
+        let initialLabel = backdropToggle.label
+        backdropToggle.tap()
+        XCTAssertTrue(wait { backdropToggle.label != initialLabel }, "Preview backdrop toggle should flip dark/light label")
 
         let coral = app.buttons["settings.appIcon.coral"]
         for _ in 0..<6 {
@@ -79,15 +87,19 @@ final class SettingsUITests: XCTestCase {
         }
         XCTAssertTrue(coral.isHittable)
         coral.tap()
-        let undo = app.buttons["settings.appIcon.notice.undo"]
-        XCTAssertTrue(undo.waitForExistence(timeout: 5), "Success notice should offer undo")
-        undo.tap()
+        dismissIconChangeAlert(in: app)
+        XCTAssertTrue(wait { coral.isSelected && coral.isEnabled })
+        XCTAssertFalse(app.descendants(matching: .any)["settings.appIcon.notice"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["hud.toast"].exists)
+
         let prism = app.buttons["settings.appIcon.prism"]
-        XCTAssertTrue(wait { prism.isSelected }, "Undo must return the selection to the previous icon")
-        let done = app.buttons["settings.appIcon.notice.done"]
-        if done.waitForExistence(timeout: 3) { done.tap() }
-        XCTAssertTrue(wait { !app.descendants(matching: .any)["settings.appIcon.notice"].exists },
-                      "Dismissing the notice should remove it")
+        for _ in 0..<6 {
+            if prism.isHittable { break }
+            app.swipeDown()
+        }
+        prism.tap()
+        dismissIconChangeAlert(in: app)
+        XCTAssertTrue(wait { prism.isSelected && prism.isEnabled }, "Tapping the previous style should switch back directly")
     }
 
     func testSelectedIconSurvivesStaleSystemReadBackgroundReentryAndRelaunch() {

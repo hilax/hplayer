@@ -42,10 +42,17 @@ struct MagnetLaunchPlayer: View {
 
     init(request: MagnetPlaybackRequest) {
         self.request = request
-        // 卡片上已经在跑（或者已经准备好）的同一种方式：直接接手，不重新解析 / 提交
+        // 卡片上已经在跑（或者已经准备好）的同一种方式：直接接手，不重新解析 / 提交；
+        // 若 115 多文件目录已就绪，同步生成默认播放队列，首帧直接进 PlayerView，避免多建一层等待壳与播放内核。
         let hash = request.infoHash
         let mode = request.mode
-        _controller = StateObject(wrappedValue: MagnetRelayCenter.shared.take(infoHash: hash, mode: mode) ?? MagnetController())
+        _controller = StateObject(wrappedValue: {
+            let instance = MagnetRelayCenter.shared.take(infoHash: hash, mode: mode) ?? MagnetController()
+            if mode != .bt {
+                instance.prepareDefaultCloudQueueIfReady()
+            }
+            return instance
+        }())
     }
 
     var body: some View {
@@ -66,7 +73,6 @@ struct MagnetLaunchPlayer: View {
         }
         .task {
             guard !InterfacePreview.active else { return }
-            controller.activate()
             let useCloud: Bool
             switch request.mode {
             case .cloud: useCloud = true
@@ -74,6 +80,7 @@ struct MagnetLaunchPlayer: View {
             case nil: useCloud = cloudRelay
             }
             controller.configureCloud(client: appState.directClient(), enabled: useCloud)
+            controller.activate()
             if let link = MagnetLink.parse(request.magnet) {
                 controller.open(link)
             }
@@ -123,8 +130,7 @@ struct MagnetLaunchPlayer: View {
     private func autoPlayIfReady() {
         guard !autoPlayed, controller.phase == .ready, let catalog = controller.catalog,
               !controller.playerVisible, controller.cloudQueue == nil else { return }
-        let candidates = (catalog.main.isEmpty ? catalog.allVideos : catalog.main).filter(\.isPlayable)
-        guard let pick = controller.lastPlayed ?? candidates.max(by: { $0.size < $1.size }) else { return }
+        guard let pick = controller.preferredFile(in: catalog) else { return }
         autoPlayed = true
         controller.play(pick)
     }

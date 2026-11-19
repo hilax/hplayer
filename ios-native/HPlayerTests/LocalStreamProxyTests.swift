@@ -669,6 +669,67 @@ final class LocalStreamProxyTests: XCTestCase {
         wait(for: [exp3], timeout: 1)
         XCTAssertNil(acceptedDowngrade)
     }
+
+    /// 302 重定向到 CDN 节点后，若该节点被 403 拒绝，冷却判断必须仍以未重定向的直链地址为准，
+    /// 不得因 `current != redirectedURL` 绕过冷却导致反复调用换链接口或死循环。
+    func testRedirectedFreshAddressStillRespectsRenewalCooldown() async throws {
+        let server = try ScriptedHTTPServer([
+            // 1. 首次请求旧地址 -> 403，触发 renew 拿到 fresh
+            .send(status: 403, headers: ["Content-Length": "0"], body: Data()),
+            // 2. 请求 fresh -> 302 跳转到 /cdn/node1.mp4
+            .send(status: 302, headers: ["Location": "/cdn/node1.mp4", "Content-Length": "0"], body: Data()),
+            // 3. /cdn/node1.mp4 -> 403（命中冷却，按 refusalDelays 等待后重试 fresh，不再次调用 renew）
+            .send(status: 403, headers: ["Content-Length": "0"], body: Data()),
+            // 4. 退避后重试 fresh -> 302 跳转到 /cdn/node2.mp4
+            .send(status: 302, headers: ["Location": "/cdn/node2.mp4", "Content-Length": "0"], body: Data()),
+            // 5. /cdn/node2.mp4 -> 200 成功返回
+            .send(status: 200, headers: ["Content-Type": "video/mp4", "Content-Length": "5"], body: Data("hello".utf8)),
+        ])
+        defer { server.stop() }
+
+        let proxy = LocalStreamProxy()
+        proxy.setRefusalDelaysForTesting([0.05, 0.05])
+        let calls = RenewCounter()
+        let fresh = try XCTUnwrap(URL(string: server.url.absoluteString + "?fresh=1"))
+        let relayed = await proxy.localURL(for: server.url, headers: [:], streamID: "p115:redirect-test", renew: {
+            calls.increment()
+            return fresh
+        })
+        let local = try XCTUnwrap(relayed)
+
+        let fetched = try fetch(local, range: nil)
+        let history = proxy.problemHistoryLines.joined(separator: "\n")
+        XCTAssertEqual(fetched.status, 200, history)
+        XCTAssertEqual(fetched.body, Data("hello".utf8))
+        XCTAssertEqual(calls.value, 1, "302 重定向后的 403 必须受换链冷却保护，只换一次地址；\(history)")
+        XCTAssertEqual(server.receivedTargets(), [
+            "/a/video.mp4",
+            "/a/video.mp4?fresh=1",
+            "/cdn/node1.mp4",
+            "/a/video.mp4?fresh=1",
+            "/cdn/node2.mp4",
+        ])
+    }
+
+    /// 代理层近期正在高速接收字节时，应向看门狗报告流处于健康状态，避免误触切换节点。
+    func testStreamHealthyOrRecoveringReflectsActiveTransfer() async throws {
+        let total = 200_000
+        let initialChunk = 65_536
+        let full = pattern(total)
+        ScriptedUpstream.install([
+            .hold(status: 206, headers: ["Content-Type": "video/mp4", "Content-Range": "bytes 0-\(total - 1)/\(total)", "Content-Length": "\(total)"], body: Data(full.prefix(initialChunk))),
+        ])
+        let proxy = LocalStreamProxy(protocolClasses: [ScriptedUpstream.self])
+        let upstream = try XCTUnwrap(URL(string: "https://example.com/a/healthy.mp4"))
+        let local = try XCTUnwrap(await proxy.localURL(for: upstream, headers: [:], streamID: "p115:healthy"))
+
+        XCTAssertFalse(proxy.isStreamHealthyOrRecovering(for: local))
+        let client = try openStream(local, range: "bytes=0-\(total - 1)")
+        defer { close(client) }
+        _ = try readUntil(client, bodyBytes: initialChunk)
+
+        XCTAssertTrue(proxy.isStreamHealthyOrRecovering(for: local), "刚收到 64 KiB 有效数据时代理层应报告为健康")
+    }
 }
 
 private final class RenewCounter: @unchecked Sendable {

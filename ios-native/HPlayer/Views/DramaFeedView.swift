@@ -751,21 +751,33 @@ final class DramaPagerController: UIViewController, UIScrollViewDelegate, UIGest
 private struct DramaLandscapeView: View {
     @ObservedObject var player: DramaEpisodePlayer
     let title: String
-    /// 用户选的倍速：长按 2 倍速松手后回到它
+    /// 用户选的倍速：长按加速松手后回到它
     let speed: Float
     let onExit: () -> Void
+    @ObservedObject private var gestureStore = PlaybackGestureStore.shared
+    private var gestureSettings: PlaybackGestureSettings { gestureStore.settings }
     @State private var controlsVisible = true
     @State private var hideTask: Task<Void, Never>?
     @State private var boosting = false
+    @State private var boostLocked = false
+    @State private var boostLockPrimed = false
     /// 左右滑动快进快退：起手时的播放位置和预览目标（松手才跳转）
     @State private var seekStart: Double?
     @State private var seekTarget: Double?
+    @State private var seekCancelled = false
+    @State private var panFromSideEdge = false
+    @State private var panBase = CGPoint.zero
     /// 这次拖动的方向还没定 / 已定为横滑 / 竖滑（竖滑不做事）
     @State private var panDirection: PanDirection?
 
     private enum PanDirection { case horizontal, vertical }
     /// 走够这么远才定方向，和主播放器一致
     private static let panLockDistance: CGFloat = 14
+
+    /// 短剧页长按倍速跟随设置（单指长按上限 3× 以保持 AVPlayer 流畅）
+    private var resolvedBoostRate: Float {
+        min(3.0, max(speed, gestureSettings.longPressBoostRate.rate))
+    }
 
     var body: some View {
         ZStack {
@@ -776,16 +788,24 @@ private struct DramaLandscapeView: View {
 
             PlaybackGestureSurface(
                 status: accessibilityStatus,
+                doubleTapEnabled: gestureSettings.doubleTapAction != .off,
+                longPressEnabled: gestureSettings.longPressBoostEnabled,
+                longPressDuration: 0.30,
+                allowSimultaneousPanWithLongPress: gestureSettings.longPressExtra == .slideToSeek,
+                pinchEnabled: false,
                 onTap: {
+                    if boostLocked {
+                        cancelLockedBoost()
+                        return
+                    }
                     withAnimation(.easeOut(duration: 0.2)) { controlsVisible.toggle() }
                     scheduleHide()
                 },
-                onDoubleTap: {
-                    Haptics.tap()
-                    player.togglePlay()
-                },
+                onDoubleTapAt: handleDoubleTap,
                 onBoost: setBoost,
-                onPan: handlePan
+                onLongPressDrag: handleLongPressDrag,
+                onPan: handlePan,
+                onPanStartsAtSideEdge: { panFromSideEdge = $0 }
             )
             .ignoresSafeArea()
 
@@ -805,7 +825,7 @@ private struct DramaLandscapeView: View {
                     .frame(maxHeight: .infinity, alignment: .top)
                     .padding(.top, 20)
                     .transition(.opacity)
-                    .allowsHitTesting(false)
+                    .allowsHitTesting(boostLocked)
             }
 
             if controlsVisible {
@@ -814,7 +834,12 @@ private struct DramaLandscapeView: View {
             }
         }
         .onAppear(perform: scheduleHide)
-        .onDisappear { if boosting { setBoost(false) } }
+        .onChange(of: player.isPlaying) { playing in
+            if !playing, boostLocked || boosting {
+                cancelLockedBoost(silent: true)
+            }
+        }
+        .onDisappear { cancelLockedBoost(silent: true) }
         .statusBarHidden(true)
     }
 
@@ -824,34 +849,118 @@ private struct DramaLandscapeView: View {
         return player.isPlaying ? position : "已暂停，\(position)"
     }
 
-    // MARK: 长按 2 倍速
+    // MARK: 双击
+
+    private func handleDoubleTap(at location: CGPoint, in size: CGSize) {
+        switch gestureSettings.doubleTapAction {
+        case .off:
+            return
+        case .playPause:
+            Haptics.tap()
+            player.togglePlay()
+        case .splitSeekAndToggle:
+            let region = gestureSettings.doubleTapRegion(at: location.x, width: size.width)
+            switch region {
+            case .center:
+                Haptics.tap()
+                player.togglePlay()
+            case .left, .right:
+                guard player.duration > 0, player.state == .ready else { return }
+                let step = gestureSettings.doubleTapStep.seconds
+                let delta = region == .right ? step : -step
+                let ceiling = max(player.currentTime, player.duration - 2)
+                let target = min(max(player.currentTime + delta, 0), max(0, ceiling))
+                Haptics.tap()
+                player.seek(to: target)
+            }
+        }
+    }
+
+    // MARK: 长按倍速
 
     private func setBoost(_ on: Bool) {
         if on {
-            guard !boosting, player.isPlaying else { return }
+            if boostLocked {
+                cancelLockedBoost()
+                return
+            }
+            guard gestureSettings.longPressBoostEnabled, !boosting, player.isPlaying else { return }
             Haptics.tap()
+            boostLockPrimed = false
             withAnimation(.easeOut(duration: 0.15)) {
                 boosting = true
                 controlsVisible = false
             }
-            player.setRate(2)
+            player.setRate(resolvedBoostRate)
         } else {
-            guard boosting else { return }
+            guard boosting, !boostLocked else { return }
+            boostLockPrimed = false
             withAnimation(.easeOut(duration: 0.15)) { boosting = false }
             player.setRate(speed)
         }
     }
 
+    private func handleLongPressDrag(_ state: UIGestureRecognizer.State, origin: CGPoint, translation: CGPoint, size: CGSize) {
+        guard gestureSettings.longPressExtra == .swipeUpToLock, boosting, !boostLocked else { return }
+        switch state {
+        case .changed:
+            if translation.y <= -48 {
+                if !boostLockPrimed {
+                    boostLockPrimed = true
+                    Haptics.select()
+                }
+            } else if translation.y > -34, boostLockPrimed {
+                boostLockPrimed = false
+            }
+        case .ended:
+            if boostLockPrimed {
+                boostLocked = true
+                boostLockPrimed = false
+                Haptics.success()
+            }
+        case .cancelled, .failed:
+            boostLockPrimed = false
+        default:
+            break
+        }
+    }
+
+    private func cancelLockedBoost(silent: Bool = false) {
+        boostLocked = false
+        boostLockPrimed = false
+        if boosting {
+            withAnimation(.easeOut(duration: 0.15)) { boosting = false }
+            player.setRate(speed)
+        }
+        if !silent { Haptics.tap() }
+    }
+
     private var boostPill: some View {
-        HStack(spacing: 6) {
-            Image(appIconNamed: AppIcon.speed.name)
-            Text("2× 快进中")
+        let rateText = String(format: "%g", resolvedBoostRate)
+        let label = HStack(spacing: 6) {
+            Image(appIconNamed: (boostLocked || boostLockPrimed ? AppIcon.lock : AppIcon.speed).name)
+            if boostLocked {
+                Text("已锁定 \(rateText)× · 点按恢复")
+            } else if boostLockPrimed {
+                Text("松手锁定 \(rateText)× 倍速")
+            } else {
+                Text("\(rateText)× 快进中")
+            }
         }
         .font(.scaled(13, weight: .semibold))
         .foregroundStyle(.white)
         .padding(.horizontal, 14)
         .frame(height: 32)
         .background(.black.opacity(Theme.Opacity.strong), in: Capsule())
+
+        return Group {
+            if boostLocked {
+                Button { cancelLockedBoost() } label: { label }
+                    .buttonStyle(.plain)
+            } else {
+                label
+            }
+        }
     }
 
     // MARK: 左右滑动快进快退
@@ -864,16 +973,22 @@ private struct DramaLandscapeView: View {
             return
         default: break
         }
+        if state == .began {
+            panBase = .zero
+            seekCancelled = false
+        }
         if panDirection == nil {
             let dx = abs(translation.x), dy = abs(translation.y)
             guard max(dx, dy) >= Self.panLockDistance else {
                 if state == .ended { endSeek(commit: false) }
                 return
             }
+            panBase = translation
             // 和主播放器一样偏向快进快退：和水平夹角 50° 以内都算横滑
             panDirection = dx >= dy * 0.84 ? .horizontal : .vertical
             if panDirection == .horizontal {
-                guard player.duration > 0, player.state == .ready else {
+                guard !panFromSideEdge, gestureSettings.horizontalSeekEnabled,
+                      player.duration > 0, player.state == .ready else {
                     panDirection = .vertical
                     return
                 }
@@ -885,12 +1000,18 @@ private struct DramaLandscapeView: View {
             if state == .ended { endSeek(commit: false) }
             return
         }
-        // 滑满一屏宽能跳的时长：最多 9 分钟；滑过头也只停在结尾前 5 秒
-        let range = min(540, max(90, player.duration * 0.6))
+        let moveX = translation.x - panBase.x
+        let moveY = translation.y - panBase.y
+        let range = gestureSettings.seekSensitivity.seekRange(duration: player.duration)
         let ceiling = max(start, player.duration - 5)
-        let target = min(max(start + Double(translation.x / size.width) * range, 0), max(0, ceiling))
+        let target = min(max(start + Double(moveX / size.width) * range, 0), max(0, ceiling))
+        let shouldCancel = gestureSettings.shouldCancelSeek(translationY: moveY, surfaceHeight: size.height)
+        if shouldCancel != seekCancelled {
+            seekCancelled = shouldCancel
+            Haptics.select()
+        }
         seekTarget = target
-        if state == .ended { endSeek(commit: true) }
+        if state == .ended { endSeek(commit: !seekCancelled) }
     }
 
     private func endSeek(commit: Bool) {
@@ -898,6 +1019,7 @@ private struct DramaLandscapeView: View {
         withAnimation(.easeOut(duration: 0.2)) {
             seekTarget = nil
             seekStart = nil
+            seekCancelled = false
         }
         panDirection = nil
     }
@@ -909,7 +1031,8 @@ private struct DramaLandscapeView: View {
             time: DramaFeedPage.time(target),
             delta: "\(delta >= 0 ? "快进" : "快退") \(delta >= 0 ? "+" : "-")\(DramaFeedPage.time(abs(delta)))",
             progress: player.duration > 0 ? target / player.duration : nil,
-            total: player.duration > 0 ? "共 \(DramaFeedPage.time(player.duration))" : nil
+            total: player.duration > 0 ? "共 \(DramaFeedPage.time(player.duration))" : nil,
+            cancelled: seekCancelled
         )
     }
 

@@ -96,4 +96,24 @@ final class PlaybackBoostTests: XCTestCase {
         player.receiveEventForTesting(.property("hwdec-current", .string("no")))
         XCTAssertEqual(player.effectiveRate, 2)
     }
+
+    func testCustomBoostRateRespectsUserChoiceAndCaps4KAtTwo() throws {
+        let hd = try player(width: 1920, height: 1080)
+        defer { hd.stop() }
+        hd.setBoost(true, rate: 2.5)
+        XCTAssertEqual(hd.effectiveRate, 2.5)
+        hd.setBoost(true, rate: 4.0)
+        XCTAssertEqual(hd.effectiveRate, 4.0)
+        hd.setBoost(false)
+        XCTAssertEqual(hd.effectiveRate, 1)
+
+        let uhd = try player(width: 3840, height: 2160)
+        defer { uhd.stop() }
+        uhd.setBoost(true, rate: 4.0)
+        XCTAssertEqual(uhd.effectiveRate, 2.0, "4K must stay capped at 2x even when user picks a higher rate")
+        uhd.setBoost(true, rate: 1.5)
+        XCTAssertEqual(uhd.effectiveRate, 1.5, "Lower user-selected boost rate should be respected on 4K")
+        uhd.setBoost(false)
+        XCTAssertEqual(uhd.effectiveRate, 1)
+    }
 }

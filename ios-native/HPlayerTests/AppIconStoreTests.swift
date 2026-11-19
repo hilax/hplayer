@@ -4,6 +4,11 @@ import XCTest
 
 @MainActor
 final class AppIconStoreTests: XCTestCase {
+    private struct RecordedHUD: Equatable {
+        let text: String
+        let tone: HUDTone
+    }
+
     private func makeDefaults() -> UserDefaults {
         let suite = "AppIconStoreTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
@@ -15,13 +20,17 @@ final class AppIconStoreTests: XCTestCase {
         defaults: UserDefaults? = nil,
         system: @escaping () -> String? = { nil },
         supportsIcons: Bool = true,
-        apply: @escaping (String?, @escaping (Error?) -> Void) -> Void = { _, done in done(nil) }
+        apply: @escaping (String?, @escaping (Error?) -> Void) -> Void = { _, done in done(nil) },
+        showHUD: (@MainActor (String, HUDTone) -> Void)? = nil,
+        dismissHUD: (@MainActor () -> Void)? = nil
     ) -> AppIconStore {
         AppIconStore(
             defaults: defaults ?? makeDefaults(),
             systemName: system,
             apply: apply,
-            supportsAlternateIcons: { supportsIcons }
+            supportsAlternateIcons: { supportsIcons },
+            showHUD: showHUD ?? { _, _ in },
+            dismissHUD: dismissHUD ?? {}
         )
     }
 
@@ -37,14 +46,21 @@ final class AppIconStoreTests: XCTestCase {
         withExtendedLifetime(subscription) {}
     }
 
-    func testSelectionMovesImmediatelyButPersistsOnlyAfterSuccess() async {
+    func testSelectionMovesImmediatelyPersistsAfterSuccessWithoutDuplicateHUD() async {
         let defaults = makeDefaults()
         var requested: [String?] = []
         var completion: ((Error?) -> Void)?
-        let store = makeStore(defaults: defaults, apply: { name, done in
-            requested.append(name)
-            completion = done
-        })
+        var huds: [RecordedHUD] = []
+        var dismissCount = 0
+        let store = makeStore(
+            defaults: defaults,
+            apply: { name, done in
+                requested.append(name)
+                completion = done
+            },
+            showHUD: { text, tone in huds.append(RecordedHUD(text: text, tone: tone)) },
+            dismissHUD: { dismissCount += 1 }
+        )
         store.select(.ocean)
         XCTAssertEqual(store.selected, .ocean)
         XCTAssertTrue(store.isChanging)
@@ -54,44 +70,100 @@ final class AppIconStoreTests: XCTestCase {
 
         await complete(completion, store: store)
         XCTAssertFalse(store.isChanging)
-        XCTAssertEqual(store.notice, .success(.ocean, previous: .prism))
+        XCTAssertTrue(huds.isEmpty, "System alert already confirms success; app must not stack a duplicate success HUD")
+        XCTAssertGreaterThanOrEqual(dismissCount, 2, "Start and completion should clear any stale HUD")
         XCTAssertEqual(defaults.string(forKey: AppIconStore.choiceKey), "ocean")
     }
 
-    func testFailureKeepsPreviousConfirmedChoice() async {
+    func testFailureKeepsPreviousConfirmedChoiceAndReportsUnifiedErrorHUD() async {
         let defaults = makeDefaults()
         defaults.set("ocean", forKey: AppIconStore.choiceKey)
         var completion: ((Error?) -> Void)?
-        let store = makeStore(defaults: defaults, apply: { _, done in completion = done })
+        var huds: [RecordedHUD] = []
+        let store = makeStore(
+            defaults: defaults,
+            apply: { _, done in completion = done },
+            showHUD: { text, tone in huds.append(RecordedHUD(text: text, tone: tone)) }
+        )
         store.select(.mint)
         await complete(completion, error: NSError(domain: "test", code: 1,
                                                  userInfo: [NSLocalizedDescriptionKey: "拒绝"]), store: store)
         XCTAssertEqual(store.selected, .ocean)
         XCTAssertEqual(defaults.string(forKey: AppIconStore.choiceKey), "ocean")
-        XCTAssertEqual(store.notice, .failure("拒绝"))
+        XCTAssertEqual(huds, [RecordedHUD(text: "更换失败：拒绝", tone: .error)])
         XCTAssertEqual(makeStore(defaults: defaults).selected, .ocean)
+    }
+
+    func testDuplicateSystemCallbackDoesNotEmitDuplicateHUD() async {
+        var completion: ((Error?) -> Void)?
+        var huds: [RecordedHUD] = []
+        let store = makeStore(
+            apply: { _, done in completion = done },
+            showHUD: { text, tone in huds.append(RecordedHUD(text: text, tone: tone)) }
+        )
+        store.select(.mint)
+        let failure = NSError(domain: "test", code: 2, userInfo: [NSLocalizedDescriptionKey: "忙"])
+        await complete(completion, error: failure, store: store)
+        // 模拟异常重复回调
+        completion?(failure)
+        await Task.yield()
+        XCTAssertEqual(huds.count, 1, "A single request must never produce duplicate HUD notifications")
+    }
+
+    func testDefaultHUDIntegrationUsesSharedHUDCenterAndClearsOnNextSuccess() async {
+        HUDCenter.shared.dismiss()
+        defer { HUDCenter.shared.dismiss() }
+
+        var completion: ((Error?) -> Void)?
+        let store = AppIconStore(
+            defaults: makeDefaults(),
+            systemName: { nil },
+            apply: { _, done in completion = done },
+            supportsAlternateIcons: { true }
+        )
+
+        store.select(.coral)
+        await complete(completion, error: NSError(domain: "test", code: 3,
+                                                 userInfo: [NSLocalizedDescriptionKey: "系统繁忙"]), store: store)
+        XCTAssertEqual(HUDCenter.shared.current?.tone, .error)
+        XCTAssertEqual(HUDCenter.shared.current?.text, "更换失败：系统繁忙")
+
+        store.select(.coral)
+        await complete(completion, store: store)
+        XCTAssertNil(HUDCenter.shared.current, "Successful icon switch should clear stale error HUD without stacking a new toast")
     }
 
     func testPosix35WithoutMatchingSystemIconIsAFailure() async {
         let defaults = makeDefaults()
         var completion: ((Error?) -> Void)?
-        let store = makeStore(defaults: defaults, apply: { _, done in completion = done })
+        var huds: [RecordedHUD] = []
+        let store = makeStore(
+            defaults: defaults,
+            apply: { _, done in completion = done },
+            showHUD: { text, tone in huds.append(RecordedHUD(text: text, tone: tone)) }
+        )
         store.select(.iris)
         await complete(completion, error: NSError(domain: NSPOSIXErrorDomain, code: 35), store: store)
         XCTAssertEqual(store.selected, .prism)
         XCTAssertEqual(defaults.string(forKey: AppIconStore.choiceKey), "prism")
-        guard case .failure = store.notice else { return XCTFail("An unconfirmed error must not report success") }
+        XCTAssertEqual(huds.count, 1)
+        XCTAssertEqual(huds.first?.tone, .error, "An unconfirmed error must report failure via unified HUD")
     }
 
     func testPosix35CanSucceedWhenSystemConfirmsRequestedIcon() async {
         var system: String? = nil
         var completion: ((Error?) -> Void)?
-        let store = makeStore(system: { system }, apply: { _, done in completion = done })
+        var huds: [RecordedHUD] = []
+        let store = makeStore(
+            system: { system },
+            apply: { _, done in completion = done },
+            showHUD: { text, tone in huds.append(RecordedHUD(text: text, tone: tone)) }
+        )
         store.select(.iris)
         system = "AppIconIris"
         await complete(completion, error: NSError(domain: NSPOSIXErrorDomain, code: 35), store: store)
         XCTAssertEqual(store.selected, .iris)
-        XCTAssertEqual(store.notice, .success(.iris, previous: .prism))
+        XCTAssertTrue(huds.isEmpty)
     }
 
     func testConfirmedSelectionSurvivesStaleSystemValuesAndPageRecreation() async {
@@ -129,7 +201,7 @@ final class AppIconStoreTests: XCTestCase {
         XCTAssertEqual(makeStore(defaults: defaults, system: { "AppIconOcean" }).selected, .prism)
     }
 
-    func testUndoRestoresAndPersistsPreviousIcon() async {
+    func testSwitchingBackToPreviousIconPersistsCleanly() async {
         let defaults = makeDefaults()
         var requested: [String?] = []
         var completion: ((Error?) -> Void)?
@@ -139,7 +211,7 @@ final class AppIconStoreTests: XCTestCase {
         })
         store.select(.ocean)
         await complete(completion, store: store)
-        store.undo()
+        store.select(.prism)
         await complete(completion, store: store)
         XCTAssertEqual(store.selected, .prism)
         XCTAssertEqual(requested, ["AppIconOcean", nil])
@@ -156,30 +228,41 @@ final class AppIconStoreTests: XCTestCase {
         store.select(.ocean)
         store.select(.mint)
         store.select(.prism)
-        store.undo()
         XCTAssertEqual(requested, ["AppIconOcean"])
         XCTAssertEqual(store.selected, .ocean)
         await complete(completion, store: store)
     }
 
-    func testUnsupportedDeviceDoesNotRequestOrPersistAChange() {
+    func testUnsupportedDeviceShowsWarningHUDAndDoesNotRequestOrPersistAChange() {
         let defaults = makeDefaults()
-        let store = makeStore(defaults: defaults, supportsIcons: false, apply: { _, _ in
-            XCTFail("Unsupported devices must not request an alternate icon")
-        })
+        var huds: [RecordedHUD] = []
+        let store = makeStore(
+            defaults: defaults,
+            supportsIcons: false,
+            apply: { _, _ in
+                XCTFail("Unsupported devices must not request an alternate icon")
+            },
+            showHUD: { text, tone in huds.append(RecordedHUD(text: text, tone: tone)) }
+        )
         store.select(.mint)
         XCTAssertEqual(store.selected, .prism)
         XCTAssertFalse(store.isChanging)
         XCTAssertEqual(defaults.string(forKey: AppIconStore.choiceKey), "prism")
+        XCTAssertEqual(huds, [RecordedHUD(text: "当前设备暂不支持更换应用图标", tone: .warning)])
     }
 
-    func testSelectingCurrentAlternateDoesNotSendAnotherRequest() {
-        let store = makeStore(system: { "AppIconOcean" }, apply: { _, _ in
-            XCTFail("Selecting the active style must not send a duplicate request")
-        })
+    func testSelectingCurrentAlternateDoesNotSendAnotherRequestOrHUD() {
+        var huds: [RecordedHUD] = []
+        let store = makeStore(
+            system: { "AppIconOcean" },
+            apply: { _, _ in
+                XCTFail("Selecting the active style must not send a duplicate request")
+            },
+            showHUD: { text, tone in huds.append(RecordedHUD(text: text, tone: tone)) }
+        )
         store.select(.ocean)
         XCTAssertFalse(store.isChanging)
-        XCTAssertNil(store.notice)
+        XCTAssertTrue(huds.isEmpty)
     }
 
     func testSelectingPrismNormalizesLegacyAlternate() async {

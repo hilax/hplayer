@@ -317,23 +317,28 @@ struct PlayerSeekHUD: View {
     let delta: String
     var progress: Double? = nil
     var total: String? = nil
+    /// 横滑过程中手指下滑触发「取消本次跳转」时的视觉反馈
+    var cancelled: Bool = false
 
     var body: some View {
         VStack(spacing: 2) {
             Text(time)
                 .font(.scaled(34, weight: .bold).monospacedDigit())
-            Text(delta)
+                .opacity(cancelled ? 0.52 : 1)
+            Text(cancelled ? "松手取消跳转" : delta)
                 .font(.scaled(15, weight: .bold).monospacedDigit())
-                .foregroundStyle(Theme.HUD.playerAccent)
+                .foregroundStyle(cancelled ? Theme.warning : Theme.HUD.playerAccent)
             if let progress {
                 PlayerHUDBar(value: min(max(progress, 0), 1))
                     .frame(width: 180, height: 4)
+                    .opacity(cancelled ? 0.4 : 1)
                     .padding(.top, 6)
             }
             if let total {
                 Text(total)
                     .font(.scaled(12, weight: .medium).monospacedDigit())
                     .foregroundStyle(Theme.textSecondaryOnArtwork)
+                    .opacity(cancelled ? 0.55 : 1)
             }
         }
         .foregroundStyle(.white)

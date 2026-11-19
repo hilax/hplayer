@@ -254,9 +254,12 @@ final class PlaybackController: ObservableObject {
     private var cachedFingerprint: VideoSubtitleFingerprint?
     private var subtitleDelayHydratedSession = -1
     private var rawCacheSpeed: Int = 0
+    private var cacheDurationAtLastTick: Double = 0
     private var healthyPlaybackSeconds: Int = 0
     private var openingSeconds: Int = 0
     private var tier1RefreshAttemptedInStall = false
+    private var lastTier1RefreshUptime: TimeInterval = -Double.infinity
+    private var torrentRecoveryCount = 0
     private var pausedAtUptime: TimeInterval?
     private var preferLargerPauseWait = false
     private static let minHealthyCacheSpeedBytes = 32 * 1024
@@ -271,6 +274,7 @@ final class PlaybackController: ObservableObject {
     /// Prevent late asynchronous opens from restarting audio while closing.
     private var closingPlayback = false
     private var boosted = false
+    private var requestedBoostRate: Float = PlaybackController.boostRate
     private var boostDesyncSince: TimeInterval?
     private var lastBoostReduction = -Double.infinity
     private var loaded = false
@@ -538,6 +542,8 @@ final class PlaybackController: ObservableObject {
             softwareFallbackNoticed = false
             pictureInPictureStillReady = false
             preferLargerPauseWait = false
+            lastTier1RefreshUptime = -Double.infinity
+            torrentRecoveryCount = 0
             currentTitle = title
             currentSubtitleIdentifier = subtitleIdentifier
             currentIMDBID = imdbID
@@ -618,10 +624,11 @@ final class PlaybackController: ObservableObject {
         engine.set("hwdec", hwdecOption)
         if currentTorrentStream {
             // 本机 BT 引擎已在 HPlayerMagnet/pieces 做了持久化分片缓存并支持 16KB 块级流式吐出：
-            // 放宽超时以对齐底层 60 秒片块等待，避免 15 秒误切断本地流，并适当缩短探测与内存预读窗口
+            // 放宽超时以对齐底层 60 秒片块等待，同时允许本机回环流瞬断后自动带 Range 重连，
+            // 避免拖动或短暂等待片块时直接报错中断播放。
             engine.set("network-timeout", "60")
-            engine.set("stream-lavf-o", "reconnect=0")
-            engine.set("demuxer-lavf-probesize", "1572864")
+            engine.set("stream-lavf-o", "reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=2")
+            engine.set("demuxer-lavf-probesize", "2097152")
             engine.set("cache-pause-wait", "2.0")
         } else {
             engine.set("network-timeout", "15")
@@ -714,6 +721,7 @@ final class PlaybackController: ObservableObject {
         bufferedUntil = 0
         cachedSeconds = 0
         rawCachedSeconds = 0
+        cacheDurationAtLastTick = 0
         downloadSpeed = 0
         rawCacheSpeed = 0
         healthyPlaybackSeconds = 0
@@ -755,11 +763,11 @@ final class PlaybackController: ObservableObject {
         #endif
         if currentTorrentStream {
             engine.set("cache-on-disk", false)
-            let seconds = min(readahead.rawValue, 60)
+            let seconds = min(readahead.rawValue, 30)
             engine.set("demuxer-readahead-secs", "\(seconds)")
             engine.set("cache-secs", "\(seconds)")
-            engine.set("demuxer-max-bytes", "96MiB")
-            engine.set("demuxer-max-back-bytes", "32MiB")
+            engine.set("demuxer-max-bytes", "64MiB")
+            engine.set("demuxer-max-back-bytes", "16MiB")
             return
         }
         engine.set("cache-on-disk", true)
@@ -843,7 +851,7 @@ final class PlaybackController: ObservableObject {
                 recover(reason: "")
             } else {
                 engine?.set("pause", false)
-                if pauseElapsed >= 90, urlRefresher != nil, let engineURL = currentEngineURL,
+                if pauseElapsed >= 1200, cachedSeconds < 5, urlRefresher != nil, let engineURL = currentEngineURL,
                    !LocalStreamProxy.shared.isRecovering(for: engineURL) {
                     LocalStreamProxy.shared.refreshActiveUpstream(for: engineURL)
                 }
@@ -871,6 +879,7 @@ final class PlaybackController: ObservableObject {
         seekAwaitingRestart = true
         seekObservedTime = nil
         noDataSeconds = 0
+        cacheDurationAtLastTick = rawCachedSeconds
         if recoveryTask != nil || (!loaded && !opening) {
             // 115 正在换地址时，让这次请求继续。地址就绪后会从最新的目标位置打开。
             if currentDirect115, recoveryTask != nil {
@@ -892,6 +901,9 @@ final class PlaybackController: ObservableObject {
         if let result, result < 0 {
             if watchdogEnabled {
                 recover(reason: "跳转没有成功")
+            } else if currentTorrentStream, torrentRecoveryCount < 2 {
+                torrentRecoveryCount += 1
+                recover(reason: "跳转重新缓冲")
             } else {
                 giveUp("跳转没有成功，请重试")
             }
@@ -935,8 +947,17 @@ final class PlaybackController: ObservableObject {
     }
 
     /// 长按临时加速；高负载时降低倍速，松手恢复用户设置（mpv 自动保持音调）。
-    func setBoost(_ enabled: Bool) {
-        guard boosted != enabled else { return }
+    /// 未传 `targetRate` 时默认使用 `Self.boostRate`（3×）；4K 或软解视频封顶 2×。
+    func setBoost(_ enabled: Bool, rate targetRate: Float? = nil) {
+        if enabled {
+            requestedBoostRate = max(1, targetRate ?? Self.boostRate)
+        }
+        guard boosted != enabled else {
+            if enabled {
+                applyRate(preferredBoostRate)
+            }
+            return
+        }
         boosted = enabled
         boostDesyncSince = nil
         lastBoostReduction = -Double.infinity
@@ -944,10 +965,14 @@ final class PlaybackController: ObservableObject {
         applyRate(enabled ? preferredBoostRate : rate)
     }
 
-    /// 4K at 3× can exceed the hardware decoder's throughput. Start at 2× and
-    /// lower only the temporary speed if sustained A/V drift shows it still cannot keep up.
+    /// 4K at 3× can exceed the hardware decoder's throughput. Cap temporary boost at 2×
+    /// for 4K / software decoding and lower further if sustained A/V drift shows it cannot keep up.
     private var preferredBoostRate: Float {
-        videoWidth >= 3840 || videoHeight >= 2160 || activeHwdec == "no" ? 2 : Self.boostRate
+        let desired = max(rate, requestedBoostRate)
+        if videoWidth >= 3840 || videoHeight >= 2160 || activeHwdec == "no" {
+            return min(desired, 2)
+        }
+        return desired
     }
 
     private func applyRate(_ value: Float) {
@@ -1174,6 +1199,11 @@ final class PlaybackController: ObservableObject {
     }
 
     func applyOnlineSubtitle(_ candidate: OnlineSubtitleCandidate) async {
+        _ = await mountOnlineSubtitleCandidate(candidate)
+    }
+
+    @discardableResult
+    private func mountOnlineSubtitleCandidate(_ candidate: OnlineSubtitleCandidate) async -> Bool {
         let activeSession = session
         onlineSubtitleSearching = true
         onlineSubtitleStatus = "正在下载字幕…"
@@ -1185,25 +1215,24 @@ final class PlaybackController: ObservableObject {
         } else {
             localFile = nil
         }
-        guard session == activeSession, !closingPlayback else { return }
+        guard session == activeSession, !closingPlayback else { return false }
         onlineSubtitleSearching = false
         guard let localFile else {
             onlineSubtitleStatus = "字幕下载失败，请换一条"
-            notice = "在线字幕下载失败，请尝试其他候选"
-            return
+            return false
         }
         let mounted = await mountSubtitleFile(localFile, candidate: candidate, expectedSession: activeSession)
         guard mounted, session == activeSession, !closingPlayback else {
             if session == activeSession, !closingPlayback {
                 onlineSubtitleStatus = "字幕挂载失败，请换一条"
             }
-            return
+            return false
         }
         if let key = currentOnlineSubtitleVideoKey {
             OnlineSubtitleCache.shared.rememberSelection(candidate, fileURL: localFile, delaySeconds: subtitleDelay, for: key)
         }
         onlineSubtitleStatus = "已挂载 · \(candidate.source.shortTitle)"
-        notice = "已挂载字幕：\(candidate.trackTitle)"
+        return true
     }
 
     private var currentOnlineSubtitleVideoKey: String? {
@@ -1285,7 +1314,7 @@ final class PlaybackController: ObservableObject {
                 return
             }
 
-            // 先检查本机是否记忆过该视频选用的在线字幕
+            // 先检查本机是否记忆过该视频选用的在线字幕：静默恢复并直接默认播放，不弹顶部提示
             if let key = self.currentOnlineSubtitleVideoKey,
                let saved = OnlineSubtitleCache.shared.savedSelection(for: key) {
                 if await self.mountSubtitleFile(
@@ -1297,9 +1326,8 @@ final class PlaybackController: ObservableObject {
                         self.setSubtitleDelay(saved.selection.delaySeconds)
                     }
                     self.onlineSubtitleStatus = "已恢复 · \(saved.selection.candidate.source.shortTitle)"
-                    self.notice = "已挂载缓存字幕：\(saved.selection.candidate.trackTitle)"
+                    return
                 }
-                return
             }
 
             await self.performOnlineSubtitleSearch(manualQuery: nil, autoMount: true, expectedSession: activeSession)
@@ -1358,9 +1386,14 @@ final class PlaybackController: ObservableObject {
         onlineSubtitleSearchQuery = result.query
         onlineSubtitles = result.candidates
 
-        if autoMount, let best = OnlineSubtitleService.autoPick(from: result.candidates) {
-            await applyOnlineSubtitle(best)
-            return
+        if autoMount {
+            let picks = OnlineSubtitleService.autoPickCandidates(from: result.candidates, limit: 3)
+            for candidate in picks {
+                guard !Task.isCancelled, session == expectedSession, !closingPlayback else { return }
+                if await mountOnlineSubtitleCandidate(candidate) {
+                    return
+                }
+            }
         }
 
         onlineSubtitleSearching = false
@@ -1666,15 +1699,27 @@ final class PlaybackController: ObservableObject {
             // keep-open EOF can also pause. Only explicit controls own userPaused.
             break
         case ("paused-for-cache", .flag(let value)):
-            if value && !pausedForCache && !seeking { noDataSeconds = 0 }
+            if value && !pausedForCache && !seeking {
+                noDataSeconds = 0
+                cacheDurationAtLastTick = rawCachedSeconds
+            }
             pausedForCache = value
-            if !value, let observed = seekObservedTime { settlePendingSeek(at: observed) }
+            if !value {
+                if let observed = seekObservedTime { settlePendingSeek(at: observed) }
+                if !seeking, !opening, recoveryTask == nil, !statusNote.isEmpty { statusNote = "" }
+            }
         case ("seeking", .flag(let value)):
-            if value && !seeking && !pausedForCache { noDataSeconds = 0 }
+            if value && !seeking && !pausedForCache {
+                noDataSeconds = 0
+                cacheDurationAtLastTick = rawCachedSeconds
+            }
             seeking = value
-            if !value, let observed = seekObservedTime {
-                checkFailedSeek(observed)
-                settlePendingSeek(at: observed)
+            if !value {
+                if let observed = seekObservedTime {
+                    checkFailedSeek(observed)
+                    settlePendingSeek(at: observed)
+                }
+                if !pausedForCache, !opening, recoveryTask == nil, !statusNote.isEmpty { statusNote = "" }
             }
         case ("eof-reached", .flag(let value)):
             // Events are delivered to the main queue in batches. A newer seek
@@ -1694,9 +1739,11 @@ final class PlaybackController: ObservableObject {
             // 进度条上的浅色缓存段：差不到半秒画不出区别，不必每次都让播放页重算
             if value != bufferedUntil, abs(value - bufferedUntil) >= 0.5 || value < bufferedUntil { bufferedUntil = value }
         case ("demuxer-cache-duration", .double(let value)):
-            // 缓冲停顿或起播卡住时，只有明显上涨才算真正在缓冲，防止龟速保活导致看门狗死锁
-            let growthThreshold = (pausedForCache || seeking || !loaded) ? 0.25 : 0.01
-            if value > rawCachedSeconds + growthThreshold { dataSinceTick = true }
+            // 正常播放期保留瞬时增长标记；缓冲/起播卡住时改在 checkHealth() 按整秒累计净增长判定，
+            // 避免高频小步长回调（如每 100ms 涨 0.08s）低于单次 0.25s 阈值而误判为停滞。
+            if !(pausedForCache || seeking || !loaded), value > rawCachedSeconds + 0.01 {
+                dataSinceTick = true
+            }
             rawCachedSeconds = value
             if abs(value - cachedSeconds) >= 0.5 || (value < 1 && cachedSeconds >= 1) { cachedSeconds = value }
         case ("cache-speed", .int(let value)):
@@ -1801,6 +1848,9 @@ final class PlaybackController: ObservableObject {
             if watchdogEnabled, currentURL != nil {
                 // 这次会话里播出来过（重连后的重新打开也算）就是连接断了，不是「打开失败」
                 recover(reason: hasPlayed || playedThisSession ? "网络连接断了" : "视频打开失败")
+            } else if currentTorrentStream, (hasPlayed || playedThisSession), torrentRecoveryCount < 2, currentURL != nil {
+                torrentRecoveryCount += 1
+                recover(reason: "连接短暂中断")
             } else {
                 giveUp(message.map { "播放失败：\($0)" } ?? "播放失败，请尝试其他画质或检查网络")
             }
@@ -1808,6 +1858,9 @@ final class PlaybackController: ObservableObject {
             if pendingSeek != nil || seekAwaitingRestart || seeking || opening {
                 if watchdogEnabled, !userPaused {
                     recover(reason: "跳转时连接中断")
+                } else if currentTorrentStream, (hasPlayed || playedThisSession), !userPaused, torrentRecoveryCount < 2, currentURL != nil {
+                    torrentRecoveryCount += 1
+                    recover(reason: "跳转缓冲中断")
                 } else if !userPaused {
                     giveUp("跳转未完成，请重试")
                 }
@@ -1936,11 +1989,31 @@ final class PlaybackController: ObservableObject {
     }
 
     private func checkHealth() {
+        let now = ProcessInfo.processInfo.systemUptime
         avSync = loaded ? engine?.double("avsync") : nil
-        if boosted { checkBoostSync(avSync, at: ProcessInfo.processInfo.systemUptime) }
-        if dataSinceTick {
+        if boosted { checkBoostSync(avSync, at: now) }
+
+        // 内核在速率稳定时可能不重复发 cache-speed 变更事件，每秒主动补采一次避免误判断流
+        if let polledSpeed = engine?.int("cache-speed") {
+            rawCacheSpeed = Int(max(0, polledSpeed))
+            let speed = Double(rawCacheSpeed)
+            if speed != downloadSpeed, speed == 0 || downloadSpeed == 0 || abs(speed - downloadSpeed) >= downloadSpeed * 0.05 {
+                downloadSpeed = speed
+            }
+        }
+
+        let stalledPhase = pausedForCache || seeking || !loaded
+        let cacheDelta = rawCachedSeconds - cacheDurationAtLastTick
+        cacheDurationAtLastTick = rawCachedSeconds
+
+        let healthyFloor = stalledPhase ? Self.minHealthyCacheSpeedBytes : 1
+        let speedHealthy = rawCacheSpeed >= healthyFloor && (engine != nil || dataSinceTick)
+        let cacheGrowing = stalledPhase ? (cacheDelta >= 0.25) : (cacheDelta > 0.01)
+        let proxyHealthy = currentEngineURL.map { LocalStreamProxy.shared.isStreamHealthyOrRecovering(for: $0) } ?? false
+
+        if dataSinceTick || cacheGrowing || speedHealthy || proxyHealthy {
             noDataSeconds = 0
-            if !pausedForCache || rawCacheSpeed >= Self.minHealthyCacheSpeedBytes {
+            if !pausedForCache || rawCacheSpeed >= Self.minHealthyCacheSpeedBytes || proxyHealthy {
                 tier1RefreshAttemptedInStall = false
             }
         } else {
@@ -1952,8 +2025,9 @@ final class PlaybackController: ObservableObject {
 
         if loaded, playing, !pausedForCache, !seeking, !ended, error.isEmpty {
             healthyPlaybackSeconds += 1
-            if healthyPlaybackSeconds >= 25, !recoveryAttempts.isEmpty {
-                recoveryAttempts = []
+            if healthyPlaybackSeconds >= 25 {
+                if !recoveryAttempts.isEmpty { recoveryAttempts = [] }
+                if torrentRecoveryCount > 0 { torrentRecoveryCount = 0 }
             }
         } else {
             healthyPlaybackSeconds = 0
@@ -1961,16 +2035,19 @@ final class PlaybackController: ObservableObject {
 
         guard watchdogEnabled, recoveryTask == nil, currentURL != nil, error.isEmpty, !userPaused, !ended else { return }
 
-        // 115 的起播监测持续到播放开始，中转负责先尝试续传。
+        // 115 的起播监测持续到播放开始，中转负责先尝试续传；非 115 流在冷却期外才由上层触发静默刷新。
         if awaitingStartup {
             openingSeconds += 1
-            if !currentDirect115, openingSeconds >= 6, noDataSeconds >= 6, !tier1RefreshAttemptedInStall,
-               let engineURL = currentEngineURL, LocalStreamProxy.shared.refreshActiveUpstream(for: engineURL) {
+            if !currentDirect115, openingSeconds >= 9, noDataSeconds >= 9, !tier1RefreshAttemptedInStall,
+               now - lastTier1RefreshUptime >= 30,
+               let engineURL = currentEngineURL,
+               !LocalStreamProxy.shared.isStreamHealthyOrRecovering(for: engineURL),
+               LocalStreamProxy.shared.refreshActiveUpstream(for: engineURL) {
                 tier1RefreshAttemptedInStall = true
-                statusNote = "连接缓慢，正在切换节点…"
+                lastTier1RefreshUptime = now
                 return
             }
-            if noDataSeconds >= 14 || (openingSeconds >= 18 && rawCacheSpeed < Self.minHealthyCacheSpeedBytes) {
+            if noDataSeconds >= 14 || (openingSeconds >= 18 && !proxyHealthy && rawCacheSpeed < Self.minHealthyCacheSpeedBytes) {
                 if !waitForDirect115Recovery() { recover(reason: "起播超时") }
             }
             return
@@ -1989,20 +2066,19 @@ final class PlaybackController: ObservableObject {
             if !waitForDirect115Recovery() { recover(reason: "跳转后网络没有响应") }
             return
         }
-        // Tier-1 静默切节点：缓冲停住 5 秒（或播放中余量不足 6 秒且断流 6 秒）先由中转无缝续传，保留 mpv 本地缓存
-        let lowBufferStall = playing && !pausedForCache && !seeking && cachedSeconds < 6
-            && (duration <= 0 || currentTime + cachedSeconds < duration - 5) && noDataSeconds >= 6
-        if !currentDirect115, (hasPlayed && (pausedForCache || seeking) && noDataSeconds >= 5) || lowBufferStall {
-            if !tier1RefreshAttemptedInStall, let engineURL = currentEngineURL,
-               LocalStreamProxy.shared.refreshActiveUpstream(for: engineURL) {
-                tier1RefreshAttemptedInStall = true
-                engine?.set("cache-pause-wait", "2.5")
-                if pausedForCache || seeking { statusNote = "正在切换高速节点…" }
-                return
-            }
+        // Tier-1 静默续传：115 交由本机中转自动续传不抢切；其他流仅在真正停住缓冲/跳转且冷却满 30 秒才静默刷新一次。
+        if !currentDirect115, hasPlayed, pausedForCache || seeking, noDataSeconds >= 5,
+           !tier1RefreshAttemptedInStall, now - lastTier1RefreshUptime >= 30,
+           let engineURL = currentEngineURL,
+           !LocalStreamProxy.shared.isStreamHealthyOrRecovering(for: engineURL),
+           LocalStreamProxy.shared.refreshActiveUpstream(for: engineURL) {
+            tier1RefreshAttemptedInStall = true
+            lastTier1RefreshUptime = now
+            engine?.set("cache-pause-wait", "2.5")
+            return
         }
-        // Tier-2 兜底重开：中转节点刷新仍未恢复，才停掉重连
-        let reopenThreshold = tier1RefreshAttemptedInStall ? 10 : 8
+        // Tier-2 兜底重开：中转静默刷新仍未恢复，且 115 不处于恢复窗口内，才停掉重连
+        let reopenThreshold = tier1RefreshAttemptedInStall ? 11 : 8
         if hasPlayed, pausedForCache || seeking, noDataSeconds >= reopenThreshold, !waitForDirect115Recovery() {
             recover(reason: "网络卡住了")
         }

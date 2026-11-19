@@ -29,6 +29,7 @@ private struct PlaybackAdjustment {
     let progress: Double
     var detail = ""
     var targetTime: Double? = nil
+    var cancelled = false
 }
 
 /// 竖屏信息页上五个快捷入口点开的菜单：在按钮旁边弹出，不再是底部面板
@@ -249,15 +250,30 @@ struct PlaybackControlsView: View {
     @Namespace private var episodeRangeSpace
     /// 竖屏快捷入口（画质、倍速、字幕、画面比例、解码）点开的菜单
     @State private var quickMenu: QuickMenu?
+    @ObservedObject private var gestureStore = PlaybackGestureStore.shared
+    private var gestureSettings: PlaybackGestureSettings { gestureStore.settings }
     /// 竖屏右上角「…」点开的定时关闭菜单
     @State private var showSleepMenu = false
     @State private var boosting = false
+    /// 长按上滑锁定倍速后，松手仍维持倍速（单击画面或点按顶部胶囊恢复原速）
+    @State private var boostLocked = false
+    /// 长按中手指已上滑过阈值、松手将锁定倍速的预告状态
+    @State private var boostLockPrimed = false
     @State private var dragging = false
     @State private var dragTime = 0.0
     /// 拖进度条开始时的播放位置，用来算「+ 00:20」
     @State private var scrubStart = 0.0
     /// 当前的 dragging 是不是由画面上的横滑快进带起来的（不是手指按在进度条上）
     @State private var panScrubbing = false
+    /// 横滑快进过程中手指下滑触发了「松手取消跳转」
+    @State private var seekCancelled = false
+    /// 分区双击左右快进/快退的连点累加提示状态
+    @State private var doubleTapRegion: PlaybackDoubleTapRegion?
+    @State private var doubleTapSeconds: Double = 0
+    @State private var doubleTapHideTask: Task<Void, Never>?
+    /// 双指捏合起手时的缩放值与防抖标记
+    @State private var pinchStartZoom: Double = 1.0
+    @State private var pinchToggleFired = false
     /// 横屏点按钮弹出的玻璃层（画质、倍速、字幕音轨、选集、画面比例、更多）
     @State private var popover: PlayerPopover?
     /// 「更多」菜单里当前打开的二级页
@@ -281,6 +297,8 @@ struct PlaybackControlsView: View {
     @State private var panActive = false
     /// 这次拖动从屏幕上下边缘起手（系统手势区）
     @State private var panFromSystemEdge = false
+    /// 这次拖动从屏幕左右边缘起手（侧滑返回 / 握持防误触区）
+    @State private var panFromSideEdge = false
     /// 方向锁定时手指已经走过的位移，后面的调节量从这里开始算，画面不会突然跳一下。
     @State private var panBase = CGPoint.zero
     @State private var lastAdjustment = ""
@@ -445,10 +463,19 @@ struct PlaybackControlsView: View {
         .onDisappear {
             hideTask?.cancel()
             adjustmentHideTask?.cancel()
+            doubleTapHideTask?.cancel()
             sleepTask?.cancel()
+            boosting = false
+            boostLocked = false
+            boostLockPrimed = false
             playback.setBoost(false)
             systemVolume.stop()
             if brightnessAdjusted, let originalBrightness { ScreenBrightness.screen.brightness = originalBrightness }
+        }
+        .onChange(of: playback.playing) { playing in
+            if !playing, boostLocked || boosting {
+                cancelLockedBoost(silent: true)
+            }
         }
         // 播放中途打开 VoiceOver：把已经收起的控制栏拿出来，否则只剩一块「播放画面」可以摸到
         .onChange(of: voiceOverEnabled) { enabled in
@@ -525,6 +552,8 @@ struct PlaybackControlsView: View {
                     GlassIconButton(systemImage: pipIconName, label: pipLabel) { togglePictureInPicture() }
                         .accessibilityIdentifier("playback.pip")
                 }
+                GlassIconButton(systemImage: AppIcon.screenshot.name, label: "截图") { takeScreenshot() }
+                    .accessibilityIdentifier("playback.screenshot")
                 GlassIconButton(systemImage: AppIcon.aspect.name, label: "画面比例") { togglePopover(.aspect) }
                     .overlay { popoverRing(.aspect) }
                     .accessibilityIdentifier("playback.aspect")
@@ -1569,15 +1598,19 @@ struct PlaybackControlsView: View {
             }
             PlaybackGestureSurface(
                 status: gestureStatus,
-                onTap: toggleControls,
-                onDoubleTap: {
-                    guard !locked else { return }
-                    hideControlsForGesture()
-                    playback.toggle()
-                },
+                doubleTapEnabled: gestureSettings.doubleTapAction != .off,
+                longPressEnabled: gestureSettings.longPressBoostEnabled,
+                longPressDuration: 0.30,
+                allowSimultaneousPanWithLongPress: gestureSettings.longPressExtra == .slideToSeek,
+                pinchEnabled: gestureSettings.pinchAction != .off,
+                onTap: handleSingleTap,
+                onDoubleTapAt: handleDoubleTap,
                 onBoost: setBoost,
+                onLongPressDrag: handleLongPressDrag,
                 onPan: handlePan,
-                onPanStartsAtSystemEdge: { panFromSystemEdge = $0 }
+                onPinch: handlePinch,
+                onPanStartsAtSystemEdge: { panFromSystemEdge = $0 },
+                onPanStartsAtSideEdge: { panFromSideEdge = $0 }
             )
 
             if controlsVisible && !locked {
@@ -1588,13 +1621,22 @@ struct PlaybackControlsView: View {
                 }
             } else if controlsVisible && locked {
                 HStack {
+                    if landscape { Spacer() }
                     GlassIconButton(systemImage: AppIcon.lock.name, label: "解锁", diameter: 40, action: unlock)
                         .accessibilityIdentifier("playback.unlock")
-                    Spacer()
+                    if !landscape { Spacer() }
                 }
-                .padding(.leading, landscape ? edgeControlInset(safe: insets.leading, width: width) : 16)
+                .padding(.leading, landscape ? 0 : 16)
+                .padding(.trailing, landscape ? edgeControlInset(safe: insets.trailing, width: width) : 0)
                 .transition(.opacity)
                 .zIndex(3)
+            }
+
+            if let region = doubleTapRegion, doubleTapSeconds != 0 {
+                doubleTapOverlay(region: region, seconds: doubleTapSeconds)
+                    .transition(.opacity)
+                    .allowsHitTesting(false)
+                    .zIndex(4)
             }
 
             centerStatus
@@ -1607,7 +1649,7 @@ struct PlaybackControlsView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                     .padding(.top, hudInsets.top + Self.hudTopInset)
                     .transition(.opacity)
-                    .allowsHitTesting(false)
+                    .allowsHitTesting(boostLocked)
                     .zIndex(5)
             }
 
@@ -1647,15 +1689,12 @@ struct PlaybackControlsView: View {
         }
         .overlay {
             HStack {
+                Spacer()
                 GlassIconButton(systemImage: AppIcon.unlock.name, label: "锁定", diameter: 40, action: lock)
                     .accessibilityIdentifier("playback.lock")
-                Spacer()
-                GlassIconButton(systemImage: AppIcon.screenshot.name, label: "截图", diameter: 40) { takeScreenshot() }
-                    .accessibilityIdentifier("playback.screenshot")
             }
-            .padding(.leading, edgeControlInset(safe: insets.leading, width: width))
             .padding(.trailing, edgeControlInset(safe: insets.trailing, width: width))
-            // 弹出层打开时两侧的锁定、截图淡出，画面上只留正在用的那一层
+            // 弹出层打开时右侧的锁定按钮淡出，画面上只留正在用的那一层
             .opacity(popover == nil ? 1 : 0)
             .allowsHitTesting(popover == nil)
             .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: popover)
@@ -3150,23 +3189,86 @@ struct PlaybackControlsView: View {
         .accessibilityIdentifier("playback.cacheStatus")
     }
 
-    /// 长按快进：顶部的玻璃胶囊，和亮度、音量提示在同一个位置
+    /// 长按快进：顶部的玻璃胶囊，和亮度、音量提示在同一个位置；支持上滑锁定倍速与点击解除
     private var boostPill: some View {
-        HStack(spacing: 8) {
-            Image(appIconNamed: AppIcon.skip.name)
+        let rateText = String(format: "%g", playback.effectiveRate)
+        let showSwipeHint = !boostLocked && !boostLockPrimed && gestureSettings.longPressExtra == .swipeUpToLock
+        let content = HStack(spacing: 8) {
+            Image(appIconNamed: (boostLocked || boostLockPrimed ? AppIcon.lock : AppIcon.skip).name)
                 .font(.scaled(13, weight: .bold))
-                .foregroundStyle(Theme.gold)
-            Text("\(String(format: "%g", playback.effectiveRate))× 快进中")
-                .font(.scaled(13, weight: .bold))
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
+                .foregroundStyle(boostLocked || boostLockPrimed ? Theme.HUD.playerAccent : Theme.gold)
+            if boostLocked {
+                Text("已锁定 \(rateText)× · 点按恢复")
+                    .font(.scaled(13, weight: .bold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+            } else if boostLockPrimed {
+                Text("松手锁定 \(rateText)× 倍速")
+                    .font(.scaled(13, weight: .bold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+            } else {
+                Text("\(rateText)× 快进中")
+                    .font(.scaled(13, weight: .bold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                if showSwipeHint {
+                    Text("上滑锁定")
+                        .font(.scaled(11, weight: .medium))
+                        .foregroundStyle(Theme.textSecondaryOnArtwork)
+                        .lineLimit(1)
+                }
+            }
         }
         .foregroundStyle(.white)
         .padding(.horizontal, 16)
         .frame(height: 36)
         .glassCapsule()
+
+        return Group {
+            if boostLocked {
+                Button {
+                    cancelLockedBoost()
+                } label: {
+                    content
+                }
+                .buttonStyle(.plain)
+            } else {
+                content
+            }
+        }
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("playback.boostHUD")
+    }
+
+    /// 分区双击左右快进/快退反馈：显示在对应半屏居中，不挡字幕和中线主体
+    private func doubleTapOverlay(region: PlaybackDoubleTapRegion, seconds: Double) -> some View {
+        let forward = region == .right
+        let amount = Int(abs(seconds).rounded())
+        let badge = HStack(spacing: 6) {
+            Image(appIconNamed: (forward ? AppIcon.seek : AppIcon.seekBack).name)
+                .font(.scaled(15, weight: .bold))
+                .foregroundStyle(Theme.HUD.playerAccent)
+            Text("\(forward ? "+" : "-")\(amount) 秒")
+                .font(.scaled(14, weight: .bold).monospacedDigit())
+                .foregroundStyle(.white)
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 38)
+        .glassCapsule()
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("playback.doubleTapHUD")
+
+        return HStack(spacing: 0) {
+            if forward {
+                Spacer(minLength: 0)
+                badge.frame(maxWidth: .infinity)
+            } else {
+                badge.frame(maxWidth: .infinity)
+                Spacer(minLength: 0)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     /// 手势提示始终位于同一顶部位置，操作栏显隐不改变这个距离。
@@ -3179,8 +3281,8 @@ struct PlaybackControlsView: View {
     /// 为两侧操作按钮留出空间；横屏还保留至少一段片名，竖屏使用较短的提示条。
     private func topHUDWidth(landscape: Bool, insets: EdgeInsets, width: CGFloat) -> CGFloat {
         let side = landscape
-            // 右上角多了小窗按钮时再让出一个按钮的宽度
-            ? max(max(insets.leading, insets.trailing), 28) + 42 + 12 + 80 + 12 + (playback.pictureInPictureSupported ? 52 : 0)
+            // 右上角有截图、画面比例、更多（及可选的小窗按钮）
+            ? max(max(insets.leading, insets.trailing), 28) + 42 + 12 + 132 + 12 + (playback.pictureInPictureSupported ? 52 : 0)
             : 4 + 88 + 12
         return max(96, min(280, width - side * 2))
     }
@@ -3194,7 +3296,8 @@ struct PlaybackControlsView: View {
                 case .seek:
                     PlayerSeekHUD(time: timeText(adjustment.targetTime ?? 0),
                                   delta: "\(adjustment.title) \(adjustment.valueText)",
-                                  progress: playback.duration > 0 ? adjustment.progress : nil)
+                                  progress: playback.duration > 0 ? adjustment.progress : nil,
+                                  cancelled: adjustment.cancelled)
                         .frame(maxWidth: width)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                         .padding(.top, insets.top + Self.hudTopInset)
@@ -3266,6 +3369,9 @@ struct PlaybackControlsView: View {
     private func move(_ offset: Int) { if let id = adjacent(offset) { onSelect(id); revealControls() } }
     private func lock() {
         locked = true
+        if gestureSettings.lockDisablesAllGestures, boostLocked || boosting {
+            cancelLockedBoost(silent: true)
+        }
         popover = nil
         showSleepMenu = false
         quickMenu = nil
@@ -3439,6 +3545,62 @@ struct PlaybackControlsView: View {
         return values.map { "\($0.0)=\(String(format: "%.2f", Double($0.1)))" }.joined(separator: "; ")
     }
 
+    private func handleSingleTap() {
+        if boostLocked {
+            cancelLockedBoost()
+            return
+        }
+        toggleControls()
+    }
+
+    private func handleDoubleTap(at location: CGPoint, in size: CGSize) {
+        guard !locked, !showList, quickMenu == nil, popover == nil, !closing else { return }
+        switch gestureSettings.doubleTapAction {
+        case .off:
+            return
+        case .playPause:
+            hideControlsForGesture()
+            playback.toggle()
+        case .splitSeekAndToggle:
+            let region = gestureSettings.doubleTapRegion(at: location.x, width: size.width)
+            switch region {
+            case .center:
+                hideControlsForGesture()
+                playback.toggle()
+            case .left, .right:
+                hideControlsForGesture()
+                guard playback.seekable, playback.duration > 0 else {
+                    showNotice(playback.duration > 0 ? "视频还在加载，暂时不能快进快退" : "这个视频不支持快进快退")
+                    return
+                }
+                let step = gestureSettings.doubleTapStep.seconds
+                let delta = region == .right ? step : -step
+                let ceiling = max(playback.currentTime, playback.duration - 2)
+                let target = min(max(playback.currentTime + delta, 0), max(0, ceiling))
+                playback.seek(to: target)
+                Haptics.tap()
+
+                let nextAccumulated = (doubleTapRegion == region ? doubleTapSeconds : 0) + delta
+                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.14)) {
+                    doubleTapRegion = region
+                    doubleTapSeconds = nextAccumulated
+                }
+                let sign = nextAccumulated >= 0 ? "+" : "-"
+                let verb = nextAccumulated >= 0 ? "快进" : "快退"
+                lastAdjustment = "\(verb) \(sign)\(Int(abs(nextAccumulated).rounded()))s"
+                doubleTapHideTask?.cancel()
+                doubleTapHideTask = Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 850_000_000)
+                    guard !Task.isCancelled else { return }
+                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
+                        doubleTapRegion = nil
+                        doubleTapSeconds = 0
+                    }
+                }
+            }
+        }
+    }
+
     private func toggleControls() {
         if popover != nil { closePopover(); return }
         if showSleepMenu { closeSleepMenu(); return }
@@ -3463,16 +3625,114 @@ struct PlaybackControlsView: View {
 
     private func setBoost(_ enabled: Bool) {
         if enabled {
-            // 锁定后也能长按快进；锁定时其他面板都已收起
-            guard !showList, quickMenu == nil, popover == nil, panKind == nil, playback.playing else { return }
+            // 已处于上滑锁定倍速时，再次长按直接解除锁定恢复原速
+            if boostLocked {
+                cancelLockedBoost()
+                return
+            }
+            if locked && gestureSettings.lockDisablesAllGestures { return }
+            guard gestureSettings.longPressBoostEnabled,
+                  !showList, quickMenu == nil, popover == nil, panKind == nil, playback.playing else { return }
             hideControlsForGesture()
+            boostLockPrimed = false
             boosting = true
-            playback.setBoost(true)
+            playback.setBoost(true, rate: gestureSettings.longPressBoostRate.rate)
             lastAdjustment = "长按 \(String(format: "%g", playback.effectiveRate))×"
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
         } else if boosting {
+            // 上滑锁定倍速已生效时，松手保持倍速继续播放
+            if boostLocked { return }
+            boostLockPrimed = false
             boosting = false
             playback.setBoost(false)
+        }
+    }
+
+    /// 长按期间的手指移动：支持「上滑锁定倍速」
+    private func handleLongPressDrag(_ state: UIGestureRecognizer.State, origin: CGPoint, translation: CGPoint, size: CGSize) {
+        guard gestureSettings.longPressExtra == .swipeUpToLock, boosting, !boostLocked else { return }
+        switch state {
+        case .changed:
+            if translation.y <= -48 {
+                if !boostLockPrimed {
+                    boostLockPrimed = true
+                    Haptics.select()
+                }
+            } else if translation.y > -34, boostLockPrimed {
+                boostLockPrimed = false
+            }
+        case .ended:
+            if boostLockPrimed {
+                boostLocked = true
+                boostLockPrimed = false
+                Haptics.success()
+                lastAdjustment = "锁定倍速 \(String(format: "%g", playback.effectiveRate))×"
+            }
+        case .cancelled, .failed:
+            boostLockPrimed = false
+        default:
+            break
+        }
+    }
+
+    private func cancelLockedBoost(silent: Bool = false) {
+        boostLocked = false
+        boostLockPrimed = false
+        if boosting {
+            boosting = false
+            playback.setBoost(false)
+        }
+        if !silent { Haptics.tap() }
+    }
+
+    /// 双指捏合画面：支持「适应 / 填充切换」与「自由缩放（1.0× – 2.0×）」
+    private func handlePinch(_ state: UIGestureRecognizer.State, scale: CGFloat, velocity: CGFloat) {
+        guard !locked, !showList, quickMenu == nil, popover == nil, !closing else { return }
+        let mode = gestureSettings.pinchAction
+        guard mode != .off else { return }
+
+        switch state {
+        case .began:
+            hideControlsForGesture()
+            pinchStartZoom = playback.zoom
+            pinchToggleFired = false
+        case .changed:
+            switch mode {
+            case .off:
+                break
+            case .toggleFill:
+                guard !pinchToggleFired else { return }
+                if scale >= 1.18 {
+                    if playback.aspect != .fill || playback.zoom > 1.01 {
+                        playback.setZoom(1)
+                        playback.setAspect(.fill)
+                        pinchToggleFired = true
+                        Haptics.select()
+                        showNotice("填充画面")
+                    }
+                } else if scale <= 0.85 {
+                    if playback.aspect != .fit || playback.zoom > 1.01 {
+                        playback.setZoom(1)
+                        playback.setAspect(.fit)
+                        pinchToggleFired = true
+                        Haptics.select()
+                        showNotice("适应画面")
+                    }
+                }
+            case .freeZoom:
+                let target = min(max(pinchStartZoom * Double(scale), 1.0), 2.0)
+                playback.setZoom(target)
+                showNotice("画面缩放 \(Int((target * 100).rounded()))%")
+            }
+        case .ended, .cancelled, .failed:
+            if mode == .freeZoom, playback.zoom > 1.0, playback.zoom < 1.06 {
+                playback.setZoom(1.0)
+                Haptics.select()
+                showNotice("画面缩放 100%")
+            }
+            pinchToggleFired = false
+        default:
+            break
         }
     }
 
@@ -3494,9 +3754,14 @@ struct PlaybackControlsView: View {
             default: break
             }
             endPanScrub()
+            seekCancelled = false
             panActive = false
             panKind = nil
             adjustment = nil
+            return
+        }
+        if locked && gestureSettings.lockDisablesAllGestures {
+            if state == .ended { endPanScrub() }
             return
         }
         guard !showList, quickMenu == nil, popover == nil, !closing, size.width > 0, size.height > 0 else {
@@ -3505,7 +3770,7 @@ struct PlaybackControlsView: View {
             return
         }
         if state == .began {
-            setBoost(false)
+            if !boostLocked { setBoost(false) }
             hideControlsForGesture()
             adjustmentStartTime = playback.currentTime
             // 每次从屏幕和系统的真实值开始调：自动亮度、音量键、控制中心都可能在两次滑动之间改过它们
@@ -3513,6 +3778,7 @@ struct PlaybackControlsView: View {
             adjustmentStartVolume = systemVolume.currentLevel()
             panKind = nil
             panBase = .zero
+            seekCancelled = false
             panActive = true
         }
         guard panActive else { return }
@@ -3531,13 +3797,17 @@ struct PlaybackControlsView: View {
             // 偏向快进快退：拇指横滑常带一点斜，和水平夹角 50° 以内都算横滑（以前 45° 一刀切，
             // 斜一点就变成调亮度 / 音量，看起来像「滑了没反应」）
             let horizontal = dx >= dy * 0.84
-            // 锁定后只留横滑快进快退，竖滑不调亮度和音量，免得躺着看时误碰
+            // 锁定后（未开启全禁时）只留横滑快进快退，竖滑不调亮度和音量，免得躺着看时误碰
             if locked && !horizontal {
                 panActive = false
                 return
             }
-            // 更偏横就快进快退，更偏竖就调亮度（左半边）或音量（右半边）
             if horizontal {
+                // 从屏幕左右边缘 24pt 内起手多为侧滑返回或握持误触，直接忽略
+                if panFromSideEdge || !gestureSettings.horizontalSeekEnabled {
+                    panActive = false
+                    return
+                }
                 guard playback.seekable, playback.duration > 0 else {
                     panActive = false
                     showNotice(playback.duration > 0 ? "视频还在加载，暂时不能拖动进度" : "这个视频不支持拖动进度")
@@ -3555,7 +3825,13 @@ struct PlaybackControlsView: View {
                     panActive = false
                     return
                 }
-                panKind = origin.x < size.width / 2 ? .brightness : .volume
+                switch gestureSettings.verticalAction(at: origin.x, width: size.width, isLandscape: isLandscapeWindow) {
+                case .brightness: panKind = .brightness
+                case .volume: panKind = .volume
+                case .off:
+                    panActive = false
+                    return
+                }
             }
         }
         guard let panKind else { return }
@@ -3566,35 +3842,50 @@ struct PlaybackControlsView: View {
         case .notice:
             break
         case .seek:
-            // 滑满一屏宽能跳的时长：最多 9 分钟
-            let range = min(540, max(90, playback.duration * 0.6))
+            // 滑满一屏宽能跳的时长由灵敏度决定（精准 / 标准 / 快速）
+            let range = gestureSettings.seekSensitivity.seekRange(duration: playback.duration)
             // 滑过头也只停在结尾前 5 秒，不会一下跳到最后、直接播完停住
             let ceiling = max(adjustmentStartTime, playback.duration - 5)
             let target = min(max(adjustmentStartTime + Double(moveX / size.width) * range, 0), max(0, ceiling))
-            seekHaptic(target: target)
-            adjustment = seekAdjustment(target: target, from: adjustmentStartTime)
+            let shouldCancel = gestureSettings.shouldCancelSeek(translationY: moveY, surfaceHeight: size.height)
+            if shouldCancel != seekCancelled {
+                seekCancelled = shouldCancel
+                Haptics.select()
+            }
+            if !seekCancelled {
+                seekHaptic(target: target)
+            }
+            adjustment = seekAdjustment(target: target, from: adjustmentStartTime, cancelled: seekCancelled)
             // 只更新跳转预览，松手才真正跳转；操作栏和进度条保持隐藏。
-            dragTime = target
+            dragTime = seekCancelled ? adjustmentStartTime : target
         case .brightness:
-            let value = min(max(adjustmentStartBrightness - Double(moveY / size.height) * 1.2, 0.02), 1)
+            let gain = gestureSettings.levelSensitivity.multiplier
+            let value = min(max(adjustmentStartBrightness - Double(moveY / size.height) * gain, 0.02), 1)
             ScreenBrightness.screen.brightness = CGFloat(value)
             brightnessLevel = value
             brightnessAdjusted = true
             adjustment = PlaybackAdjustment(kind: .brightness, title: "亮度", valueText: "\(Int((value * 100).rounded()))%", progress: value)
         case .volume:
-            let value = min(max(adjustmentStartVolume - Double(moveY / size.height) * 1.2, 0), 1)
+            let gain = gestureSettings.levelSensitivity.multiplier
+            let value = min(max(adjustmentStartVolume - Double(moveY / size.height) * gain, 0), 1)
             applyVolume(value)
             adjustment = PlaybackAdjustment(kind: .volume, title: "音量", valueText: "\(Int((value * 100).rounded()))%", progress: value)
         }
         if let adjustment { lastAdjustment = "\(adjustment.title) \(adjustment.valueText)" }
         if state == .ended {
-            if let target = adjustment?.targetTime {
+            let wasCancelled = seekCancelled
+            if let target = adjustment?.targetTime, !wasCancelled {
                 playback.seek(to: target)
             }
             endPanScrub()
+            seekCancelled = false
             self.panKind = nil
             panActive = false
-            hideAdjustmentSoon()
+            if wasCancelled {
+                adjustment = nil
+            } else {
+                hideAdjustmentSoon()
+            }
         }
     }
 
@@ -3613,15 +3904,16 @@ struct PlaybackControlsView: View {
         dragging = false
     }
 
-    private func seekAdjustment(target: Double, from start: Double) -> PlaybackAdjustment {
+    private func seekAdjustment(target: Double, from start: Double, cancelled: Bool = false) -> PlaybackAdjustment {
         let delta = (target - start).rounded()
         return PlaybackAdjustment(
             kind: .seek,
-            title: delta >= 0 ? "快进" : "快退",
-            valueText: "\(delta >= 0 ? "+" : "-") \(timeText(abs(delta)))",
+            title: cancelled ? "取消跳转" : (delta >= 0 ? "快进" : "快退"),
+            valueText: cancelled ? "松手取消" : "\(delta >= 0 ? "+" : "-") \(timeText(abs(delta)))",
             progress: playback.duration > 0 ? target / playback.duration : 0,
             detail: "\(timeText(target)) / \(timeText(playback.duration))",
-            targetTime: target
+            targetTime: target,
+            cancelled: cancelled
         )
     }
 

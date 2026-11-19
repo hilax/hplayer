@@ -60,124 +60,226 @@ enum HomeScreenIcon: String, CaseIterable, Identifiable {
 }
 
 struct AppIconSettingsView: View {
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @StateObject private var store = AppIconStore.shared
+    @ObservedObject private var store = AppIconStore.shared
+    /// 仅控制顶部主屏幕预览的深 / 浅桌面底色，不影响系统或应用外观。
+    @State private var previewDarkOverride: Bool?
+
+    private var previewDark: Bool {
+        previewDarkOverride ?? (colorScheme == .dark)
+    }
 
     private var columns: [GridItem] {
-        let count = dynamicTypeSize.isAccessibilitySize ? 1 : (horizontalSizeClass == .regular ? 3 : 2)
-        return Array(repeating: GridItem(.flexible(), spacing: 12, alignment: .top), count: count)
+        let count = dynamicTypeSize.isAccessibilitySize ? 1 : 3
+        return Array(
+            repeating: GridItem(.flexible(), spacing: Theme.Space.md, alignment: .top),
+            count: count
+        )
     }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 28) {
-                currentIconCard
+            VStack(alignment: .leading, spacing: Theme.Space.xl) {
+                previewStage
 
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: Theme.Space.md) {
                     collectionHeader
-                    LazyVGrid(columns: columns, spacing: 12) {
+                    LazyVGrid(columns: columns, spacing: Theme.Space.md) {
                         ForEach(HomeScreenIcon.allCases) { icon in
                             iconOption(icon)
                         }
                     }
                 }
 
-                Label(
-                    store.supportsAlternateIcons
-                        ? "轻点样式，即可更换主屏幕上的应用图标。"
+                DesignNotice(
+                    symbol: store.supportsAlternateIcons ? AppIcon.info.name : AppIcon.alert.name,
+                    text: store.supportsAlternateIcons
+                        ? "点按样式即可更换主屏幕图标，更换完成后系统会显示一次确认提示。"
                         : "当前设备暂不支持更换应用图标。",
-                    image: AppIcon.info.name
+                    warning: !store.supportsAlternateIcons
                 )
-                .font(.footnote)
-                .foregroundStyle(Theme.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, 4)
+                .padding(.horizontal, Theme.Space.xs)
             }
-            .padding(Theme.contentInset)
-            .padding(.top, 8)
-            .padding(.bottom, 16)
-            .frame(maxWidth: 672)
+            .frame(maxWidth: 620)
             .frame(maxWidth: .infinity)
+            .padding(.horizontal, Theme.contentInset)
+            .padding(.vertical, Theme.Space.lg)
         }
+        .scrollIndicators(.hidden)
         .background(Theme.pageBackground.ignoresSafeArea())
         .navigationTitle("应用图标")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            if let notice = store.notice {
-                IconChangeNoticeCard(notice: notice, store: store)
-                    .padding(.horizontal, Theme.contentInset)
-                    .padding(.vertical, 8)
-                    .frame(maxWidth: 672)
-                    .frame(maxWidth: .infinity)
-                    .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
-            }
-        }
-        .animation(Motion.resolved(Motion.smooth, reduceMotion: reduceMotion), value: store.notice)
+        .designScreen("app-icon")
         .animation(Motion.resolved(Motion.snappy, reduceMotion: reduceMotion), value: store.selected)
+        .animation(Motion.resolved(Motion.snappy, reduceMotion: reduceMotion), value: previewDark)
     }
 
-    private var currentIconCard: some View {
-        Group {
-            if dynamicTypeSize.isAccessibilitySize {
-                VStack(alignment: .leading, spacing: 20) {
-                    IconArtwork(icon: store.selected, size: 88)
-                    currentIconDetails
-                }
-            } else {
-                HStack(spacing: 20) {
-                    IconArtwork(icon: store.selected, size: 88)
-                    currentIconDetails
-                    Spacer(minLength: 0)
-                }
-            }
+    // MARK: - 顶部主屏幕预览舞台
+
+    private var previewStage: some View {
+        VStack(spacing: 0) {
+            homeScreenCanvas
+            Rectangle()
+                .fill(Theme.rule)
+                .frame(height: Theme.Stroke.hairline)
+                .accessibilityHidden(true)
+            currentStatusBar
         }
-        .padding(24)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.sheet, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: Theme.Radius.sheet, style: .continuous)
-                .strokeBorder(Theme.hairline, lineWidth: 1)
-        }
-        .accessibilityElement(children: .combine)
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
+        .surfaceCard()
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("settings.appIcon.current")
     }
 
-    private var currentIconDetails: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                if store.isChanging {
-                    ProgressView()
-                        .controlSize(.small)
-                        .tint(Theme.textSecondary)
-                        .accessibilityHidden(true)
+    /// 模拟主屏幕桌面：正中放置当前选中的 HPlayer 图标与名称，两侧以极淡占位槽位建立桌面比例。
+    private var homeScreenCanvas: some View {
+        let iconSide: CGFloat = dynamicTypeSize.isAccessibilitySize ? 72 : 64
+        let ghostCountPerSide = dynamicTypeSize.isAccessibilitySize ? 0 : (horizontalSizeClass == .regular ? 2 : 1)
+        let labelColor = previewDark ? Theme.paper : Theme.ink
+
+        return HStack(alignment: .top, spacing: Theme.Space.xl) {
+            if ghostCountPerSide > 0 {
+                ForEach(0..<ghostCountPerSide, id: \.self) { _ in
+                    ghostAppSlot(size: iconSide - 4)
                 }
-                Text(store.isChanging ? "正在切换" : "当前使用")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(Theme.textSecondary)
             }
 
-            Text(store.selected.title)
-                .font(.title3.weight(.bold))
-                .foregroundStyle(Theme.textPrimary)
-                .fixedSize(horizontal: false, vertical: true)
+            VStack(spacing: Theme.Space.sm) {
+                IconArtwork(icon: store.selected, size: iconSide, darkBackdrop: previewDark)
+                    .id(store.selected)
+                    .transition(
+                        reduceMotion
+                            ? .opacity
+                            : .scale(scale: 0.92).combined(with: .opacity)
+                    )
+                Text("HPlayer")
+                    .font(Theme.Typo.caption.weight(.medium))
+                    .foregroundStyle(labelColor)
+                    .lineLimit(1)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("主屏幕预览，当前图标 \(store.selected.title)")
 
-            Text(store.selected.subtitle)
-                .font(.subheadline)
-                .foregroundStyle(Theme.textSecondary)
+            if ghostCountPerSide > 0 {
+                ForEach(0..<ghostCountPerSide, id: \.self) { _ in
+                    ghostAppSlot(size: iconSide - 4)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, Theme.Space.lg)
+        .padding(.top, Theme.Space.xl + Theme.Space.xs)
+        .padding(.bottom, Theme.Space.xl)
+        .background {
+            LinearGradient(
+                colors: previewDark
+                    ? [Theme.Preview.darkCard.opacity(0.75), Theme.Preview.darkPage]
+                    : [Theme.Preview.lightCard, Theme.Preview.lightPage],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        }
+        .overlay(alignment: .topTrailing) {
+            backdropToggleButton
         }
     }
 
+    private func ghostAppSlot(size: CGFloat) -> some View {
+        let tileFill = previewDark ? Theme.Preview.darkCard : Theme.Preview.lightCard
+        let line = previewDark ? Theme.Preview.darkLine.opacity(0.45) : Theme.Preview.lightLine.opacity(0.65)
+        let shape = RoundedRectangle(cornerRadius: size * 0.225, style: .continuous)
+
+        return VStack(spacing: Theme.Space.sm + 2) {
+            shape
+                .fill(tileFill.opacity(previewDark ? 0.85 : 0.9))
+                .overlay { shape.strokeBorder(line, lineWidth: Theme.Stroke.hairline) }
+                .frame(width: size, height: size)
+            Capsule()
+                .fill(line)
+                .frame(width: size * 0.56, height: 6)
+        }
+        .padding(.top, Theme.Space.hair)
+        .accessibilityHidden(true)
+    }
+
+    private var backdropToggleButton: some View {
+        Button {
+            Haptics.select()
+            previewDarkOverride = !previewDark
+        } label: {
+            Image(icon: previewDark ? .appearanceLight : .appearanceDark)
+                .font(.scaled(15, weight: Theme.iconWeight))
+                .foregroundStyle(previewDark ? Theme.paper : Theme.ink)
+                .frame(width: 30, height: 30)
+                .background(
+                    (previewDark ? Theme.Preview.darkCard : Theme.Preview.lightCard).opacity(0.9),
+                    in: Circle()
+                )
+                .overlay {
+                    Circle().strokeBorder(
+                        previewDark ? Theme.Preview.darkLine.opacity(0.5) : Theme.Preview.lightLine,
+                        lineWidth: Theme.Stroke.hairline
+                    )
+                }
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+                .hoverEffect(.highlight)
+        }
+        .buttonStyle(.pressable(scale: 0.92))
+        .padding(.top, Theme.Space.xs)
+        .padding(.trailing, Theme.Space.xs)
+        .accessibilityLabel(previewDark ? "切换为浅色桌面预览" : "切换为深色桌面预览")
+        .accessibilityIdentifier("settings.appIcon.previewBackdrop")
+    }
+
+    private var currentStatusBar: some View {
+        HStack(alignment: .center, spacing: Theme.Space.md) {
+            VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                Text(store.selected.title)
+                    .font(Theme.Typo.headline)
+                    .foregroundStyle(Theme.textPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(store.selected.subtitle)
+                    .font(Theme.Typo.caption)
+                    .foregroundStyle(Theme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: Theme.Space.sm)
+
+            if store.isChanging {
+                HStack(spacing: Theme.Space.xs + 2) {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(Theme.textSecondary)
+                    Text("正在切换")
+                        .font(Theme.Typo.caption)
+                        .foregroundStyle(Theme.textSecondary)
+                }
+            } else if store.selected == .prism {
+                TagBadge(text: "默认", style: .neutral)
+            } else {
+                TagBadge(text: "使用中", style: .accent)
+            }
+        }
+        .padding(.horizontal, Theme.Space.lg)
+        .padding(.vertical, Theme.Space.md + 2)
+    }
+
+    // MARK: - 全部样式网格
+
     private var collectionHeader: some View {
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: 12) {
+            HStack(spacing: Theme.Space.md) {
                 collectionTitle
                 Spacer(minLength: 0)
                 restoreDefaultButton
             }
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: Theme.Space.xs) {
                 collectionTitle
                 restoreDefaultButton
             }
@@ -185,80 +287,57 @@ struct AppIconSettingsView: View {
     }
 
     private var collectionTitle: some View {
-        Text("选择样式")
-            .font(.headline)
-            .foregroundStyle(Theme.textPrimary)
+        Text("全部样式")
+            .font(Theme.Typo.meta.weight(.medium))
+            .foregroundStyle(Theme.textTertiary)
+            .padding(.leading, Theme.Space.xs)
             .fixedSize()
             .accessibilityAddTraits(.isHeader)
     }
 
     private var restoreDefaultButton: some View {
-        Button {
+        let isDefault = store.selected == .prism
+        return Button {
             store.select(.prism)
         } label: {
-            Label("恢复默认", image: AppIcon.refresh.name)
-                .font(.subheadline.weight(.medium))
+            Label("恢复默认", icon: .refresh)
+                .font(Theme.Typo.meta.weight(.medium))
                 .fixedSize()
-                .foregroundStyle(store.selected == .prism ? Theme.textTertiary : Theme.accent)
+                .foregroundStyle(isDefault ? Theme.textMuted : Theme.accentAlt)
                 .frame(minHeight: 44)
-                .padding(.horizontal, 4)
+                .padding(.horizontal, Theme.Space.xs)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.pressable)
-        .disabled(store.isChanging || !store.supportsAlternateIcons || store.selected == .prism)
+        .disabled(store.isChanging || !store.supportsAlternateIcons || isDefault)
         .accessibilityLabel("恢复默认图标")
         .accessibilityIdentifier("settings.appIcon.restoreDefault")
     }
 
     private func iconOption(_ icon: HomeScreenIcon) -> some View {
         let selected = store.selected == icon
+        let shape = RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
+
         return Button {
             store.select(icon)
         } label: {
-            VStack(alignment: .leading, spacing: 16) {
-                IconArtwork(icon: icon, size: 72)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 6)
-
-                HStack(alignment: .top, spacing: 8) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(icon.title)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(Theme.textPrimary)
-                        Text(icon.subtitle)
-                            .font(.caption)
-                            .foregroundStyle(Theme.textSecondary)
-                    }
-                    .fixedSize(horizontal: false, vertical: true)
-
-                    Spacer(minLength: 0)
-
-                    if selected && store.isChanging {
-                        ProgressView()
-                            .controlSize(.small)
-                            .tint(Theme.textPrimary)
-                            .frame(width: 20, height: 20)
-                    } else {
-                        Image(appIconNamed: selected ? AppIcon.selected.name : AppIcon.unselected.name)
-                            .font(.scaled(20, weight: Theme.iconWeight))
-                            .foregroundStyle(selected ? Theme.textPrimary : Theme.textTertiary)
-                            .frame(width: 20, height: 20)
-                    }
+            Group {
+                if dynamicTypeSize.isAccessibilitySize {
+                    accessibleOptionBody(icon: icon, selected: selected)
+                } else {
+                    compactOptionBody(icon: icon, selected: selected)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .accessibilityHidden(true)
             }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                selected ? Theme.surfaceRaised : Theme.surface,
-                in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
-            )
+            .frame(maxWidth: .infinity)
+            .background(selected ? Theme.surfaceRaised : Theme.surface, in: shape)
             .overlay {
-                RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
-                    .strokeBorder(selected ? Theme.textPrimary : Theme.hairline, lineWidth: selected ? 2 : 1)
+                shape.strokeBorder(
+                    selected ? Theme.primaryAction : Theme.hairline,
+                    lineWidth: selected ? Theme.Stroke.rule : Theme.Stroke.hairline
+                )
             }
-            .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
+            .contentShape(shape)
+            .hoverEffect(.highlight)
         }
         .buttonStyle(.pressable(scale: 0.97))
         .disabled(store.isChanging || !store.supportsAlternateIcons)
@@ -267,115 +346,95 @@ struct AppIconSettingsView: View {
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityIdentifier("settings.appIcon.\(icon.rawValue)")
     }
+
+    private func compactOptionBody(icon: HomeScreenIcon, selected: Bool) -> some View {
+        VStack(spacing: Theme.Space.md) {
+            IconArtwork(icon: icon, size: 60, darkBackdrop: colorScheme == .dark)
+                .padding(.top, Theme.Space.sm)
+
+            VStack(spacing: Theme.Space.hair) {
+                Text(icon.title)
+                    .font(Theme.Typo.meta.weight(selected ? .semibold : .medium))
+                    .foregroundStyle(Theme.textPrimary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+                Text(icon.subtitle)
+                    .font(Theme.Typo.caption)
+                    .foregroundStyle(Theme.textTertiary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+            }
+        }
+        .padding(.horizontal, Theme.Space.sm)
+        .padding(.vertical, Theme.Space.md)
+        .frame(maxWidth: .infinity)
+        .overlay(alignment: .topTrailing) {
+            if selected {
+                Group {
+                    if store.isChanging {
+                        ProgressView()
+                            .controlSize(.mini)
+                            .tint(Theme.textPrimary)
+                            .frame(width: 18, height: 18)
+                    } else {
+                        CheckBadge(selected: true, size: 18)
+                    }
+                }
+                .padding(Theme.Space.sm)
+            }
+        }
+        .accessibilityHidden(true)
+    }
+
+    private func accessibleOptionBody(icon: HomeScreenIcon, selected: Bool) -> some View {
+        HStack(spacing: Theme.Space.md) {
+            IconArtwork(icon: icon, size: 56, darkBackdrop: colorScheme == .dark)
+
+            VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                Text(icon.title)
+                    .font(Theme.Typo.headline)
+                    .foregroundStyle(Theme.textPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(icon.subtitle)
+                    .font(Theme.Typo.caption)
+                    .foregroundStyle(Theme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: Theme.Space.sm)
+
+            if selected && store.isChanging {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(Theme.textPrimary)
+                    .frame(width: 22, height: 22)
+            } else {
+                CheckBadge(selected: selected, size: 22)
+            }
+        }
+        .padding(Theme.Space.lg)
+        .accessibilityHidden(true)
+    }
 }
 
 private struct IconArtwork: View {
     let icon: HomeScreenIcon
     let size: CGFloat
+    var darkBackdrop: Bool = true
 
     var body: some View {
+        let shape = RoundedRectangle(cornerRadius: size * 0.225, style: .continuous)
         Image(icon.previewName)
             .resizable()
             .aspectRatio(contentMode: .fit)
             .frame(width: size, height: size)
-            .clipShape(RoundedRectangle(cornerRadius: size * 0.225, style: .continuous))
+            .clipShape(shape)
             .overlay {
-                RoundedRectangle(cornerRadius: size * 0.225, style: .continuous)
-                    .strokeBorder(Theme.hairline, lineWidth: 0.5)
+                shape.strokeBorder(
+                    darkBackdrop ? Theme.Preview.darkLine.opacity(0.45) : Theme.Preview.lightLine,
+                    lineWidth: Theme.Stroke.hairline
+                )
             }
-            .shadow(color: Theme.shadow, radius: 8, x: 0, y: 4)
             .accessibilityHidden(true)
-    }
-}
-
-private struct IconChangeNoticeCard: View {
-    let notice: AppIconStore.Notice
-    @ObservedObject var store: AppIconStore
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-
-    var body: some View {
-        Group {
-            if dynamicTypeSize.isAccessibilitySize {
-                VStack(alignment: .leading, spacing: 8) {
-                    message
-                    HStack {
-                        Spacer(minLength: 0)
-                        actions
-                    }
-                }
-            } else {
-                HStack(spacing: 12) {
-                    message
-                    Spacer(minLength: 0)
-                    actions
-                }
-            }
-        }
-        .padding(12)
-        .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
-                .strokeBorder(Theme.hairline, lineWidth: 1)
-        }
-        .shadow(color: Theme.shadow, radius: 12, x: 0, y: 4)
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("settings.appIcon.notice")
-    }
-
-    private var message: some View {
-        HStack(spacing: 10) {
-            switch notice {
-            case .success(let icon, _):
-                IconArtwork(icon: icon, size: 36)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("图标已更新")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(Theme.textPrimary)
-                    Text(icon.title)
-                        .font(.caption)
-                        .foregroundStyle(Theme.textSecondary)
-                }
-            case .failure(let message):
-                Image(appIconNamed: AppIcon.alert.name)
-                    .font(.scaled(20, weight: Theme.iconWeight))
-                    .foregroundStyle(Theme.danger)
-                    .frame(width: 36, height: 36)
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("更换失败，已保留原图标")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(Theme.textPrimary)
-                    Text(message)
-                        .font(.caption)
-                        .foregroundStyle(Theme.textSecondary)
-                }
-            }
-        }
-        .fixedSize(horizontal: false, vertical: true)
-    }
-
-    private var actions: some View {
-        HStack(spacing: 0) {
-            if case .success = notice {
-                Button("撤销") { store.undo() }
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(Theme.accent)
-                    .frame(minWidth: 44, minHeight: 44)
-                    .disabled(store.isChanging)
-                    .accessibilityIdentifier("settings.appIcon.notice.undo")
-            }
-            Button {
-                store.clearNotice()
-            } label: {
-                Image(appIconNamed: AppIcon.close.name)
-                    .font(.scaled(13, weight: Theme.iconWeight))
-                    .foregroundStyle(Theme.textSecondary)
-                    .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
-            }
-            .accessibilityLabel("关闭提示")
-            .accessibilityIdentifier("settings.appIcon.notice.done")
-        }
-        .buttonStyle(.pressable)
     }
 }

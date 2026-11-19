@@ -1149,12 +1149,20 @@ actor OnlineSubtitleService {
         return SubtitleTextDecoder.decode(data)
     }
 
+    /// 从排好序的候选中按优先级挑出适合自动挂载的若干条（优先中文字幕，其次哈希精确命中），
+    /// 以便首选外链失效时静默顺延尝试下一条。
+    static func autoPickCandidates(from candidates: [OnlineSubtitleCandidate], limit: Int = 3) -> [OnlineSubtitleCandidate] {
+        guard limit > 0 else { return [] }
+        let chinese = candidates.filter(\.isChinese)
+        if !chinese.isEmpty {
+            return Array(chinese.prefix(limit))
+        }
+        return Array(candidates.filter(\.matchedByHash).prefix(limit))
+    }
+
     /// 从排好序的候选中挑选最适合自动挂载的一条（只接受中文字幕或哈希精确命中）。
     static func autoPick(from candidates: [OnlineSubtitleCandidate]) -> OnlineSubtitleCandidate? {
-        if let chinese = candidates.first(where: \.isChinese) {
-            return chinese
-        }
-        return candidates.first(where: \.matchedByHash)
+        autoPickCandidates(from: candidates, limit: 1).first
     }
 
     // MARK: 1. 迅雷字幕库（Hash CID + 片名/番号）

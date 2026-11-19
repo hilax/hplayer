@@ -191,8 +191,12 @@ final class PlaybackUITests: XCTestCase {
         XCTAssertLessThan(slider.frame.minX - elapsed.frame.maxX, 14, "Elapsed time hugs the timeline")
         XCTAssertLessThan(app.staticTexts["总时长"].frame.minX - slider.frame.maxX, 14, "Total time hugs the timeline")
         XCTAssertLessThan(abs(elapsed.frame.midY - slider.frame.midY), 12, "Elapsed time is on the timeline row")
-        XCTAssertGreaterThan(app.buttons["playback.lock"].frame.midX, frame.width * 0.09, "Lock control should sit inward from the edge")
-        XCTAssertLessThan(app.buttons["playback.screenshot"].frame.midX, frame.width * 0.91, "Screenshot control should sit inward from the edge")
+        let lockButton = app.buttons["playback.lock"]
+        let screenshotButton = app.buttons["playback.screenshot"]
+        XCTAssertGreaterThan(lockButton.frame.midX, frame.width * 0.5, "Lock control sits on the right side in landscape")
+        XCTAssertLessThan(lockButton.frame.midX, frame.width * 0.91, "Lock control should sit inward from the right edge")
+        XCTAssertGreaterThan(screenshotButton.frame.midX, frame.width * 0.5, "Screenshot control sits in the top-right bar")
+        XCTAssertLessThan(screenshotButton.frame.midY, frame.height * 0.35, "Screenshot control belongs to the landscape top bar")
         XCTAssertTrue(wait { (pause.value as? String) == "playing" && self.seconds(elapsed.label) > 0 && app.sliders.firstMatch.isEnabled }, "HLS should play with working seeking")
 
         pause.tap()

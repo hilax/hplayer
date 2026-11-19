@@ -302,9 +302,10 @@ struct SettingsView: View {
 
 // MARK: - 播放设置
 
-/// 「我的 › 播放」：自动连播、自动小窗、字幕样式、边播边存、解码方式。和播放页用的是同一组偏好。
+/// 「我的 › 播放」：播放手势、自动连播、自动小窗、字幕样式、边播边存、解码方式。和播放页用的是同一组偏好。
 struct PlaybackSettingsView: View {
     @AppStorage("player.autoPlayNext") private var autoPlayNext = true
+    @ObservedObject private var gestureStore = PlaybackGestureStore.shared
     @State private var decoding = VideoDecoding.saved
     @State private var readahead = ReadaheadLevel.saved
     @State private var subtitleStyle = SubtitleStyle.saved
@@ -315,6 +316,17 @@ struct PlaybackSettingsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Space.xl) {
+        SettingsSection(title: "") {
+            NavigationLink { PlaybackGestureSettingsView() } label: {
+                LibraryActionRow(
+                    symbol: AppIcon.tune.name,
+                    title: "播放手势",
+                    value: gestureStore.settings.summaryText
+                )
+            }
+            .buttonStyle(.pressable(scale: 0.985))
+            .accessibilityIdentifier("mine.playback.gestures")
+        }
         SettingsSection(title: "", footnote: "从下一次打开播放器开始生效。播放时也可以在播放页的「更多」里临时调整。") {
             SettingRow(icon: .autoPlayNext, title: "自动连播") {
                 Toggle("自动连播", isOn: $autoPlayNext)
@@ -620,6 +632,7 @@ private struct DanmakuPreview: View {
 /// 外观：三张手机小预览（跟随系统 / 浅色 / 深色），下面是单选圈，和系统「显示与亮度」一样的选法。
 struct AppearanceSettingsView: View {
     @AppStorage(AppearanceMode.storageKey) private var appearance: AppearanceMode = .system
+    @ObservedObject private var iconStore = AppIconStore.shared
 
     var body: some View {
         ScrollView {
@@ -632,7 +645,11 @@ struct AppearanceSettingsView: View {
                 }
                 SettingsSection(title: "") {
                     NavigationLink { AppIconSettingsView() } label: {
-                        LibraryActionRow(symbol: AppIcon.appIconStyle.name, title: "应用图标")
+                        LibraryActionRow(
+                            symbol: AppIcon.appIconStyle.name,
+                            title: "应用图标",
+                            value: iconStore.selected.title
+                        )
                     }
                     .buttonStyle(.pressable(scale: 0.985))
                     .accessibilityIdentifier("settings.appIcon")

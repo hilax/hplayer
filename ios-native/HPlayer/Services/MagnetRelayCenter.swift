@@ -134,8 +134,8 @@ final class MagnetRelayCenter: ObservableObject {
         if let status = statuses[hash], status.isWorking { return }
         removeJob(hash)
         let controller = MagnetController()
-        controller.activate()
         controller.configureCloud(client: client, enabled: true)
+        controller.activate()
         statuses[hash] = downloaded.contains(hash) ? .preparing : .submitting
         adopt(controller, hash: hash, magnet: magnet, title: title, mode: .cloud)
         controller.open(link)

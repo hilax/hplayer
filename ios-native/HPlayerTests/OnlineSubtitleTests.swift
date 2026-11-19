@@ -452,4 +452,36 @@ final class OnlineSubtitleTests: XCTestCase {
         XCTAssertEqual(SubtitleStyle.soft.overrides["sub-blur"], "0", "透明底不得启用 sub-blur，避免无粗描边时将文字本体高斯模糊")
         XCTAssertNotNil(SubtitleStyle.soft.overrides["sub-shadow-offset"])
     }
+
+    @MainActor
+    func testAutoPickCandidatesProvidesFallbackOrderAndApplyEmitsNoNotice() async throws {
+        let c1 = OnlineSubtitleCandidate(
+            id: "sub|1", title: "中文首选", languageLabel: "简体中文", format: "srt",
+            source: .xunlei, downloadURL: URL(string: "http://127.0.0.1:1/1.srt")!,
+            matchedByHash: true, durationSeconds: nil, score: 300
+        )
+        let c2 = OnlineSubtitleCandidate(
+            id: "sub|2", title: "中文备选", languageLabel: "繁体中文", format: "ass",
+            source: .subtitlecat, downloadURL: URL(string: "https://example.com/2.ass")!,
+            matchedByHash: false, durationSeconds: nil, score: 200
+        )
+        let c3 = OnlineSubtitleCandidate(
+            id: "sub|3", title: "英文", languageLabel: "英文", format: "srt",
+            source: .opensubtitles, downloadURL: URL(string: "https://example.com/3.srt")!,
+            matchedByHash: true, durationSeconds: nil, score: 150
+        )
+
+        let picked = OnlineSubtitleService.autoPickCandidates(from: [c1, c2, c3], limit: 3)
+        XCTAssertEqual(picked.map(\.id), ["sub|1", "sub|2"], "有中文字幕时优先按序提供中文候选顺延尝试")
+
+        let hashFallback = OnlineSubtitleService.autoPickCandidates(from: [c3], limit: 3)
+        XCTAssertEqual(hashFallback.map(\.id), ["sub|3"], "无中文字幕时回退到哈希命中候选")
+
+        // 无引擎时调用 applyOnlineSubtitle 即使失败也不应弹出顶部 notice 提示
+        let player = PlaybackController()
+        defer { player.stop() }
+        player.open(URL(string: "https://example.com/movie.mkv")!, autoRecover: false, title: "Movie")
+        await player.applyOnlineSubtitle(c1)
+        XCTAssertEqual(player.notice, "", "在线字幕加载与失败均不应弹出播放页顶部提示")
+    }
 }

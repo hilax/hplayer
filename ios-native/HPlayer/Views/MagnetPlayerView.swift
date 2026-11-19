@@ -81,8 +81,8 @@ struct MagnetPlayerView: View {
         }
         .task {
             guard !InterfacePreview.active else { return }
-            controller.activate()
             configureCloud()
+            controller.activate()
             guard input.isEmpty, !initialMagnet.isEmpty else { return }
             input = initialMagnet
             submit()
@@ -301,11 +301,16 @@ struct MagnetPlayerView: View {
 
             HStack {
                 resolveMetric("已用时间", value: playbackTimeText(Double(controller.elapsed)))
-                Spacer()
-                resolveMetric("已连接节点", value: "\(controller.swarm.connected)")
-                Spacer()
-                resolveMetric("接收速度", value: "\(formatSize(Int(clamping: controller.swarm.downloadRate)))/s")
-            }.padding(.vertical, 14)
+                if !controller.usesCloud {
+                    Spacer()
+                    resolveMetric("已连接节点", value: "\(controller.swarm.connected)")
+                    Spacer()
+                    let rateText = formatSize(Int(clamping: controller.swarm.downloadRate))
+                    resolveMetric("接收速度", value: rateText.isEmpty ? "0 B/s" : "\(rateText)/s")
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 14)
             Button {
                 controller.reset()
             } label: {

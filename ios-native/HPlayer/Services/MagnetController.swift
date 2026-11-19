@@ -288,6 +288,7 @@ final class MagnetController: ObservableObject {
     private var monitorTask: Task<Void, Never>?
     private var resolveStarted: Date?
     private var engineReady = false
+    private var btEngineAcquired = false
     private var active = false
     private var lastSavedAt = Date.distantPast
     /// 最近一次看到的播放进度，播放结束时内核报告的时间不一定可靠
@@ -331,20 +332,28 @@ final class MagnetController: ObservableObject {
 
     // MARK: 页面生命周期
 
-    /// 进入页面：占用并提前启动引擎，顺便在线更新 Tracker 列表
+    /// 进入页面：按需占用并启动 BT 引擎（走 115 云下载时不启动本机 BT 引擎，避免浪费 CPU、内存与带宽）。
     func activate() {
         guard !active else { return }
         active = true
+        if !cloudEnabled {
+            ensureBTEngineActivated()
+        }
+        startMonitor()
+    }
+
+    private func ensureBTEngineActivated() {
+        guard active, !btEngineAcquired else { return }
+        btEngineAcquired = true
         host.acquire()
         Task { await PublicTrackers.refreshIfNeeded() }
         Task { [weak self] in
             guard let self else { return }
             if (try? await self.host.engine()) != nil {
                 self.engineReady = true
-                if self.phase == .resolving, self.step < .peers { self.step = .peers }
+                if self.phase == .resolving, !self.usesCloud, self.step < .peers { self.step = .peers }
             }
         }
-        startMonitor()
     }
 
     /// 离开页面：停止播放和数据流；种子信息留在本机，引擎稍后自动关闭
@@ -367,6 +376,9 @@ final class MagnetController: ObservableObject {
         let oldStream = stream
         stream = nil
         let oldPrewarm = consumePrewarmForStop(excludingID: oldStream?.id)
+        let shouldReleaseBT = btEngineAcquired
+        btEngineAcquired = false
+        guard oldStream != nil || oldPrewarm != nil || shouldReleaseBT else { return }
         let host = self.host
         Task {
             if let oldStream, host.isRunning, let engine = try? await host.engine() {
@@ -375,7 +387,7 @@ final class MagnetController: ObservableObject {
             if let oldPrewarm, host.isRunning, let engine = try? await host.engine() {
                 try? await engine.stopStream(oldPrewarm.id)
             }
-            host.release()
+            if shouldReleaseBT { host.release() }
         }
     }
 
@@ -414,6 +426,7 @@ final class MagnetController: ObservableObject {
             }
         } else {
             // 没选 115：只用软件自带的磁力解析
+            ensureBTEngineActivated()
             cloudTask?.cancel()
             cloudTask = nil
             cloud = .off
@@ -481,8 +494,8 @@ final class MagnetController: ObservableObject {
             if autoPlaysSingleMain {
                 // 只有一个正片时直接开始播放
                 if catalog.main.count == 1 { play(catalog.main[0]) }
-            } else if let prewarmPick = preferredBTFile(in: catalog, infoHash: link.infoHash) {
-                // 卡片接力等待打开窗口期间，提前调用 prepareStream 让底层开始调度片头与片尾关键块
+            } else if let prewarmPick = preferredFile(in: catalog, infoHash: link.infoHash) {
+                // 卡片接力等待打开窗口期间，提前调用 prepareStream 让底层开始调度片头与片尾关键块（多文件种子同样预热默认正片）
                 startPrewarm(torrentID: id, fileIndex: prewarmPick.index)
             }
         } catch is CancellationError {
@@ -526,6 +539,7 @@ final class MagnetController: ObservableObject {
             return
         }
         guard let torrentID else { return }
+        ensureBTEngineActivated()
         playback.prepareForPresentation()
         playTask?.cancel()
         savePosition()
@@ -588,13 +602,25 @@ final class MagnetController: ObservableObject {
         }
     }
 
-    private func preferredBTFile(in catalog: MagnetCatalog, infoHash: String) -> MagnetFile? {
-        if let index = history.item(for: infoHash)?.lastFileIndex,
+    /// 为目录挑选默认应播放或预热的视频：优先上次观看的那一集，否则选正片里体积最大的一个。
+    func preferredFile(in catalog: MagnetCatalog, infoHash: String? = nil) -> MagnetFile? {
+        let hash = infoHash ?? link?.infoHash
+        if let hash,
+           let index = history.item(for: hash)?.lastFileIndex,
            let last = catalog.allVideos.first(where: { $0.historyIndex == index }),
            last.isPlayable {
             return last
         }
-        return catalog.main.count == 1 ? catalog.main[0] : nil
+        let candidates = (catalog.main.isEmpty ? catalog.allVideos : catalog.main).filter(\.isPlayable)
+        return candidates.max(by: { $0.size < $1.size })
+    }
+
+    /// 115 离线目录已就绪但尚未构造播放队列（例如多文件种子）：立即选出默认视频生成 `cloudQueue`，
+    /// 避免播放窗口先渲染一层 BT 等待壳、再销毁重建成 115 播放器。
+    func prepareDefaultCloudQueueIfReady() {
+        guard phase == .ready, let catalog, catalog.source == .cloud, cloudQueue == nil, !playerVisible else { return }
+        guard let pick = preferredFile(in: catalog) else { return }
+        play(pick)
     }
 
     private func startPrewarm(torrentID: String, fileIndex: UInt32) {
@@ -765,7 +791,7 @@ final class MagnetController: ObservableObject {
         if phase == .resolving, let resolveStarted {
             elapsed = Int(Date().timeIntervalSince(resolveStarted))
         }
-        guard engineReady, host.isRunning, let engine = try? await host.engine() else { return }
+        guard btEngineAcquired, engineReady, host.isRunning, let engine = try? await host.engine() else { return }
         if let stats = try? await engine.currentStats() {
             swarm = Swarm(
                 connected: Int(stats.connectedPeers),
@@ -842,6 +868,7 @@ final class MagnetController: ObservableObject {
             cloudTask?.cancel()
             cloudTask = nil
             if cloud != .ready { cloud = .off }
+            if active { ensureBTEngineActivated() }
         }
         // 解析中途切换了方式：按新的方式重新解析这个链接
         if (nowEnabled != wasEnabled || (clientChanged && nowEnabled)),
@@ -949,6 +976,8 @@ final class MagnetController: ObservableObject {
                 do {
                     found = try await client.offlineTask(infoHash: link.infoHash)
                     failures = 0
+                } catch Direct115FileError.notLoggedIn {
+                    throw Direct115FileError.notLoggedIn
                 } catch {
                     failures += 1
                     if failures >= 4 { throw error }
@@ -960,6 +989,13 @@ final class MagnetController: ObservableObject {
                         cloud = .downloading(100)
                         let videos = try await client.offlineVideos(for: task)
                         guard !Task.isCancelled, cloudClient?.cookie == client.cookie else { return }
+                        // 离线完成后后台预热默认主视频的原画直链，打开播放器时可直接命中会话缓存起播
+                        if let primary = preferredCloudVideo(from: videos, infoHash: link.infoHash, name: task.name, totalSize: task.size) {
+                            let pickCode = primary.file.pickCode
+                            Task {
+                                _ = try? await client.originalURL(pickCode: pickCode, useCache: true)
+                            }
+                        }
                         cloudFinished(videos, task: task, link: link, client: client)
                         return
                     case .failed:
@@ -1044,9 +1080,16 @@ final class MagnetController: ObservableObject {
     private func playCloud(_ file: MagnetFile, pickCode: String, link: MagnetLink) {
         if playerVisible { closePlayer() }
         history.recordPlayed(infoHash: link.infoHash, file: file)
+        let catalogCode = catalog.flatMap { SubtitleQueryBuilder.extractAVCode(from: $0.name) }
+        func resolvedTitle(for item: MagnetFile) -> String {
+            guard let catalogCode, SubtitleQueryBuilder.extractAVCode(from: item.title) == nil else {
+                return item.title
+            }
+            return "\(catalogCode) · \(item.title)"
+        }
         let list = (catalog?.main.contains(file) ?? false) ? (catalog?.main ?? []) : (catalog?.allVideos ?? [])
-        let items = list.compactMap { item in item.pickCode.map { PlaybackSource.p115(title: item.title, pickCode: $0) } }
-        let source = PlaybackSource.p115(title: file.title, pickCode: pickCode)
+        let items = list.compactMap { item in item.pickCode.map { PlaybackSource.p115(title: resolvedTitle(for: item), pickCode: $0) } }
+        let source = PlaybackSource.p115(title: resolvedTitle(for: file), pickCode: pickCode)
         cloudQueue = PlaybackQueue(source: source, items: items.isEmpty ? [source] : items)
     }
 
