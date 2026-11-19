@@ -14,6 +14,8 @@ struct ImageRequest: Hashable {
 /// 各个位置用的缩小尺寸（最长边，单位像素）。预取和显示必须用同一个值，缓存才对得上。
 enum ArtworkSize {
     static let poster = 600
+    /// 16:9 列表/货架横向卡片（最大 260pt 宽），相比 hero(1280) 省 68% 像素解码与显存开销
+    static let card = 720
     static let hero = 1280
     static let backdrop = 160
 }

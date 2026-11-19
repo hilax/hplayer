@@ -28,7 +28,7 @@ enum MissAVCategory: String, CaseIterable, Identifiable {
 }
 
 /// MissAV 视频卡片信息
-struct MissAVVideoCard: Identifiable, Hashable, Codable {
+struct MissAVVideoCard: Identifiable, Hashable, Codable, Sendable {
     let id: String
     let title: String
     let url: String

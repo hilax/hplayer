@@ -202,10 +202,12 @@ struct HomeAmbientBackdrop: View {
             // 下拉距离是量出来的，总比手指慢一帧：拉得快时模糊层还没撑上来，以前露出的是一截页面底色，
             // 现在露出的是镜像过来的模糊画面。画面本来就重度模糊，看不出是镜像
             .overlay(alignment: .top) {
-                layers
-                    .scaleEffect(x: 1, y: -1)
-                    .frame(height: heroHeight + pull)
-                    .offset(y: -(heroHeight + pull))
+                if pull > 0.5 {
+                    layers
+                        .scaleEffect(x: 1, y: -1)
+                        .frame(height: heroHeight + pull)
+                        .offset(y: -(heroHeight + pull))
+                }
             }
             .allowsHitTesting(false)
             .accessibilityHidden(true)

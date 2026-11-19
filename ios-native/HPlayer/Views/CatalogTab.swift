@@ -179,13 +179,12 @@ struct CatalogTab: View {
     @Binding var preset: CatalogPreset?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.libraryStoreRefs) private var storeRefs
     @EnvironmentObject private var appState: AppState
-    @EnvironmentObject private var mediaLibrary: MediaLibraryStore
-    @EnvironmentObject private var localStore: LocalMediaStore
-    @EnvironmentObject private var metadataStore: MediaMetadataStore
 
     /// 分组和网格条目由 HomeView 在后台算好（见 LibrarySnapshotStore），第一次打开片库不用再在主线程重算。
     @EnvironmentObject private var librarySnapshots: LibrarySnapshotStore
+    @StateObject private var filterCache = CatalogFilterCache()
     private var snapshot: HomeSnapshot { librarySnapshots.home }
     private var entries: [CatalogEntry] { librarySnapshots.catalogEntries }
     /// 顶部头部「筛选」按一次加一：滚到筛选区
@@ -225,8 +224,10 @@ struct CatalogTab: View {
         }
         .sheet(item: $matching) { request in
             MetadataMatchView(file: request.file, current: request.current, onMatch: { metadata in
+                guard let metadataStore = storeRefs?.metadataStore else { return }
                 for target in request.targets { await metadataStore.match(metadata, to: target) }
             }, onClear: request.current == nil ? nil : { () async -> Void in
+                guard let metadataStore = storeRefs?.metadataStore else { return }
                 for target in request.targets { await metadataStore.unmatch(target) }
             })
         }
@@ -354,46 +355,12 @@ struct CatalogTab: View {
         return result
     }
 
-    /// 当前筛选和排序后的结果
+    /// 当前筛选和排序后的结果（按快照版本与筛选条件缓存，避免每次重绘在主线程全库过滤排序）
     private var visible: [CatalogEntry] {
-        var list = entries.filter { entry in
-            switch kind {
-            case .all:
-                if case .performer = entry.payload { return false }
-            case .movie:
-                guard case .movie = entry.payload else { return false }
-            case .series:
-                guard case .series = entry.payload else { return false }
-            case .anime:
-                if case .performer = entry.payload { return false }
-                if !entry.isAnime { return false }
-            case .performer:
-                guard case .performer = entry.payload else { return false }
-            }
-            if kind != .performer {
-                if region != .all, CatalogRegion.region(of: entry.country) != region { return false }
-                if !year.matches(entry.year) { return false }
-            }
-            return true
-        }
-        switch sort {
-        case .recentlyAdded:
-            list.sort { $0.addedOrder > $1.addedOrder }
-        case .recentlyPlayed:
-            list.sort {
-                switch ($0.playedRank, $1.playedRank) {
-                case let (a?, b?): return a < b
-                case (_?, nil): return true
-                case (nil, _?): return false
-                default: return $0.addedOrder > $1.addedOrder
-                }
-            }
-        case .topRated:
-            list.sort { ($0.rating ?? -1) > ($1.rating ?? -1) }
-        case .title:
-            list.sort { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
-        }
-        return list
+        filterCache.filtered(entries: entries, revision: librarySnapshots.revision,
+                             catalogRevision: librarySnapshots.catalogRevision,
+                             catalogReady: librarySnapshots.catalogReady,
+                             kind: kind, region: region, year: year, sort: sort)
     }
 
     private var subtitle: String {
@@ -547,11 +514,75 @@ struct CatalogTab: View {
     }
 
     private func delete(_ item: HomeMediaItem) {
-        if let local = localStore.files.first(where: { $0.id == item.id }) {
+        if let localStore = storeRefs?.localStore,
+           let local = localStore.files.first(where: { $0.id == item.id }) {
             localStore.delete(local)
         } else {
-            mediaLibrary.remove(pickCode: item.media.pickCode, for: appState)
+            storeRefs?.mediaLibrary.remove(pickCode: item.media.pickCode, for: appState)
         }
+    }
+}
+
+/// 无 @Published 的筛选排序缓存：只在快照或筛选条件真正改变时重排一次，滚动或父视图刷新直接 O(1) 复用。
+private final class CatalogFilterCache: ObservableObject {
+    private struct Key: Equatable {
+        let revision: Int
+        let catalogRevision: Int
+        let catalogReady: Bool
+        let kind: CatalogKind
+        let region: CatalogRegion
+        let year: CatalogYear
+        let sort: CatalogSort
+    }
+
+    private var lastKey: Key?
+    private var cached: [CatalogEntry] = []
+
+    func filtered(entries: [CatalogEntry], revision: Int, catalogRevision: Int, catalogReady: Bool,
+                  kind: CatalogKind, region: CatalogRegion, year: CatalogYear, sort: CatalogSort) -> [CatalogEntry] {
+        let key = Key(revision: revision, catalogRevision: catalogRevision,
+                      catalogReady: catalogReady, kind: kind, region: region, year: year, sort: sort)
+        if key == lastKey { return cached }
+        lastKey = key
+        var list = entries.filter { entry in
+            switch kind {
+            case .all:
+                if case .performer = entry.payload { return false }
+            case .movie:
+                guard case .movie = entry.payload else { return false }
+            case .series:
+                guard case .series = entry.payload else { return false }
+            case .anime:
+                if case .performer = entry.payload { return false }
+                if !entry.isAnime { return false }
+            case .performer:
+                guard case .performer = entry.payload else { return false }
+            }
+            if kind != .performer {
+                if region != .all, CatalogRegion.region(of: entry.country) != region { return false }
+                if !year.matches(entry.year) { return false }
+            }
+            return true
+        }
+        switch sort {
+        case .recentlyAdded:
+            list.sort { $0.addedOrder > $1.addedOrder }
+        case .recentlyPlayed:
+            list.sort {
+                switch ($0.playedRank, $1.playedRank) {
+                case let (a?, b?): return a < b
+                case (_?, nil): return true
+                case (nil, _?): return false
+                default: return $0.addedOrder > $1.addedOrder
+                }
+            }
+        case .topRated:
+            list.sort { ($0.rating ?? -1) > ($1.rating ?? -1) }
+        case .title:
+            list.sort { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+        }
+        cached = list
+        return list
     }
 }
 

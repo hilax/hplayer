@@ -1,46 +1,83 @@
 import SwiftUI
 
+/// 不触发 SwiftUI 订阅的共享 Store 引用：供首页、片库等页面在用户点击删除、匹配、导入时调用，
+/// 避免扫描或匹配高频更新底层 Store 时，把整个首页和 6 个频道反复整页重绘。
+struct LibraryStoreRefs {
+    let mediaLibrary: MediaLibraryStore
+    let localStore: LocalMediaStore
+    let metadataStore: MediaMetadataStore
+}
+
+private struct LibraryStoreRefsKey: EnvironmentKey {
+    static let defaultValue: LibraryStoreRefs? = nil
+}
+
+extension EnvironmentValues {
+    var libraryStoreRefs: LibraryStoreRefs? {
+        get { self[LibraryStoreRefsKey.self] }
+        set { self[LibraryStoreRefsKey.self] = newValue }
+    }
+}
+
+/// 持有首页共用的各个 Store 生命周期，本身不包含任何 `@Published` 属性，
+/// 因此扫描进度、入库列表、封面匹配高频变化时，不会把顶层 `HomeView` 和整个 `TabView` 连带重绘。
+@MainActor
+private final class HomeStoreBag: ObservableObject {
+    let appState: AppState
+    let recents: RecentStore
+    let mediaLibrary: MediaLibraryStore
+    let localStore: LocalMediaStore
+    let metadataStore: MediaMetadataStore
+    let scanner: CloudLibraryScanner
+    let accountInfo: P115AccountInfoStore
+    let navigation: HomeNavigation
+    let rootBar: RootNavigationBarState
+    let librarySnapshots: LibrarySnapshotStore
+    let searchKeyboard: SearchKeyboardCoordinator
+
+    init(appState: AppState, library: MediaLibraryStore?, local: LocalMediaStore?,
+         metadata: MediaMetadataStore?, recents: RecentStore?,
+         accountInfo: P115AccountInfoStore?, navigation: HomeNavigation?) {
+        self.appState = appState
+        self.recents = recents ?? RecentStore.shared
+        self.mediaLibrary = library ?? MediaLibraryStore()
+        self.localStore = local ?? LocalMediaStore()
+        self.metadataStore = metadata ?? MediaMetadataStore(concurrency: 3, restoring: true, performerLookup: { code, contentID in
+            await MetadataSearch.shared.performers(for: code, contentID: contentID)
+        })
+        self.scanner = CloudLibraryScanner()
+        self.accountInfo = accountInfo ?? P115AccountInfoStore()
+        self.navigation = navigation ?? HomeNavigation()
+        self.rootBar = RootNavigationBarState()
+        self.librarySnapshots = LibrarySnapshotStore()
+        self.searchKeyboard = SearchKeyboardCoordinator()
+    }
+
+    var storeRefs: LibraryStoreRefs {
+        LibraryStoreRefs(mediaLibrary: mediaLibrary, localStore: localStore, metadataStore: metadataStore)
+    }
+}
+
 struct HomeView: View {
-    @Environment(\.scenePhase) private var scenePhase
-    @AppStorage(AdultMetadataSettings.enabledKey) private var adultMatching = false
-    @AppStorage(CoverMatchingSettings.automaticKey) private var automaticMatching = false
-    @StateObject private var recents = RecentStore.shared
-    @StateObject private var mediaLibrary = MediaLibraryStore()
-    @StateObject private var localStore = LocalMediaStore()
-    @StateObject private var metadataStore = MediaMetadataStore(concurrency: 3, restoring: true, performerLookup: { code, contentID in
-        await MetadataSearch.shared.performers(for: code, contentID: contentID)
-    })
-    @StateObject private var scanner = CloudLibraryScanner()
-    @StateObject private var accountInfo = P115AccountInfoStore()
-    @StateObject private var navigation = HomeNavigation()
-    /// 一级页面导航栏的状态（网盘根目录多选时要显示正常导航栏）
-    @StateObject private var rootBar = RootNavigationBarState()
-    /// 首页和片库共用的分组结果，在这里算一次，两个页面直接读。
-    @StateObject private var librarySnapshots = LibrarySnapshotStore()
-    /// 标记过「不在精选中显示」的影片，变化时精选要重新挑。
-    @ObservedObject private var featuredStore = FeaturedStore.shared
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @StateObject private var stores: HomeStoreBag
     @Environment(\.colorScheme) private var colorScheme
     /// 当前标签（系统原生 TabView 的选中项）。
     @State private var selection: HomeSection = .home
     /// 搜索是盖在标签页上面的全屏页，不占标签位；打开过以后保持存活（搜索词还在）。
     @State private var searchOpen = false
     @State private var searchCreated = false
-    @StateObject private var searchKeyboard = SearchKeyboardCoordinator()
     private let searchInitiallyVisible: Bool
     /// 首页分类入口带过来的筛选；片库读取后会清空。
     @State private var catalogPreset: CatalogPreset?
-    /// 首页当前频道：推荐 / 片库 / 动漫（2.0：原「片库」Tab 并入首页）。
+    /// 首页当前频道：推荐 / 动漫 / 片库 / 短剧 / Jable / MissAV。
     @State private var channel: HomeChannel = .recommend
-    @State private var restored = false
-    @ObservedObject private var appState: AppState
 
     /// init 会在上层页面每次刷新时被重新调用，这里不做任何读盘或联网，
-    /// 恢复工作放到 restoreOnce，只执行一次。
-    private var sourceStatus: P115Status?
-    private var sourceQuota: QuotaResponse?
-    private var initialSearch = ""
-    private var searchFiles: [P115File] = []
+    /// 恢复工作放到 HomeLibraryCoordinator.restoreOnce，只执行一次。
+    private let sourceStatus: P115Status?
+    private let sourceQuota: QuotaResponse?
+    private let initialSearch: String
+    private let searchFiles: [P115File]
 
     init(appState: AppState, initialSection: HomeSection = .home, initialChannel: HomeChannel = .recommend,
          library: MediaLibraryStore? = nil, local: LocalMediaStore? = nil,
@@ -48,167 +85,49 @@ struct HomeView: View {
          accountInfo: P115AccountInfoStore? = nil, navigation: HomeNavigation? = nil,
          sourceStatus: P115Status? = nil, sourceQuota: QuotaResponse? = nil,
          initialSearch: String = "", searchFiles: [P115File] = []) {
-        _appState = ObservedObject(wrappedValue: appState)
+        _stores = StateObject(wrappedValue: HomeStoreBag(
+            appState: appState, library: library, local: local, metadata: metadata,
+            recents: recents, accountInfo: accountInfo, navigation: navigation
+        ))
         _selection = State(initialValue: initialSection == .search ? .home : initialSection)
         _searchOpen = State(initialValue: initialSection == .search)
         _searchCreated = State(initialValue: initialSection == .search)
         self.searchInitiallyVisible = initialSection == .search
         _channel = State(initialValue: initialChannel)
-        if let library { _mediaLibrary = StateObject(wrappedValue: library) }
-        if let local { _localStore = StateObject(wrappedValue: local) }
-        if let metadata { _metadataStore = StateObject(wrappedValue: metadata) }
-        if let recents { _recents = StateObject(wrappedValue: recents) }
-        if let accountInfo { _accountInfo = StateObject(wrappedValue: accountInfo) }
-        if let navigation { _navigation = StateObject(wrappedValue: navigation) }
-        self.sourceStatus = sourceStatus; self.sourceQuota = sourceQuota
-        self.initialSearch = initialSearch; self.searchFiles = searchFiles
-    }
-
-    /// 「下载到手机」：下载好的视频放进本地视频库；每次开始或续传时现取 115 的下载地址。
-    private func configureDownloads() {
-        guard !InterfacePreview.active else { return }
-        let manager = DownloadManager.shared
-        manager.media = localStore
-        let state = appState
-        manager.requestProvider = { [weak state] item in
-            guard let state, let client = state.directClient() else {
-                throw APIError.server("请先登录 115")
-            }
-            let address = try await client.originalURL(pickCode: item.pickCode)
-            return client.downloadRequest(for: address)
-        }
-    }
-
-    /// 下载只在 App 打开时进行：切到后台时向系统多要一小段时间，之后自动暂停；回来后继续。
-    private func updateDownloads(for phase: ScenePhase) {
-        guard !InterfacePreview.active else { return }
-        switch phase {
-        case .background:
-            DownloadManager.shared.sceneDidEnterBackground()
-        case .active:
-            DownloadManager.shared.sceneDidBecomeActive()
-        default:
-            break
-        }
-    }
-
-    private func restoreOnce() {
-        configureDownloads()
-        guard !restored else { return }
-        if InterfacePreview.active {
-            metadataStore.finishRestoring()
-            return
-        }
-        restored = true
-        scanner.selectAccount(appState.libraryAccountID)
-        // 扫描检查点先于首页恢复，避免上次退出时的最后一批文件遗漏。
-        mediaLibrary.add(scanner.discoveredFiles, for: appState)
-        // 片名解析在后台线程做完再回来恢复封面，主线程不被整个片库的解析拖住。
-        let files = HomeLibrary.media(local: localStore, cloud: mediaLibrary, appState: appState)
-        Task { await metadataStore.restore(files: files) }
+        self.sourceStatus = sourceStatus
+        self.sourceQuota = sourceQuota
+        self.initialSearch = initialSearch
+        self.searchFiles = searchFiles
     }
 
     var body: some View {
         tabs
-            .onAppear(perform: restoreOnce)
-            .task(id: appState.sessionID) { await refreshAccountInfo() }
-            .onChange(of: selection) { section in
-                navigation.setCloudRoutes([])
-                if section == .cloud || section == .mine { Task { await refreshAccountInfo() } }
+            .background {
+                HomeLibraryCoordinator(
+                    appState: stores.appState,
+                    recents: stores.recents,
+                    mediaLibrary: stores.mediaLibrary,
+                    localStore: stores.localStore,
+                    metadataStore: stores.metadataStore,
+                    scanner: stores.scanner,
+                    accountInfo: stores.accountInfo,
+                    navigation: stores.navigation,
+                    librarySnapshots: stores.librarySnapshots,
+                    selection: selection,
+                    sourceStatus: sourceStatus,
+                    sourceQuota: sourceQuota
+                )
             }
-            .onChange(of: scenePhase) { phase in
-                if phase == .active { Task { await refreshAccountInfo() } }
-                updateDownloads(for: phase)
-            }
-            .task(id: syncInput) {
-                guard !InterfacePreview.active else { return }
-                await metadataStore.waitUntilRestored()
-                guard !Task.isCancelled else { return }
-                if scanner.accountID != appState.libraryAccountID {
-                    metadataStore.pause()
-                    scanner.selectAccount(appState.libraryAccountID)
-                    mediaLibrary.add(scanner.discoveredFiles, for: appState)
-                }
-                metadataStore.hydrate(files: libraryFiles)
-                if scenePhase == .background {
-                    scanner.pause()
-                    metadataStore.pause()
-                    mediaLibrary.flush()
-                } else if automaticMatching || isHomeTest {
-                    metadataStore.sync(files: libraryFiles)
-                }
-            }
-            .task(id: snapshotKey) {
-                // 先等封面缓存恢复完，第一屏直接带封面，不会先出现一屏没封面的画面。
-                await metadataStore.waitUntilRestored()
-                guard !Task.isCancelled else { return }
-                await librarySnapshots.rebuild(files: libraryFiles, matches: metadataStore.metadataByMediaID,
-                                               hiddenFeatured: featuredStore.hidden)
-            }
-            // 按记录的先后排序：重看旧片、记录满 30 条后再看新片时条数不变，所以要比较整串 id，不能只看条数
-            .task(id: CatalogEntriesKey(revision: librarySnapshots.revision, recents: recents.items.map(\.id))) {
-                await librarySnapshots.rebuildEntries(recents: recents.items)
-            }
-            .onChange(of: automaticMatching) { enabled in
-                if enabled && scenePhase != .background {
-                    metadataStore.resumeAutomatic()
-                    metadataStore.sync(files: libraryFiles)
-                } else if !enabled {
-                    metadataStore.stopByUser()
-                }
-            }
-            .onChange(of: adultMatching) { enabled in
-                metadataStore.pause()
-                guard scenePhase != .background, automaticMatching || isHomeTest else {
-                    metadataStore.hydrate(files: libraryFiles)
-                    return
-                }
-                if enabled { metadataStore.retryFailed(files: libraryFiles) }
-                else { metadataStore.sync(files: libraryFiles) }
-            }
-            .environmentObject(recents)
-            .environmentObject(mediaLibrary)
-            .environmentObject(localStore)
-            .environmentObject(metadataStore)
-            .environmentObject(scanner)
-            .environmentObject(accountInfo)
-            .environmentObject(librarySnapshots)
-            .environmentObject(navigation)
+            .environmentObject(stores.recents)
+            .environmentObject(stores.mediaLibrary)
+            .environmentObject(stores.localStore)
+            .environmentObject(stores.metadataStore)
+            .environmentObject(stores.scanner)
+            .environmentObject(stores.accountInfo)
+            .environmentObject(stores.librarySnapshots)
+            .environmentObject(stores.navigation)
+            .environment(\.libraryStoreRefs, stores.storeRefs)
             .tint(Theme.accent)
-    }
-
-    private var isHomeTest: Bool {
-        #if DEBUG
-        return ProcessInfo.processInfo.environment["HPLAYER_HOME_TEST"] == "1"
-        #else
-        return false
-        #endif
-    }
-
-    private func refreshAccountInfo() async {
-        if InterfacePreview.active {
-            accountInfo.seed(session: appState.sessionID, status: sourceStatus, quota: sourceQuota)
-            return
-        }
-        await accountInfo.refreshIfNeeded(session: appState.sessionID, client: appState.directClient())
-    }
-
-    private var libraryFiles: [LibraryMedia] {
-        HomeLibrary.media(local: localStore, cloud: mediaLibrary, appState: appState)
-    }
-
-    private var snapshotKey: LibrarySnapshotKey {
-        LibrarySnapshotKey(local: localStore.files.count, cloudRevision: mediaLibrary.revision,
-                           metadataRevision: metadataStore.revision, account: appState.libraryAccountID,
-                           hiddenFeatured: featuredStore.hidden)
-    }
-
-    /// Keep scanning/matching alive when moving between tabs; coalesce scan batches.
-    private var syncInput: LibrarySyncInput {
-        let count = localStore.files.count + mediaLibrary.files(for: appState).count
-        return LibrarySyncInput(count: scanner.phase == .running ? count / 300 : count,
-                                accountID: appState.libraryAccountID,
-                                background: scenePhase == .background, scanning: scanner.phase == .running)
     }
 
     /// 系统原生 TabView：iOS 26 上标签栏是悬浮的 Liquid Glass 胶囊，可以左右拖动切换；
@@ -216,75 +135,25 @@ struct HomeView: View {
     /// 搜索不在标签栏上，是盖在整个 TabView（含标签栏）上面的全屏页。
     private var tabs: some View {
         ZStack {
-            NavigationStack(path: $navigation.path) {
+            HomeNavigationShell(navigation: stores.navigation, rootBar: stores.rootBar,
+                                appState: stores.appState, librarySnapshots: stores.librarySnapshots) {
                 tabPages
-                    // 一级页面的导航栏一直显示但隐形，推入二级页时不会整条滑偏（见 rootNavigationBar）
-                    .environment(\.rootNavigationBarState, rootBar)
-                    .rootNavigationBar(rootBar, depth: navigation.path.count)
-                    .navigationDestination(for: PerformerListRoute.self) { _ in
-                        PerformerGridView(groups: librarySnapshots.home.performers)
-                    }
-                    .navigationDestination(for: PerformerRoute.self) { route in
-                        if let group = librarySnapshots.home.performers.first(where: { $0.id == route.id }) {
-                            PerformerCollectionView(group: group).id(route.id)
-                        } else {
-                            EmptyStateView(icon: AppIcon.people.name, title: "演员合集已更新", message: "返回后重新进入演员合集。")
-                        }
-                    }
-                    .navigationDestination(for: AnimeDetailRoute.self) { route in
-                        AnimeDetailView(animeId: route.animeId).id(route.animeId)
-                    }
-                    .navigationDestination(for: AnimeBrowseRoute.self) { route in
-                        AnimeBrowseView(route: route)
-                    }
-                    .navigationDestination(for: DramaRoute.self) { route in
-                        DramaDetailView(route: route).environmentObject(appState)
-                    }
-                    .navigationDestination(for: JableRoute.self) { route in
-                        JableDetailView(route: route)
-                    }
-                    .navigationDestination(for: MissAVRoute.self) { route in
-                        MissAVDetailView(route: route)
-                    }
-                    .navigationDestination(for: JableBrowseRoute.self) { route in
-                        JableBrowseView(route: route)
-                    }
-                    .navigationDestination(for: MissAVBrowseRoute.self) { route in
-                        MissAVBrowseView(route: route)
-                    }
-                    .navigationDestination(for: DramaBrowseRoute.self) { route in
-                        DramaBrowseView(route: route)
-                    }
-                    // 程序化路径的目标注册在整个 TabView 的外层，网盘根页退场后仍可解析。
-                    .navigationDestination(for: CloudRoute.self) { route in
-                        CloudTab(route: route)
-                    }
-                    .navigationDestination(for: MineRoute.self) { route in
-                        switch route {
-                        case .watchlist:
-                            AnimeWatchlistView()
-                        case .tasks:
-                            AnimeTasksView()
-                        case .messages:
-                            AnimeMessagesView()
-                        case .page(.offline):
-                            OfflineTasksView()
-                        case .page(.downloads):
-                            DownloadsView()
-                        case .page(.recycleBin):
-                            RecycleBinView()
-                        case .page(.localVideos):
-                            LocalVideosView()
-                        }
-                    }
             }
-            // 导航栏按键（返回键和右上角按钮）统一用主题的导航栏按键色
-            .navigationButtonTint()
-            .ignoresSafeArea(.keyboard, edges: .bottom)
             .accessibilityHidden(searchOpen)
 
             if searchCreated {
-                searchPage
+                HomeSearchShell(
+                    isOpen: searchOpen,
+                    initiallyVisible: searchInitiallyVisible,
+                    initialQuery: initialSearch,
+                    initialResults: searchFiles,
+                    stores: stores,
+                    onClose: { closeSearch() }
+                )
+                .ignoresSafeArea()
+                .allowsHitTesting(searchOpen)
+                .accessibilityHidden(!searchOpen)
+                .zIndex(1)
             }
         }
         .background(Theme.pageBackground.ignoresSafeArea())
@@ -328,30 +197,6 @@ struct HomeView: View {
         .ignoresSafeArea(.keyboard, edges: .bottom)
     }
 
-    private var searchPage: some View {
-        SearchOverlayHost(isOpen: searchOpen,
-                          initiallyVisible: searchInitiallyVisible,
-                          coordinator: searchKeyboard) {
-            SearchTab(initialQuery: initialSearch,
-                      initialResults: searchFiles,
-                      isActive: searchOpen,
-                      library: librarySnapshots.ready ? librarySnapshots.home : nil,
-                      keyboard: searchKeyboard,
-                      onClose: { closeSearch() })
-                .environmentObject(appState)
-                .environmentObject(recents)
-                .environmentObject(mediaLibrary)
-                .environmentObject(localStore)
-                .environmentObject(metadataStore)
-                .environmentObject(librarySnapshots)
-                .tint(Theme.accent)
-        }
-        .ignoresSafeArea()
-        .allowsHitTesting(searchOpen)
-        .accessibilityHidden(!searchOpen)
-        .zIndex(1)
-    }
-
     /// 没选中标签的图标：线框款，预先染成主题的次要文字灰（浅色 / 深色各一套）。
     private static func restingTabIcon(_ icon: AppIcon, scheme: ColorScheme) -> UIImage {
         let traits = UITraitCollection(userInterfaceStyle: scheme == .dark ? .dark : .light)
@@ -377,7 +222,7 @@ struct HomeView: View {
     private func page(for section: HomeSection) -> some View {
         switch section {
         case .home:
-            // 推荐 / 动漫 / 片库 / 短剧：左右滑动切换，频道条和搜索框是固定头部（见 HomeChannelsView）
+            // 推荐 / 动漫 / 片库 / 短剧 / Jable / MissAV：左右滑动切换，频道条和搜索框是固定头部（见 HomeChannelsView）
             HomeChannelsView(channel: $channel, catalogPreset: $catalogPreset,
                              onSearch: { openSearch() }, onBrowseLibrary: { selection = .cloud })
         case .magnet:
@@ -389,6 +234,309 @@ struct HomeView: View {
         case .search:
             EmptyView()
         }
+    }
+}
+
+/// 独立导航壳：仅观察 `HomeNavigation`，路由以外的后台扫描/匹配状态变化绝不触发导航栈重算。
+private struct HomeNavigationShell<Content: View>: View {
+    @ObservedObject var navigation: HomeNavigation
+    let rootBar: RootNavigationBarState
+    let appState: AppState
+    let librarySnapshots: LibrarySnapshotStore
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        NavigationStack(path: $navigation.path) {
+            content()
+                // 一级页面的导航栏一直显示但隐形，推入二级页时不会整条滑偏（见 rootNavigationBar）
+                .environment(\.rootNavigationBarState, rootBar)
+                .rootNavigationBar(rootBar, depth: navigation.path.count)
+                .navigationDestination(for: PerformerListRoute.self) { _ in
+                    PerformerGridView(groups: librarySnapshots.home.performers)
+                }
+                .navigationDestination(for: PerformerRoute.self) { route in
+                    if let group = librarySnapshots.home.performers.first(where: { $0.id == route.id }) {
+                        PerformerCollectionView(group: group).id(route.id)
+                    } else {
+                        EmptyStateView(icon: AppIcon.people.name, title: "演员合集已更新", message: "返回后重新进入演员合集。")
+                    }
+                }
+                .navigationDestination(for: AnimeDetailRoute.self) { route in
+                    AnimeDetailView(animeId: route.animeId).id(route.animeId)
+                }
+                .navigationDestination(for: AnimeBrowseRoute.self) { route in
+                    AnimeBrowseView(route: route)
+                }
+                .navigationDestination(for: DramaRoute.self) { route in
+                    DramaDetailView(route: route).environmentObject(appState)
+                }
+                .navigationDestination(for: JableRoute.self) { route in
+                    JableDetailView(route: route)
+                }
+                .navigationDestination(for: MissAVRoute.self) { route in
+                    MissAVDetailView(route: route)
+                }
+                .navigationDestination(for: JableBrowseRoute.self) { route in
+                    JableBrowseView(route: route)
+                }
+                .navigationDestination(for: MissAVBrowseRoute.self) { route in
+                    MissAVBrowseView(route: route)
+                }
+                .navigationDestination(for: DramaBrowseRoute.self) { route in
+                    DramaBrowseView(route: route)
+                }
+                // 程序化路径的目标注册在整个 TabView 的外层，网盘根页退场后仍可解析。
+                .navigationDestination(for: CloudRoute.self) { route in
+                    CloudTab(route: route)
+                }
+                .navigationDestination(for: MineRoute.self) { route in
+                    switch route {
+                    case .watchlist:
+                        AnimeWatchlistView()
+                    case .tasks:
+                        AnimeTasksView()
+                    case .messages:
+                        AnimeMessagesView()
+                    case .page(.offline):
+                        OfflineTasksView()
+                    case .page(.downloads):
+                        DownloadsView()
+                    case .page(.recycleBin):
+                        RecycleBinView()
+                    case .page(.localVideos):
+                        LocalVideosView()
+                    }
+                }
+        }
+        // 导航栏按键（返回键和右上角按钮）统一用主题的导航栏按键色
+        .navigationButtonTint()
+        .ignoresSafeArea(.keyboard, edges: .bottom)
+    }
+}
+
+/// 独立搜索浮层宿主：只在搜索被打开创建后才观察 `librarySnapshots`。
+private struct HomeSearchShell: View {
+    let isOpen: Bool
+    let initiallyVisible: Bool
+    let initialQuery: String
+    let initialResults: [P115File]
+    let stores: HomeStoreBag
+    @ObservedObject private var librarySnapshots: LibrarySnapshotStore
+    let onClose: () -> Void
+
+    init(isOpen: Bool, initiallyVisible: Bool, initialQuery: String, initialResults: [P115File],
+         stores: HomeStoreBag, onClose: @escaping () -> Void) {
+        self.isOpen = isOpen
+        self.initiallyVisible = initiallyVisible
+        self.initialQuery = initialQuery
+        self.initialResults = initialResults
+        self.stores = stores
+        _librarySnapshots = ObservedObject(wrappedValue: stores.librarySnapshots)
+        self.onClose = onClose
+    }
+
+    var body: some View {
+        SearchOverlayHost(isOpen: isOpen,
+                          initiallyVisible: initiallyVisible,
+                          coordinator: stores.searchKeyboard) {
+            SearchTab(initialQuery: initialQuery,
+                      initialResults: initialResults,
+                      isActive: isOpen,
+                      library: librarySnapshots.ready ? librarySnapshots.home : nil,
+                      keyboard: stores.searchKeyboard,
+                      onClose: onClose)
+                .environmentObject(stores.appState)
+                .environmentObject(stores.recents)
+                .environmentObject(stores.mediaLibrary)
+                .environmentObject(stores.localStore)
+                .environmentObject(stores.metadataStore)
+                .environmentObject(stores.librarySnapshots)
+                .tint(Theme.accent)
+        }
+    }
+}
+
+/// 零尺寸后台协调视图：集中订阅扫描、入库、封面匹配、播放记录与场景切换，驱动快照重建和元数据同步。
+/// 因为它的 body 只是 Color.clear，高频状态变化只会局部触发这里，绝不连带重绘 TabView 和首页 6 个频道。
+private struct HomeLibraryCoordinator: View {
+    @Environment(\.scenePhase) private var scenePhase
+    @AppStorage(AdultMetadataSettings.enabledKey) private var adultMatching = false
+    @AppStorage(CoverMatchingSettings.automaticKey) private var automaticMatching = false
+
+    @ObservedObject var appState: AppState
+    @ObservedObject var recents: RecentStore
+    @ObservedObject var mediaLibrary: MediaLibraryStore
+    @ObservedObject var localStore: LocalMediaStore
+    @ObservedObject var metadataStore: MediaMetadataStore
+    @ObservedObject var scanner: CloudLibraryScanner
+    @ObservedObject var accountInfo: P115AccountInfoStore
+    let navigation: HomeNavigation
+    @ObservedObject var librarySnapshots: LibrarySnapshotStore
+    @ObservedObject private var featuredStore = FeaturedStore.shared
+
+    let selection: HomeSection
+    let sourceStatus: P115Status?
+    let sourceQuota: QuotaResponse?
+
+    @State private var restored = false
+
+    var body: some View {
+        Color.clear
+            .onAppear(perform: restoreOnce)
+            .task(id: appState.sessionID) { await refreshAccountInfo() }
+            .onChange(of: selection) { section in
+                navigation.setCloudRoutes([])
+                if section == .cloud || section == .mine { Task { await refreshAccountInfo() } }
+            }
+            .onChange(of: scenePhase) { phase in
+                if phase == .active { Task { await refreshAccountInfo() } }
+                updateDownloads(for: phase)
+            }
+            .task(id: syncInput) {
+                guard !InterfacePreview.active else { return }
+                await metadataStore.waitUntilRestored()
+                guard !Task.isCancelled else { return }
+                if scanner.accountID != appState.libraryAccountID {
+                    metadataStore.pause()
+                    scanner.selectAccount(appState.libraryAccountID)
+                    mediaLibrary.add(scanner.discoveredFiles, for: appState)
+                }
+                let files = libraryFiles
+                // 新扫进来的文件名先在后台线程预解析，再回到主线程 hydrate / sync，避免主线程连续跑正则掉帧
+                await metadataStore.prewarmNames(files.map(\.name), priority: scanner.phase == .running ? .utility : .userInitiated)
+                guard !Task.isCancelled else { return }
+                metadataStore.hydrate(files: files)
+                if scenePhase == .background {
+                    scanner.pause()
+                    metadataStore.pause()
+                    mediaLibrary.flush()
+                } else if automaticMatching || isHomeTest {
+                    metadataStore.sync(files: files)
+                }
+            }
+            .task(id: snapshotKey) {
+                // 先等封面缓存恢复完，第一屏直接带封面，不会先出现一屏没封面的画面。
+                await metadataStore.waitUntilRestored()
+                guard !Task.isCancelled else { return }
+                let scanning = scanner.phase == .running
+                // 扫描文件夹/全盘时每页都会递增 revision：扫描期间拉长防抖并用低优先级后台线程重建，
+                // 暂停或完成后立刻按 0.3s 快速刷新最终片库，消除浏览首页频道时的周期性掉帧。
+                await librarySnapshots.rebuild(
+                    files: libraryFiles,
+                    matches: metadataStore.metadataByMediaID,
+                    hiddenFeatured: featuredStore.hidden,
+                    debounce: scanning ? 3.5 : 0.3,
+                    backgroundPriority: scanning ? .utility : .userInitiated
+                )
+            }
+            // 按记录的先后排序：重看旧片、记录满 30 条后再看新片时条数不变，所以要比较整串 id，不能只看条数
+            .task(id: CatalogEntriesKey(revision: librarySnapshots.revision, recents: recents.items.map(\.id))) {
+                await librarySnapshots.rebuildEntries(recents: recents.items)
+            }
+            .onChange(of: automaticMatching) { enabled in
+                if enabled && scenePhase != .background {
+                    metadataStore.resumeAutomatic()
+                    Task {
+                        let files = libraryFiles
+                        await metadataStore.prewarmNames(files.map(\.name), priority: .utility)
+                        metadataStore.sync(files: files)
+                    }
+                } else if !enabled {
+                    metadataStore.stopByUser()
+                }
+            }
+            .onChange(of: adultMatching) { enabled in
+                metadataStore.pause()
+                let files = libraryFiles
+                guard scenePhase != .background, automaticMatching || isHomeTest else {
+                    metadataStore.hydrate(files: files)
+                    return
+                }
+                if enabled { metadataStore.retryFailed(files: files) }
+                else { metadataStore.sync(files: files) }
+            }
+    }
+
+    private func configureDownloads() {
+        guard !InterfacePreview.active else { return }
+        let manager = DownloadManager.shared
+        manager.media = localStore
+        let state = appState
+        manager.requestProvider = { [weak state] item in
+            guard let state, let client = state.directClient() else {
+                throw APIError.server("请先登录 115")
+            }
+            let address = try await client.originalURL(pickCode: item.pickCode)
+            return client.downloadRequest(for: address)
+        }
+    }
+
+    private func updateDownloads(for phase: ScenePhase) {
+        guard !InterfacePreview.active else { return }
+        switch phase {
+        case .background:
+            DownloadManager.shared.sceneDidEnterBackground()
+        case .active:
+            DownloadManager.shared.sceneDidBecomeActive()
+        default:
+            break
+        }
+    }
+
+    private func restoreOnce() {
+        configureDownloads()
+        guard !restored else { return }
+        if InterfacePreview.active {
+            metadataStore.finishRestoring()
+            return
+        }
+        restored = true
+        scanner.selectAccount(appState.libraryAccountID)
+        // 扫描检查点先于首页恢复，避免上次退出时的最后一批文件遗漏。
+        mediaLibrary.add(scanner.discoveredFiles, for: appState)
+        // 片名解析在后台线程做完再回来恢复封面，主线程不被整个片库的解析拖住。
+        let files = HomeLibrary.media(local: localStore, cloud: mediaLibrary, appState: appState)
+        Task { await metadataStore.restore(files: files) }
+    }
+
+    private var isHomeTest: Bool {
+        #if DEBUG
+        return ProcessInfo.processInfo.environment["HPLAYER_HOME_TEST"] == "1"
+        #else
+        return false
+        #endif
+    }
+
+    private func refreshAccountInfo() async {
+        if InterfacePreview.active {
+            accountInfo.seed(session: appState.sessionID, status: sourceStatus, quota: sourceQuota)
+            return
+        }
+        await accountInfo.refreshIfNeeded(session: appState.sessionID, client: appState.directClient())
+    }
+
+    private var libraryFiles: [LibraryMedia] {
+        HomeLibrary.media(local: localStore, cloud: mediaLibrary, appState: appState)
+    }
+
+    private var snapshotKey: LibrarySnapshotKey {
+        let scanning = scanner.phase == .running
+        return LibrarySnapshotKey(
+            local: localStore.files.count,
+            cloudRevision: scanning ? mediaLibrary.revision / 5 : mediaLibrary.revision,
+            metadataRevision: metadataStore.revision,
+            account: appState.libraryAccountID,
+            hiddenFeatured: featuredStore.hidden,
+            scanning: scanning
+        )
+    }
+
+    /// Keep scanning/matching alive when moving between tabs; coalesce scan batches.
+    private var syncInput: LibrarySyncInput {
+        let count = localStore.files.count + mediaLibrary.files(for: appState).count
+        return LibrarySyncInput(count: scanner.phase == .running ? count / 300 : count,
+                                accountID: appState.libraryAccountID,
+                                background: scenePhase == .background, scanning: scanner.phase == .running)
     }
 }
 
@@ -405,6 +553,7 @@ private struct LibrarySnapshotKey: Equatable {
     let metadataRevision: Int
     let account: String?
     let hiddenFeatured: Set<String>
+    let scanning: Bool
 }
 
 private struct CatalogEntriesKey: Equatable {

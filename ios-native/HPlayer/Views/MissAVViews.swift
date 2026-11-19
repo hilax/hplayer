@@ -30,7 +30,9 @@ final class MissAVFeed: ObservableObject {
     /// 第一次打开这个分类：先把上次缓存的第一页摆出来，再去取最新的（取到后整页替换）
     func loadFirstIfNeeded(_ category: MissAVCategory) async {
         guard shelf(category).page == 0 else { return }
-        if shelf(category).items.isEmpty, let cached = ChannelListCache.loadWithAge(Self.cacheKey(category), as: MissAVVideoCard.self) {
+        if shelf(category).items.isEmpty,
+           let cached = await ChannelListCache.loadWithAgeAsync(Self.cacheKey(category), as: MissAVVideoCard.self) {
+            guard shelf(category).page == 0, shelf(category).items.isEmpty else { return }
             var state = Shelf()
             state.items = cached.items
             // 二十分钟内取过的直接当第一页用，不再排队重取；往下翻页时接着取第二页
@@ -79,7 +81,7 @@ final class MissAVFeed: ObservableObject {
                 updated.hasMore = !fresh.isEmpty
                 updated.loading = false
                 shelves[category] = updated
-                ChannelListCache.save(fresh, key: Self.cacheKey(category))
+                ChannelListCache.saveAsync(fresh, key: Self.cacheKey(category))
                 return
             }
             let known = Set(updated.items.map(\.id))
@@ -117,7 +119,7 @@ struct MissAVPosterCard: View {
                     .aspectRatio(16 / 9, contentMode: .fit)
                     .overlay {
                         if let url = URL(string: item.coverUrl) {
-                            PipelineImage(url: url, maxPixel: ArtworkSize.hero) { phase in
+                            PipelineImage(url: url, maxPixel: ArtworkSize.card) { phase in
                                 switch phase {
                                 case let .loaded(image):
                                     Image(uiImage: image)
@@ -309,7 +311,8 @@ struct MissAVTab: View {
                 shelfHeader(category, identifier: identifier)
                 ScrollView(.horizontal) {
                     LazyHStack(alignment: .top, spacing: 12) {
-                        ForEach(Array(state.items.prefix(12).enumerated()), id: \.element.id) { index, item in
+                        let visible = Array(state.items.prefix(12))
+                        ForEach(Array(visible.enumerated()), id: \.element.id) { index, item in
                             NavigationLink(value: MissAVRoute(id: item.id, title: item.title, cover: item.coverUrl, url: item.url)) {
                                 MissAVPosterCard(item: item)
                                     .frame(width: cardWidth)
@@ -318,6 +321,7 @@ struct MissAVTab: View {
                             .accessibilityIdentifier("missav.poster.\(item.id)")
                             .reveal(index, id: "\(identifier).\(item.id)")
                             .shelfCard()
+                            .prefetchArtwork(after: index, in: visible, count: 4, maxPixel: ArtworkSize.card) { $0.coverUrl }
                         }
                     }
                     .shelfContent()

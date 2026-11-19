@@ -115,13 +115,16 @@ struct ContinueArtworkView: View {
     let height: CGFloat
     @ObservedObject private var store = ContinueArtworkStore.shared
     @ObservedObject private var frames = PlaybackFrameStore.shared
+    @State private var diskFrame: UIImage?
 
     private var frameKey: String { PlaybackFrameStore.key(for: entry.target) }
+    private var frameRevision: Int { frames.revisions[frameKey] ?? 0 }
 
     var body: some View {
+        let resolvedFrame = frames.cachedImage(for: frameKey) ?? diskFrame
         Group {
-            // frames 是观察对象：新截图存好（revisions 变化）时卡片跟着刷新
-            if let frame = frames.image(for: frameKey) {
+            // 内存命中第一帧直接画，未命中在后台读盘预解码，避免滚动货架时卡主线程
+            if let frame = resolvedFrame {
                 frameView(frame)
                     .transition(.opacity)
             } else if !entry.artworkURL.isEmpty {
@@ -145,6 +148,13 @@ struct ContinueArtworkView: View {
         }
         .frame(width: width, height: height)
         .clipped()
+        .task(id: "\(frameKey)|\(frameRevision)") {
+            if let cached = frames.cachedImage(for: frameKey) {
+                diskFrame = cached
+                return
+            }
+            diskFrame = await frames.loadImage(for: frameKey)
+        }
         .task(id: entry.id) {
             if entry.artworkURL.isEmpty { await store.resolve(entry.target) }
         }

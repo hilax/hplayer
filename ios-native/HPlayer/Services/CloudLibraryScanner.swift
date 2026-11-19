@@ -76,6 +76,7 @@ final class CloudLibraryScanner: ObservableObject {
     private let retryBaseDelay: TimeInterval
     private let persistInterval: TimeInterval
     private var lastPersistAt = Date.distantPast
+    private var lastPublishAt = Date.distantPast
     private let maximumAttempts: Int
     private var checkpoint: Checkpoint?
     private var knownFolders = Set<String>()
@@ -84,6 +85,8 @@ final class CloudLibraryScanner: ObservableObject {
     private var generation: UInt64 = 0
     private var previousRequestAt: Date?
     private var damagedCheckpoint = false
+    /// 扫描进度和清单块编码放到串行后台队列：中途每页存盘不阻塞主线程，暂停/结束/清理时 sync 排干队列保证落盘顺序。
+    private static let ioQueue = DispatchQueue(label: "hplayer.scanner.io", qos: .utility)
 
     init(
         defaults: UserDefaults = .standard,
@@ -117,6 +120,7 @@ final class CloudLibraryScanner: ObservableObject {
         lastError = ""
         scopeName = nil
         damagedCheckpoint = false
+        Self.ioQueue.sync {}
         guard let next, let data = defaults.data(forKey: checkpointKey(next)) else { return }
         do {
             var saved = try JSONDecoder().decode(Checkpoint.self, from: data)
@@ -211,7 +215,11 @@ final class CloudLibraryScanner: ObservableObject {
     func discardSavedState() {
         invalidateTask()
         if let saved = checkpoint { removeInventory(saved) }
-        if let accountID { defaults.removeObject(forKey: checkpointKey(accountID)) }
+        if let accountID {
+            let defaults = self.defaults
+            let key = checkpointKey(accountID)
+            Self.ioQueue.sync { defaults.removeObject(forKey: key) }
+        }
         checkpoint = nil
         knownFolders = []
         knownVideos = []
@@ -277,26 +285,27 @@ final class CloudLibraryScanner: ObservableObject {
                         if !knownVideos.contains(id), newVideoIDs.insert(id).inserted { newVideos.append(file) }
                     }
                 }
-                // Store only the new inventory chunk; don't rewrite thousands of video records per page.
+                // Store only the new inventory chunk; encode off the main thread so scrolling stays smooth.
                 if !newVideos.isEmpty {
-                    let data = try JSONEncoder().encode(newVideos)
-                    defaults.set(data, forKey: inventoryKey(saved, index: saved.inventoryChunks))
+                    let chunkKey = inventoryKey(saved, index: saved.inventoryChunks)
+                    persistChunk(newVideos, key: chunkKey)
                     saved.inventoryChunks += 1
                     saved.videoCount += newVideos.count
                 }
                 saved.phase = saved.pendingFolders.isEmpty ? .completed : .running
                 saved.lastError = ""
-                // 目录清单可能很大，每页都整份重写会拖慢主线程；中途最多每隔几秒保存一次，
-                // 暂停、失败、完成时一定保存。丢失的页面重启后会按去重规则重新扫到。
-                if saved.phase != .running || Date().timeIntervalSince(lastPersistAt) >= persistInterval {
-                    try persist(saved)
+                // 目录清单可能很大，中途后台异步写盘不阻塞主线程；暂停、失败、完成时同步落盘确保不丢进度。
+                if saved.phase != .running {
+                    try persist(saved, background: false)
+                } else if Date().timeIntervalSince(lastPersistAt) >= persistInterval {
+                    try persist(saved, background: true)
                 }
                 checkpoint = saved
                 knownFolders.formUnion(newFolderIDs)
                 knownVideos.formUnion(newVideoIDs)
                 discoveredFiles.append(contentsOf: newVideos)
                 if !pageFolders.isEmpty { onFolders?(pageFolders) }
-                publish(saved)
+                publish(saved, allowThrottle: saved.phase == .running)
                 // There is no suspension between the account check, checkpoint commit and callback.
                 guard isCurrent(token, accountID) else { return }
                 if !newVideos.isEmpty { onBatch(newVideos) }
@@ -355,14 +364,22 @@ final class CloudLibraryScanner: ObservableObject {
         file.id.isEmpty ? "pick:\(file.pickCode)|\(file.parentId)|\(file.name)" : "file:\(file.id)"
     }
 
-    private func publish(_ saved: Checkpoint) {
-        phase = saved.phase
-        progress = Progress(scannedFolders: saved.completedFolders.count,
-                            discoveredFolders: saved.completedFolders.count + saved.pendingFolders.count,
-                            discoveredVideos: saved.videoCount)
-        currentFolderName = saved.pendingFolders.first?.name ?? ""
-        scopeName = saved.scopeName
-        lastError = saved.lastError
+    private func publish(_ saved: Checkpoint, allowThrottle: Bool = false) {
+        let now = Date()
+        if allowThrottle, minimumRequestInterval > 0, phase == .running, saved.phase == .running,
+           now.timeIntervalSince(lastPublishAt) < 0.4 {
+            return
+        }
+        lastPublishAt = now
+        let nextProgress = Progress(scannedFolders: saved.completedFolders.count,
+                                    discoveredFolders: saved.completedFolders.count + saved.pendingFolders.count,
+                                    discoveredVideos: saved.videoCount)
+        let nextFolder = saved.pendingFolders.first?.name ?? ""
+        if phase != saved.phase { phase = saved.phase }
+        if progress != nextProgress { progress = nextProgress }
+        if currentFolderName != nextFolder { currentFolderName = nextFolder }
+        if scopeName != saved.scopeName { scopeName = saved.scopeName }
+        if lastError != saved.lastError { lastError = saved.lastError }
     }
 
     private func checkpointKey(_ accountID: String) -> String {
@@ -373,12 +390,44 @@ final class CloudLibraryScanner: ObservableObject {
         "\(checkpointKey(saved.accountID)).\(saved.scanID).inventory.\(index)"
     }
 
-    private func persist(_ saved: Checkpoint) throws {
+    private func persistChunk(_ videos: [P115File], key: String) {
+        let defaults = self.defaults
+        Self.ioQueue.async {
+            if let data = try? JSONEncoder().encode(videos) {
+                defaults.set(data, forKey: key)
+            }
+        }
+    }
+
+    private func persist(_ saved: Checkpoint, background: Bool = false) throws {
         lastPersistAt = Date()
-        defaults.set(try JSONEncoder().encode(saved), forKey: checkpointKey(saved.accountID))
+        let defaults = self.defaults
+        let key = checkpointKey(saved.accountID)
+        if background {
+            Self.ioQueue.async {
+                if let data = try? JSONEncoder().encode(saved) {
+                    defaults.set(data, forKey: key)
+                }
+            }
+            return
+        }
+        var encodeError: Error?
+        Self.ioQueue.sync {
+            do {
+                let data = try JSONEncoder().encode(saved)
+                defaults.set(data, forKey: key)
+            } catch {
+                encodeError = error
+            }
+        }
+        if let encodeError { throw encodeError }
     }
 
     private func removeInventory(_ saved: Checkpoint) {
-        for index in 0..<saved.inventoryChunks { defaults.removeObject(forKey: inventoryKey(saved, index: index)) }
+        let defaults = self.defaults
+        let keys = (0..<saved.inventoryChunks).map { inventoryKey(saved, index: $0) }
+        Self.ioQueue.sync {
+            for key in keys { defaults.removeObject(forKey: key) }
+        }
     }
 }

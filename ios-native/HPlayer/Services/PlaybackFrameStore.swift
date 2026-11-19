@@ -19,6 +19,8 @@ final class PlaybackFrameStore: ObservableObject {
     @Published private(set) var revisions: [String: Int] = [:]
 
     private let cache = NSCache<NSString, UIImage>()
+    /// 记录已确认磁盘上没有截图的键，避免列表滑回来时反复做磁盘 I/O。
+    private var missingKeys = Set<String>()
     private let directory: URL
     private static let limit = 40
 
@@ -43,9 +45,36 @@ final class PlaybackFrameStore: ObservableObject {
 
     // MARK: 读
 
+    /// 仅查内存缓存（零磁盘 I/O），适合在 SwiftUI body 里同步读取。
+    func cachedImage(for key: String) -> UIImage? {
+        cache.object(forKey: key as NSString)
+    }
+
+    /// 异步从磁盘读取并后台预解码，避免滚动「继续观看」货架时阻塞主线程。
+    func loadImage(for key: String) async -> UIImage? {
+        if let cached = cache.object(forKey: key as NSString) { return cached }
+        if missingKeys.contains(key) { return nil }
+        let path = fileURL(for: key).path
+        let decoded: UIImage? = await Task.detached(priority: .utility) {
+            guard let raw = UIImage(contentsOfFile: path) else { return nil }
+            return raw.preparingForDisplay() ?? raw
+        }.value
+        if let decoded {
+            missingKeys.remove(key)
+            cache.setObject(decoded, forKey: key as NSString)
+        } else {
+            missingKeys.insert(key)
+        }
+        return decoded
+    }
+
     func image(for key: String) -> UIImage? {
         if let cached = cache.object(forKey: key as NSString) { return cached }
-        guard let image = UIImage(contentsOfFile: fileURL(for: key).path) else { return nil }
+        if missingKeys.contains(key) { return nil }
+        guard let image = UIImage(contentsOfFile: fileURL(for: key).path) else {
+            missingKeys.insert(key)
+            return nil
+        }
         cache.setObject(image, forKey: key as NSString)
         return image
     }
@@ -88,12 +117,14 @@ final class PlaybackFrameStore: ObservableObject {
 
     func remove(_ key: String) {
         cache.removeObject(forKey: key as NSString)
+        missingKeys.insert(key)
         try? FileManager.default.removeItem(at: fileURL(for: key))
         revisions[key] = nil
     }
 
     func removeAll() {
         cache.removeAllObjects()
+        missingKeys.removeAll()
         try? FileManager.default.removeItem(at: directory)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         revisions = [:]
@@ -115,6 +146,7 @@ final class PlaybackFrameStore: ObservableObject {
             return true
         }.value
         guard written else { return }
+        missingKeys.remove(key)
         cache.setObject(UIImage(cgImage: cgImage), forKey: key as NSString)
         revisions[key, default: 0] += 1
     }

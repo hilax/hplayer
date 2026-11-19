@@ -44,6 +44,7 @@ struct LoopingCarousel<Item: Identifiable, Background: View, Foreground: View, H
     @State private var turning = false
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.isChannelPageActive) private var pageActive
 
     /// 揭开动画时长；文字在一半时换
     private static var turnDuration: TimeInterval { 0.9 }
@@ -68,7 +69,7 @@ struct LoopingCarousel<Item: Identifiable, Background: View, Foreground: View, H
 
     private var canAutoplay: Bool {
         count > 1 && CarouselAutoplay.enabled && !reduceMotion && !dragging && !turning
-            && appeared && onScreen && scenePhase == .active
+            && appeared && onScreen && pageActive && scenePhase == .active
     }
 
     var body: some View {
@@ -328,9 +329,10 @@ struct LoopingCarousel<Item: Identifiable, Background: View, Foreground: View, H
     }
 
     private static func isOnScreen(_ frame: CGRect) -> Bool {
-        let height = UIScreen.main.bounds.height
-        // 露出不到 60pt（基本被状态栏、搜索栏挡住）就算看不见
-        return frame.maxY > 60 && frame.minY < height - 60
+        let bounds = UIScreen.main.bounds
+        // 纵向露出不到 60pt，或横向已滑出当前屏幕（相邻频道常驻在 HStack 外侧），都不算看得见
+        return frame.maxY > 60 && frame.minY < bounds.height - 60
+            && frame.maxX > 20 && frame.minX < bounds.width - 20
     }
 
     // MARK: 指示器

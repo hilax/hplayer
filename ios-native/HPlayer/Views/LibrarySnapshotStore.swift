@@ -15,17 +15,22 @@ final class LibrarySnapshotStore: ObservableObject {
     @Published private(set) var catalogReady = false
     /// 每换一次分组加一：片库条目、首页预取都跟着它刷新。
     @Published private(set) var revision = 0
+    /// 每次片库网格条目重建加一（含最近播放顺序变化）：片库页筛选排序缓存据此失效。
+    private(set) var catalogRevision = 0
 
     /// 片库不大时直接在主线程算，第一帧就有内容；再大就放到后台，主线程不被卡住。
     static let inlineLimit = 400
 
-    func rebuild(files: [LibraryMedia], matches: [String: MediaMetadata], hiddenFeatured: Set<String> = []) async {
+    func rebuild(files: [LibraryMedia], matches: [String: MediaMetadata], hiddenFeatured: Set<String> = [],
+                 debounce: TimeInterval = 0.3, backgroundPriority: TaskPriority = .userInitiated) async {
         let snapshot: HomeSnapshot
         if ready {
-            // 匹配、扫描期间结果一批批到，攒 0.3 秒再算一次
-            try? await Task.sleep(nanoseconds: 300_000_000)
-            guard !Task.isCancelled else { return }
-            snapshot = await Task.detached(priority: .userInitiated) {
+            // 匹配、扫描期间结果一批批到：普通更新攒 0.3 秒，扫描全盘/文件夹期间拉长防抖并用低优先级后台线程，不抢前台滑动帧率
+            if debounce > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(debounce * 1_000_000_000))
+                guard !Task.isCancelled else { return }
+            }
+            snapshot = await Task.detached(priority: backgroundPriority) {
                 LibrarySnapshotStore.make(files, matches, hiddenFeatured)
             }.value
         } else if files.count > Self.inlineLimit {
@@ -48,7 +53,7 @@ final class LibrarySnapshotStore: ObservableObject {
         guard ready else { return }
         let snapshot = home
         let entries: [CatalogEntry]
-        if snapshot.items.count > Self.inlineLimit {
+        if catalogReady || snapshot.items.count > Self.inlineLimit {
             entries = await Task.detached(priority: .utility) {
                 CatalogTab.makeEntries(snapshot, recents: recents)
             }.value
@@ -57,6 +62,7 @@ final class LibrarySnapshotStore: ObservableObject {
         }
         guard !Task.isCancelled else { return }
         catalogEntries = entries
+        catalogRevision &+= 1
         catalogReady = true
     }
 

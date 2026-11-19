@@ -150,6 +150,7 @@ struct PagedHeaderContainer<Page: Hashable, FirstRow: View, SecondRow: View, Con
         }
         .environment(\.channelPageInsets, insets)
         .environment(\.pageScrollReporter, PageScrollReporter(state: scroll, key: AnyHashable(page)))
+        .environment(\.isChannelPageActive, page == selection)
         .onPreferenceChange(AmbientHeroPresenceKey.self) { hasHero in
             if hasHero { heroPages.insert(page) } else { heroPages.remove(page) }
         }
@@ -303,6 +304,10 @@ private struct PageScrollReporterKey: EnvironmentKey {
     static let defaultValue: PageScrollReporter? = nil
 }
 
+private struct IsChannelPageActiveKey: EnvironmentKey {
+    static let defaultValue = true
+}
+
 extension EnvironmentValues {
     var channelPageInsets: ChannelPageInsets {
         get { self[ChannelPageInsetsKey.self] }
@@ -312,6 +317,12 @@ extension EnvironmentValues {
     var pageScrollReporter: PageScrollReporter? {
         get { self[PageScrollReporterKey.self] }
         set { self[PageScrollReporterKey.self] = newValue }
+    }
+
+    /// 当前频道页正处于选中状态；切走后的常驻页面据此暂停后台轮播动画，避免多个离屏频道同时占用主线程和 GPU。
+    var isChannelPageActive: Bool {
+        get { self[IsChannelPageActiveKey.self] }
+        set { self[IsChannelPageActiveKey.self] = newValue }
     }
 }
 

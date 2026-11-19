@@ -13,13 +13,8 @@ struct HomeTab: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// 系统（或「外观」设置）的深浅色。首页内容强制按深色显示，从首页推出去的页面要恢复成这个。
     @Environment(\.colorScheme) private var colorScheme
-    @EnvironmentObject private var recents: RecentStore
+    @Environment(\.libraryStoreRefs) private var storeRefs
     @EnvironmentObject private var appState: AppState
-    @EnvironmentObject private var mediaLibrary: MediaLibraryStore
-    @EnvironmentObject private var localStore: LocalMediaStore
-    @EnvironmentObject private var metadataStore: MediaMetadataStore
-    @EnvironmentObject private var scanner: CloudLibraryScanner
-    @ObservedObject private var magnetHistory = MagnetHistoryStore.shared
     /// 2.0：首页融合在线内容——我的追番、热门新番、最新更新
     @ObservedObject private var watchlist = AnimeWatchlistStore.shared
     @ObservedObject private var online = HomeOnlineFeed.shared
@@ -57,26 +52,21 @@ struct HomeTab: View {
     }
 
 
-    private var libraryFiles: [LibraryMedia] {
-        HomeLibrary.media(local: localStore, cloud: mediaLibrary, appState: appState)
-    }
-
     var body: some View {
         let library = snapshot
-        let continueItems = continueEntries(library)
 
         Group {
             GeometryReader { viewport in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
-                        if !snapshotReady || metadataStore.isRestoring {
-                            // 数据还在准备：只留空白页面底色，不显示空状态
+                        if !snapshotReady {
+                            // 数据还在准备（含启动恢复封面缓存）：只留空白页面底色，不显示空状态
                             Color.clear.frame(height: viewport.size.height)
                         } else {
                             let slides = HomeSlide.interleave(featured: library.featured, banners: online.banners)
-                            header(library, slides: slides, continueItems: continueItems,
+                            header(library, slides: slides,
                                    width: viewport.size.width, safeTop: insets.top)
-                            sections(library, continueItems: continueItems, width: viewport.size.width)
+                            sections(library, width: viewport.size.width)
                         }
                     }
                     .tracksPageScroll()
@@ -86,10 +76,7 @@ struct HomeTab: View {
                 .ignoresSafeArea(edges: .top)
             }
             .overlay(alignment: .bottom) {
-                if localStore.isImporting {
-                    ProgressView("正在导入视频…").font(.subheadline)
-                        .padding(16).background(Theme.surface, in: Capsule()).padding(.bottom, 12)
-                }
+                LocalImportProgressOverlay()
             }
             .background(Theme.pageBackground.ignoresSafeArea())
             .fileImporter(
@@ -99,7 +86,9 @@ struct HomeTab: View {
             ) { result in
                 switch result {
                 case .success(let urls):
-                    Task { importError = await localStore.importFiles(urls).joined(separator: "\n") }
+                    if let localStore = storeRefs?.localStore {
+                        Task { importError = await localStore.importFiles(urls).joined(separator: "\n") }
+                    }
                 case .failure(let error):
                     importError = error.localizedDescription
                 }
@@ -120,7 +109,7 @@ struct HomeTab: View {
             } message: {
                 Text(playError)
             }
-            .task { localStore.refresh() }
+            .task { storeRefs?.localStore.refresh() }
             .task { await online.loadIfNeeded() }
             .onChange(of: librarySnapshots.revision) { _ in prefetchArtwork(snapshot) }
             .onChange(of: online.banners.count) { _ in prefetchArtwork(snapshot) }
@@ -136,7 +125,7 @@ struct HomeTab: View {
             if let queue = pendingPlayback { pendingPlayback = nil; playing = queue }
             else if let item = pendingMatch { pendingMatch = nil; matching = MatchRequest(item: item) }
         }) { item in
-            MediaActionSheet(item: item, position: recents.position(for: item.media.source), onPlay: {
+            MediaActionSheet(item: item, position: RecentStore.shared.position(for: item.media.source), onPlay: {
                 pendingPlayback = HomeLibrary.queue(for: item, in: snapshot.items); actionItem = nil
             }, onMatch: { pendingMatch = item; actionItem = nil }, onRemove: { delete(item); actionItem = nil },
             onHideFeatured: canHideFromFeatured(item) ? {
@@ -151,16 +140,20 @@ struct HomeTab: View {
                 .environmentObject(appState)
         }
         .sheet(isPresented: $showCloudBrowser) {
-            HomeCloudBrowser()
-                .environmentObject(appState)
-                .environmentObject(mediaLibrary)
+            if let mediaLibrary = storeRefs?.mediaLibrary {
+                HomeCloudBrowser()
+                    .environmentObject(appState)
+                    .environmentObject(mediaLibrary)
+            }
         }
         .sheet(item: $matching) { request in
             MetadataMatchView(file: request.file, current: request.current, onMatch: { metadata in
+                guard let metadataStore = storeRefs?.metadataStore else { return }
                 for target in request.targets {
                     await metadataStore.match(metadata, to: target)
                 }
             }, onClear: request.current == nil ? nil : { () async -> Void in
+                guard let metadataStore = storeRefs?.metadataStore else { return }
                 for target in request.targets {
                     await metadataStore.unmatch(target)
                 }
@@ -187,7 +180,7 @@ struct HomeTab: View {
     // MARK: 顶栏、搜索、轮播
 
     /// 页面顶部：轮播（片库精选和热播动漫交替）。频道条、搜索框在频道容器的固定头部里，这里只留出它们的位置。
-    private func header(_ library: HomeSnapshot, slides: [HomeSlide], continueItems: [ContinueEntry],
+    private func header(_ library: HomeSnapshot, slides: [HomeSlide],
                         width: CGFloat, safeTop: CGFloat) -> some View {
         AmbientHeroSection(slides: slides, carouselLabel: "精选推荐", carouselIdentifier: "home.carouselPosition",
                            safeTop: safeTop, width: width) {
@@ -208,7 +201,7 @@ struct HomeTab: View {
                 Color.clear.contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("\(recents.position(for: item.media.source) == nil ? "播放" : "继续播放") \(item.title)")
+            .accessibilityLabel("\(RecentStore.shared.position(for: item.media.source) == nil ? "播放" : "继续播放") \(item.title)")
             .accessibilityIdentifier("home.heroPlay")
             .contextMenu {
                 Button("播放", icon: AppIcon.play.name) {
@@ -255,7 +248,7 @@ struct HomeTab: View {
         defer { addAction = nil }
         switch addAction {
         case .local:
-            if localStore.isImporting { importError = "已有视频正在导入，请稍后再试。" }
+            if storeRefs?.localStore.isImporting == true { importError = "已有视频正在导入，请稍后再试。" }
             else { showImporter = true }
         case .cloud: showCloudBrowser = true
         case .magnet: magnetLaunch = MagnetLaunch(value: "")
@@ -267,15 +260,14 @@ struct HomeTab: View {
 
     /// 内容区从上到下：继续观看、我的追番、热门新番（三列竖海报）、我的片库·电影（两列横卡）、剧集、最新更新、演员合集。
     /// 片库还什么都没有时，在轮播下面放引导。
-    private func sections(_ library: HomeSnapshot, continueItems: [ContinueEntry], width: CGFloat) -> some View {
+    private func sections(_ library: HomeSnapshot, width: CGFloat) -> some View {
         let contentWidth = max(width - Theme.contentInset * 2, 1)
         return VStack(alignment: .leading, spacing: Theme.Space.shelf) {
             if library.items.isEmpty {
                 emptyState
             }
-            if !continueItems.isEmpty {
-                continueShelf(continueItems)
-            }
+            HomeContinueShelf(library: library, revision: librarySnapshots.revision,
+                              colorScheme: colorScheme, onOpen: openEntry)
             watchlistShelf
             if !online.trending.isEmpty {
                 trendingGrid(width: contentWidth)
@@ -344,124 +336,19 @@ struct HomeTab: View {
         }
     }
 
-    // MARK: 继续观看
-
-    private func continueShelf(_ entries: [ContinueEntry]) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            shelfHeader("继续观看", detail: "\(entries.count)", identifier: "home.shelf.continue") {
-                ContinueHistoryView(entries: entries, onOpen: openEntry, onRemove: remove)
-            }
-
-            ScrollView(.horizontal) {
-                LazyHStack(alignment: .top, spacing: 12) {
-                    ForEach(Array(entries.prefix(12).enumerated()), id: \.element.id) { index, entry in
-                        Button {
-                            openEntry(entry)
-                        } label: {
-                            ContinueCard(entry: entry, width: 168)
-                        }
-                        .buttonStyle(PosterButtonStyle())
-                        .reveal(index, id: entry.id)
-                        .shelfCard()
-                        .contextMenu {
-                            Button("从继续观看移除", icon: AppIcon.remove.name, role: .destructive) {
-                                remove(entry)
-                            }
-                        }
-                    }
-                }
-                .shelfContent()
-                .padding(.vertical, 4)
-            }
-            .shelfScrolling()
-            .padding(.horizontal, -Theme.contentInset)
-            .scrollIndicators(.hidden)
-        }
-    }
-
-    /// 普通播放记录和磁力记录合在一起，按时间倒序
-    private func continueEntries(_ library: HomeSnapshot) -> [ContinueEntry] {
-        let byID = Dictionary(library.items.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        let localByName = Dictionary(
-            library.items.filter { !$0.isCloud }.map { ($0.media.name, $0) },
-            uniquingKeysWith: { first, _ in first }
-        )
-        var entries: [ContinueEntry] = []
-
-        for recent in recents.items {
-            let match: HomeMediaItem?
-            if let pickCode = recent.pickCode, !pickCode.isEmpty {
-                match = byID["115|\(pickCode)"]
-            } else if recent.isLocalFile, let url = URL(string: recent.url) {
-                match = localByName[url.lastPathComponent]
-            } else {
-                match = nil
-            }
-            let parsed = MediaNameParser.parse(recent.title).title
-            let sourceLabel = recent.isDrama ? "在线短剧" : recent.isAnime ? "在线动漫" : (recent.isCloud ? "115 网盘" : (recent.isLocalFile ? "本地视频" : "网络地址"))
-            var detail: [String] = [sourceLabel]
-            if let episode = match?.episodeLabel { detail.append(episode) }
-            if let position = recent.position {
-                detail.append("看到 \(playbackTimeText(position))")
-            } else {
-                detail.append(recent.playedAt.formatted(.relative(presentation: .named)))
-            }
-            let artwork: String
-            if let match {
-                artwork = match.backgroundURL.isEmpty ? match.posterURL : match.backgroundURL
-            } else {
-                artwork = ""
-            }
-            let tagLabel = recent.isDrama ? "短剧" : recent.isAnime ? "动漫" : (recent.isCloud ? "115" : (recent.isLocalFile ? "本地" : "网络"))
-            entries.append(ContinueEntry(
-                id: "recent|\(recent.id)",
-                target: .recent(recent),
-                title: match?.title ?? (parsed.isEmpty ? recent.title : parsed),
-                subtitle: detail.joined(separator: " · "),
-                tag: tagLabel,
-                artworkURL: artwork,
-                progress: recent.progress,
-                date: recent.playedAt,
-                libraryItem: match
-            ))
-        }
-
-        for item in magnetHistory.items {
-            let progress = item.lastProgress
-            var detail: [String] = ["磁力"]
-            if let title = item.lastFileTitle, item.videoCount > 1 { detail.append(title) }
-            if let progress {
-                detail.append("看到 \(playbackTimeText(progress.seconds))")
-            } else {
-                detail.append(item.updatedAt.formatted(.relative(presentation: .named)))
-            }
-            let parsed = MediaNameParser.parse(item.name).title
-            entries.append(ContinueEntry(
-                id: "magnet|\(item.infoHash)",
-                target: .magnet(item),
-                title: parsed.isEmpty ? item.name : parsed,
-                subtitle: detail.joined(separator: " · "),
-                tag: "磁力",
-                artworkURL: "",
-                progress: progress?.fraction,
-                date: item.updatedAt,
-                libraryItem: nil
-            ))
-        }
-
-        return entries.sorted { $0.date > $1.date }
-    }
+    // MARK: 继续观看播放动作
 
     private func openEntry(_ entry: ContinueEntry) {
+        let recents = RecentStore.shared
+        let mediaDirectory = storeRefs?.localStore.mediaDirectory
         switch entry.target {
         case .recent(let recent):
             // 优先还原当时播放的整份列表（同一个文件夹 / 同一部番 / 同一部剧），选集里能看到上下集
-            if let queue = RecentPlaylistStore.shared.queue(for: recent, localDirectory: localStore.mediaDirectory) {
+            if let mediaDirectory, let queue = RecentPlaylistStore.shared.queue(for: recent, localDirectory: mediaDirectory) {
                 playing = queue
             } else if let item = entry.libraryItem {
-                let items = HomeLibrary.items(libraryFiles, metadata: metadataStore.metadataByMediaID)
-                playing = HomeLibrary.queue(for: item, in: items)
-            } else if let source = recents.source(for: recent, localDirectory: localStore.mediaDirectory) {
+                playing = HomeLibrary.queue(for: item, in: snapshot.items)
+            } else if let mediaDirectory, let source = recents.source(for: recent, localDirectory: mediaDirectory) {
                 if case .anime(let ref) = source {
                     // 更新前的动漫记录没有存列表：现取一次番剧详情，拼出同一条线路的所有集
                     Task { playing = await Self.animeQueue(for: ref) }
@@ -484,17 +371,6 @@ struct HomeTab: View {
         let episodes = detail.episodeRefs(routeIndex: routeIndex)
         guard let current = episodes.first(where: { $0.part == ref.part }) else { return single }
         return PlaybackQueue(source: .anime(current), items: episodes.map { .anime($0) })
-    }
-
-    private func remove(_ entry: ContinueEntry) {
-        // 截下的画面一起删
-        PlaybackFrameStore.shared.remove(PlaybackFrameStore.key(for: entry.target))
-        switch entry.target {
-        case .recent(let recent):
-            recents.remove(recent)
-        case .magnet(let item):
-            magnetHistory.remove(item.infoHash)
-        }
     }
 
     // MARK: 在线内容（追番、热门新番、最新更新）
@@ -720,10 +596,11 @@ struct HomeTab: View {
     }
 
     private func delete(_ item: HomeMediaItem) {
-        if let local = localStore.files.first(where: { $0.id == item.id }) {
+        if let localStore = storeRefs?.localStore,
+           let local = localStore.files.first(where: { $0.id == item.id }) {
             localStore.delete(local)
         } else {
-            mediaLibrary.remove(pickCode: item.media.pickCode, for: appState)
+            storeRefs?.mediaLibrary.remove(pickCode: item.media.pickCode, for: appState)
         }
     }
 
@@ -762,6 +639,186 @@ struct HomeTab: View {
         .accessibilityIdentifier("home.emptyLibrary")
     }
 
+}
+
+/// 仅观察本地导入状态的轻提示浮层，避免 localStore 变化牵连整个首页重绘。
+private struct LocalImportProgressOverlay: View {
+    @EnvironmentObject private var localStore: LocalMediaStore
+
+    var body: some View {
+        if localStore.isImporting {
+            ProgressView("正在导入视频…").font(.subheadline)
+                .padding(16).background(Theme.surface, in: Capsule()).padding(.bottom, 12)
+        }
+    }
+}
+
+/// 独立的「继续观看」货架：仅观察播放记录与磁力记录，并用无 @Published 缓存跳过重复的片名解析和相对时间格式化。
+private struct HomeContinueShelf: View {
+    let library: HomeSnapshot
+    let revision: Int
+    let colorScheme: ColorScheme
+    let onOpen: (ContinueEntry) -> Void
+
+    @ObservedObject private var recents = RecentStore.shared
+    @ObservedObject private var magnetHistory = MagnetHistoryStore.shared
+    @StateObject private var cache = ContinueEntriesCache()
+
+    var body: some View {
+        let entries = cache.entries(library: library, revision: revision,
+                                    recents: recents.items, magnets: magnetHistory.items)
+        if !entries.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                ShelfHeader(title: "继续观看", identifier: "home.shelf.continue", inset: 0) {
+                    HStack(spacing: 10) {
+                        Text("\(entries.count)")
+                            .font(.scaled(12))
+                            .tertiaryTextStyle()
+                        NavigationLink {
+                            ContinueHistoryView(entries: entries, onOpen: onOpen, onRemove: remove)
+                                .restoringAppearance(colorScheme)
+                        } label: {
+                            ShelfLinkLabel(text: "全部")
+                                .frame(minWidth: 44, minHeight: 44, alignment: .trailing)
+                        }
+                        .buttonStyle(.pressable(scale: 0.92))
+                    }
+                }
+
+                ScrollView(.horizontal) {
+                    LazyHStack(alignment: .top, spacing: 12) {
+                        ForEach(Array(entries.prefix(12).enumerated()), id: \.element.id) { index, entry in
+                            Button {
+                                onOpen(entry)
+                            } label: {
+                                ContinueCard(entry: entry, width: 168)
+                            }
+                            .buttonStyle(PosterButtonStyle())
+                            .reveal(index, id: entry.id)
+                            .shelfCard()
+                            .contextMenu {
+                                Button("从继续观看移除", icon: AppIcon.remove.name, role: .destructive) {
+                                    remove(entry)
+                                }
+                            }
+                        }
+                    }
+                    .shelfContent()
+                    .padding(.vertical, 4)
+                }
+                .shelfScrolling()
+                .padding(.horizontal, -Theme.contentInset)
+                .scrollIndicators(.hidden)
+            }
+        }
+    }
+
+    private func remove(_ entry: ContinueEntry) {
+        PlaybackFrameStore.shared.remove(PlaybackFrameStore.key(for: entry.target))
+        switch entry.target {
+        case .recent(let recent):
+            recents.remove(recent)
+        case .magnet(let item):
+            magnetHistory.remove(item.infoHash)
+        }
+    }
+}
+
+private final class ContinueEntriesCache: ObservableObject {
+    private struct Key: Equatable {
+        let revision: Int
+        let recentStamps: [String]
+        let magnetStamps: [String]
+    }
+
+    private var lastKey: Key?
+    private var cached: [ContinueEntry] = []
+
+    func entries(library: HomeSnapshot, revision: Int, recents: [RecentItem], magnets: [MagnetHistoryItem]) -> [ContinueEntry] {
+        let key = Key(
+            revision: revision,
+            recentStamps: recents.map { "\($0.id)|\($0.position ?? -1)|\($0.playedAt.timeIntervalSince1970)" },
+            magnetStamps: magnets.map { "\($0.infoHash)|\($0.lastProgress?.seconds ?? -1)|\($0.updatedAt.timeIntervalSince1970)" }
+        )
+        if key == lastKey { return cached }
+        lastKey = key
+        cached = Self.build(library: library, recents: recents, magnets: magnets)
+        return cached
+    }
+
+    private static func build(library: HomeSnapshot, recents: [RecentItem], magnets: [MagnetHistoryItem]) -> [ContinueEntry] {
+        guard !recents.isEmpty || !magnets.isEmpty else { return [] }
+        let byID = Dictionary(library.items.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let localByName = Dictionary(
+            library.items.filter { !$0.isCloud }.map { ($0.media.name, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        var entries: [ContinueEntry] = []
+        entries.reserveCapacity(recents.count + magnets.count)
+
+        for recent in recents {
+            let match: HomeMediaItem?
+            if let pickCode = recent.pickCode, !pickCode.isEmpty {
+                match = byID["115|\(pickCode)"]
+            } else if recent.isLocalFile, let url = URL(string: recent.url) {
+                match = localByName[url.lastPathComponent]
+            } else {
+                match = nil
+            }
+            let parsed = MediaNameParser.parse(recent.title).title
+            let sourceLabel = recent.isDrama ? "在线短剧" : recent.isAnime ? "在线动漫" : (recent.isCloud ? "115 网盘" : (recent.isLocalFile ? "本地视频" : "网络地址"))
+            var detail: [String] = [sourceLabel]
+            if let episode = match?.episodeLabel { detail.append(episode) }
+            if let position = recent.position {
+                detail.append("看到 \(playbackTimeText(position))")
+            } else {
+                detail.append(recent.playedAt.formatted(.relative(presentation: .named)))
+            }
+            let artwork: String
+            if let match {
+                artwork = match.backgroundURL.isEmpty ? match.posterURL : match.backgroundURL
+            } else {
+                artwork = ""
+            }
+            let tagLabel = recent.isDrama ? "短剧" : recent.isAnime ? "动漫" : (recent.isCloud ? "115" : (recent.isLocalFile ? "本地" : "网络"))
+            entries.append(ContinueEntry(
+                id: "recent|\(recent.id)",
+                target: .recent(recent),
+                title: match?.title ?? (parsed.isEmpty ? recent.title : parsed),
+                subtitle: detail.joined(separator: " · "),
+                tag: tagLabel,
+                artworkURL: artwork,
+                progress: recent.progress,
+                date: recent.playedAt,
+                libraryItem: match
+            ))
+        }
+
+        for item in magnets {
+            let progress = item.lastProgress
+            var detail: [String] = ["磁力"]
+            if let title = item.lastFileTitle, item.videoCount > 1 { detail.append(title) }
+            if let progress {
+                detail.append("看到 \(playbackTimeText(progress.seconds))")
+            } else {
+                detail.append(item.updatedAt.formatted(.relative(presentation: .named)))
+            }
+            let parsed = MediaNameParser.parse(item.name).title
+            entries.append(ContinueEntry(
+                id: "magnet|\(item.infoHash)",
+                target: .magnet(item),
+                title: parsed.isEmpty ? item.name : parsed,
+                subtitle: detail.joined(separator: " · "),
+                tag: "磁力",
+                artworkURL: "",
+                progress: progress?.fraction,
+                date: item.updatedAt,
+                libraryItem: nil
+            ))
+        }
+
+        return entries.sorted { $0.date > $1.date }
+    }
 }
 
 private extension View {

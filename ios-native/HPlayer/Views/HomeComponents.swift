@@ -342,14 +342,6 @@ struct PosterArtwork: View {
         .frame(width: width, height: width * 1.5)
         .contentShape(Rectangle())
         .coverEdge()
-        .background {
-            // 阴影画在纯色形状上，滚动时不用对整张海报图重新取阴影。
-            // 形状往里收 1pt、用中性色：原来是同样大小的纯黑底，圆角抗锯齿时会在封面边缘透出一圈黑边。
-            RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous)
-                .fill(Theme.surfaceRaised)
-                .padding(1)
-                .shadow(color: Theme.shadow, radius: 10, x: 0, y: 6)
-        }
     }
 }
 

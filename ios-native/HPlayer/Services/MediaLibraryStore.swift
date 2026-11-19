@@ -57,7 +57,18 @@ final class MediaLibraryStore: ObservableObject {
     }
 
     private var mediaCache: (scope: String, revision: Int, items: [LibraryMedia])?
+    /// 按账号缓存 pickCode → 数组下标，扫描逐页增量入库时不必每页 O(N) 重建整张去重字典。
+    private var pickCodeIndexByAccount: [String: [String: Int]] = [:]
     private(set) var revision = 0
+
+    private func indexMap(for scope: String, in files: [P115File]) -> [String: Int] {
+        if let cached = pickCodeIndexByAccount[scope], cached.count <= files.count {
+            return cached
+        }
+        let built = Dictionary(files.enumerated().map { ($0.element.pickCode, $0.offset) }, uniquingKeysWith: { first, _ in first })
+        pickCodeIndexByAccount[scope] = built
+        return built
+    }
 
     /// 首页每次刷新都要用到；片库很大时缓存转换结果，只在内容变化后重算。
     func media(for appState: AppState) -> [LibraryMedia] {
@@ -71,10 +82,10 @@ final class MediaLibraryStore: ObservableObject {
     func add(_ files: [P115File], for appState: AppState) {
         guard appState.isAuthenticated, let scope = appState.libraryAccountID else { return }
         var result = cloudByAccount[scope] ?? []
-        var indices = Dictionary(result.enumerated().map { ($0.element.pickCode, $0.offset) }, uniquingKeysWith: { first, _ in first })
+        var indices = indexMap(for: scope, in: result)
         var changed = false
         for file in files where file.isVideo && !file.isDir && !file.pickCode.isEmpty {
-            if let index = indices[file.pickCode] {
+            if let index = indices[file.pickCode], index < result.count, result[index].pickCode == file.pickCode {
                 if result[index] != file { result[index] = file; changed = true }
             } else {
                 indices[file.pickCode] = result.count
@@ -83,6 +94,7 @@ final class MediaLibraryStore: ObservableObject {
             }
         }
         guard changed else { return }
+        pickCodeIndexByAccount[scope] = indices
         cloudByAccount[scope] = result
         revision += 1
         save()
@@ -91,6 +103,7 @@ final class MediaLibraryStore: ObservableObject {
     func remove(pickCode: String, for appState: AppState) {
         guard let scope = appState.libraryAccountID else { return }
         cloudByAccount[scope]?.removeAll { $0.pickCode == pickCode }
+        pickCodeIndexByAccount[scope] = nil
         revision += 1
         save()
     }
@@ -101,6 +114,7 @@ final class MediaLibraryStore: ObservableObject {
         let before = files.count
         files.removeAll { pickCodes.contains($0.pickCode) }
         guard files.count != before else { return }
+        pickCodeIndexByAccount[scope] = nil
         cloudByAccount[scope] = files
         revision += 1
         save()
@@ -117,10 +131,11 @@ final class MediaLibraryStore: ObservableObject {
     func update(_ files: [P115File], for appState: AppState) {
         guard !files.isEmpty, appState.isAuthenticated, let scope = appState.libraryAccountID,
               var current = cloudByAccount[scope] else { return }
-        let indices = Dictionary(current.enumerated().map { ($0.element.pickCode, $0.offset) }, uniquingKeysWith: { first, _ in first })
+        let indices = indexMap(for: scope, in: current)
         var changed = false
         for file in files where !file.pickCode.isEmpty {
-            guard let index = indices[file.pickCode], current[index] != file else { continue }
+            guard let index = indices[file.pickCode], index < current.count,
+                  current[index].pickCode == file.pickCode, current[index] != file else { continue }
             current[index] = file
             changed = true
         }

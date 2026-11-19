@@ -28,11 +28,24 @@ enum ChannelListCache {
         return (entry.items, age)
     }
 
+    static func loadWithAgeAsync<Item: Codable & Sendable>(_ key: String, as type: Item.Type = Item.self) async -> (items: [Item], age: TimeInterval)? {
+        await Task.detached(priority: .utility) {
+            Self.loadWithAge(key, as: type)
+        }.value
+    }
+
     static func save<Item: Codable>(_ items: [Item], key: String) {
         guard !items.isEmpty, let url = fileURL(key),
               let data = try? JSONEncoder().encode(Entry(savedAt: Date(), items: items)) else { return }
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? data.write(to: url, options: .atomic)
+    }
+
+    static func saveAsync<Item: Codable & Sendable>(_ items: [Item], key: String) {
+        guard !items.isEmpty else { return }
+        Task.detached(priority: .utility) {
+            Self.save(items, key: key)
+        }
     }
 
     private static func fileURL(_ key: String) -> URL? {

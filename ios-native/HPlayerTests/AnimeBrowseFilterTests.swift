@@ -84,8 +84,15 @@ final class AnimeBrowseFilterTests: XCTestCase {
     func testPopularNewReleasesIncludesAllYearsAndStatuses() {
         let route = AnimeBrowseRoute.newReleases
         let model = AnimeBrowseModel(route: route)
-        XCTAssertFalse(route.allowsFiltering)
+        XCTAssertTrue(route.allowsFiltering)
+        XCTAssertNil(route.channelId)
         XCTAssertEqual(model.sort, "hits")
+        XCTAssertTrue(model.filter.isEmpty)
+        XCTAssertNil(model.filter.channelId)
+        XCTAssertNil(model.filter.type)
+        XCTAssertNil(model.filter.year)
+        XCTAssertNil(model.filter.area)
+        XCTAssertNil(model.filter.status)
         XCTAssertTrue(model.filter.serverParameters.isEmpty)
         XCTAssertTrue(model.filter.admits(item(1, year: "2019", isend: 1), knownYears: []))
         XCTAssertTrue(model.filter.admits(item(2, year: "2026", isend: 0), knownYears: []))

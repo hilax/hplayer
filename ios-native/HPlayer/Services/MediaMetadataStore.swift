@@ -157,12 +157,14 @@ final class MediaMetadataStore: ObservableObject {
         }
     }
 
-    private func prewarmNames(_ names: [String]) async {
+    /// 后台预解析尚未缓存的文件名：扫描期间大批新文件进来时先在后台跑正则，避免主线程 hydrate / sync 掉帧。
+    func prewarmNames(_ names: [String], priority: TaskPriority = .userInitiated) async {
         let missing = Array(Set(names).subtracting(nameCache.keys))
         guard !missing.isEmpty else { return }
-        let parsed = await Task.detached(priority: .userInitiated) {
+        let parsed = await Task.detached(priority: priority) {
             Self.makeNameInfos(missing)
         }.value
+        guard !Task.isCancelled else { return }
         for (name, info) in parsed where nameCache[name] == nil { nameCache[name] = info }
     }
 
@@ -284,7 +286,7 @@ final class MediaMetadataStore: ObservableObject {
                     bufferedResults[file.id] = metadata
                 }
                 // 每匹配一部就发布一次会让首页整页重算、界面卡死；攒一批再一起更新。
-                if bufferedResults.count >= 20 || Date().timeIntervalSince(lastPublishAt) >= 1.5 { publishBuffered() }
+                if bufferedResults.count >= 20 || Date().timeIntervalSince(lastPublishAt) >= 2.5 { publishBuffered() }
                 await Task.yield()
             }
             inFlightKeys.remove(key)

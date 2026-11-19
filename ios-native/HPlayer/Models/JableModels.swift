@@ -26,7 +26,7 @@ enum JableCategory: String, CaseIterable, Identifiable {
 }
 
 /// Jable 视频卡片信息
-struct JableVideoCard: Identifiable, Hashable, Codable {
+struct JableVideoCard: Identifiable, Hashable, Codable, Sendable {
     let id: String
     let title: String
     let url: String

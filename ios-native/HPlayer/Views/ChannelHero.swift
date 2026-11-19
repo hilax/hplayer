@@ -121,7 +121,7 @@ struct AmbientHeroSection<Top: View, HitArea: View>: View {
                 GeometryReader { proxy in
                     // 这一块是滚动内容的最上面，平时顶在屏幕最上沿（全局 y = 0），下拉多少就往下移多少。
                     // 按屏幕坐标量：滚动视图的坐标原点在状态栏下沿，用它量会一直少一个状态栏高度，顶上留白
-                    let pull = max(0, proxy.frame(in: .global).minY)
+                    let pull = max(0, proxy.frame(in: .global).minY.rounded())
                     HomeAmbientBackdrop(state: tint, palette: palette, heroHeight: heroHeight, pull: pull)
                         .frame(height: heroHeight + pull)
                         .offset(y: -pull)

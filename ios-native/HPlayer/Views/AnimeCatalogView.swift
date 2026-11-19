@@ -85,9 +85,9 @@ struct AnimeBrowseRoute: Hashable {
     var sort = "addtime"
     var allowsFiltering = true
 
-    /// 热门新番的「全部」按播放量排，年份和连载状态不限。
+    /// 热门新番的「全部」按播放量排，默认选择全部频道、全部类型、全部年份、全部地区、全部状态，并保留完整筛选功能。
     static var newReleases: AnimeBrowseRoute {
-        AnimeBrowseRoute(channelId: nil, title: "热门新番", sort: "hits", allowsFiltering: false)
+        AnimeBrowseRoute(channelId: nil, title: "热门新番", sort: "hits", allowsFiltering: true)
     }
 }
 
