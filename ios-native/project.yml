@@ -127,9 +127,15 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: app.hplayer.native
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES: "AppIconClassic AppIconPrism AppIconOcean AppIconMint AppIconIris AppIconCoral"
+        ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS: YES
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
         TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: NO
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+    postBuildScripts:
+      - name: Bundle Alternate App Icons
+        script: python3 "$SRCROOT/scripts/bundle-alternate-icons.py"
+        basedOnDependencyAnalysis: false
 
   HPlayerUITests:
     type: bundle.ui-testing

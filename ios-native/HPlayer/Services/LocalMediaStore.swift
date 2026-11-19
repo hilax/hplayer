@@ -51,22 +51,24 @@ final class LocalMediaStore: ObservableObject {
     }
 
     func refresh() {
-        guard let items = try? fm.contentsOfDirectory(
+        let updated: [LocalMedia]
+        if let items = try? fm.contentsOfDirectory(
             at: mediaDirectory,
             includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey, .isRegularFileKey],
             options: [.skipsHiddenFiles]
-        ) else {
-            files = []
-            return
+        ) {
+            updated = items.compactMap { url -> LocalMedia? in
+                guard videoExtensions.contains(url.pathExtension.lowercased()),
+                      let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey, .isRegularFileKey]),
+                      values.isRegularFile == true else { return nil }
+                return LocalMedia(url: url, size: values.fileSize ?? 0, modified: values.contentModificationDate ?? .distantPast)
+            }.sorted { $0.modified > $1.modified }
+        } else {
+            updated = []
         }
-
-        files = items.compactMap { url -> LocalMedia? in
-            guard videoExtensions.contains(url.pathExtension.lowercased()),
-                  let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey, .isRegularFileKey]),
-                  values.isRegularFile == true else { return nil }
-            return LocalMedia(url: url, size: values.fileSize ?? 0, modified: values.contentModificationDate ?? .distantPast)
-        }.sorted { $0.modified > $1.modified }
-
+        if updated != files {
+            files = updated
+        }
     }
 
     /// Copy off the main thread; publish only complete files and preserve existing videos.

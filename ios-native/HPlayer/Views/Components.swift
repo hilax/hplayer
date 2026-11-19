@@ -115,7 +115,6 @@ struct EmptyStateView: View {
     var body: some View {
         VStack(spacing: 18) {
             EmptyStateMark(icon: icon)
-                .reveal(0)
             VStack(spacing: 8) {
                 Text(title)
                     .font(.title3.weight(.semibold))
@@ -128,13 +127,11 @@ struct EmptyStateView: View {
                     .lineSpacing(3)
                     .frame(maxWidth: 300)
             }
-            .reveal(1)
             if let actionTitle, let action {
                 Button(actionTitle, action: action)
                     .buttonStyle(PrimaryActionStyle())
                     .frame(maxWidth: 220)
                     .padding(.top, 6)
-                    .reveal(2)
             }
         }
         .padding(32)

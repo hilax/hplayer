@@ -187,72 +187,6 @@ enum PlaybackPinchAction: String, CaseIterable, Identifiable {
     }
 }
 
-/// 快捷手势预设模式（方案 C）
-enum PlaybackGesturePreset: String, CaseIterable, Identifiable {
-    case standard
-    case minimal
-    case binge
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .standard: return "标准"
-        case .minimal: return "防误触"
-        case .binge: return "刷剧"
-        }
-    }
-
-    var subtitle: String {
-        switch self {
-        case .standard: return "均衡顺手"
-        case .minimal: return "单击无延迟"
-        case .binge: return "快进与倍速优先"
-        }
-    }
-
-    var settings: PlaybackGestureSettings {
-        switch self {
-        case .standard:
-            return .default
-        case .minimal:
-            return PlaybackGestureSettings(
-                doubleTapAction: .off,
-                doubleTapStep: .s10,
-                longPressBoostEnabled: false,
-                longPressBoostRate: .r20,
-                longPressExtra: .holdOnly,
-                horizontalSeekEnabled: true,
-                seekSensitivity: .precise,
-                pullDownToCancelSeek: true,
-                leftVerticalAction: .off,
-                rightVerticalAction: .off,
-                levelSensitivity: .standard,
-                pinchAction: .off,
-                disableVerticalInPortrait: true,
-                lockDisablesAllGestures: true
-            )
-        case .binge:
-            return PlaybackGestureSettings(
-                doubleTapAction: .splitSeekAndToggle,
-                doubleTapStep: .s15,
-                longPressBoostEnabled: true,
-                longPressBoostRate: .r30,
-                longPressExtra: .swipeUpToLock,
-                horizontalSeekEnabled: true,
-                seekSensitivity: .fast,
-                pullDownToCancelSeek: true,
-                leftVerticalAction: .brightness,
-                rightVerticalAction: .volume,
-                levelSensitivity: .standard,
-                pinchAction: .toggleFill,
-                disableVerticalInPortrait: true,
-                lockDisablesAllGestures: false
-            )
-        }
-    }
-}
-
 // MARK: - 完整手势配置模型
 
 struct PlaybackGestureSettings: Equatable {
@@ -288,11 +222,6 @@ struct PlaybackGestureSettings: Equatable {
         lockDisablesAllGestures: false
     )
 
-    /// 精确匹配哪一套快捷预设；任一字段与全部预设不同时返回 nil（表示自定义）。
-    var matchingPreset: PlaybackGesturePreset? {
-        PlaybackGesturePreset.allCases.first { $0.settings == self }
-    }
-
     var isDefault: Bool { self == .default }
 
     /// 是否至少有一侧开启了上下滑亮度/音量调节
@@ -302,13 +231,7 @@ struct PlaybackGestureSettings: Equatable {
 
     /// 展示在「我的 › 播放」列表行尾的简短摘要
     var summaryText: String {
-        if let preset = matchingPreset {
-            switch preset {
-            case .standard: return "标准"
-            case .minimal: return "防误触"
-            case .binge: return "刷剧"
-            }
-        }
+        if isDefault { return "默认" }
         var parts: [String] = [doubleTapAction.shortTitle]
         if longPressBoostEnabled {
             parts.append("长按 \(longPressBoostRate.title)")
@@ -429,10 +352,6 @@ final class PlaybackGestureStore: ObservableObject {
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         self.settings = PlaybackGesturePrefs.load(from: defaults)
-    }
-
-    func applyPreset(_ preset: PlaybackGesturePreset) {
-        settings = preset.settings
     }
 
     func resetToDefaults() {

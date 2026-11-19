@@ -1,10 +1,9 @@
 import SwiftUI
 
-/// 「我的 › 播放 › 播放手势」：顶部三组快捷预设（标准 / 防误触 / 刷剧），下方四组单项自定义开关与参数。
+/// 「我的 › 播放 › 播放手势」：四组单项自定义开关与参数。
 /// 与正片播放器、短剧横屏页共用 `PlaybackGestureStore.shared`，修改后即时生效。
 struct PlaybackGestureSettingsView: View {
     @ObservedObject private var store = PlaybackGestureStore.shared
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var settings: PlaybackGestureSettings { store.settings }
@@ -12,7 +11,6 @@ struct PlaybackGestureSettingsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Space.xl) {
-                presetSection
                 tapSection
                 longPressSection
                 swipeSection
@@ -31,85 +29,6 @@ struct PlaybackGestureSettingsView: View {
         .toolbar(.visible, for: .navigationBar)
         .designScreen("playback-gestures")
         .animation(Motion.resolved(Motion.snappy, reduceMotion: reduceMotion), value: store.settings)
-    }
-
-    // MARK: - 快捷预设（方案 C）
-
-    private var presetSection: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.sm) {
-            HStack(spacing: Theme.Space.sm) {
-                Text("快捷预设")
-                    .font(Theme.Typo.meta.weight(.medium))
-                    .foregroundStyle(Theme.textTertiary)
-                    .padding(.leading, Theme.Space.xs)
-                    .accessibilityAddTraits(.isHeader)
-                Spacer(minLength: 0)
-                if settings.matchingPreset == nil {
-                    TagBadge(text: "自定义", style: .neutral)
-                }
-            }
-
-            let layout = dynamicTypeSize.isAccessibilitySize
-                ? AnyLayout(VStackLayout(spacing: Theme.Space.sm))
-                : AnyLayout(HStackLayout(spacing: Theme.Space.sm))
-
-            layout {
-                ForEach(PlaybackGesturePreset.allCases) { preset in
-                    presetCard(preset)
-                }
-            }
-
-            Text("选好预设后，仍可在下方按习惯微调任意单项，修改后立即生效。")
-                .font(Theme.Typo.caption)
-                .foregroundStyle(Theme.textTertiary)
-                .lineSpacing(2)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, Theme.Space.xs)
-        }
-    }
-
-    private func presetCard(_ preset: PlaybackGesturePreset) -> some View {
-        let selected = settings.matchingPreset == preset
-        let shape = RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
-        return Button {
-            guard !selected else {
-                Haptics.tap()
-                return
-            }
-            store.applyPreset(preset)
-            HUD.show("已切换为「\(preset.title)」手势", .success)
-        } label: {
-            VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                HStack(spacing: Theme.Space.xs) {
-                    Text(preset.title)
-                        .font(Theme.Typo.row.weight(.semibold))
-                        .foregroundStyle(Theme.textPrimary)
-                        .lineLimit(1)
-                    Spacer(minLength: 0)
-                    CheckBadge(selected: selected, size: 18)
-                }
-                Text(preset.subtitle)
-                    .font(Theme.Typo.caption)
-                    .foregroundStyle(selected ? Theme.textSecondary : Theme.textTertiary)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(Theme.Space.md)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(selected ? Theme.surfaceRaised : Theme.surface, in: shape)
-            .overlay {
-                shape.strokeBorder(
-                    selected ? Theme.primaryAction : Theme.hairline,
-                    lineWidth: selected ? Theme.Stroke.rule : Theme.Stroke.hairline
-                )
-            }
-            .contentShape(shape)
-            .hoverEffect(.highlight)
-        }
-        .buttonStyle(.pressable(scale: 0.97))
-        .accessibilityLabel("\(preset.title)，\(preset.subtitle)")
-        .accessibilityAddTraits(selected ? .isSelected : [])
-        .accessibilityIdentifier("mine.playback.gestures.preset.\(preset.rawValue)")
     }
 
     // MARK: - 分组 1：点按与双击

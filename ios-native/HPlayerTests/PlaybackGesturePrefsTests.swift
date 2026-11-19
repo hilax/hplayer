@@ -11,42 +11,42 @@ final class PlaybackGesturePrefsTests: XCTestCase {
         return defaults
     }
 
-    func testDefaultSettingsMatchStandardPresetAndPersistAcrossReloads() {
+    func testDefaultSettingsPersistCustomizationsAndResetCleanly() {
         let defaults = makeDefaults()
         let store = PlaybackGestureStore(defaults: defaults)
         XCTAssertEqual(store.settings, .default)
-        XCTAssertEqual(store.settings.matchingPreset, .standard)
         XCTAssertTrue(store.settings.isDefault)
-        XCTAssertEqual(store.settings.summaryText, "标准")
+        XCTAssertEqual(store.settings.summaryText, "默认")
 
-        store.applyPreset(.binge)
-        XCTAssertEqual(store.settings.matchingPreset, .binge)
-        XCTAssertEqual(store.settings.doubleTapStep, .s15)
-        XCTAssertEqual(store.settings.longPressExtra, .swipeUpToLock)
-        XCTAssertEqual(store.settings.seekSensitivity, .fast)
+        store.settings.doubleTapAction = .playPause
+        store.settings.doubleTapStep = .s15
+        store.settings.longPressBoostRate = .r25
+        store.settings.longPressExtra = .swipeUpToLock
+        store.settings.seekSensitivity = .fast
+        store.settings.leftVerticalAction = .volume
+        store.settings.rightVerticalAction = .brightness
+        store.settings.disableVerticalInPortrait = true
+        store.settings.lockDisablesAllGestures = true
 
         let reloaded = PlaybackGestureStore(defaults: defaults)
-        XCTAssertEqual(reloaded.settings, PlaybackGesturePreset.binge.settings)
-
-        reloaded.settings.leftVerticalAction = .volume
-        reloaded.settings.rightVerticalAction = .brightness
-        XCTAssertNil(reloaded.settings.matchingPreset, "Tweaking a single item should switch from preset to custom")
-        XCTAssertTrue(reloaded.settings.summaryText.contains("分区双击"))
+        XCTAssertEqual(reloaded.settings, store.settings)
+        XCTAssertFalse(reloaded.settings.isDefault)
+        XCTAssertEqual(reloaded.settings.summaryText, "双击暂停 · 长按 2.5×")
 
         reloaded.resetToDefaults()
         XCTAssertEqual(reloaded.settings, .default)
         XCTAssertEqual(PlaybackGesturePrefs.load(from: defaults), .default)
+        XCTAssertEqual(reloaded.settings.summaryText, "默认")
     }
 
-    func testMinimalPresetDisablesDoubleTapAndLocksAllGestures() {
-        let minimal = PlaybackGesturePreset.minimal.settings
-        XCTAssertEqual(minimal.doubleTapAction, .off)
-        XCTAssertFalse(minimal.longPressBoostEnabled)
-        XCTAssertFalse(minimal.hasAnyVerticalAction)
-        XCTAssertEqual(minimal.pinchAction, .off)
-        XCTAssertTrue(minimal.disableVerticalInPortrait)
-        XCTAssertTrue(minimal.lockDisablesAllGestures)
-        XCTAssertEqual(minimal.summaryText, "防误触")
+    func testDisablingDoubleTapAndLongPressUpdatesSummary() {
+        var settings = PlaybackGestureSettings.default
+        settings.doubleTapAction = .off
+        settings.longPressBoostEnabled = false
+        settings.leftVerticalAction = .off
+        settings.rightVerticalAction = .off
+        XCTAssertFalse(settings.hasAnyVerticalAction)
+        XCTAssertEqual(settings.summaryText, "无双击")
     }
 
     func testDoubleTapRegionSplitsIntoEqualThirds() {

@@ -721,7 +721,8 @@ final class LocalStreamProxyTests: XCTestCase {
         ])
         let proxy = LocalStreamProxy(protocolClasses: [ScriptedUpstream.self])
         let upstream = try XCTUnwrap(URL(string: "https://example.com/a/healthy.mp4"))
-        let local = try XCTUnwrap(await proxy.localURL(for: upstream, headers: [:], streamID: "p115:healthy"))
+        let localURL = await proxy.localURL(for: upstream, headers: [:], streamID: "p115:healthy")
+        let local = try XCTUnwrap(localURL)
 
         XCTAssertFalse(proxy.isStreamHealthyOrRecovering(for: local))
         let client = try openStream(local, range: "bytes=0-\(total - 1)")
