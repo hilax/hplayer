@@ -313,7 +313,9 @@ struct PlaybackControlsView: View {
     @StateObject private var diagnosticsCopier = CopyFeedback()
     /// 播放器窗口当前是不是横屏（给状态栏和系统手势用，它们在 GeometryReader 外面）
     @State private var isLandscapeWindow = PlayerWindowController.startsInLandscape
-    /// 正在柔和关闭：整个播放页淡出并轻轻缩小
+    /// 关闭前是否处于横屏：横屏退场期间锁定纯黑视频底，绝不闪出竖屏信息页或浅色背景
+    @State private var closingFromLandscape = false
+    /// 非独立窗口宿主退场时的柔和淡出
     @State private var closeFade = false
     @State private var infoTab: PlayerInfoTab = .intro
     @State private var showDanmakuSettings = false
@@ -363,8 +365,9 @@ struct PlaybackControlsView: View {
                 let landscape = full.size.width > full.size.height
                 let layoutSize = full.size
                 let insets = Self.layoutInsets(landscape: landscape, system: systemInsets)
+                let lockDarkClosingChrome = closingFromLandscape
                 ZStack(alignment: .top) {
-                    if landscape {
+                    if landscape || lockDarkClosingChrome {
                         Theme.playerBackground
                     } else {
                         Theme.pageBackground
@@ -372,13 +375,15 @@ struct PlaybackControlsView: View {
 
                     // 竖屏：上面是 16:9 的小窗播放器，下面是影片信息、选集和文件信息；横屏：画面铺满
                     VStack(spacing: 0) {
-                        if !landscape { Color.black.frame(height: insets.top) }
+                        if !landscape && !lockDarkClosingChrome { Color.black.frame(height: insets.top) }
+                        if !landscape && lockDarkClosingChrome { Spacer(minLength: 0) }
                         // 画面区永远是深色：浅色模式下也不会变成白色的控制按钮
                         videoLayer(landscape: landscape, insets: insets, width: layoutSize.width,
                                    inlineHeight: inlineVideoHeight(in: layoutSize))
                             .environment(\.colorScheme, .dark)
                             .foregroundStyle(Color.white)
-                        if !landscape { infoPage(bottomInset: insets.bottom) }
+                        if !landscape && lockDarkClosingChrome { Spacer(minLength: 0) }
+                        if !landscape && !lockDarkClosingChrome { infoPage(bottomInset: insets.bottom) }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                     // 出画面后才知道视频比例：小窗从默认的 16:9 变到实际比例时顺滑过渡，下面的内容跟着让开
@@ -437,7 +442,7 @@ struct PlaybackControlsView: View {
         }
         .animeSignInSheet(isPresented: $showSignIn)
         .designScreen("player")
-        .statusBarHidden(isLandscapeWindow)
+        .statusBarHidden(isLandscapeWindow || closingFromLandscape)
         .defersSystemGestures(on: isLandscapeWindow ? .all : [])
         .persistentSystemOverlays(controlsVisible ? .automatic : .hidden)
         .onAppear {
@@ -3961,28 +3966,40 @@ struct PlaybackControlsView: View {
             if revealing { revealControls() }
         }
     }
-    /// 柔和关闭：控制栏和整个播放页一起淡出、轻轻缩小，淡出结束后卸掉独立窗口并恢复竖屏主窗口。
+    /// 柔和关闭：横屏时保持当前视频画面并立刻启动竖屏旋转，竖屏落定瞬间放回主窗口再直接叠化退场，消除黑屏空档。
     private func closePlayer() {
         guard !closing else { return }
         closing = true
+        closingFromLandscape = isLandscapeWindow
         hideTask?.cancel()
-        playback.setBoost(false)
-        playback.pauseForClose()
-        PlayerWindowController.shared.willClose(animated: !reduceMotion)
         popover = nil
         popoverCloseTask?.cancel()
         showList = false
         quickMenu = nil
         showSleepMenu = false
-        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.22)) {
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.1)) {
             controlsVisible = false
-            closeFade = true
         }
-        Task { @MainActor in
-            if !reduceMotion { try? await Task.sleep(nanoseconds: 230_000_000) }
-            var transaction = Transaction()
-            transaction.disablesAnimations = true
-            withTransaction(transaction) { onClose() }
+        playback.setBoost(false)
+        if PlayerWindowController.shared.isPresented {
+            PlayerWindowController.shared.willClose(animated: !reduceMotion) {
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) { onClose() }
+            }
+            // 先发起窗口转屏与关闭过渡，再停流并截封面，确保手指点下那一帧立即响应不卡顿
+            playback.pauseForClose()
+        } else {
+            playback.pauseForClose()
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) {
+                closeFade = true
+            }
+            Task { @MainActor in
+                if !reduceMotion { try? await Task.sleep(nanoseconds: 160_000_000) }
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) { onClose() }
+            }
         }
     }
 

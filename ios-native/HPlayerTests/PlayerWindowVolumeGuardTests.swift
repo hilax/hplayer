@@ -1,4 +1,5 @@
 import MediaPlayer
+import SwiftUI
 import XCTest
 @testable import HPlayer
 
@@ -18,5 +19,34 @@ final class PlayerWindowVolumeGuardTests: XCTestCase {
         XCTAssertGreaterThan(view.alpha, 0)
         XCTAssertLessThan(view.alpha, 0.1, "几乎透明，不能被看见")
         XCTAssertFalse(view.isUserInteractionEnabled, "不能挡住播放页的手势")
+    }
+
+    func testWillCloseCompletesAndResetsStateAcrossDismiss() throws {
+        let controller = PlayerWindowController.shared
+        let token = UUID()
+        var dismissedExternally = false
+        let presented = controller.present(AnyView(Color.clear), token: token, landscape: false) {
+            dismissedExternally = true
+        }
+        guard presented != nil else {
+            // 无窗口场景时 willClose 仍应立即触发完成回调
+            var completed = false
+            controller.willClose(animated: false) { completed = true }
+            XCTAssertTrue(completed)
+            XCTAssertFalse(dismissedExternally)
+            return
+        }
+        defer { controller.dismiss(token: token) }
+
+        XCTAssertTrue(controller.isShowing(token))
+        var completed = false
+        controller.willClose(animated: false) {
+            completed = true
+            controller.dismiss(token: token)
+        }
+        XCTAssertTrue(completed, "无动画关闭应立即完成并卸掉窗口")
+        XCTAssertFalse(controller.isPresented)
+        XCTAssertFalse(controller.isShowing(token))
+        XCTAssertFalse(dismissedExternally)
     }
 }
