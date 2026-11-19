@@ -42,6 +42,13 @@ final class HomeScreenIconTests: XCTestCase {
             XCTAssertNil(legacyPrism["CFBundleIconName"])
             let legacyFiles = try XCTUnwrap(legacyPrism["CFBundleIconFiles"] as? [String])
             XCTAssertTrue(legacyFiles.contains("AppIconPrism"))
+
+            // 珊瑚橙换了注册名；旧名 AppIconCoral 保留为别名并指向新名的实体 PNG。
+            XCTAssertEqual(HomeScreenIcon.coral.alternateName, "HPIconCoral")
+            let legacyCoral = try XCTUnwrap(alternates["AppIconCoral"] as? [String: Any], "Keep the coral name used by earlier builds")
+            XCTAssertNil(legacyCoral["CFBundleIconName"])
+            let legacyCoralFiles = try XCTUnwrap(legacyCoral["CFBundleIconFiles"] as? [String])
+            XCTAssertTrue(legacyCoralFiles.contains("HPIconCoral"))
         }
 
         // 确认所有备选图标在 .app 根目录均存在轻量实体 @2x / @3x 与 iPad PNG，避免回退为空白网格。

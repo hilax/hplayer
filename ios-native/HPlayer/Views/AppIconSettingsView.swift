@@ -37,8 +37,26 @@ enum HomeScreenIcon: String, CaseIterable, Identifiable {
         case .ocean: return "AppIconOcean"
         case .mint: return "AppIconMint"
         case .iris: return "AppIconIris"
-        case .coral: return "AppIconCoral"
+        // 不能再用 AppIconCoral：系统按备选图标名缓存桌面渲染，旧名在早期构建里
+        // 被缓存成空白网格，覆盖安装后仍沿用。换成从未注册过的新名强制重新渲染。
+        case .coral: return "HPIconCoral"
         }
+    }
+
+    /// 早期构建注册过、现已更换的系统图标名。仍识别为同一样式，避免升级后勾选丢失；
+    /// 系统仍停在这些旧名时，再点一次该样式会重新应用当前名称。
+    var legacyNames: [String] {
+        switch self {
+        case .prism: return ["AppIconPrism"]
+        case .coral: return ["AppIconCoral"]
+        default: return []
+        }
+    }
+
+    /// 系统当前名称是否为本样式的旧注册名（需要迁移到 `alternateName`）。
+    func isLegacyName(_ name: String?) -> Bool {
+        guard let name else { return false }
+        return legacyNames.contains(name)
     }
 
     var previewName: String {
@@ -53,9 +71,9 @@ enum HomeScreenIcon: String, CaseIterable, Identifiable {
     }
 
     func matchesCurrentName(_ name: String?) -> Bool {
-        // Keep the white-prism selection from builds where it was an alternate.
-        if self == .prism { return name == nil || name == "AppIconPrism" }
-        return name == alternateName
+        // Keep selections made under names registered by earlier builds
+        // (white prism as AppIconPrism, coral as AppIconCoral).
+        name == alternateName || isLegacyName(name)
     }
 }
 

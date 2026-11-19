@@ -109,8 +109,9 @@ final class AppIconStore: ObservableObject {
             return
         }
         if icon == selected {
-            // 默认图标但系统仍遗留旧 alternate 字符串（如 AppIconPrism）时归一化为 nil。
-            if icon == .prism, systemName() == "AppIconPrism" {
+            // 系统仍停在旧注册名（AppIconPrism、AppIconCoral）时重新应用当前名称：
+            // 默认图标归一化为 nil，珊瑚橙迁移到不受旧缓存影响的新名。
+            if icon.isLegacyName(systemName()) {
                 commit(icon, previous: selected)
             } else {
                 Haptics.tap()

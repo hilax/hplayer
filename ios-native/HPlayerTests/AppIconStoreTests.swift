@@ -278,6 +278,26 @@ final class AppIconStoreTests: XCTestCase {
         await complete(completion, store: store)
     }
 
+    func testSelectingCoralMovesLegacyCachedNameToCurrentName() async {
+        // 旧名 AppIconCoral 可能被系统缓存成空白网格：仍识别为珊瑚橙，再点一次迁移到新名。
+        var requested: [String?] = []
+        var completion: ((Error?) -> Void)?
+        let defaults = makeDefaults()
+        let store = makeStore(defaults: defaults, system: { "AppIconCoral" }, apply: { name, done in
+            requested.append(name)
+            completion = done
+        })
+        XCTAssertEqual(store.selected, .coral)
+        store.select(.coral)
+        XCTAssertEqual(requested, ["HPIconCoral"])
+        await complete(completion, store: store)
+        XCTAssertEqual(defaults.string(forKey: AppIconStore.choiceKey), "coral")
+
+        let legacySaved = makeDefaults()
+        legacySaved.set("AppIconCoral", forKey: AppIconStore.choiceKey)
+        XCTAssertEqual(makeStore(defaults: legacySaved).selected, .coral)
+    }
+
     func testLaunchMigratesLegacySavedSystemNamesToStableChoiceIDs() {
         for icon in HomeScreenIcon.allCases {
             let defaults = makeDefaults()

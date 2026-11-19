@@ -24,8 +24,16 @@ ALTERNATE_ICONS = [
     "AppIconOcean",
     "AppIconMint",
     "AppIconIris",
-    "AppIconCoral",
+    # 珊瑚橙改用全新注册名：iOS 按「备选图标名」缓存桌面渲染结果，旧名 AppIconCoral
+    # 在早期 Assets.car 方案下被缓存成空白网格后，覆盖安装、换版本号都不会刷新。
+    "HPIconCoral",
 ]
+
+# 早期构建注册过的旧名 -> 现在的名称。旧名仍写进 Info.plist（指向新名的实体 PNG），
+# 保证系统当前仍停在旧名的设备有合法条目；App 内再点一次该样式即迁移到新名。
+LEGACY_ALIASES = {
+    "AppIconCoral": "HPIconCoral",
+}
 
 ICON_RENDITIONS = [
     ("@2x.png", 120),
@@ -65,6 +73,11 @@ def populate_alternate_icons(plist: dict, root_key: str, icon_files_for_name) ->
         # `@2x`/`@3x` root PNGs via `CFBundleIconFiles` rather than `Assets.car`.
         alternates[name] = {
             "CFBundleIconFiles": icon_files_for_name(name),
+            "UIPrerenderedIcon": False,
+        }
+    for legacy, current in LEGACY_ALIASES.items():
+        alternates[legacy] = {
+            "CFBundleIconFiles": icon_files_for_name(current),
             "UIPrerenderedIcon": False,
         }
     icons["CFBundleAlternateIcons"] = alternates
