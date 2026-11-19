@@ -136,6 +136,38 @@ final class HomeUITests: XCTestCase {
         if !unmatched.isHittable { app.swipeUp() }
         XCTAssertTrue(unmatched.waitForExistence(timeout: 5), "Unmatched media is managed from Resources")
     }
+
+    func testCatalogLandscapePlayerClose() {
+        continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchEnvironment["HPLAYER_HOME_TEST"] = "1"
+        app.launchEnvironment["HPLAYER_METADATA_TEST_ENDPOINT"] = "http://127.0.0.1:8765"
+        app.launchEnvironment["HPLAYER_UI_TEST_KEEP_CONTROLS_VISIBLE"] = "1"
+        app.launch()
+        defer { app.terminate() }
+
+        let catalogChannel = app.buttons["home.channel.library"]
+        XCTAssertTrue(catalogChannel.waitForExistence(timeout: 25))
+        catalogChannel.tap()
+
+        let dune = app.buttons["home.poster.tt1160419"].firstMatch
+        for _ in 0..<4 where !dune.isHittable { app.swipeUp(velocity: .slow) }
+        XCTAssertTrue(dune.waitForExistence(timeout: 20), "Dune poster should exist in Catalog")
+        dune.tap()
+
+        let close = app.buttons["playback.close"]
+        let orientation = app.buttons["playback.orientation"]
+        XCTAssertTrue(wait(timeout: 15) { close.exists && orientation.exists && orientation.label == "竖屏" },
+                      "Player should open in landscape from Catalog")
+
+        close.tap()
+        XCTAssertTrue(wait(timeout: 8) { !close.exists && catalogChannel.exists && catalogChannel.isHittable },
+                      "Closing landscape player from Catalog must dismiss player and restore interactive Catalog")
+        let afterFrame = app.windows.firstMatch.frame
+        XCTAssertGreaterThan(afterFrame.height, afterFrame.width, "Main window must be portrait after closing landscape player")
+        XCTAssertTrue(catalogChannel.isSelected, "Should still be on Catalog channel after closing player")
+    }
     private func wait(timeout: TimeInterval = 10, _ predicate: @escaping () -> Bool) -> Bool {
         XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in predicate() }, object: nil)], timeout: timeout) == .completed
     }

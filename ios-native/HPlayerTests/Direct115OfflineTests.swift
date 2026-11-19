@@ -268,9 +268,9 @@ final class Direct115OfflineTests: XCTestCase {
 
         let url = try XCTUnwrap(URL(string: "https://cdn.example.com/file.mp4"))
         cache.storeOriginalURL(url, cookie: "UID=101_a", pickCode: "pc1", now: now)
-        XCTAssertEqual(cache.originalURL(cookie: "UID=101_a", pickCode: "pc1", now: now.addingTimeInterval(30)), url)
+        XCTAssertEqual(cache.originalURL(cookie: "UID=101_a", pickCode: "pc1", now: now.addingTimeInterval(Direct115SessionCache.defaultOriginalURLTTL - 10)), url)
         XCTAssertNil(cache.originalURL(cookie: "UID=202_b", pickCode: "pc1", now: now.addingTimeInterval(30)))
-        XCTAssertNil(cache.originalURL(cookie: "UID=101_a", pickCode: "pc1", now: now.addingTimeInterval(46)))
+        XCTAssertNil(cache.originalURL(cookie: "UID=101_a", pickCode: "pc1", now: now.addingTimeInterval(Direct115SessionCache.defaultOriginalURLTTL + 1)))
 
         cache.storeOriginalURL(url, cookie: "UID=101_a", pickCode: "pc2", now: now)
         cache.invalidateOriginalURL(cookie: "UID=101_a", pickCode: "pc2")
@@ -290,6 +290,8 @@ final class Direct115OfflineTests: XCTestCase {
 
         cache.save(infoHash: "ABCDEF", cookie: "UID=111_dev", name: "Movie", totalSize: 1024, videos: videos, now: now)
         XCTAssertEqual(cache.get(infoHash: "abcdef", cookie: "UID=111_dev", now: now.addingTimeInterval(60))?.videos, videos)
+        XCTAssertEqual(cache.pickCodes(forInfoHash: "ABCDEF"), ["pc1"])
+        XCTAssertEqual(cache.infoHashes(containingPickCode: "pc1"), ["abcdef"])
         XCTAssertNil(cache.get(infoHash: "abcdef", cookie: "UID=222_dev", now: now.addingTimeInterval(60)))
         XCTAssertNil(cache.get(infoHash: "abcdef", cookie: "UID=111_dev", now: now.addingTimeInterval(15 * 24 * 3600)))
     }

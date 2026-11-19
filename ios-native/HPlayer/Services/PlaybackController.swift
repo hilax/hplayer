@@ -271,6 +271,8 @@ final class PlaybackController: ObservableObject {
 
     /// 用户自己按了暂停
     private var userPaused = false
+    /// 窗口仍在转屏淡入前：先让 mpv 在后台拉流、解头并解码首帧，淡入瞬间放开立即起播
+    private var awaitingReveal = false
     /// Prevent late asynchronous opens from restarting audio while closing.
     private var closingPlayback = false
     private var boosted = false
@@ -474,8 +476,8 @@ final class PlaybackController: ObservableObject {
             ("cache-pause-initial", "no"),
             ("cache-pause-wait", preferLargerPauseWait ? "2.5" : "1"),
             // 打开时少探测一点格式信息，网络视频更快出画面
-            ("demuxer-lavf-analyzeduration", "1"),
-            ("demuxer-lavf-probesize", "4194304"),
+            ("demuxer-lavf-analyzeduration", "0.5"),
+            ("demuxer-lavf-probesize", "1572864"),
             // 续播和大跨度跳转只落到关键帧，4K 原画不用从关键帧一路解码到目标；小跳转单独要求精确
             ("hr-seek", "no"),
             ("cache-on-disk", "yes"),
@@ -532,11 +534,13 @@ final class PlaybackController: ObservableObject {
         imdbID: String? = nil,
         isAdultVideo: Bool = false,
         skipRemoteHash: Bool = false,
-        isTorrentStream: Bool = false
+        isTorrentStream: Bool = false,
+        deferAutoPlay: Bool = false
     ) {
         guard !closingPlayback else { return }
         session += 1
         currentTorrentStream = isTorrentStream
+        awaitingReveal = deferAutoPlay
         if !preservingPosition {
             playedThisSession = false
             softwareFallbackNoticed = false
@@ -633,7 +637,8 @@ final class PlaybackController: ObservableObject {
         } else {
             engine.set("network-timeout", "15")
             engine.set("stream-lavf-o", "reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=4")
-            engine.set("demuxer-lavf-probesize", "4194304")
+            engine.set("demuxer-lavf-analyzeduration", "0.5")
+            engine.set("demuxer-lavf-probesize", direct115 ? "1572864" : "2097152")
             engine.set("cache-pause-wait", preferLargerPauseWait ? "2.5" : "1")
         }
         applyCacheOptions(engine)
@@ -651,7 +656,7 @@ final class PlaybackController: ObservableObject {
         let cookieHeader = Self.cookieHeader(cookie)
         engine.set("http-header-fields", direct115 && !cookieHeader.isEmpty ? "Cookie: \(cookieHeader.replacingOccurrences(of: ",", with: "%2C"))" : "")
         engine.set("start", position > 0 ? String(format: "%.3f", position) : "none")
-        engine.set("pause", !keepPlaying)
+        engine.set("pause", !keepPlaying || awaitingReveal)
         engine.set("speed", Double(rate))
         applyAspect(engine)
         let currentSession = session
@@ -669,7 +674,7 @@ final class PlaybackController: ObservableObject {
                   self.engine === engine else { return }
             self.addressTask = nil
             self.currentEngineURL = URL(string: address)
-            engine.command(["loadfile", address, "replace"])
+            _ = await engine.commandAsync(["loadfile", address, "replace"])
         }
         startWatchdog()
 
@@ -787,6 +792,7 @@ final class PlaybackController: ObservableObject {
     func pauseForClose() {
         pictureInPicture?.stop()
         closingPlayback = true
+        awaitingReveal = false
         userPaused = true
         pausedAtUptime = ProcessInfo.processInfo.systemUptime
         pendingOpen = nil
@@ -823,8 +829,18 @@ final class PlaybackController: ObservableObject {
     /// Magnet playback can reuse its controller for the next presentation.
     func prepareForPresentation() { closingPlayback = false }
 
+    /// 播放器窗口完成转屏淡入后放开首帧暂挂，立即起播。
+    func releaseRevealHold() {
+        guard awaitingReveal else { return }
+        awaitingReveal = false
+        guard !closingPlayback, !userPaused else { return }
+        engine?.set("pause", false)
+        updateFlags()
+    }
+
     func toggle() {
         guard !closingPlayback, currentURL != nil else { return }
+        awaitingReveal = false
         if ended || (!playing && eofReached) {
             // A genuine ending replays from zero; an interrupted seek resumes its
             // latest target. seek also reloads the file if mpv has already closed it.
@@ -1046,6 +1062,7 @@ final class PlaybackController: ObservableObject {
         playing = false
         buffering = false
         opening = false
+        awaitingReveal = false
         userPaused = false
         currentURL = nil
         currentTorrentStream = false
@@ -2209,6 +2226,16 @@ final class PlaybackController: ObservableObject {
                 return !name.isEmpty && !["path", "domain", "expires", "max-age", "samesite"].contains(name)
             }
             .joined(separator: "; ")
+    }
+
+    static func direct115Headers(cookie: String) -> [String: String] {
+        var headers = [
+            "User-Agent": Direct115Client.userAgent,
+            "Referer": "https://115.com/",
+        ]
+        let cleaned = Self.cookieHeader(cookie)
+        if !cleaned.isEmpty { headers["Cookie"] = cleaned }
+        return headers
     }
 
     /// 网络视频交给本机中转，由系统网络栈去连 115（mpv 自带的 TLS 连 115 会被断开）；本机地址（磁力边下边播）直接给内核

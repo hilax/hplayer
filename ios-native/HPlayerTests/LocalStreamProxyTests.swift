@@ -731,6 +731,137 @@ final class LocalStreamProxyTests: XCTestCase {
 
         XCTAssertTrue(proxy.isStreamHealthyOrRecovering(for: local), "刚收到 64 KiB 有效数据时代理层应报告为健康")
     }
+
+    private func mp4Box(type: String, size: Int64, extended: Bool = false) -> Data {
+        var data = Data()
+        if extended {
+            var s1 = UInt32(1).bigEndian
+            data.append(Data(bytes: &s1, count: 4))
+            data.append(Data(type.utf8))
+            var s64 = UInt64(size).bigEndian
+            data.append(Data(bytes: &s64, count: 8))
+        } else {
+            var s32 = UInt32(size).bigEndian
+            data.append(Data(bytes: &s32, count: 4))
+            data.append(Data(type.utf8))
+        }
+        return data
+    }
+
+    func testMP4MoovProbeDetectsHeadAndTailMoov() {
+        var faststart = mp4Box(type: "ftyp", size: 24)
+        faststart.append(Data(repeating: 0, count: 16))
+        faststart.append(mp4Box(type: "moov", size: 2048))
+        XCTAssertEqual(MP4MoovProbe.inspect(prefix: faststart, totalSize: 10_000_000), .moovAtHead)
+
+        var tailStandard = mp4Box(type: "ftyp", size: 24)
+        tailStandard.append(Data(repeating: 0, count: 16))
+        tailStandard.append(mp4Box(type: "mdat", size: 8_000_000))
+        tailStandard.append(Data(repeating: 0, count: 64))
+        XCTAssertEqual(
+            MP4MoovProbe.inspect(prefix: tailStandard, totalSize: 8_500_024),
+            .moovAtTail(start: 8_000_024, end: 8_500_023)
+        )
+
+        var tailLarge64 = mp4Box(type: "ftyp", size: 24)
+        tailLarge64.append(Data(repeating: 0, count: 16))
+        let largeMdatSize: Int64 = 5_000_000_000
+        tailLarge64.append(mp4Box(type: "mdat", size: largeMdatSize, extended: true))
+        tailLarge64.append(Data(repeating: 0, count: 64))
+        XCTAssertEqual(
+            MP4MoovProbe.inspect(prefix: tailLarge64, totalSize: largeMdatSize + 24 + 1_500_000),
+            .moovAtTail(start: largeMdatSize + 24, end: largeMdatSize + 24 + 1_500_000 - 1)
+        )
+
+        XCTAssertEqual(MP4MoovProbe.inspect(prefix: Data(repeating: 0xAA, count: 128), totalSize: 10_000), .undetermined)
+    }
+
+    /// 预热检测到 MP4 的 moov 在文件尾部时，会自动拉取片头和尾部 moov 写入缓存，mpv 随后读取两段均为零上游请求。
+    func testPrewarmPopulatesHeadAndTailMoovForInstantCacheHits() async throws {
+        let total = 400_000
+        let mdatStart = 24
+        let mdatSize = 350_000
+        let moovStart = mdatStart + mdatSize
+        let moovSize = total - moovStart
+        var full = Data()
+        full.append(mp4Box(type: "ftyp", size: Int64(mdatStart)))
+        full.append(Data(repeating: 0x11, count: mdatStart - 8))
+        full.append(mp4Box(type: "mdat", size: Int64(mdatSize)))
+        full.append(pattern(mdatSize - 8))
+        full.append(mp4Box(type: "moov", size: Int64(moovSize)))
+        full.append(pattern(moovSize - 8))
+        XCTAssertEqual(full.count, total)
+
+        let headEnd = min(total - 1, 256 * 1024 - 1)
+        ScriptedUpstream.install([
+            .reply(status: 206, headers: [
+                "Content-Type": "video/mp4",
+                "Content-Range": "bytes 0-\(headEnd)/\(total)",
+                "Content-Length": "\(headEnd + 1)",
+                "Accept-Ranges": "bytes",
+            ], body: Data(full[0...headEnd])),
+            .reply(status: 206, headers: [
+                "Content-Type": "video/mp4",
+                "Content-Range": "bytes \(moovStart)-\(total - 1)/\(total)",
+                "Content-Length": "\(moovSize)",
+                "Accept-Ranges": "bytes",
+            ], body: Data(full[moovStart..<total])),
+        ])
+        let proxy = LocalStreamProxy(protocolClasses: [ScriptedUpstream.self])
+        let upstream = try XCTUnwrap(URL(string: "https://cdn.example.com/movie.mp4"))
+        proxy.prewarm(url: upstream, headers: [:], streamID: "p115:prewarm-moov", resume: true)
+
+        for _ in 0..<100 {
+            if ScriptedUpstream.receivedRanges().count >= 2 && proxy.cachedByteCountForTesting() >= moovSize + 65_536 {
+                break
+            }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        XCTAssertEqual(ScriptedUpstream.receivedRanges().count, 2)
+        XCTAssertEqual(ScriptedUpstream.receivedRanges().last, "bytes=\(moovStart)-\(total - 1)")
+
+        let relayed = await proxy.localURL(for: upstream, headers: [:], streamID: "p115:prewarm-moov")
+        let local = try XCTUnwrap(relayed)
+        let headResp = try fetch(local, range: "bytes=0-1023")
+        XCTAssertEqual(headResp.status, 206)
+        XCTAssertEqual(headResp.body, Data(full[0..<1024]))
+        let moovResp = try fetch(local, range: "bytes=\(moovStart)-\(total - 1)")
+        XCTAssertEqual(moovResp.status, 206)
+        XCTAssertEqual(moovResp.body, Data(full[moovStart..<total]))
+        XCTAssertEqual(ScriptedUpstream.receivedRanges().count, 2, "Head and tail moov must be served from cache without extra upstream requests")
+    }
+
+    /// 后台预热还在传输片头时 mpv 就发起了 bytes=0- 请求：直接接管在途连接并平滑续拉后续分段，不重复发 bytes=0- 请求。
+    func testInFlightPrewarmIsAdoptedWithoutDuplicateUpstreamRequest() async throws {
+        let total = 10_000
+        let firstEnd = 4_999
+        let full = pattern(total)
+        let server = try ScriptedHTTPServer([
+            .send(status: 206, headers: [
+                "Content-Type": "video/mp4",
+                "Content-Range": "bytes 0-\(firstEnd)/\(total)",
+                "Content-Length": "\(firstEnd + 1)",
+                "Accept-Ranges": "bytes",
+            ], body: Data(full[0...firstEnd])),
+            .send(status: 206, headers: [
+                "Content-Type": "video/mp4",
+                "Content-Range": "bytes \(firstEnd + 1)-\(total - 1)/\(total)",
+                "Content-Length": "\(total - firstEnd - 1)",
+                "Accept-Ranges": "bytes",
+            ], body: Data(full[(firstEnd + 1)..<total])),
+        ])
+        defer { server.stop() }
+        let proxy = LocalStreamProxy()
+        proxy.setChunkSizeForTesting(5_000)
+        proxy.prewarm(url: server.url, headers: [:], streamID: "p115:adopt", resume: false)
+
+        let relayed = await proxy.localURL(for: server.url, headers: [:], streamID: "p115:adopt")
+        let local = try XCTUnwrap(relayed)
+        let fetched = try fetch(local, range: "bytes=0-")
+        XCTAssertEqual(fetched.status, 206)
+        XCTAssertEqual(fetched.body, full)
+        XCTAssertEqual(server.receivedRanges().count, 2, "Adopted prewarm must not duplicate the initial 0- range: \(server.receivedRanges())")
+    }
 }
 
 private final class RenewCounter: @unchecked Sendable {

@@ -116,9 +116,28 @@ private struct MagnetHistoryRow: View {
         .contentShape(Rectangle())
     }
 
+    private var resolvedFrame: UIImage? {
+        if let frame = PlaybackFrameStore.shared.image(for: PlaybackFrameStore.key(forMagnet: item.infoHash)) {
+            return frame
+        }
+        if let pickCode = item.lastCloudPickCode, !pickCode.isEmpty {
+            return PlaybackFrameStore.shared.image(for: "recent|p115|\(pickCode)")
+        }
+        return nil
+    }
+
+    private var resolvedProgressFraction: Double? {
+        if let fraction = item.lastProgress?.fraction, fraction > 0 { return fraction }
+        if let pickCode = item.lastCloudPickCode, !pickCode.isEmpty,
+           let progress = RecentStore.shared.item(forKey: "p115|\(pickCode)")?.progress, progress > 0 {
+            return progress
+        }
+        return nil
+    }
+
     private var thumbnail: some View {
         ZStack(alignment: .bottom) {
-            if let frame = PlaybackFrameStore.shared.image(for: PlaybackFrameStore.key(forMagnet: item.infoHash)) {
+            if let frame = resolvedFrame {
                 Image(uiImage: frame)
                     .resizable()
                     .scaledToFill()
@@ -129,7 +148,7 @@ private struct MagnetHistoryRow: View {
                     .foregroundStyle(Theme.textTertiary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            if let fraction = item.lastProgress?.fraction, fraction > 0 {
+            if let fraction = resolvedProgressFraction, fraction > 0 {
                 GeometryReader { proxy in
                     ZStack(alignment: .leading) {
                         Rectangle().fill(Theme.scrim)

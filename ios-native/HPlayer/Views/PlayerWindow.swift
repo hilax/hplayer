@@ -80,8 +80,12 @@ final class PlayerWindowController {
     private var revealWaiters: [CheckedContinuation<Void, Never>] = []
     /// 播放期间暂时隐藏的主窗口：系统校验「支持的方向」时会把它也算进去，它只支持竖屏，横屏请求就被拒绝
     private var hiddenMain: UIWindow?
+    /// 关闭横屏播放后等待主窗口回到竖屏再淡入，避免露出横屏布局或触发双窗口方向冲突
+    private var mainRevealTask: Task<Void, Never>?
     /// 这一次弹出的标记。关闭只认自己弹出的那个窗口：别的播放入口复位状态时，不会把正在播的窗口误关掉。
     private var token: UUID?
+    /// 正在执行关闭淡出，阻止晚到的转屏重试或淡入回调
+    private var closing = false
     /// 每发起一轮转屏请求加一：旧一轮的重试看到编号变了就停下，不和新一轮（比如点了横竖屏按钮）打架。
     private var orientationRound = 0
     /// 最近一次打开播放器的转屏过程和主线程卡顿，附在「复制播放诊断信息」里，真机排查不用开调试文字。
@@ -90,6 +94,8 @@ final class PlayerWindowController {
     private var watchdog: Task<Void, Never>?
 
     var isPresented: Bool { window != nil }
+    /// 播放器窗口还在转屏、尚未显示：可先在后台预热并暂停在首帧，等窗口淡入那一刻立刻起播
+    var needsRevealHold: Bool { window != nil && !revealed && !closing }
 
     /// 播放器窗口本身固定深色（这样状态栏文字是白的、系统控件也是深色），
     /// 竖屏页面的信息区和面板要跟随的是 App 当前的外观，读主窗口实际生效的模式。
@@ -122,34 +128,46 @@ final class PlayerWindowController {
     /// 弹出播放器窗口，返回这次弹出的标记（关闭时要带上）。
     /// `onDismissed` 在窗口被调用方以外的原因关掉时调用（被新的播放顶替、没有可用的场景），让调用方把自己的状态复位。
     @discardableResult
-    func present(_ root: AnyView, landscape: Bool, onDismissed: @escaping () -> Void) -> UUID? {
+    func present(_ root: AnyView, token requestedToken: UUID = UUID(), landscape: Bool, onDismissed: @escaping () -> Void) -> UUID? {
         if window != nil {
             // 另一个入口要播放时，正在播的窗口让位：先关掉它、通知它的入口复位，再弹出新的。
             // 例如磁力页从 BT 播放改用 115 播放：关旧窗口和开新窗口发生在同一次刷新里，两边的回调谁先谁后不固定，
             // 以前新窗口先到时会被直接忽略，115 播放就再也打不开。
             let previous = self.onDismissed
-            dismiss()
+            dismiss(replacing: true)
             previous?()
         }
+        mainRevealTask?.cancel()
+        mainRevealTask = nil
         pendingDebug = []
         log = []
         presentedAt = Date()
-        guard let scene = activeScene() else { onDismissed(); return nil }
+        guard let scene = activeScene() else {
+            restoreMainVisibility(in: activeScene())
+            onDismissed()
+            return nil
+        }
+        if let main = hiddenMain ?? mainWindow(in: scene) {
+            main.alpha = 1
+        }
         self.onDismissed = onDismissed
         revealed = false
+        closing = false
         wantsLandscape = landscape
         debug("打开 横屏=\(landscape) 设备方向=\(UIDevice.current.orientation.rawValue) 场景方向=\(scene.interfaceOrientation.rawValue)")
         if landscape {
             // 主窗口只支持竖屏，它可见时系统会拒绝横屏请求：在播放器窗口出来之前就先藏好，
             // 不再等 80 毫秒以后才藏（那时第一次转屏请求很可能已经按「主窗口可见」被拒绝了）。
             hideMain(in: scene)
+        } else {
+            restoreMainVisibility(in: scene)
         }
 
         let player = PlayerWindow(windowScene: scene)
         player.allowedOrientations = landscape ? .landscape : .portrait
         player.overrideUserInterfaceStyle = .dark
         player.backgroundColor = .clear
-        // 窗口层级必须比主窗口高，同时保持透明：关闭时淡出会露出下面的页面
+        // 窗口层级必须比主窗口高，同时保持透明：竖屏关闭时淡出会露出下面的页面
         player.windowLevel = UIWindow.Level.normal + 1
         player.isOpaque = false
 
@@ -162,8 +180,7 @@ final class PlayerWindowController {
 
         self.window = player
         self.host = host
-        let token = UUID()
-        self.token = token
+        self.token = requestedToken
         UIDevice.current.beginGeneratingDeviceOrientationNotifications()
 
         if landscape {
@@ -171,7 +188,7 @@ final class PlayerWindowController {
             Task { @MainActor [weak self, weak player] in
                 try? await Task.sleep(nanoseconds: 80_000_000)
                 // 只对这一次弹出的窗口生效：期间关掉又打开了新的，就不再动它
-                guard let self, let player, self.window === player else { return }
+                guard let self, let player, self.window === player, !self.closing else { return }
                 self.requestOrientation(Self.preferredLandscape(), in: scene)
             }
         } else {
@@ -183,12 +200,12 @@ final class PlayerWindowController {
             self?.reveal()   // 兜底：转屏一直没成功（被系统拒绝、主线程被占住）时，也不能一直黑着
         }
         startWatchdog()
-        return token
+        return requestedToken
     }
 
     /// 播放页里的「横屏 / 竖屏」按钮
     func setLandscape(_ landscape: Bool) {
-        guard let window, let scene = window.windowScene else { return }
+        guard let window, !closing, let scene = window.windowScene else { return }
         // 竖屏打开的播放器（短剧竖屏播放）要转横屏时，主窗口还可见；它只支持竖屏，会让系统拒绝横屏请求。
         if landscape { hideMain(in: scene) }
         window.allowedOrientations = landscape ? .landscape : .portrait
@@ -196,51 +213,149 @@ final class PlayerWindowController {
     }
 
     private func hideMain(in scene: UIWindowScene) {
+        mainRevealTask?.cancel()
+        mainRevealTask = nil
         guard hiddenMain == nil, let main = mainWindow(in: scene) else { return }
+        main.alpha = 1
         main.isHidden = true
         hiddenMain = main
         let presented = main.rootViewController?.presentedViewController
         debug("隐藏主窗 presented=\(presented.map { String(describing: type(of: $0)) } ?? "无") state=\(scene.activationState.rawValue)")
     }
 
-    /// 播放页开始淡出时先把主窗口放回来，淡出时露出的是它
-    func willClose() {
-        guard let main = hiddenMain else { return }
-        main.isHidden = false
+    private func restoreMainVisibility(in scene: UIWindowScene?) {
+        let main = hiddenMain ?? mainWindow(in: scene)
         hiddenMain = nil
+        main?.alpha = 1
+        main?.isHidden = false
+    }
+
+    /// 播放页开始关闭淡出：
+    /// - 已经在竖屏时先放回主窗口，淡出直接露出底下的页面；
+    /// - 处于横屏时不能提前把只支持竖屏的主窗口设回可见（否则两个窗口支持方向冲突，系统会立刻把场景切回竖屏，
+    ///   横屏播放器窗口会被裁成上半屏卡住）。横屏下保持主窗口隐藏，先让播放器整窗淡出，再在 `dismiss` 里卸掉播放窗并恢复竖屏主窗。
+    func willClose(animated: Bool = true) {
+        guard let window, !closing else { return }
+        closing = true
+        revealTask?.cancel()
+        revealTask = nil
+        orientationRound += 1
+        resumeRevealWaiters()
+
+        let inLandscape = (window.windowScene?.interfaceOrientation.isLandscape == true)
+            || window.bounds.width > window.bounds.height
+            || window.allowedOrientations != .portrait
+        if !inLandscape {
+            restoreMainVisibility(in: window.windowScene)
+        }
+        if animated {
+            UIView.animate(withDuration: 0.22, delay: 0, options: [.curveEaseInOut, .beginFromCurrentState]) {
+                window.alpha = 0
+            }
+        } else {
+            window.alpha = 0
+        }
     }
 
     /// 关闭这次弹出的窗口；标记对不上（窗口已经被新的播放顶替）就什么都不做。
     func dismiss(token: UUID) {
         guard self.token == token else { return }
-        dismiss()
+        dismiss(replacing: false)
     }
 
-    /// 关闭：窗口移除，系统方向回到竖屏。主窗口一直是竖屏，不会有翻转。
-    private func dismiss() {
+    /// 关闭：先彻底隐藏并从场景卸下播放器窗口，再恢复主窗口与竖屏方向，避免双窗口方向冲突导致横屏画面残留在竖屏上半屏。
+    private func dismiss(replacing: Bool = false) {
         guard let player = window else { return }
         let scene = player.windowScene
+        let wasLandscape = (scene?.interfaceOrientation.isLandscape == true)
+            || player.bounds.width > player.bounds.height
+            || player.allowedOrientations != .portrait
+        let mainWasHidden = hiddenMain != nil
+
         revealTask?.cancel()
+        revealTask = nil
         resumeRevealWaiters()
         window = nil
         host = nil
         token = nil
+        closing = false
         orientationRound += 1
+        let returnRound = orientationRound
         watchdog?.cancel()
         watchdog = nil
         onDismissed = nil
-        player.isHidden = true
-        player.rootViewController = nil
         debugLabel = nil
         debugLines = []
         pendingDebug = []
+
+        player.alpha = 0
+        player.isHidden = true
+        player.rootViewController = nil
+        player.windowScene = nil
         UIDevice.current.endGeneratingDeviceOrientationNotifications()
 
-        willClose()
-        let main = mainWindow(in: scene)
-        main?.makeKey()
-        main?.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
-        scene?.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait)) { _ in }
+        guard !replacing else { return }
+
+        mainRevealTask?.cancel()
+        mainRevealTask = nil
+        let main = hiddenMain ?? mainWindow(in: scene)
+        hiddenMain = nil
+
+        if wasLandscape && mainWasHidden, let main {
+            main.alpha = 0
+            main.isHidden = false
+            main.makeKey()
+            main.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
+            if let scene {
+                requestPortraitReturn(in: scene, round: returnRound, attempt: 0)
+            }
+            mainRevealTask = Task { @MainActor [weak self, weak main, weak scene] in
+                // 等场景完成竖屏几何更新后再淡入主窗口，最多等 150ms；若期间又打开新播放器则中止
+                for _ in 0..<5 {
+                    if let scene, !scene.interfaceOrientation.isLandscape { break }
+                    try? await Task.sleep(nanoseconds: 30_000_000)
+                    guard !Task.isCancelled, self?.window == nil else {
+                        main?.alpha = 1
+                        return
+                    }
+                }
+                guard let main, !Task.isCancelled, self?.window == nil else {
+                    main?.alpha = 1
+                    return
+                }
+                UIView.animate(withDuration: 0.16, delay: 0, options: [.curveEaseOut, .beginFromCurrentState]) {
+                    main.alpha = 1
+                }
+            }
+        } else {
+            main?.alpha = 1
+            main?.isHidden = false
+            main?.makeKey()
+            main?.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
+            if let scene {
+                requestPortraitReturn(in: scene, round: returnRound, attempt: 0)
+            }
+        }
+    }
+
+    /// 关闭播放器后请求场景回到竖屏；真机上首次请求偶发被系统拒绝时短间隔补发，避免停留在横屏。
+    private func requestPortraitReturn(in scene: UIWindowScene, round: Int, attempt: Int) {
+        guard window == nil, round == orientationRound else { return }
+        scene.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait)) { [weak self, weak scene] _ in
+            guard attempt < 3 else { return }
+            Task { @MainActor [weak self, weak scene] in
+                try? await Task.sleep(nanoseconds: 120_000_000)
+                guard let self, let scene, self.window == nil, round == self.orientationRound else { return }
+                self.requestPortraitReturn(in: scene, round: round, attempt: attempt + 1)
+            }
+        }
+        guard attempt < 3 else { return }
+        Task { @MainActor [weak self, weak scene] in
+            try? await Task.sleep(nanoseconds: 180_000_000)
+            guard let self, let scene, self.window == nil, round == self.orientationRound,
+                  scene.interfaceOrientation.isLandscape else { return }
+            self.requestPortraitReturn(in: scene, round: round, attempt: attempt + 1)
+        }
     }
 
     // MARK: 内部
@@ -266,7 +381,7 @@ final class PlayerWindowController {
     }
 
     private func reveal() {
-        guard !revealed, let window else { return }
+        guard !revealed, !closing, let window else { return }
         revealed = true
         revealTask?.cancel()
         resumeRevealWaiters()
@@ -458,13 +573,20 @@ private struct PlayerWindowModifier<Root: View>: ViewModifier {
         // 页面重新出现时自己的窗口还开着，不要重新弹一个（会把正在播的视频从头再开）
         if let token, PlayerWindowController.shared.isShowing(token) { return }
         let binding = $isPresented
+        let presentationToken = UUID()
         let view = root()
             // 播放窗口是独立窗口：全局 HUD 提示在播放时落到画面顶部（深色）
             .hudHost(.player)
             .environmentObject(appState)
-            .environment(\.dismissPlayerWindow, { binding.wrappedValue = false })
+            .environment(\.dismissPlayerWindow, {
+                // 先复位绑定状态再直接关闭独立窗口：即使宿主页面在隐藏主窗或横向分页屏外未收到 onChange，
+                // 播放器窗口也能立即可靠卸下，且主窗恢复可见时 onAppear 不会再次误弹播放器。
+                binding.wrappedValue = false
+                PlayerWindowController.shared.dismiss(token: presentationToken)
+            })
         token = PlayerWindowController.shared.present(
             AnyView(view),
+            token: presentationToken,
             landscape: landscape ?? PlayerWindowController.startsInLandscape,
             onDismissed: { binding.wrappedValue = false }
         )

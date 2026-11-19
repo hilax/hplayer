@@ -3163,7 +3163,7 @@ struct PlaybackControlsView: View {
             diagnosticsCopier.reset()
             return
         }
-        let delay: UInt64 = playback.currentTime > 0.5 && !loading ? 800_000_000 : 1_500_000_000
+        let delay: UInt64 = playback.hasPlayed && !loading ? 800_000_000 : 1_500_000_000
         busyTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: delay)
             guard !Task.isCancelled else { return }
@@ -3961,26 +3961,25 @@ struct PlaybackControlsView: View {
             if revealing { revealControls() }
         }
     }
-    /// 柔和关闭：控制栏和整个播放页一起淡出、轻轻缩小，淡出结束后直接关掉。
-    /// 主窗口一直是竖屏、没有转过，所以不需要翻转，也不需要遮罩。
+    /// 柔和关闭：控制栏和整个播放页一起淡出、轻轻缩小，淡出结束后卸掉独立窗口并恢复竖屏主窗口。
     private func closePlayer() {
         guard !closing else { return }
         closing = true
         hideTask?.cancel()
         playback.setBoost(false)
         playback.pauseForClose()
-        PlayerWindowController.shared.willClose()
+        PlayerWindowController.shared.willClose(animated: !reduceMotion)
         popover = nil
         popoverCloseTask?.cancel()
         showList = false
         quickMenu = nil
         showSleepMenu = false
-        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.3)) {
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.22)) {
             controlsVisible = false
             closeFade = true
         }
         Task { @MainActor in
-            if !reduceMotion { try? await Task.sleep(nanoseconds: 310_000_000) }
+            if !reduceMotion { try? await Task.sleep(nanoseconds: 230_000_000) }
             var transaction = Transaction()
             transaction.disablesAnimations = true
             withTransaction(transaction) { onClose() }

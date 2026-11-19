@@ -20,6 +20,11 @@ enum PlayerWarmup {
         lock.unlock()
         guard first else { return }
         PlayerDiskCache.prepare()
+        // 提前把本机回环中转监听拉起来，并备好内置字幕字体目录，避免首次点开 115 视频时冷启动中转监听。
+        LocalStreamProxy.shared.warmUp()
+        PlayerDiskCache.queue.async {
+            _ = SubtitleFontManager.prepareSubtitleFontDirectory()
+        }
         queue.async {
             let session = AVAudioSession.sharedInstance()
             _ = session.category

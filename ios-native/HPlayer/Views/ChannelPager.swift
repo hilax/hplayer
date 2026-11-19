@@ -60,6 +60,9 @@ struct PagedHeaderContainer<Page: Hashable, FirstRow: View, SecondRow: View, Con
     @State private var position: Page?
     /// 去过的页和当前页左右两页才建内容；建过的一直留着（滚动位置、已加载的数据不丢）
     @State private var visited: Set<Page> = []
+    /// 正在因窗口尺寸变化 / 主窗口恢复对齐页码，期间不把中间偏移写回 selection
+    @State private var realigning = false
+    @State private var realignGeneration = 0
 
     var body: some View {
         GeometryReader { proxy in
@@ -117,12 +120,15 @@ struct PagedHeaderContainer<Page: Hashable, FirstRow: View, SecondRow: View, Con
                     withAnimation(Motion.smooth) { position = value }
                 }
                 .onChange(of: position) { value in
+                    // 独立播放器打开期间或窗口尺寸切换对齐过程中，ScrollView 偏移会被临时重算，不能把当前频道覆盖成相邻页
+                    guard !PlayerWindowController.shared.isPresented, !realigning else { return }
                     if let value, value != selection { selection = value }
                 }
                 // 播放器横屏时主窗口被藏起来、跟着场景转成横的再转回来，宽度变了以后
                 // 横向滚动停在两页中间（露出半个旁边的频道）。宽度一变、主窗口重新露出来，都对齐回当前页。
                 .onChange(of: width) { _ in realign(reader) }
-                .onReceive(NotificationCenter.default.publisher(for: UIWindow.didBecomeVisibleNotification)) { _ in
+                .onReceive(NotificationCenter.default.publisher(for: UIWindow.didBecomeVisibleNotification)) { note in
+                    guard !(note.object is PlayerWindow) else { return }
                     realign(reader)
                 }
             }
@@ -159,6 +165,9 @@ struct PagedHeaderContainer<Page: Hashable, FirstRow: View, SecondRow: View, Con
     /// 不带动画地把横向分页对齐到当前页；等这一轮布局结束再对齐，宽度才是新的
     private func realign(_ reader: ScrollViewProxy) {
         let target = selection
+        realignGeneration += 1
+        let gen = realignGeneration
+        realigning = true
         for delay in [0.0, 0.35] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                 var transaction = Transaction()
@@ -168,6 +177,9 @@ struct PagedHeaderContainer<Page: Hashable, FirstRow: View, SecondRow: View, Con
                     position = target
                 }
             }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+            if realignGeneration == gen { realigning = false }
         }
     }
 

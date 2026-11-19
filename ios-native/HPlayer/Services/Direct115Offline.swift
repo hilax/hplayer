@@ -662,6 +662,31 @@ final class MagnetCloudVideoCache: @unchecked Sendable {
         persistLocked()
     }
 
+    func pickCodes(forInfoHash infoHash: String) -> Set<String> {
+        let normalized = infoHash.lowercased()
+        guard !normalized.isEmpty else { return [] }
+        lock.lock()
+        defer { lock.unlock() }
+        var result: Set<String> = []
+        for entry in entries.values where entry.infoHash == normalized {
+            for video in entry.videos where !video.file.pickCode.isEmpty {
+                result.insert(video.file.pickCode)
+            }
+        }
+        return result
+    }
+
+    func infoHashes(containingPickCode pickCode: String) -> Set<String> {
+        guard !pickCode.isEmpty else { return [] }
+        lock.lock()
+        defer { lock.unlock() }
+        var result: Set<String> = []
+        for entry in entries.values where entry.videos.contains(where: { $0.file.pickCode == pickCode }) {
+            result.insert(entry.infoHash)
+        }
+        return result
+    }
+
     func clear() {
         lock.lock()
         defer { lock.unlock() }

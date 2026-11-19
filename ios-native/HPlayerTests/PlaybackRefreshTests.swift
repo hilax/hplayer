@@ -129,4 +129,27 @@ final class PlaybackRefreshTests: XCTestCase {
         try await Task.sleep(nanoseconds: 2_400_000_000)
         XCTAssertEqual(player.notice, "")
     }
+
+    func testDeferredAutoPlayReleasesCleanlyAndRespectsClose() throws {
+        let player = PlaybackController()
+        defer { player.stop() }
+        let url = try XCTUnwrap(URL(string: "https://example.com/original.mp4"))
+
+        player.open(url, direct115: true, autoRecover: false, deferAutoPlay: true)
+        XCTAssertTrue(player.playing, "预热暂挂不改变用户的播放意图，避免首帧闪现暂停按钮")
+        XCTAssertTrue(player.buffering)
+
+        player.releaseRevealHold()
+        player.receiveEventForTesting(.fileLoaded)
+        player.receiveEventForTesting(.playbackRestart)
+        XCTAssertTrue(player.hasPlayed)
+        XCTAssertTrue(player.playing)
+        XCTAssertFalse(player.buffering)
+
+        // 若窗口在淡入前就被关闭，随后到达的 releaseRevealHold 不能重新恢复播放
+        player.open(url, direct115: true, autoRecover: false, deferAutoPlay: true)
+        player.pauseForClose()
+        player.releaseRevealHold()
+        XCTAssertFalse(player.playing)
+    }
 }

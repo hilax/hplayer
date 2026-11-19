@@ -284,12 +284,18 @@ final class Direct115SessionCache: @unchecked Sendable {
         let expiresAt: Date
     }
 
+    static let defaultOriginalURLTTL: TimeInterval = 15 * 60
+
     private let lock = NSLock()
     private var userIDs: [String: Int] = [:]
     private var userOrder: [String] = []
     private var originalURLs: [String: CachedURL] = [:]
     private var urlOrder: [String] = []
-    private let originalURLTTL: TimeInterval = 45
+    private let originalURLTTL: TimeInterval
+
+    init(originalURLTTL: TimeInterval = Direct115SessionCache.defaultOriginalURLTTL) {
+        self.originalURLTTL = originalURLTTL
+    }
 
     func userID(for cookie: String) -> Int? {
         lock.lock()

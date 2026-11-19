@@ -15,6 +15,12 @@ struct MagnetHistoryItem: Codable, Identifiable, Equatable {
     var updatedAt: Date
     /// 每个文件的总时长（秒），和 positions 一起用来画进度条；旧记录没有这一项
     var durations: [String: Double]? = nil
+    /// 最近一次是通过 115 播放的（115 播放记录由 RecentStore 承载，首页「继续观看」不再重复显示磁力卡片）
+    var playedViaCloud: Bool? = nil
+    /// 115 离线目录里对应的视频提取码列表（用于和 RecentStore 中的 115 记录关联去重）
+    var cloudPickCodes: [String]? = nil
+    /// 最近一次通过 115 播放的视频提取码
+    var lastCloudPickCode: String? = nil
 
     var id: String { infoHash }
 
@@ -33,11 +39,13 @@ final class MagnetHistoryStore: ObservableObject {
 
     @Published private(set) var items: [MagnetHistoryItem] = []
 
+    private let defaults: UserDefaults
     private let storageKey = "hplayer.magnet.history"
     private let limit = 30
 
-    init() {
-        guard let data = UserDefaults.standard.data(forKey: storageKey),
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        guard let data = defaults.data(forKey: storageKey),
               let decoded = try? JSONDecoder().decode([MagnetHistoryItem].self, from: data) else { return }
         items = decoded
     }
@@ -48,6 +56,8 @@ final class MagnetHistoryStore: ObservableObject {
 
     /// 解析成功：新建或刷新记录，并移到最前面
     func recordResolved(link: MagnetLink, catalog: MagnetCatalog) {
+        let viaCloud = catalog.source == .cloud
+        let pickCodes = catalog.allVideos.compactMap(\.pickCode).filter { !$0.isEmpty }
         var entry = self.item(for: link.infoHash) ?? MagnetHistoryItem(
             infoHash: link.infoHash,
             magnet: link.uri,
@@ -64,6 +74,10 @@ final class MagnetHistoryStore: ObservableObject {
         entry.totalSize = catalog.totalSize
         entry.videoCount = catalog.allVideos.count
         entry.updatedAt = Date()
+        entry.playedViaCloud = viaCloud
+        if !pickCodes.isEmpty {
+            entry.cloudPickCodes = pickCodes
+        }
         upsert(entry)
     }
 
@@ -72,7 +86,90 @@ final class MagnetHistoryStore: ObservableObject {
         entry.lastFileIndex = file.historyIndex
         entry.lastFileTitle = file.title
         entry.updatedAt = Date()
+        if let pickCode = file.pickCode, !pickCode.isEmpty {
+            entry.playedViaCloud = true
+            entry.lastCloudPickCode = pickCode
+            var codes = entry.cloudPickCodes ?? []
+            if !codes.contains(pickCode) { codes.append(pickCode) }
+            entry.cloudPickCodes = codes
+        } else {
+            entry.playedViaCloud = false
+        }
         upsert(entry)
+    }
+
+    /// 从首页「继续观看」移除一条 115 播放记录时，同步标记旧版尚未写入 `playedViaCloud` 的对应磁力条目，
+    /// 避免删掉 115 卡片后原本被去重隐藏的旧磁力卡片重新冒出来。
+    func markSupersededByCloud(pickCode: String, cachedInfoHashes: Set<String> = [], title: String = "") {
+        guard !pickCode.isEmpty else { return }
+        var changed = false
+        let normalizedTitle = Self.normalizedTitle(title)
+        for index in items.indices {
+            let item = items[index]
+            guard item.playedViaCloud == nil, item.lastProgress == nil else { continue }
+            let matchesPickCode = item.lastCloudPickCode == pickCode || (item.cloudPickCodes?.contains(pickCode) == true)
+            let matchesHash = cachedInfoHashes.contains(item.infoHash.lowercased())
+            let matchesTitle = !normalizedTitle.isEmpty && Self.matchesCloudTitle(item, normalizedCloudTitle: normalizedTitle)
+            if matchesPickCode || matchesHash || matchesTitle {
+                items[index].playedViaCloud = true
+                if items[index].lastCloudPickCode == nil {
+                    items[index].lastCloudPickCode = pickCode
+                }
+                changed = true
+            }
+        }
+        if changed { persist() }
+    }
+
+    /// 判断一条磁力历史记录在首页「继续观看」里是否已经由对应的 115 播放记录承载（避免同一视频出现两条记录）。
+    static func isSupersededByCloud(
+        _ item: MagnetHistoryItem,
+        recentCloudPickCodes: Set<String>,
+        recentCloudTitles: [String],
+        cachedPickCodesForHash: (String) -> Set<String>,
+        isDownloadedToCloud: (String) -> Bool
+    ) -> Bool {
+        if let playedViaCloud = item.playedViaCloud {
+            return playedViaCloud
+        }
+        // 兼容旧版本已经写盘的历史记录：没有 BT 播放进度，且对应提取码或已离线资源已在 115 最近播放里出现
+        guard item.lastProgress == nil else { return false }
+        var codes = Set(item.cloudPickCodes ?? [])
+        if let last = item.lastCloudPickCode, !last.isEmpty { codes.insert(last) }
+        codes.formUnion(cachedPickCodesForHash(item.infoHash))
+        if !codes.isEmpty && !codes.isDisjoint(with: recentCloudPickCodes) {
+            return true
+        }
+        guard isDownloadedToCloud(item.infoHash), !recentCloudTitles.isEmpty else { return false }
+        for cloudTitle in recentCloudTitles {
+            let normalized = normalizedTitle(cloudTitle)
+            if !normalized.isEmpty, matchesCloudTitle(item, normalizedCloudTitle: normalized) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func normalizedTitle(_ raw: String) -> String {
+        let parsed = MediaNameParser.parse(raw).title
+        let candidate = parsed.isEmpty ? raw : parsed
+        return candidate.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private static func matchesCloudTitle(_ item: MagnetHistoryItem, normalizedCloudTitle: String) -> Bool {
+        if let fileTitle = item.lastFileTitle {
+            let normalizedFile = normalizedTitle(fileTitle)
+            if normalizedFile.count >= 4,
+               normalizedFile == normalizedCloudTitle || normalizedCloudTitle.contains(normalizedFile) || normalizedFile.contains(normalizedCloudTitle) {
+                return true
+            }
+        }
+        let normalizedName = normalizedTitle(item.name)
+        if normalizedName.count >= 4,
+           normalizedName == normalizedCloudTitle || normalizedCloudTitle.contains(normalizedName) || normalizedName.contains(normalizedCloudTitle) {
+            return true
+        }
+        return false
     }
 
     func position(infoHash: String, fileIndex: UInt32) -> Double? {
@@ -125,6 +222,6 @@ final class MagnetHistoryStore: ObservableObject {
 
     private func persist() {
         guard let data = try? JSONEncoder().encode(items) else { return }
-        UserDefaults.standard.set(data, forKey: storageKey)
+        defaults.set(data, forKey: storageKey)
     }
 }

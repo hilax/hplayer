@@ -28,8 +28,9 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
     private var profiles: [String: StreamProfile] = [:]
     private var profileOrder: [String] = []
     private var streamGenerations: [String: Int] = [:]
-    private var tasks: [Int: ProxyConnection] = [:]
+    private var tasks: [Int: UpstreamTaskHandler] = [:]
     private var connections: [ObjectIdentifier: ProxyConnection] = [:]
+    private var prewarms: [String: PrewarmTransfer] = [:]
     private var serialCounter = 0
     private var lastProblem = ""
     /// 最近几次上游出错的记录（带时间）。自动重试好几次之后，最初的出错原因不会被后面的覆盖掉。
@@ -112,6 +113,124 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
     }
 
     // MARK: 对外
+
+    /// 提前把本机回环监听拉起来，避免首次打开 115 视频时现建监听。
+    func warmUp() {
+        queue.async {
+            self.ensureListener()
+        }
+    }
+
+    /// 拿到 115 原画直链后立刻在后台预热：建立到 CDN 的 TLS 连接并预取片头字节（若检测到 MP4 的 moov 在文件尾，
+    /// 再接着预取 moov 区间）写入内存块缓存。mpv 稍后发起请求时若预热仍在进行可直接接管同一条连接，不浪费并发。
+    func prewarm(
+        url upstream: URL,
+        headers: [String: String],
+        streamID: String? = nil,
+        resume: Bool = false,
+        renew: (() async throws -> URL)? = nil
+    ) {
+        guard !Self.looksLikePlaylistURL(upstream) else { return }
+        queue.async {
+            self.ensureListener()
+            let key = self.renewalKey(streamID: streamID, upstream: upstream)
+            if let renew { self.registerRenewal(forKey: key, renew) }
+            // 取消其他视频残留的预热任务，避免占用带宽和连接
+            for (otherKey, other) in self.prewarms where otherKey != key {
+                other.cancel()
+                self.prewarms.removeValue(forKey: otherKey)
+            }
+            // 这个视频已经有活跃播放连接时不再发预热请求，避免和 115 并发数冲突
+            let hasActive = self.connections.values.contains { $0.matchesStreamKey(key) && $0.isActiveMediaRequest }
+            guard !hasActive, self.prewarms[key] == nil else { return }
+
+            let targetURL = self.currentUpstream(forKey: key, fallback: upstream)
+            // 如果片头已经在缓存里（刚播过同片），检查是否需要补预热尾部 moov
+            if let headHit = self.blockCache.lookup(key: key, start: 0, requestedEnd: 65_535) {
+                if case .moovAtTail(let tailStart, let tailEnd) = MP4MoovProbe.inspect(prefix: headHit.data, totalSize: headHit.meta.totalSize),
+                   let missing = self.missingCacheRange(forKey: key, start: tailStart, end: tailEnd) {
+                    self.startPrewarmTransfer(key: key, url: targetURL, headers: headers,
+                                              start: missing.start, end: missing.end, resume: resume, followTailMoov: false)
+                }
+                return
+            }
+
+            let headEnd: Int64 = resume ? (256 * 1024 - 1) : (2 * 1_048_576 - 1)
+            self.startPrewarmTransfer(key: key, url: targetURL, headers: headers,
+                                      start: 0, end: headEnd, resume: resume, followTailMoov: true)
+        }
+    }
+
+    private func startPrewarmTransfer(
+        key: String,
+        url: URL,
+        headers: [String: String],
+        start: Int64,
+        end: Int64,
+        resume: Bool,
+        followTailMoov: Bool
+    ) {
+        guard end >= start else { return }
+        prewarms[key]?.cancel()
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        for (name, value) in headers {
+            request.setValue(value, forHTTPHeaderField: name)
+        }
+        request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
+        request.setValue("bytes=\(start)-\(end)", forHTTPHeaderField: "Range")
+        let transfer = PrewarmTransfer(
+            key: key,
+            url: url,
+            headers: headers,
+            rangeStart: start,
+            rangeEnd: end,
+            resume: resume,
+            followTailMoov: followTailMoov,
+            proxy: self
+        )
+        prewarms[key] = transfer
+        transfer.start(request: request)
+    }
+
+    private func missingCacheRange(forKey key: String, start: Int64, end: Int64) -> (start: Int64, end: Int64)? {
+        guard end >= start else { return nil }
+        guard let hit = blockCache.lookup(key: key, start: start, requestedEnd: end) else {
+            return (start, end)
+        }
+        let coveredEnd = start + Int64(hit.data.count) - 1
+        guard coveredEnd < hit.resolvedEnd else { return nil }
+        return (coveredEnd + 1, hit.resolvedEnd)
+    }
+
+    fileprivate func prewarmDidFinish(_ transfer: PrewarmTransfer, nextTailRange: (start: Int64, end: Int64)?) {
+        guard prewarms[transfer.key] === transfer else { return }
+        prewarms.removeValue(forKey: transfer.key)
+        guard let tail = nextTailRange else { return }
+        let hasActive = connections.values.contains { $0.matchesStreamKey(transfer.key) && $0.isActiveMediaRequest }
+        guard !hasActive else { return }
+        guard let missing = missingCacheRange(forKey: transfer.key, start: tail.start, end: tail.end) else { return }
+        let targetURL = currentUpstream(forKey: transfer.key, fallback: transfer.url)
+        startPrewarmTransfer(key: transfer.key, url: targetURL, headers: transfer.headers,
+                             start: missing.start, end: missing.end, resume: transfer.resume, followTailMoov: false)
+    }
+
+    fileprivate func takeAdoptablePrewarm(forKey key: String, start: Int64, requestedEnd: Int64?) -> PrewarmTransfer? {
+        guard let transfer = prewarms[key], transfer.canBeAdopted(forStart: start, requestedEnd: requestedEnd) else {
+            return nil
+        }
+        prewarms.removeValue(forKey: key)
+        return transfer
+    }
+
+    fileprivate func cancelPrewarm(forKey key: String) {
+        guard let transfer = prewarms.removeValue(forKey: key) else { return }
+        transfer.cancel()
+    }
+
+    fileprivate func reassignTask(_ task: URLSessionDataTask, to handler: UpstreamTaskHandler) {
+        tasks[task.taskIdentifier] = handler
+    }
 
     /// 把网络地址换成本机中转地址；中转服务起不来时返回 nil，调用方就直接用原地址
     func localURL(
@@ -419,6 +538,7 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
     /// （记住下到哪了）；它们之后要么被 mpv 关掉，要么等别的下载都结束了再从原位置接着下。
     fileprivate func claimUpstream(for handler: ProxyConnection) {
         guard let key = handler.streamKey else { return }
+        cancelPrewarm(forKey: key)
         for other in connections.values where other !== handler && other.streamKey == key {
             if handler.hasExplicitStreamID && other.profileGeneration < handler.profileGeneration {
                 other.forceClosePreempted()
@@ -717,7 +837,7 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
 
     // MARK: 上游请求
 
-    fileprivate func startTask(_ request: URLRequest, for handler: ProxyConnection) -> URLSessionDataTask {
+    fileprivate func startTask(_ request: URLRequest, for handler: UpstreamTaskHandler) -> URLSessionDataTask {
         let task = session.dataTask(with: request)
         tasks[task.taskIdentifier] = handler
         task.resume()
@@ -853,9 +973,9 @@ private final class StreamBlockCache {
     }
 
     private static let headPinBytes: Int64 = 2 * 1_048_576
-    private static let tailPinBytes: Int64 = 2 * 1_048_576
+    private static let tailPinBytes: Int64 = 4 * 1_048_576
     private static let maxSingleBlockBytes = 2 * 1_048_576
-    private let maxTotalBytes = 40 * 1_048_576
+    private let maxTotalBytes = 48 * 1_048_576
     private var entries: [String: Entry] = [:]
     private var clock: UInt64 = 0
     private(set) var totalBytes = 0
@@ -1045,8 +1165,255 @@ extension LocalStreamProxy: URLSessionDataDelegate {
     }
 }
 
+/// 探测 MP4 文件开头若干字节，判断 `moov` 索引是否在文件尾部。
+/// 若先见到 `mdat` 再到文件尾，可直接算出尾部 `moov` 的精确字节区间供中转提前预取。
+enum MP4MoovProbe: Equatable {
+    case undetermined
+    case moovAtHead
+    case moovAtTail(start: Int64, end: Int64)
+
+    static func inspect(prefix: Data, totalSize: Int64, maxTailBytes: Int64 = 4 * 1_048_576) -> MP4MoovProbe {
+        guard totalSize > 16, prefix.count >= 12 else { return .undetermined }
+        let firstType = boxType(in: prefix, at: 4)
+        guard firstType == "ftyp" || firstType == "wide" || firstType == "free" || firstType == "moov" || firstType == "mdat" else {
+            return .undetermined
+        }
+        var offset: Int64 = 0
+        var iterations = 0
+        while iterations < 32, offset + 8 <= Int64(prefix.count) {
+            iterations += 1
+            let pos = Int(offset)
+            let size32 = readUInt32BE(prefix, at: pos)
+            let type = boxType(in: prefix, at: pos + 4)
+            let boxSize: Int64
+            if size32 == 1 {
+                guard pos + 16 <= prefix.count else { return .undetermined }
+                let size64 = readUInt64BE(prefix, at: pos + 8)
+                guard size64 >= 16, size64 <= UInt64(Int64.max) else { return .undetermined }
+                boxSize = Int64(size64)
+            } else if size32 == 0 {
+                boxSize = totalSize - offset
+            } else {
+                guard size32 >= 8 else { return .undetermined }
+                boxSize = Int64(size32)
+            }
+            if type == "moov" {
+                return .moovAtHead
+            }
+            if type == "mdat" {
+                let afterMdat = offset + boxSize
+                guard afterMdat > offset, afterMdat < totalSize else { return .undetermined }
+                let end = min(totalSize - 1, afterMdat + maxTailBytes - 1)
+                return .moovAtTail(start: afterMdat, end: end)
+            }
+            guard boxSize > 0, offset <= Int64.max - boxSize else { return .undetermined }
+            offset += boxSize
+            if offset >= totalSize { return .undetermined }
+        }
+        return .undetermined
+    }
+
+    private static func boxType(in data: Data, at index: Int) -> String {
+        guard index >= 0, index + 4 <= data.count else { return "" }
+        let start = data.index(data.startIndex, offsetBy: index)
+        let end = data.index(start, offsetBy: 4)
+        return String(decoding: data[start..<end], as: UTF8.self)
+    }
+
+    private static func readUInt32BE(_ data: Data, at index: Int) -> UInt32 {
+        let base = data.startIndex + index
+        return (UInt32(data[base]) << 24)
+            | (UInt32(data[base + 1]) << 16)
+            | (UInt32(data[base + 2]) << 8)
+            | UInt32(data[base + 3])
+    }
+
+    private static func readUInt64BE(_ data: Data, at index: Int) -> UInt64 {
+        let hi = UInt64(readUInt32BE(data, at: index))
+        let lo = UInt64(readUInt32BE(data, at: index + 4))
+        return (hi << 32) | lo
+    }
+}
+
+private protocol UpstreamTaskHandler: AnyObject {
+    func didRedirect(to url: URL)
+    func didReceive(_ response: URLResponse, from dataTask: URLSessionDataTask) -> Bool
+    func didReceive(_ data: Data)
+    func didComplete(_ error: Error?)
+}
+
+/// 后台预热传输：拿到 115 直链后立刻开始拉取片头（或尾部 moov）写入 `StreamBlockCache`。
+/// mpv 稍后打开同一偏移时可直接接管这条仍在进行的 URLSessionDataTask，零重复建连、零浪费首包。
+private final class PrewarmTransfer: UpstreamTaskHandler {
+    let key: String
+    var url: URL
+    let headers: [String: String]
+    let rangeStart: Int64
+    let rangeEnd: Int64
+    let resume: Bool
+    let followTailMoov: Bool
+    private weak var proxy: LocalStreamProxy?
+
+    private(set) var task: URLSessionDataTask?
+    private(set) var responseReceived = false
+    private(set) var meta: StreamBlockCache.Metadata?
+    private(set) var actualStart: Int64 = 0
+    private(set) var actualEnd: Int64 = 0
+    private(set) var bufferedData = Data()
+    private var probedMoov = false
+    private var detectedTailRange: (start: Int64, end: Int64)?
+    private var finished = false
+
+    init(
+        key: String,
+        url: URL,
+        headers: [String: String],
+        rangeStart: Int64,
+        rangeEnd: Int64,
+        resume: Bool,
+        followTailMoov: Bool,
+        proxy: LocalStreamProxy
+    ) {
+        self.key = key
+        self.url = url
+        self.headers = headers
+        self.rangeStart = rangeStart
+        self.rangeEnd = rangeEnd
+        self.resume = resume
+        self.followTailMoov = followTailMoov
+        self.proxy = proxy
+    }
+
+    func start(request: URLRequest) {
+        guard let proxy, !finished else { return }
+        task = proxy.startTask(request, for: self)
+    }
+
+    func canBeAdopted(forStart start: Int64, requestedEnd: Int64?) -> Bool {
+        guard !finished, task != nil, start == rangeStart else { return false }
+        if responseReceived {
+            guard meta != nil, actualStart == start else { return false }
+            if let requestedEnd, requestedEnd < actualEnd { return false }
+            return true
+        }
+        if let requestedEnd, requestedEnd < rangeEnd { return false }
+        return true
+    }
+
+    /// 把正在进行的上游任务直接移交给 `ProxyConnection`，不再重复建连。
+    func detachTaskForAdoption() -> URLSessionDataTask? {
+        finished = true
+        let running = task
+        task = nil
+        return running
+    }
+
+    func cancel() {
+        guard !finished else { return }
+        finished = true
+        if let task {
+            proxy?.detach(task)
+            task.cancel()
+        }
+        task = nil
+    }
+
+    func didRedirect(to url: URL) {
+        self.url = url
+    }
+
+    func didReceive(_ response: URLResponse, from dataTask: URLSessionDataTask) -> Bool {
+        guard !finished, let http = response as? HTTPURLResponse,
+              http.statusCode == 206,
+              let range = Self.contentRange(of: http),
+              range.start == rangeStart,
+              let total = Self.totalLength(of: http), total > 0 else {
+            finish(nextTail: nil)
+            return false
+        }
+        responseReceived = true
+        actualStart = range.start
+        actualEnd = range.end
+        meta = StreamBlockCache.Metadata(
+            totalSize: total,
+            supportsRanges: true,
+            contentType: http.value(forHTTPHeaderField: "Content-Type"),
+            etag: http.value(forHTTPHeaderField: "ETag"),
+            lastModified: http.value(forHTTPHeaderField: "Last-Modified"),
+            acceptRanges: http.value(forHTTPHeaderField: "Accept-Ranges") ?? "bytes"
+        )
+        return true
+    }
+
+    func didReceive(_ data: Data) {
+        guard !finished, let meta, let proxy, !data.isEmpty else { return }
+        let offset = actualStart + Int64(bufferedData.count)
+        bufferedData.append(data)
+        proxy.blockCache.record(key: key, meta: meta, offset: offset, data: data)
+
+        if followTailMoov && !probedMoov && actualStart == 0 && bufferedData.count >= 64 {
+            let probe = MP4MoovProbe.inspect(prefix: bufferedData, totalSize: meta.totalSize)
+            switch probe {
+            case .moovAtHead:
+                probedMoov = true
+            case .moovAtTail(let tailStart, let tailEnd):
+                probedMoov = true
+                detectedTailRange = (tailStart, tailEnd)
+            case .undetermined:
+                if bufferedData.count >= 16_384 { probedMoov = true }
+            }
+        }
+        // 续播场景下片头已有 64 KiB（足以让 mpv 读完 ftyp/mdat 头），立刻停掉剩余片头下载转去拉尾部 moov
+        if resume && followTailMoov && detectedTailRange != nil && bufferedData.count >= 65_536 {
+            if let running = task {
+                proxy.detach(running)
+                running.cancel()
+                task = nil
+            }
+            finish(nextTail: detectedTailRange)
+        }
+    }
+
+    func didComplete(_ error: Error?) {
+        task = nil
+        guard !finished else { return }
+        if error != nil {
+            finish(nextTail: nil)
+        } else {
+            finish(nextTail: detectedTailRange)
+        }
+    }
+
+    private func finish(nextTail: (start: Int64, end: Int64)?) {
+        guard !finished else { return }
+        finished = true
+        if let task {
+            proxy?.detach(task)
+            task.cancel()
+            self.task = nil
+        }
+        proxy?.prewarmDidFinish(self, nextTailRange: nextTail)
+    }
+
+    private static func totalLength(of response: HTTPURLResponse) -> Int64? {
+        guard let value = response.value(forHTTPHeaderField: "Content-Range"),
+              let total = value.split(separator: "/").last else { return nil }
+        return Int64(total.trimmingCharacters(in: .whitespaces))
+    }
+
+    private static func contentRange(of response: HTTPURLResponse) -> (start: Int64, end: Int64)? {
+        guard let value = response.value(forHTTPHeaderField: "Content-Range") else { return nil }
+        let parts = value.split(separator: " ")
+        guard parts.count == 2, parts[0].lowercased() == "bytes" else { return nil }
+        guard let span = parts[1].split(separator: "/", maxSplits: 1).first else { return nil }
+        let bounds = span.split(separator: "-")
+        guard bounds.count == 2, let start = Int64(bounds[0]), let end = Int64(bounds[1]), end >= start else { return nil }
+        return (start, end)
+    }
+}
+
 /// mpv 发来的一个请求：读请求头，转成 URLSession 请求，再把响应原样写回去。一个连接只服务一个请求。
-private final class ProxyConnection {
+private final class ProxyConnection: UpstreamTaskHandler {
     /// 写给 mpv 的数据积压超过 8MB 就暂停下载，降到 2MB 再继续，免得内存涨上去
     private static let pauseBytes = 8 * 1_048_576
     private static let resumeBytes = 2 * 1_048_576
@@ -1372,6 +1739,67 @@ private final class ProxyConnection {
 
         let playlistCandidate = LocalStreamProxy.looksLikePlaylistURL(target.url) || isPlaylistChildStream
         let canChunk = !isHead && !playlistCandidate && proxy.chunkSize > 0 && parsedRange != nil
+
+        // 若后台预热正在拉取相同起始偏移，直接接管这条在途连接，免去重复建连或等待重开
+        if !isHead, !playlistCandidate, let parsed = parsedRange,
+           let prewarm = proxy.takeAdoptablePrewarm(forKey: key, start: parsed.start, requestedEnd: parsed.end),
+           let runningTask = prewarm.detachTaskForAdoption() {
+            proxy.claimUpstream(for: self)
+            upstreamURL = prewarm.url
+            if prewarm.responseReceived, let meta = prewarm.meta {
+                let total = meta.totalSize
+                let resolvedEnd = min(parsed.end ?? (total - 1), total - 1)
+                let expectedTotal = resolvedEnd - parsed.start + 1
+                var head = "HTTP/1.1 206 Partial Content\r\n"
+                if let ct = meta.contentType { head += "Content-Type: \(ct)\r\n" }
+                head += "Content-Length: \(expectedTotal)\r\n"
+                head += "Content-Range: bytes \(parsed.start)-\(resolvedEnd)/\(total)\r\n"
+                if let ar = meta.acceptRanges { head += "Accept-Ranges: \(ar)\r\n" }
+                if let lm = meta.lastModified { head += "Last-Modified: \(lm)\r\n" }
+                if let et = meta.etag { head += "ETag: \(et)\r\n" }
+                head += "Connection: close\r\n\r\n"
+
+                headersSent = true
+                bodyStart = parsed.start
+                bodyEnd = resolvedEnd
+                bodyTotal = total
+                currentChunkActualEnd = prewarm.actualEnd
+                validator = meta.etag
+                cachedContentType = meta.contentType
+                cachedAcceptRanges = meta.acceptRanges
+                cachedLastModified = meta.lastModified
+                cachedSupportsRanges = meta.supportsRanges
+                chunkingActive = prewarm.actualEnd < resolvedEnd
+                deliveredBody = Int64(prewarm.bufferedData.count)
+
+                write(Data(head.utf8))
+                write(prewarm.bufferedData)
+                if bodyComplete {
+                    proxy.detach(runningTask)
+                    runningTask.cancel()
+                    finish()
+                    return
+                }
+                let now = ProcessInfo.processInfo.systemUptime
+                lastProgressUptime = now
+                windowStartUptime = now
+                windowBytes = 0
+                task = runningTask
+                proxy.reassignTask(runningTask, to: self)
+                startStallTimer()
+                return
+            } else {
+                chunkingActive = canChunk || parsed.end == nil || (parsed.end ?? Int64.max) > prewarm.rangeEnd
+                let now = ProcessInfo.processInfo.systemUptime
+                lastProgressUptime = now
+                windowStartUptime = now
+                windowBytes = 0
+                task = runningTask
+                proxy.reassignTask(runningTask, to: self)
+                startStallTimer()
+                return
+            }
+        }
 
         // 先查内存头尾与热点缓存：命中的话可直接返回（或仅向 115 拉取剩余部分）
         if !isHead, !playlistCandidate, let parsed = parsedRange,

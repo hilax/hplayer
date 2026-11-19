@@ -717,6 +717,10 @@ private struct HomeContinueShelf: View {
         PlaybackFrameStore.shared.remove(PlaybackFrameStore.key(for: entry.target))
         switch entry.target {
         case .recent(let recent):
+            if let pickCode = recent.pickCode, !pickCode.isEmpty {
+                let hashes = MagnetCloudVideoCache.shared.infoHashes(containingPickCode: pickCode)
+                magnetHistory.markSupersededByCloud(pickCode: pickCode, cachedInfoHashes: hashes, title: recent.title)
+            }
             recents.remove(recent)
         case .magnet(let item):
             magnetHistory.remove(item.infoHash)
@@ -724,6 +728,7 @@ private struct HomeContinueShelf: View {
     }
 }
 
+@MainActor
 private final class ContinueEntriesCache: ObservableObject {
     private struct Key: Equatable {
         let revision: Int
@@ -738,7 +743,10 @@ private final class ContinueEntriesCache: ObservableObject {
         let key = Key(
             revision: revision,
             recentStamps: recents.map { "\($0.id)|\($0.position ?? -1)|\($0.playedAt.timeIntervalSince1970)" },
-            magnetStamps: magnets.map { "\($0.infoHash)|\($0.lastProgress?.seconds ?? -1)|\($0.updatedAt.timeIntervalSince1970)" }
+            magnetStamps: magnets.map {
+                let cloud = $0.playedViaCloud.map { $0 ? 1 : 0 } ?? -1
+                return "\($0.infoHash)|\(cloud)|\($0.lastProgress?.seconds ?? -1)|\($0.updatedAt.timeIntervalSince1970)"
+            }
         )
         if key == lastKey { return cached }
         lastKey = key
@@ -794,7 +802,20 @@ private final class ContinueEntriesCache: ObservableObject {
             ))
         }
 
+        let recentCloudItems = recents.filter(\.isCloud)
+        let recentCloudPickCodes = Set(recentCloudItems.compactMap(\.pickCode).filter { !$0.isEmpty })
+        let recentCloudTitles = recentCloudItems.map(\.title)
+
         for item in magnets {
+            if MagnetHistoryStore.isSupersededByCloud(
+                item,
+                recentCloudPickCodes: recentCloudPickCodes,
+                recentCloudTitles: recentCloudTitles,
+                cachedPickCodesForHash: { MagnetCloudVideoCache.shared.pickCodes(forInfoHash: $0) },
+                isDownloadedToCloud: { MagnetRelayCenter.shared.isDownloaded($0) }
+            ) {
+                continue
+            }
             let progress = item.lastProgress
             var detail: [String] = ["磁力"]
             if let title = item.lastFileTitle, item.videoCount > 1 { detail.append(title) }
