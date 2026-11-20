@@ -14,6 +14,30 @@ final class SocialComposerKeyboardTests: XCTestCase {
         return predicate()
     }
 
+    /// 模拟器里输入框一聚焦就会弹出真实键盘。第一次加载键盘时可能把主线程卡住两三秒（日志里的
+    /// 「Keyboard queue task timeout」），晚到的真实键盘通知会冲掉测试发的模拟通知、或把计时吃掉。
+    /// 先等真实键盘弹出并安静 0.3 秒再开始模拟；连着硬件键盘时不会弹，最多等 `timeout` 秒。
+    private func waitForRealKeyboardToSettle(timeout: TimeInterval = 3) async {
+        final class Events { var last = Date(); var shown = false }
+        let events = Events()
+        let names: [Notification.Name] = [
+            UIResponder.keyboardWillShowNotification, UIResponder.keyboardDidShowNotification,
+            UIResponder.keyboardWillChangeFrameNotification, UIResponder.keyboardDidChangeFrameNotification
+        ]
+        let tokens = names.map { name in
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { note in
+                events.last = Date()
+                if note.name == UIResponder.keyboardDidShowNotification { events.shown = true }
+            }
+        }
+        defer { tokens.forEach { NotificationCenter.default.removeObserver($0) } }
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if events.shown && Date().timeIntervalSince(events.last) > 0.3 { return }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+    }
+
     func testWillHideClosesEvenWhenFocusStateHasNotUpdatedYet() async {
         let tracker = SocialComposerKeyboardTracker(
             hideConfirmDelayNs: 20_000_000,
@@ -387,7 +411,7 @@ final class SocialComposerKeyboardTests: XCTestCase {
                 window.rootViewController = nil
             }
 
-            try? await Task.sleep(nanoseconds: 120_000_000)
+            await waitForRealKeyboardToSettle()
 
             let shownInfo: [AnyHashable: Any] = [
                 UIResponder.keyboardFrameEndUserInfoKey: NSValue(cgRect: CGRect(x: 0, y: 550, width: 393, height: 302)),
@@ -406,7 +430,8 @@ final class SocialComposerKeyboardTests: XCTestCase {
             NotificationCenter.default.post(name: UIResponder.keyboardWillHideNotification, object: nil, userInfo: hideInfo)
             NotificationCenter.default.post(name: UIResponder.keyboardDidHideNotification, object: nil, userInfo: hideInfo)
 
-            let closed = await waitUntil(timeout: 1.5) { closeCount == 1 }
+            // 正常 0.1 秒内就关；给模拟器偶发的主线程卡顿留足余量
+            let closed = await waitUntil(timeout: 5) { closeCount == 1 }
             XCTAssertTrue(closed, "SocialComposer(\(target.id)) 应在收到键盘隐藏通知后自动关闭")
         }
     }
@@ -434,8 +459,8 @@ final class SocialComposerKeyboardTests: XCTestCase {
             window.rootViewController = nil
         }
 
-        // 等模拟器自身首次聚焦的键盘动画彻底落稳，再发模拟通知，避免真实 didShow 延迟到达冲掉人工 willHide
-        try? await Task.sleep(nanoseconds: 700_000_000)
+        // 等模拟器自身首次聚焦的真实键盘彻底落稳，再发模拟通知，避免真实 didShow 延迟到达冲掉人工 willHide
+        await waitForRealKeyboardToSettle()
 
         let shownInfo: [AnyHashable: Any] = [
             UIResponder.keyboardFrameEndUserInfoKey: NSValue(cgRect: CGRect(x: 0, y: 550, width: 393, height: 302)),
@@ -452,7 +477,8 @@ final class SocialComposerKeyboardTests: XCTestCase {
         ]
         NotificationCenter.default.post(name: UIResponder.keyboardWillHideNotification, object: nil, userInfo: hideInfo)
 
-        let closed = await waitUntil(timeout: 2.0) { closeCount == 1 }
+        // 正常约 0.4 秒关掉（80 毫秒确认 + 280 毫秒退场兜底）；给模拟器偶发的主线程卡顿留足余量
+        let closed = await waitUntil(timeout: 5) { closeCount == 1 }
         XCTAssertTrue(closed, "即使仅发出 keyboardWillHideNotification，退场结束后也应兜底卸载")
     }
 }
