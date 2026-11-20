@@ -331,12 +331,20 @@ final class RedesignFlowUITests: XCTestCase {
         dismiss()
         XCTAssertTrue(wait { !hardware.exists })
 
-        // 选集和动漫详情页一样：「全部」原地展开成网格，展开后有正序 / 倒序，再点收起
+        // 选集和动漫详情页、片库详情页一致：「全部」平滑展开成抽屉网格，展开后有正序 / 倒序与自动连播，再点收起
         let all = app.buttons["playback.episodes.all"]
         if all.waitForExistence(timeout: 5) {
+            let collapsedShot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+            collapsedShot.name = "Portrait episodes collapsed"
+            collapsedShot.lifetime = .keepAlways
+            add(collapsedShot)
             all.tap()
             XCTAssertTrue(app.buttons["playback.episodes.descending"].waitForExistence(timeout: 5), "Expanded episodes show the order toggle")
             XCTAssertTrue(app.switches["playback.episodes.autoNext"].exists)
+            let expandedShot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+            expandedShot.name = "Portrait episodes expanded"
+            expandedShot.lifetime = .keepAlways
+            add(expandedShot)
             all.tap()
             XCTAssertTrue(wait { !app.buttons["playback.episodes.descending"].exists }, "Collapsing hides the order toggle")
         }

@@ -181,7 +181,7 @@ struct AnimeVideoItem: Identifiable, Codable, Hashable {
 
     var safePicURLString: String {
         guard let raw = pic, !raw.isEmpty else { return "" }
-        if raw.hasPrefix("http://") {
+        if raw.hasPrefix("http://"), !raw.hasPrefix("http://127.0.0.1"), !raw.hasPrefix("http://localhost") {
             return "https://" + raw.dropFirst(7)
         }
         return raw
@@ -224,7 +224,8 @@ struct AnimeVideoDetail: Identifiable, Codable, Hashable {
     init(id: Int, name: String, source: String? = nil, parts: [AnimePlayRoute] = [],
          continu: String? = nil, year: String? = nil, area: String? = nil, type: String? = nil,
          actor: String? = nil, director: String? = nil, content: String? = nil,
-         stars: String? = nil, autoPlay: Int? = nil, pic: String? = nil) {
+         stars: String? = nil, autoPlay: Int? = nil, pic: String? = nil,
+         hits: Int? = nil, commentTotal: Int? = nil, danmuCount: Int? = nil) {
         self.id = id
         self.name = name
         self.source = source
@@ -239,6 +240,9 @@ struct AnimeVideoDetail: Identifiable, Codable, Hashable {
         self.stars = stars
         self.autoPlay = autoPlay
         self.pic = pic
+        self.hits = hits
+        self.commentTotal = commentTotal
+        self.danmuCount = danmuCount
     }
 
     init(from decoder: Decoder) throws {
@@ -284,7 +288,7 @@ struct AnimeVideoDetail: Identifiable, Codable, Hashable {
 
     var safePicURLString: String {
         guard let raw = pic, !raw.isEmpty else { return "" }
-        if raw.hasPrefix("http://") {
+        if raw.hasPrefix("http://"), !raw.hasPrefix("http://127.0.0.1"), !raw.hasPrefix("http://localhost") {
             return "https://" + raw.dropFirst(7)
         }
         return raw

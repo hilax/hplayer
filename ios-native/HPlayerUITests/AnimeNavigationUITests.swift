@@ -113,25 +113,44 @@ final class AnimeNavigationUITests: XCTestCase {
         let backFrame = back.frame
         let barFrame = navigationBar.frame
         let watchlist = app.buttons["anime.watchlist.900001"]
-        XCTAssertTrue(watchlist.exists)
-        XCTAssertFalse(watchlist.isEnabled)
+        XCTAssertFalse(watchlist.exists, "Watchlist button lives in the detail action bar rather than the top-right navigation bar")
         XCTAssertFalse(home.isHittable)
         attach("AnimeNavigation-\(style)-loading-\(fails)")
 
         if fails {
             XCTAssertTrue(app.buttons["重新加载"].firstMatch.waitForExistence(timeout: 15))
-            XCTAssertFalse(watchlist.isEnabled)
+            XCTAssertFalse(watchlist.exists)
         } else {
-            XCTAssertTrue(app.buttons["anime.play"].waitForExistence(timeout: 15))
+            let play = app.buttons["anime.play"]
+            XCTAssertTrue(play.waitForExistence(timeout: 15))
+            XCTAssertTrue(watchlist.waitForExistence(timeout: 5))
             XCTAssertTrue(watchlist.isEnabled)
-            // 右上角追番按钮要真的画出爱心（真机上出现过只剩玻璃圆）
+            XCTAssertTrue(watchlist.isHittable)
+            XCTAssertGreaterThan(watchlist.frame.minY, navigationBar.frame.maxY,
+                                 "Prominent watchlist button must sit in the hero action bar below the navigation bar")
+            XCTAssertEqual(watchlist.frame.midY, play.frame.midY, accuracy: 4,
+                           "Watchlist button aligns side-by-side with the primary play button")
             let ink = watchlist.iconInkRatio()
-            XCTAssertGreaterThan(ink, 0.02, "The watchlist button must draw its bookmark (\(style)); ink=\(ink)")
+            XCTAssertGreaterThan(ink, 0.02, "The watchlist button must render visibly (\(style)); ink=\(ink)")
         }
         assertSameFrame(back.frame, backFrame, message: "Loading must not move or resize the back button")
         assertSameFrame(navigationBar.frame, barFrame, message: "Loading must not change the navigation bar height")
         XCTAssertTrue(back.isHittable)
         attach("AnimeNavigation-\(style)-\(fails ? "error" : "loaded")")
+
+        if !fails {
+            // 验证统一选集栏的展开与收起
+            let allEpisodes = app.buttons["anime.episodes.all"]
+            XCTAssertTrue(allEpisodes.waitForExistence(timeout: 5))
+            allEpisodes.tap()
+            let descending = app.buttons["anime.episodes.descending"]
+            XCTAssertTrue(descending.waitForExistence(timeout: 5), "Expanding anime episodes reveals the sort toggle")
+            attach("AnimeNavigation-\(style)-episodes-expanded")
+            allEpisodes.tap()
+            let collapsed = NSPredicate { _, _ in !descending.exists }
+            XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: collapsed, object: nil)], timeout: 5), .completed,
+                           "Collapsing anime episodes hides the sort toggle")
+        }
 
         if fails {
             back.tap()

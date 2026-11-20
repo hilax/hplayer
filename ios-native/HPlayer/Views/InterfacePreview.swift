@@ -41,10 +41,17 @@ enum InterfacePreview {
         }
         return AnimeVideoDetail(
             id: id, name: "雪王来了！",
-            parts: [AnimePlayRoute(play: "preview", playZh: "国语", singleClarityDisplay: nil,
-                                  part: ["第01集", "第02集", "第03集"])],
-            continu: "更新至3集", year: "2026", area: "大陆", type: "搞笑,日常",
-            content: "动漫详情导航回归使用的离线数据。"
+            parts: [
+                AnimePlayRoute(play: "preview", playZh: "国语", singleClarityDisplay: nil,
+                               part: (1...12).map { String(format: "第%02d集", $0) }),
+            ],
+            continu: "更新至12集", year: "2026", area: "大陆", type: "搞笑,日常,奇幻",
+            content: "动漫详情导航回归使用的离线数据，用于验证主操作栏的追番按钮布局、数据概览条，以及与片库详情页和竖屏播放器一致的选集展开收起动效。",
+            stars: "9.2",
+            pic: "http://127.0.0.1:8765/design-art/interstellar-poster.jpg",
+            hits: 141_200,
+            commentTotal: 173,
+            danmuCount: 1_280
         )
     }
     #endif

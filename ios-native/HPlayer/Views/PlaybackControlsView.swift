@@ -243,11 +243,9 @@ struct PlaybackControlsView: View {
     @State private var controlsVisible = true
     @State private var locked = false
     @State private var showList = false
-    /// 竖屏信息区的选集：和动漫详情页一样，默认一行横排，「全部」原地展开成五列网格
+    /// 竖屏信息区的选集：与动漫详情页、片库详情页共用 UnifiedEpisodeShelf
     @State private var episodesExpanded = false
     @State private var episodesDescending = false
-    @State private var episodeRange = 0
-    @Namespace private var episodeRangeSpace
     /// 竖屏快捷入口（画质、倍速、字幕、画面比例、解码）点开的菜单
     @State private var quickMenu: QuickMenu?
     @ObservedObject private var gestureStore = PlaybackGestureStore.shared
@@ -2635,247 +2633,63 @@ struct PlaybackControlsView: View {
             .padding(.vertical, 4)
     }
 
-    /// 选集：和动漫详情页同一套逻辑。收起时一行横排（自动滚到在看的那集），
-    /// 「全部」在原地展开成五列网格、超过 50 集分段，展开时标题右边换成正序 / 倒序
+    /// 选集：与动漫详情页、片库详情页共用 UnifiedEpisodeShelf。
+    /// 收起时单行横排卡片（自动居中到正在播放的一集），点「全部」平滑展开成完整网格与排序抽屉。
     private var episodesSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 10) {
-                Text("选集")
-                    .font(.scaled(18, weight: .bold))
-                    .foregroundStyle(Theme.textPrimary)
-                Spacer(minLength: 8)
-                if episodesExpanded {
-                    episodeOrderToggle
-                } else {
-                    Text("\(autoPlayNext ? "自动连播 · " : "")共 \(max(items.count, 1)) 集")
-                        .font(.scaled(13))
-                        .foregroundStyle(Theme.textTertiary)
-                        .lineLimit(1)
-                }
-                if items.count > 1 {
-                    Button {
-                        Haptics.select()
-                        if !episodesExpanded {
-                            var transaction = Transaction()
-                            transaction.disablesAnimations = true
-                            withTransaction(transaction) {
-                                episodeRange = rangeContainingCurrent()
-                            }
-                        }
-                        withAnimation(Motion.resolved(Motion.snappy, reduceMotion: reduceMotion)) {
-                            episodesExpanded.toggle()
-                        }
-                    } label: {
-                        HStack(spacing: 3) {
-                            Text(episodesExpanded ? "收起" : "全部")
-                                .font(.scaled(13, weight: .semibold))
-                            Image(icon: episodesExpanded ? .collapse : .expand)
-                                .iconStyle(size: 10, color: Theme.textPrimary)
-                        }
-                        .foregroundStyle(Theme.textPrimary)
-                        .frame(minWidth: 44, minHeight: 44, alignment: .trailing)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.pressable(scale: 0.92))
-                    .accessibilityIdentifier("playback.episodes.all")
-                }
+        let shelfItems = items.enumerated().map { index, item in
+            let progress = item.progress
+            let finished = (progress ?? 0) >= 0.92
+            let spokenValue: String
+            if finished {
+                spokenValue = "已看完"
+            } else if let progress, progress > 0.02 {
+                spokenValue = "看到 \(Int((progress * 100).rounded()))%"
+            } else {
+                spokenValue = ""
             }
-            if !items.isEmpty {
-                ZStack(alignment: .topLeading) {
-                    if episodesExpanded {
-                        episodeGridPanel
-                            .compositingGroup()
-                            .transition(.opacity)
-                    } else {
-                        episodeStrip
-                            .transition(.opacity)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-                .padding(.horizontal, 16)
-                .clipped()
-                .padding(.horizontal, -16)
-            }
+            return EpisodeShelfItem(
+                id: item.id,
+                shortTitle: EpisodeShelfItem.numberedTitle(index + 1),
+                accessibilityTitle: item.title,
+                progress: progress,
+                accessibilityValue: spokenValue,
+                accessibilityID: "playback.episode.\(item.id)"
+            )
         }
-        .padding(.top, 22)
-        .onChange(of: episodesDescending) { _ in episodeRange = rangeContainingCurrent() }
-        .onChange(of: items.count) { _ in episodeRange = rangeContainingCurrent() }
-    }
 
-    /// 收起时：一行横排，打开时滚到在看的那一集
-    private var episodeStrip: some View {
-        let currentIndex = currentEpisodeIndex
-        return ScrollViewReader { proxy in
-            ScrollView(.horizontal) {
-                LazyHStack(spacing: 8) {
-                    ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                        stripCell(item, index: index, currentIndex: currentIndex)
-                            .id(item.id)
-                    }
-                }
-                .padding(.vertical, 2)
-            }
-            .scrollIndicators(.hidden)
-            .onAppear {
-                DispatchQueue.main.async {
-                    var transaction = Transaction()
-                    transaction.disablesAnimations = true
-                    withTransaction(transaction) { proxy.scrollTo(selectedID, anchor: .center) }
-                }
-            }
-            .onChange(of: selectedID) { id in
-                withAnimation(reduceMotion ? nil : Motion.smooth) { proxy.scrollTo(id, anchor: .center) }
-            }
-        }
-    }
-
-    /// 50 集一段：「1-50」「51-100」…；倒序时段落也倒过来
-    private var episodeRanges: [Range<Int>] {
-        let count = items.count
-        guard count > 0 else { return [] }
-        let size = AnimeEpisodePanel.rangeSize
-        let list = stride(from: 0, to: count, by: size).map { $0..<min($0 + size, count) }
-        return episodesDescending ? list.reversed() : list
-    }
-
-    private func rangeContainingCurrent() -> Int {
-        let current = items.firstIndex { $0.id == selectedID } ?? 0
-        return episodeRanges.firstIndex { $0.contains(current) } ?? 0
-    }
-
-    /// 展开时：分段胶囊 + 五列网格，网格下面是自动连播开关
-    private var episodeGridPanel: some View {
-        let ranges = episodeRanges
-        let range = ranges.indices.contains(episodeRange) ? ranges[episodeRange] : (ranges.first ?? 0..<0)
-        let indices = episodesDescending ? Array(range.reversed()) : Array(range)
-        let currentIndex = currentEpisodeIndex
-        return VStack(alignment: .leading, spacing: 12) {
-            if ranges.count > 1 {
-                ScrollViewReader { proxy in
-                    ScrollView(.horizontal) {
-                        HStack(spacing: 6) {
-                            ForEach(Array(ranges.enumerated()), id: \.offset) { index, item in
-                                SelectionPill(title: "\(item.lowerBound + 1)-\(item.upperBound)", selected: index == episodeRange,
-                                              namespace: episodeRangeSpace) {
-                                    withAnimation(Motion.snappy) { episodeRange = index }
-                                }
-                                .id(index)
-                                .accessibilityIdentifier("playback.episodes.range.\(item.lowerBound + 1)")
-                            }
-                        }
-                    }
-                    .scrollIndicators(.hidden)
-                    .onAppear {
-                        var transaction = Transaction()
-                        transaction.disablesAnimations = true
-                        withTransaction(transaction) { proxy.scrollTo(episodeRange, anchor: .center) }
-                    }
-                    .onChange(of: episodeRange) { index in
-                        withAnimation(reduceMotion ? nil : Motion.smooth) { proxy.scrollTo(index, anchor: .center) }
-                    }
-                }
-            }
-            // 换段、正序倒序：格子直接换内容，不再整块换 id 重建再淡入
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 5), spacing: 10) {
-                ForEach(Array(indices.enumerated()), id: \.offset) { _, index in
-                    stripCell(items[index], index: index, currentIndex: currentIndex, fill: true)
-                }
-            }
-            .transaction { $0.animation = nil }
+        return UnifiedEpisodeShelf(
+            items: shelfItems,
+            currentID: selectedID,
+            summary: "\(autoPlayNext ? "自动连播 · " : "")共 \(max(items.count, 1)) 集",
+            isExpanded: $episodesExpanded,
+            isDescending: $episodesDescending,
+            showsNowPlayingOnCurrent: true,
+            identifiers: EpisodeShelfIdentifiers(
+                toggle: "playback.episodes.all",
+                ascending: "playback.episodes.ascending",
+                descending: "playback.episodes.descending",
+                rangePrefix: "playback.episodes.range"
+            ),
+            onSelect: { item in
+                onSelect(item.id)
+                revealControls()
+            },
+            expandedFooter: {
             HStack {
                 Text("自动连播")
-                    .font(.scaled(14))
+                    .font(Theme.Typo.row)
                     .foregroundStyle(Theme.textSecondary)
-                Spacer(minLength: 8)
+                Spacer(minLength: Theme.Space.sm)
                 Toggle("自动连播", isOn: $autoPlayNext)
                     .labelsHidden()
                     .tint(Theme.accentFill)
                     .accessibilityIdentifier("playback.episodes.autoNext")
             }
-            .frame(minHeight: 44)
-        }
-    }
-
-    /// 正序 / 倒序（展开时才显示），样式和动漫详情页一致
-    private var episodeOrderToggle: some View {
-        HStack(spacing: 0) {
-            episodeOrderPill("正序", icon: .sortAscending, selected: !episodesDescending) { episodesDescending = false }
-            episodeOrderPill("倒序", icon: .sortDescending, selected: episodesDescending) { episodesDescending = true }
-        }
-        .padding(2)
-        .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
-    }
-
-    private func episodeOrderPill(_ title: String, icon: AppIcon, selected: Bool, action: @escaping () -> Void) -> some View {
-        Button {
-            guard !selected else { return }
-            Haptics.select()
-            withAnimation(reduceMotion ? nil : Motion.snappy) { action() }
-        } label: {
-            HStack(spacing: 3) {
-                Image(icon: icon)
-                    .iconStyle(size: 11, color: selected ? Theme.onPrimary : Theme.textSecondary)
-                Text(title)
-                    .font(.scaled(11, weight: selected ? .bold : .medium))
-                    .foregroundStyle(selected ? Theme.onPrimary : Theme.textSecondary)
+            .padding(.horizontal, EpisodeShelfLayout.cardPadding)
+            .frame(minHeight: 48)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .frame(minHeight: 28)
-            .background {
-                // 选中块在正序 / 倒序之间滑过去
-                if selected {
-                    RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous)
-                        .fill(Theme.primaryAction)
-                        .matchedGeometryEffect(id: "playback.order.selection", in: episodeRangeSpace)
-                }
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.pressable(scale: 0.95))
-        .accessibilityAddTraits(selected ? .isSelected : [])
-        .accessibilityIdentifier(title == "倒序" ? "playback.episodes.descending" : "playback.episodes.ascending")
-    }
-
-    /// fill：网格里撑满格子宽度；横排里是固定 48 宽
-    /// 正在播的是第几集（整排 / 网格只算一次，以前每一格都把列表从头找一遍）
-    private var currentEpisodeIndex: Int {
-        items.firstIndex { $0.id == selectedID } ?? 0
-    }
-
-    /// 当前集：主操作色底（深色下白、浅色下墨黑）+ 正在播放的小柱；看过的集数字变灰。和动漫详情页的选集一致，不用琥珀色
-    private func stripCell(_ item: PlaybackListItem, index: Int, currentIndex: Int, fill: Bool = false) -> some View {
-        let current = index == currentIndex
-        let shape = RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous)
-        return Button {
-            onSelect(item.id)
-            revealControls()
-        } label: {
-            VStack(spacing: 2) {
-                Text("\(index + 1)")
-                    .font(.scaled(16, weight: .semibold).monospacedDigit())
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.6)
-                if current {
-                    Image(icon: .nowPlaying)
-                        .font(.system(size: 9, weight: .semibold))
-                        .accessibilityHidden(true)
-                }
-            }
-            .foregroundStyle(current ? Theme.onPrimary : (index < currentIndex ? Theme.textTertiary : Theme.textPrimary))
-            .padding(.horizontal, 4)
-            .frame(width: fill ? nil : 56, height: 52)
-            .frame(maxWidth: fill ? .infinity : nil)
-            .background(current ? Theme.primaryAction : Theme.surface, in: shape)
-            .overlay {
-                if !current { shape.strokeBorder(Theme.hairline, lineWidth: 0.5) }
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.pressable(scale: 0.95))
-        .accessibilityLabel(item.title)
-        .accessibilityIdentifier("playback.episode.\(item.id)")
-        .accessibilityAddTraits(current ? .isSelected : [])
+        )
+        .padding(.top, Theme.Space.xl)
     }
 
     /// 「接下来」：左边一块画面位（下一集还没播过，没有截图，放一个中性的视频图标），

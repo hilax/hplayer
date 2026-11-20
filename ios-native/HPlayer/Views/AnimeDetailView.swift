@@ -24,12 +24,11 @@ struct AnimeDetailView: View {
 
     @State private var playingQueue: PlaybackQueue?
     @Namespace private var routeNamespace
-    @Namespace private var orderNamespace
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
 
     private static let scrollSpace = "anime.detail.scroll"
-    private let backdropHeight: CGFloat = 260
+    private let backdropHeight: CGFloat = 280
 
     var body: some View {
         ZStack {
@@ -40,17 +39,17 @@ struct AnimeDetailView: View {
                     VStack(alignment: .leading, spacing: 0) {
                         backdropView(detail)
 
-                        // 抬头 → 数据（播放 / 评论 / 弹幕）→ 简介 → 主按钮 → 选集（横排）→ 评论预览
-                        VStack(alignment: .leading, spacing: 22) {
+                        // 海报抬头 → 播放 + 追番主操作栏 → 统一选集 → 数据概览 → 简介与演职信息 → 评论预览
+                        VStack(alignment: .leading, spacing: Theme.Space.xl) {
                             headerView(detail)
-                            statsLine(detail)
-                            synopsisSection(detail)
-                            primaryPlayButton(detail)
+                            actionBar(detail)
                             routesAndEpisodesSection(detail)
+                            metricsStrip(detail)
+                            synopsisSection(detail)
                             commentsSection(detail)
                         }
                         .padding(.horizontal, Theme.contentInset)
-                        .padding(.top, -50)
+                        .padding(.top, -74)
                         .padding(.bottom, 40)
                     }
                 }
@@ -71,34 +70,14 @@ struct AnimeDetailView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-
         }
         .designScreen("anime-detail")
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
-        // 首页隐藏了导航栏；详情页从加载的第一帧起就固定显示，避免数据到达后再展开。
+        // 首页隐藏了导航栏；详情页从加载的第一帧起就固定显示，且右上角不再塞孤立图标，
+        // 导航栏尺寸和返回键位置在加载 / 成功 / 失败全程完全稳定。
         .toolbar(.visible, for: .navigationBar)
         .modifier(TransparentNavigationBar())
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                let watched = watchlist.isWatched(id: animeId)
-                Button {
-                    guard let detail else { return }
-                    Haptics.tap()
-                    withAnimation(Motion.resolved(Motion.snappy, reduceMotion: reduceMotion)) {
-                        watchlist.toggle(detail: detail)
-                    }
-                } label: {
-                    // 未追番线框、已追番实心，颜色都是导航栏按键色（和返回键一致，不用琥珀）。
-                    // NavigationIcon 光栅化为高清位图绘制，避免 iOS 26 液态玻璃栏抽空自定义符号。
-                    NavigationIcon(watched ? .followFill : .follow)
-                }
-                // 加载、成功和失败时都保留同一个按钮，导航栏不会因工具项增删而重新布局。
-                .disabled(detail == nil)
-                .accessibilityLabel(watched ? "取消追番" : "追番")
-                .accessibilityIdentifier("anime.watchlist.\(animeId)")
-            }
-        }
         .task {
             watchlist.markUpdateChecked(id: animeId)
             await loadDetail()
@@ -143,8 +122,8 @@ struct AnimeDetailView: View {
                     .mask {
                         LinearGradient(
                             stops: [
-                                .init(color: .black, location: 0.3),
-                                .init(color: .black.opacity(Theme.Opacity.faint), location: 0.8),
+                                .init(color: .black, location: 0.25),
+                                .init(color: .black.opacity(Theme.Opacity.soft), location: 0.72),
                                 .init(color: .clear, location: 1 - 2 / height),
                                 .init(color: .clear, location: 1),
                             ],
@@ -153,14 +132,14 @@ struct AnimeDetailView: View {
                         )
                     }
 
-                // 深色模式下封面顶部偏亮（如光球）时压柔一点，保证导航栏浅色图标对比度
+                // 深色模式下封面顶部偏亮时压柔一点，保证导航栏返回键对比度
                 if colorScheme == .dark {
                     LinearGradient(
-                        colors: [Color.black.opacity(0.32), .clear],
+                        colors: [Color.black.opacity(Theme.Opacity.medium), .clear],
                         startPoint: .top,
                         endPoint: .bottom
                     )
-                    .frame(height: min(110, height))
+                    .frame(height: min(116, height))
                     .frame(maxHeight: .infinity, alignment: .top)
                     .allowsHitTesting(false)
                 }
@@ -176,56 +155,87 @@ struct AnimeDetailView: View {
     // MARK: - 海报与元信息抬头
 
     private func headerView(_ detail: AnimeVideoDetail) -> some View {
-        HStack(alignment: .bottom, spacing: 14) {
-            // 封面海报
-            PosterArtwork(urlString: detail.safePicURLString, title: detail.name, width: 95)
-                .shadow(color: Color.black.opacity(Theme.Opacity.medium), radius: 8, x: 0, y: 4)
+        let continu = detail.continu?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let finished = continu.contains("全") || continu.contains("完结")
 
-            // 信息文字
-            VStack(alignment: .leading, spacing: 6) {
+        return HStack(alignment: .bottom, spacing: Theme.Space.lg) {
+            PosterArtwork(urlString: detail.safePicURLString, title: detail.name, width: 106)
+                .shadow(color: Color.black.opacity(Theme.Opacity.medium), radius: 12, x: 0, y: 6)
+
+            VStack(alignment: .leading, spacing: Theme.Space.sm) {
+                if !continu.isEmpty {
+                    TagBadge(text: continu, style: finished ? .neutral : .accent)
+                }
+
                 Text(detail.name)
-                    .font(.display(20))
+                    .font(Theme.Typo.detailTitle)
                     .foregroundStyle(Theme.textPrimary)
                     .lineLimit(2)
+                    .minimumScaleFactor(0.85)
 
-                if let continu = detail.continu, !continu.isEmpty {
-                    Text(continu)
-                        .font(.scaled(13, weight: .bold))
-                        .foregroundStyle(Theme.accent)
-                }
+                metaLine(detail)
 
-                HStack(spacing: 6) {
-                    if let year = detail.year, !year.isEmpty { Text(year) }
-                    if let area = detail.area, !area.isEmpty { Text(area) }
-                    if let stars = detail.stars, !stars.isEmpty {
-                        HStack(spacing: 2) {
-                            Image(icon: .rating)
-                                .iconStyle(size: 10, color: Theme.rating)
-                            Text(stars)
+                if !detail.tags.isEmpty {
+                    HStack(spacing: 6) {
+                        ForEach(detail.tags.prefix(3), id: \.self) { tag in
+                            Text(tag)
+                                .font(Theme.Typo.badge)
+                                .foregroundStyle(Theme.textSecondary)
+                                .padding(.horizontal, 8)
+                                .frame(height: 22)
+                                .background(Theme.tileTint, in: Capsule())
+                                .overlay {
+                                    Capsule().strokeBorder(Theme.hairline, lineWidth: Theme.Stroke.hairline)
+                                }
                         }
-                        .foregroundStyle(Theme.rating)
                     }
-                }
-                .font(.scaled(13, weight: .semibold))
-                .foregroundStyle(Theme.textSecondary)
-
-                // 分类胶囊：与剧集页 chip 同规格（11pt、22pt 高）
-                HStack(spacing: 6) {
-                    ForEach(detail.tags.prefix(3), id: \.self) { tag in
-                        Text(tag)
-                            .font(.scaled(11, weight: .medium))
-                            .foregroundStyle(Theme.accent)
-                            .padding(.horizontal, 9)
-                            .frame(height: 22)
-                            .background(Theme.tileTint, in: Capsule())
-                    }
+                    .lineLimit(1)
                 }
             }
-            .padding(.bottom, 4)
+            .padding(.bottom, Theme.Space.xs)
         }
     }
 
-    // MARK: - 主播放按钮
+    @ViewBuilder
+    private func metaLine(_ detail: AnimeVideoDetail) -> some View {
+        let year = detail.year?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let area = detail.area?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let stars = detail.stars?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let textParts = [year, area].filter { !$0.isEmpty }
+
+        if !stars.isEmpty || !textParts.isEmpty {
+            HStack(spacing: 6) {
+                if !stars.isEmpty {
+                    HStack(spacing: 3) {
+                        Image(icon: .rating)
+                            .iconStyle(size: 11, color: Theme.rating)
+                        Text(stars)
+                            .font(Theme.Typo.meta.weight(.semibold).monospacedDigit())
+                    }
+                    .foregroundStyle(Theme.rating)
+                }
+                if !stars.isEmpty && !textParts.isEmpty {
+                    Text("·")
+                        .foregroundStyle(Theme.textMuted)
+                }
+                if !textParts.isEmpty {
+                    Text(textParts.joined(separator: " · "))
+                        .font(Theme.Typo.meta.weight(.medium))
+                        .foregroundStyle(Theme.textSecondary)
+                        .lineLimit(1)
+                }
+            }
+        }
+    }
+
+    // MARK: - 主操作栏：播放 + 追番收藏并排置顶
+
+    private func actionBar(_ detail: AnimeVideoDetail) -> some View {
+        HStack(spacing: 10) {
+            primaryPlayButton(detail)
+            watchlistButton(detail)
+        }
+    }
 
     private func primaryPlayButton(_ detail: AnimeVideoDetail) -> some View {
         let currentRoute = detail.parts.indices.contains(selectedRouteIndex) ? detail.parts[selectedRouteIndex] : detail.parts.first
@@ -234,21 +244,22 @@ struct AnimeDetailView: View {
 
         let title: String
         if isContinuing, let pos = lastPosition, pos > 5 {
-            title = "续播 \(ep) · 看到 \(formatTime(pos))"
+            title = "续播 \(ep) · \(formatTime(pos))"
         } else if isContinuing {
             title = "续播 \(ep)"
         } else {
             title = "播放 \(ep)"
         }
 
-        // 与剧集页主按钮同规格：胶囊、48pt 高、Label + 播放图标
-        return Button(action: {
+        return Button {
             startPlay(episode: ep, detail: detail)
-        }) {
-            Label(title, image: AppIcon.play.name)
-                .font(.scaled(15, weight: .bold))
+        } label: {
+            Label(title, icon: .play)
+                .font(Theme.Typo.button)
                 .foregroundStyle(Theme.onPrimary)
                 .lineLimit(1)
+                .minimumScaleFactor(0.82)
+                .padding(.horizontal, Theme.Space.md)
                 .frame(maxWidth: .infinity)
                 .frame(height: 48)
                 .background(Theme.primaryAction, in: Capsule())
@@ -258,6 +269,48 @@ struct AnimeDetailView: View {
         .accessibilityIdentifier("anime.play")
     }
 
+    /// 显眼的追番收藏按钮：紧挨播放主按钮，48pt 等高胶囊；
+    /// 未追番为石墨描边胶囊 + 书签加号，已追番切换为琥珀淡底 + 实心书签对勾。
+    private func watchlistButton(_ detail: AnimeVideoDetail) -> some View {
+        let watched = watchlist.isWatched(id: animeId)
+        return Button {
+            if watched {
+                Haptics.select()
+            } else {
+                Haptics.success()
+            }
+            withAnimation(Motion.resolved(Motion.snappy, reduceMotion: reduceMotion)) {
+                watchlist.toggle(detail: detail)
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Image(icon: watched ? .followFill : .follow)
+                    .font(.scaled(16, weight: .semibold))
+                    .bounceSymbol(on: watched)
+                Text(watched ? "已追番" : "追番")
+                    .font(Theme.Typo.button)
+                    .lineLimit(1)
+                    .contentTransition(.opacity)
+            }
+            .foregroundStyle(watched ? Theme.accentAlt : Theme.textPrimary)
+            .padding(.horizontal, Theme.Space.lg)
+            .frame(minWidth: 108, minHeight: 48)
+            .background(watched ? Theme.accentWash : Theme.surface, in: Capsule())
+            .overlay {
+                Capsule().strokeBorder(
+                    watched ? Theme.accent.opacity(0.45) : Theme.rule,
+                    lineWidth: Theme.Stroke.rule
+                )
+            }
+            .contentShape(Capsule())
+            .hoverEffect(.highlight)
+        }
+        .buttonStyle(.pressable(scale: 0.96))
+        .accessibilityLabel(watched ? "取消追番" : "追番")
+        .accessibilityIdentifier("anime.watchlist.\(animeId)")
+        .accessibilityAddTraits(watched ? .isSelected : [])
+    }
+
     private func formatTime(_ seconds: Double) -> String {
         let val = Int(max(0, seconds))
         let m = val / 60
@@ -265,65 +318,43 @@ struct AnimeDetailView: View {
         return String(format: "%02d:%02d", m, s)
     }
 
-    // MARK: - 数据行
-
-    /// 「14.1万次播放 · 173 条评论 · 1000 条弹幕」：详情接口有才显示
-    @ViewBuilder
-    private func statsLine(_ detail: AnimeVideoDetail) -> some View {
-        let parts = [
-            detail.hits.flatMap { $0 > 0 ? "\(compactCount($0)) 次播放" : nil },
-            detail.commentTotal.flatMap { $0 > 0 ? "\(compactCount($0)) 条评论" : nil },
-            detail.danmuCount.flatMap { $0 > 0 ? "\(compactCount($0)) 条弹幕" : nil },
-        ].compactMap { $0 }
-        if !parts.isEmpty {
-            Text(parts.joined(separator: " · "))
-                .font(.scaled(12))
-                .foregroundStyle(Theme.textTertiary)
-                .padding(.top, -10)
-        }
-    }
-
-    // MARK: - 选集：线路 + 一行横排（自动滚到在看的那集），「全部」打开分段面板
+    // MARK: - 选集（与片库详情页、竖屏播放器共用 UnifiedEpisodeShelf）
 
     private func routesAndEpisodesSection(_ detail: AnimeVideoDetail) -> some View {
         let route = detail.parts.indices.contains(selectedRouteIndex) ? detail.parts[selectedRouteIndex] : detail.parts.first
         let episodes = route?.part ?? []
+        let shelfItems = episodes.map { ep in
+            let progress = episodeProgress(ep, detail: detail)
+            let finished = (progress ?? 0) >= 0.92
+            let detailValue = finished ? "已看完" : (episodeDetailLine(ep, detail: detail) ?? "")
+            return EpisodeShelfItem(
+                id: ep,
+                shortTitle: EpisodeShelfItem.shortAnimeTitle(ep),
+                accessibilityTitle: ep,
+                progress: progress,
+                accessibilityValue: detailValue
+            )
+        }
 
-        return VStack(alignment: .leading, spacing: 12) {
-            ShelfHeader(title: "选集", inset: 0) {
-                HStack(spacing: 10) {
-                    if episodesExpanded {
-                        orderToggle
-                    } else {
-                        Text(episodeSummary(detail, route: route))
-                            .font(.scaled(12))
-                            .tertiaryTextStyle()
-                            .lineLimit(1)
-                    }
-                    if episodes.count > 1 {
-                        Button {
-                            Haptics.select()
-                            withAnimation(Motion.resolved(Motion.snappy, reduceMotion: reduceMotion)) {
-                                episodesExpanded.toggle()
-                            }
-                        } label: {
-                            HStack(spacing: 3) {
-                                Text(episodesExpanded ? "收起" : "全部")
-                                    .font(.scaled(13))
-                                Image(icon: episodesExpanded ? .collapse : .expand)
-                                    .iconStyle(size: 10, color: Theme.textSecondary)
-                            }
-                            .foregroundStyle(Theme.textSecondary)
-                            .frame(minWidth: 44, minHeight: 44, alignment: .trailing)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.pressable(scale: 0.92))
-                        .accessibilityIdentifier("anime.episodes.all")
-                    }
-                }
-            }
-
-            // 线路胶囊：只有一条线路时不占一行（线路名已经写在标题右边）
+        return UnifiedEpisodeShelf(
+            items: shelfItems,
+            currentID: activeEpisode,
+            summary: episodeSummary(detail, route: route),
+            isExpanded: $episodesExpanded,
+            isDescending: $isDescending,
+            identifiers: EpisodeShelfIdentifiers(
+                toggle: "anime.episodes.all",
+                ascending: "anime.episodes.ascending",
+                descending: "anime.episodes.descending",
+                rangePrefix: "anime.episodes.range"
+            ),
+            caption: activeEpisode.flatMap { episodeDetailLine($0, detail: detail) },
+            onSelect: { item in
+                activeEpisode = item.id
+                startPlay(episode: item.id, detail: detail)
+            },
+            topAccessory: {
+            // 线路胶囊：只有一条线路时不占一行（线路名已经写在标题旁）
             if detail.parts.count > 1 {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
@@ -333,82 +364,17 @@ struct AnimeDetailView: View {
                                 selected: index == selectedRouteIndex,
                                 namespace: routeNamespace
                             ) {
-                                withAnimation(Motion.snappy) { selectedRouteIndex = index }
+                                withAnimation(Motion.resolved(Motion.snappy, reduceMotion: reduceMotion)) {
+                                    selectedRouteIndex = index
+                                }
                                 restoreLastWatched(detail: detail)
                             }
                         }
                     }
                 }
             }
-
-            if !episodes.isEmpty {
-                ZStack(alignment: .topLeading) {
-                    if episodesExpanded {
-                        // 「全部」：在选集栏里原地展开成五列网格，超过 50 集分段
-                        AnimeEpisodePanel(episodes: episodes, activeEpisode: activeEpisode, isDescending: isDescending,
-                                          progress: { episodeProgress($0, detail: detail) }) { episode in
-                            activeEpisode = episode
-                            startPlay(episode: episode, detail: detail)
-                        }
-                        .compositingGroup()
-                        .transition(.opacity)
-                    } else {
-                        episodeStrip(episodes, detail: detail)
-                            .transition(.opacity)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-                .padding(.horizontal, Theme.contentInset)
-                .clipped()
-                .padding(.horizontal, -Theme.contentInset)
-
-                if let ep = activeEpisode, let line = episodeDetailLine(ep, detail: detail) {
-                    Text(line)
-                        .font(.scaled(12))
-                        .tertiaryTextStyle()
-                        .lineLimit(2)
-                }
             }
-        }
-    }
-
-    /// 正序 / 倒序（展开时才显示）。选中块在两个选项之间滑过去；下面的选集网格直接换顺序，不做动画。
-    private var orderToggle: some View {
-        HStack(spacing: 0) {
-            orderPill("正序", icon: .sortAscending, selected: !isDescending) { isDescending = false }
-            orderPill("倒序", icon: .sortDescending, selected: isDescending) { isDescending = true }
-        }
-        .padding(2)
-        .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
-    }
-
-    private func orderPill(_ title: String, icon: AppIcon, selected: Bool, action: @escaping () -> Void) -> some View {
-        Button {
-            guard !selected else { return }
-            Haptics.select()
-            withAnimation(reduceMotion ? nil : Motion.snappy) { action() }
-        } label: {
-            HStack(spacing: 3) {
-                Image(icon: icon)
-                    .iconStyle(size: 11, color: selected ? Theme.onPrimary : Theme.textSecondary)
-                Text(title)
-                    .font(.scaled(11, weight: selected ? .bold : .medium))
-                    .foregroundStyle(selected ? Theme.onPrimary : Theme.textSecondary)
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .frame(minHeight: 28)
-            .background {
-                if selected {
-                    RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous)
-                        .fill(Theme.primaryAction)
-                        .matchedGeometryEffect(id: "anime.order.selection", in: orderNamespace)
-                }
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.pressable(scale: 0.95))
-        .accessibilityAddTraits(selected ? .isSelected : [])
+        )
     }
 
     /// 「国语 · 更新至 166 集」「共 12 集」
@@ -420,56 +386,110 @@ struct AnimeDetailView: View {
         return countText
     }
 
-    /// 一行横排的选集格子，打开时滚到在看的那一集；集数再多也只占一行。
-    private func episodeStrip(_ episodes: [String], detail: AnimeVideoDetail) -> some View {
-        ScrollViewReader { proxy in
-            ScrollView(.horizontal) {
-                LazyHStack(spacing: 8) {
-                    ForEach(episodes, id: \.self) { episode in
-                        AnimeEpisodeCell(title: episode, isCurrent: episode == activeEpisode,
-                                         progress: episodeProgress(episode, detail: detail) ?? 0) {
-                            activeEpisode = episode
-                            startPlay(episode: episode, detail: detail)
-                        }
-                        .frame(width: 64)
-                        .id(episode)
+    // MARK: - 数据概览条（播放 / 弹幕 / 评论）
+
+    @ViewBuilder
+    private func metricsStrip(_ detail: AnimeVideoDetail) -> some View {
+        let entries: [(value: String, label: String)] = [
+            detail.hits.flatMap { $0 > 0 ? (compactCount($0), "播放") : nil },
+            detail.danmuCount.flatMap { $0 > 0 ? (compactCount($0), "弹幕") : nil },
+            detail.commentTotal.flatMap { $0 > 0 ? (compactCount($0), "评论") : nil },
+        ].compactMap { $0 }
+
+        if !entries.isEmpty {
+            HStack(spacing: 0) {
+                ForEach(Array(entries.enumerated()), id: \.offset) { index, entry in
+                    if index > 0 {
+                        Rectangle()
+                            .fill(Theme.hairline)
+                            .frame(width: Theme.Stroke.hairline, height: 22)
                     }
+                    VStack(spacing: Theme.Space.hair) {
+                        Text(entry.value)
+                            .font(.numeral(15))
+                            .foregroundStyle(Theme.textPrimary)
+                            .lineLimit(1)
+                        Text(entry.label)
+                            .font(Theme.Typo.badge)
+                            .foregroundStyle(Theme.textTertiary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
                 }
-                .padding(.horizontal, Theme.contentInset)
-                .padding(.vertical, 2)
             }
-            .scrollIndicators(.hidden)
-            .padding(.horizontal, -Theme.contentInset)
-            .onAppear { scrollStrip(proxy, animated: false) }
-            .onChange(of: activeEpisode) { _ in scrollStrip(proxy, animated: true) }
-            .onChange(of: selectedRouteIndex) { _ in scrollStrip(proxy, animated: false) }
+            .surfaceCard()
         }
     }
 
-    private func scrollStrip(_ proxy: ScrollViewProxy, animated: Bool) {
-        guard let activeEpisode else { return }
-        DispatchQueue.main.async {
-            if animated {
-                withAnimation(Motion.resolved(Motion.smooth, reduceMotion: reduceMotion)) {
-                    proxy.scrollTo(activeEpisode, anchor: .center)
+    // MARK: - 剧情简介与演职信息
+
+    @ViewBuilder
+    private func synopsisSection(_ detail: AnimeVideoDetail) -> some View {
+        let text = detail.cleanDesc.trimmingCharacters(in: .whitespacesAndNewlines)
+        let director = detail.director?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let actor = detail.actor?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let hasCredits = !director.isEmpty || !actor.isEmpty
+
+        if !text.isEmpty || hasCredits {
+            VStack(alignment: .leading, spacing: Theme.Space.sm) {
+                ShelfHeader(title: "简介", inset: 0) { EmptyView() }
+
+                if !text.isEmpty {
+                    Text(text)
+                        .font(Theme.Typo.row)
+                        .foregroundStyle(Theme.textSecondary)
+                        .lineSpacing(4)
+                        .lineLimit(isOverviewExpanded ? nil : 3)
                 }
-            } else {
-                var transaction = Transaction()
-                transaction.disablesAnimations = true
-                withTransaction(transaction) { proxy.scrollTo(activeEpisode, anchor: .center) }
+
+                if hasCredits && (isOverviewExpanded || text.count <= 60) {
+                    VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                        if !director.isEmpty {
+                            creditLine(label: "导演", value: director)
+                        }
+                        if !actor.isEmpty {
+                            creditLine(label: "主演", value: actor)
+                        }
+                    }
+                    .padding(.top, Theme.Space.xs)
+                }
+
+                if text.count > 60 || (hasCredits && !text.isEmpty) {
+                    Button(isOverviewExpanded ? "收起" : "展开全部") {
+                        Haptics.select()
+                        withAnimation(Motion.resolved(Motion.snappy, reduceMotion: reduceMotion)) {
+                            isOverviewExpanded.toggle()
+                        }
+                    }
+                    .font(Theme.Typo.meta.weight(.semibold))
+                    .foregroundStyle(Theme.accentAlt)
+                    .buttonStyle(.pressable(scale: 0.94))
+                }
             }
+        }
+    }
+
+    private func creditLine(label: String, value: String) -> some View {
+        HStack(alignment: .top, spacing: Theme.Space.sm) {
+            Text(label)
+                .font(Theme.Typo.caption.weight(.medium))
+                .foregroundStyle(Theme.textTertiary)
+            Text(value)
+                .font(Theme.Typo.caption)
+                .foregroundStyle(Theme.textSecondary)
+                .lineLimit(2)
         }
     }
 
     // MARK: - 评论预览
 
     private func commentsSection(_ detail: AnimeVideoDetail) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: Theme.Space.sm) {
             ShelfHeader(title: "评论", inset: 0) {
                 HStack(spacing: 10) {
                     if let total = detail.commentTotal, total > 0 {
                         Text("\(compactCount(total)) 条")
-                            .font(.scaled(12))
+                            .font(Theme.Typo.caption.monospacedDigit())
                             .tertiaryTextStyle()
                     }
                     NavigationLink {
@@ -495,14 +515,14 @@ struct AnimeDetailView: View {
                 }
                 .frame(height: 80)
             } else {
-                HStack(spacing: 8) {
+                HStack(spacing: Theme.Space.sm) {
                     Image(icon: .comment).iconStyle(size: 14, color: Theme.textTertiary)
                     Text(commentPreview == nil ? "评论没有加载出来，点「全部」再试一次" : "还没有评论")
-                        .font(.scaled(13))
+                        .font(Theme.Typo.meta)
                         .foregroundStyle(Theme.textTertiary)
                 }
                 .frame(maxWidth: .infinity, minHeight: 64)
-                .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous))
+                .surfaceCard(cornerRadius: Theme.Radius.tile)
             }
         }
     }
@@ -526,31 +546,6 @@ struct AnimeDetailView: View {
         if item.finished == true { return "\(episode) · 已看完" }
         guard let position = item.position, position > 5 else { return nil }
         return "\(episode) · 看到 \(formatTime(position))"
-    }
-
-    // MARK: - 剧情简介手风琴
-
-    /// 简介：与剧集页一致，直接铺在页面上，不再包一张卡片；14pt、默认 3 行、「更多/收起」。
-    @ViewBuilder
-    private func synopsisSection(_ detail: AnimeVideoDetail) -> some View {
-        let text = detail.cleanDesc
-        if !text.isEmpty {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(text)
-                    .font(.scaled(14))
-                    .foregroundStyle(Theme.textSecondary)
-                    .lineSpacing(4)
-                    .lineLimit(isOverviewExpanded ? nil : 3)
-                if text.count > 60 {
-                    Button(isOverviewExpanded ? "收起" : "更多") {
-                        withAnimation(Motion.snappy) { isOverviewExpanded.toggle() }
-                    }
-                    .font(.scaled(14, weight: .semibold))
-                    .foregroundStyle(Theme.accent)
-                    .buttonStyle(.pressable(scale: 0.94))
-                }
-            }
-        }
     }
 
     // MARK: - 数据加载与播放调用
@@ -609,11 +604,6 @@ struct AnimeDetailView: View {
     }
 
     /// 打开播放器：把整条线路的集数都交给它，解析放到播放器里现做。
-    ///
-    /// 之前这里先解析出这一集的地址、只把这一集塞进播放列表，播放器的选集就只有「共 1 集」，
-    /// 切集、上一集/下一集、自动连播全都无从谈起。现在传的是集数引用（见 AnimeEpisodeRef），
-    /// 播放器要播哪集就现解析哪集——和 115 网盘按 pickCode 取地址是同一个模式。
-    /// 顺带也不再用详情页上的解析遮罩：播放器窗口立刻打开，转圈在播放器自己的画面里。
     private func startPlay(episode: String, detail: AnimeVideoDetail) {
         let episodes = detail.episodeRefs(routeIndex: selectedRouteIndex)
         guard let ref = episodes.first(where: { $0.part == episode }) else { return }

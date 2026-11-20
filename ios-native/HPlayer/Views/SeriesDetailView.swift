@@ -17,16 +17,12 @@ struct SeriesDetailView: View {
     @State private var matching: MatchRequest?
     @State private var season: Int?
     @State private var overviewExpanded = false
-    /// 选集栏展开成完整网格（点「全部」）
+    /// 选集栏收起/展开与排序状态（与动漫详情页、竖屏播放器共用 UnifiedEpisodeShelf）
     @State private var episodesExpanded = false
-    @State private var isDescending = false
-    @State private var episodeRange = 0
-    @State private var lastScrolledSeason: Int?
+    @State private var episodesDescending = false
     /// 长按菜单里点了移除 / 删除、等待确认的那一集
     @State private var pendingRemoval: HomeMediaItem?
     @Namespace private var seasonNamespace
-    @Namespace private var orderNamespace
-    @Namespace private var rangeNamespace
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private static let scrollSpace = "series.scroll"
@@ -105,10 +101,9 @@ struct SeriesDetailView: View {
     private func content(_ group: SeriesGroup) -> some View {
         let seasons = group.seasons
         let currentSeason = season.flatMap { seasons.contains($0) ? $0 : nil } ?? seasons.first ?? 1
-        let episodesBySeason: [Int: [HomeMediaItem]] = seasons.count > 1
-            ? Dictionary(grouping: group.episodes) { $0.parsed.season ?? 1 }
-            : [currentSeason: group.episodes]
-        let episodes = episodesBySeason[currentSeason] ?? []
+        let episodes = seasons.count > 1
+            ? group.episodes.filter { ($0.parsed.season ?? 1) == currentSeason }
+            : group.episodes
 
         return ScrollView {
             VStack(alignment: .leading, spacing: 0) {
@@ -118,8 +113,7 @@ struct SeriesDetailView: View {
                     header(group)
                     overview(group)
                     actions(group)
-                    episodesSection(group, episodes: episodes, seasons: seasons,
-                                    currentSeason: currentSeason, episodesBySeason: episodesBySeason)
+                    episodesSection(group, episodes: episodes, seasons: seasons, currentSeason: currentSeason)
                 }
                 .padding(.horizontal, Theme.contentInset)
                 .padding(.top, -55)
@@ -251,319 +245,72 @@ struct SeriesDetailView: View {
         }
     }
 
-    private struct StripScrollToken: Equatable {
-        let season: Int
-        let targetID: String?
-    }
-
-    private func episodesSection(_ group: SeriesGroup, episodes: [HomeMediaItem], seasons: [Int],
-                                 currentSeason: Int, episodesBySeason: [Int: [HomeMediaItem]]) -> some View {
+    private func episodesSection(_ group: SeriesGroup, episodes: [HomeMediaItem], seasons: [Int], currentSeason: Int) -> some View {
         let target = resumeTarget(group)?.item
-        return VStack(alignment: .leading, spacing: 12) {
-            ShelfHeader(title: "选集", inset: 0) {
-                HStack(spacing: 10) {
-                    if episodesExpanded {
-                        orderToggle
-                    } else {
-                        Text("共 \(episodes.count) 集")
-                            .font(.scaled(12))
-                            .foregroundStyle(Theme.textTertiary)
-                            .lineLimit(1)
-                    }
-                    if episodes.count > 1 {
-                        Button {
-                            Haptics.select()
-                            if !episodesExpanded {
-                                var transaction = Transaction()
-                                transaction.disablesAnimations = true
-                                withTransaction(transaction) {
-                                    episodeRange = Self.rangeContainingTarget(target, in: episodes, isDescending: isDescending)
-                                }
-                            }
-                            withAnimation(Motion.resolved(Motion.snappy, reduceMotion: reduceMotion)) {
-                                episodesExpanded.toggle()
-                            }
-                        } label: {
-                            HStack(spacing: 3) {
-                                Text(episodesExpanded ? "收起" : "全部")
-                                    .font(.scaled(13))
-                                Image(icon: episodesExpanded ? .collapse : .expand)
-                                    .iconStyle(size: 10, color: Theme.textSecondary)
-                            }
-                            .foregroundStyle(Theme.textSecondary)
-                            .frame(minWidth: 44, minHeight: 44, alignment: .trailing)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.pressable(scale: 0.92))
-                        .accessibilityIdentifier("series.episodes.all")
-                    }
-                }
-            }
-            if seasons.count > 1 {
-                ScrollView(.horizontal) {
-                    HStack(spacing: 6) {
-                        ForEach(seasons, id: \.self) { value in
-                            SelectionPill(
-                                title: "第 \(value) 季 · \(episodesBySeason[value]?.count ?? 0) 集",
-                                selected: value == currentSeason,
-                                namespace: seasonNamespace
-                            ) {
-                                let nextEpisodes = episodesBySeason[value] ?? []
-                                var transaction = Transaction()
-                                transaction.disablesAnimations = true
-                                withTransaction(transaction) {
-                                    episodeRange = Self.rangeContainingTarget(target, in: nextEpisodes, isDescending: isDescending)
-                                }
-                                withAnimation(Motion.resolved(Motion.snappy, reduceMotion: reduceMotion)) {
-                                    season = value
-                                }
-                            }
-                        }
-                    }
-                }
-                .scrollIndicators(.hidden)
-            }
-
-            if !episodes.isEmpty {
-                ZStack(alignment: .topLeading) {
-                    if episodesExpanded {
-                        episodeGridPanel(group, episodes: episodes, target: target, currentSeason: currentSeason)
-                            .compositingGroup()
-                            .transition(.opacity)
-                    } else {
-                        episodeStrip(group, episodes: episodes, target: target, currentSeason: currentSeason)
-                            .transition(.opacity)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-                .padding(.horizontal, Theme.contentInset)
-                .clipped()
-                .padding(.horizontal, -Theme.contentInset)
-            }
-
-            if let target, let line = episodeDetail(target) {
-                Text(line)
-                    .font(.scaled(12))
-                    .foregroundStyle(Theme.textTertiary)
-                    .lineLimit(2)
-                    .padding(.top, 2)
-            }
+        let episodesByID = Dictionary(episodes.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let shelfItems = episodes.enumerated().map { index, episode in
+            let recent = recentEntry(for: episode)
+            let progress = recent?.progress
+            let finished = (progress ?? 0) >= 0.92
+            let number = episode.parsed.episode.map { EpisodeShelfItem.numberedTitle($0) }
+                ?? EpisodeShelfItem.numberedTitle(index + 1)
+            let spokenValue = finished ? "已看完" : (recent?.position).map { "看到 \(playbackTimeText($0))" } ?? ""
+            return EpisodeShelfItem(
+                id: episode.id,
+                shortTitle: number,
+                accessibilityTitle: episode.episodeTitle,
+                progress: progress,
+                accessibilityValue: spokenValue
+            )
         }
-    }
 
-    /// 正序 / 倒序（展开时才显示）
-    private var orderToggle: some View {
-        HStack(spacing: 0) {
-            orderPill("正序", icon: .sortAscending, selected: !isDescending) { isDescending = false }
-            orderPill("倒序", icon: .sortDescending, selected: isDescending) { isDescending = true }
-        }
-        .padding(2)
-        .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
-    }
-
-    private func orderPill(_ title: String, icon: AppIcon, selected: Bool, action: @escaping () -> Void) -> some View {
-        Button {
-            guard !selected else { return }
-            Haptics.select()
-            withAnimation(reduceMotion ? nil : Motion.snappy) { action() }
-        } label: {
-            HStack(spacing: 3) {
-                Image(icon: icon)
-                    .iconStyle(size: 11, color: selected ? Theme.onPrimary : Theme.textSecondary)
-                Text(title)
-                    .font(.scaled(11, weight: selected ? .bold : .medium))
-                    .foregroundStyle(selected ? Theme.onPrimary : Theme.textSecondary)
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .frame(minHeight: 28)
-            .background {
-                if selected {
-                    RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous)
-                        .fill(Theme.primaryAction)
-                        .matchedGeometryEffect(id: "series.order.selection", in: orderNamespace)
-                }
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.pressable(scale: 0.95))
-        .accessibilityAddTraits(selected ? .isSelected : [])
-        .accessibilityIdentifier(title == "倒序" ? "series.episodes.descending" : "series.episodes.ascending")
-    }
-
-    /// 收起时：一行横排，打开时自动定位到待播集
-    private func episodeStrip(_ group: SeriesGroup, episodes: [HomeMediaItem], target: HomeMediaItem?, currentSeason: Int) -> some View {
-        let scrollTargetID = target.flatMap { t in episodes.contains(where: { $0.id == t.id }) ? t.id : nil } ?? episodes.first?.id
-        let token = StripScrollToken(season: currentSeason, targetID: scrollTargetID)
-        return ScrollViewReader { proxy in
-            ScrollView(.horizontal) {
-                LazyHStack(spacing: 8) {
-                    ForEach(Array(episodes.enumerated()), id: \.element.id) { index, episode in
-                        episodeCell(episode, index: index, group: group, isCurrent: episode.id == target?.id)
-                            .frame(width: 64)
-                            .id(episode.id)
-                    }
-                }
-                .padding(.horizontal, Theme.contentInset)
-                .padding(.vertical, 2)
-            }
-            .scrollIndicators(.hidden)
-            .padding(.horizontal, -Theme.contentInset)
-            .onAppear {
-                lastScrolledSeason = currentSeason
-                scrollStrip(proxy, targetID: scrollTargetID, animated: false)
-            }
-            .onChange(of: token) { newValue in
-                let seasonChanged = lastScrolledSeason != newValue.season
-                lastScrolledSeason = newValue.season
-                scrollStrip(proxy, targetID: newValue.targetID, animated: !seasonChanged)
-            }
-        }
-    }
-
-    private func scrollStrip(_ proxy: ScrollViewProxy, targetID: String?, animated: Bool) {
-        guard let targetID else { return }
-        DispatchQueue.main.async {
-            if animated {
-                withAnimation(Motion.resolved(Motion.smooth, reduceMotion: reduceMotion)) {
-                    proxy.scrollTo(targetID, anchor: .center)
-                }
-            } else {
-                var transaction = Transaction()
-                transaction.disablesAnimations = true
-                withTransaction(transaction) { proxy.scrollTo(targetID, anchor: .center) }
-            }
-        }
-    }
-
-    private static func makeRanges(count: Int, isDescending: Bool) -> [Range<Int>] {
-        guard count > 0 else { return [] }
-        let list = stride(from: 0, to: count, by: AnimeEpisodePanel.rangeSize).map { $0..<min($0 + AnimeEpisodePanel.rangeSize, count) }
-        return isDescending ? list.reversed() : list
-    }
-
-    private static func rangeContainingTarget(_ target: HomeMediaItem?, in episodes: [HomeMediaItem], isDescending: Bool) -> Int {
-        let ranges = makeRanges(count: episodes.count, isDescending: isDescending)
-        guard let target, let position = episodes.firstIndex(where: { $0.id == target.id }) else { return 0 }
-        return ranges.firstIndex { $0.contains(position) } ?? 0
-    }
-
-    /// 展开时：超过 50 集按段落胶囊分段，下方五列网格
-    private func episodeGridPanel(_ group: SeriesGroup, episodes: [HomeMediaItem], target: HomeMediaItem?, currentSeason: Int) -> some View {
-        let ranges = Self.makeRanges(count: episodes.count, isDescending: isDescending)
-        let activeRange = ranges.indices.contains(episodeRange) ? episodeRange : 0
-        let range = ranges.indices.contains(activeRange) ? ranges[activeRange] : (0..<0)
-        let indices = isDescending ? Array(range.reversed()) : Array(range)
-
-        return VStack(alignment: .leading, spacing: 12) {
-            if ranges.count > 1 {
-                ScrollViewReader { proxy in
+        return UnifiedEpisodeShelf(
+            items: shelfItems,
+            currentID: target?.id,
+            summary: "共 \(episodes.count) 集",
+            isExpanded: $episodesExpanded,
+            isDescending: $episodesDescending,
+            identifiers: EpisodeShelfIdentifiers(
+                toggle: "series.episodes.all",
+                ascending: "series.episodes.ascending",
+                descending: "series.episodes.descending",
+                rangePrefix: "series.episodes.range"
+            ),
+            caption: target.flatMap { episodeDetail($0) },
+            onSelect: { item in
+                guard let episode = episodesByID[item.id] else { return }
+                play(episode, in: group)
+            },
+            topAccessory: {
+                if seasons.count > 1 {
                     ScrollView(.horizontal) {
                         HStack(spacing: 6) {
-                            ForEach(Array(ranges.enumerated()), id: \.offset) { index, item in
+                            ForEach(seasons, id: \.self) { value in
                                 SelectionPill(
-                                    title: "\(item.lowerBound + 1)-\(item.upperBound)",
-                                    selected: index == activeRange,
-                                    namespace: rangeNamespace
+                                    title: "第 \(value) 季 · \(group.episodes.filter { ($0.parsed.season ?? 1) == value }.count) 集",
+                                    selected: value == currentSeason,
+                                    namespace: seasonNamespace
                                 ) {
                                     withAnimation(Motion.resolved(Motion.snappy, reduceMotion: reduceMotion)) {
-                                        episodeRange = index
+                                        season = value
                                     }
                                 }
-                                .id(index)
-                                .accessibilityIdentifier("series.episodes.range.\(item.lowerBound + 1)")
                             }
                         }
-                        .padding(.horizontal, Theme.contentInset - 4)
                     }
                     .scrollIndicators(.hidden)
-                    .padding(.horizontal, -Theme.contentInset)
-                    .onAppear {
-                        var transaction = Transaction()
-                        transaction.disablesAnimations = true
-                        withTransaction(transaction) { proxy.scrollTo(activeRange, anchor: .center) }
-                    }
-                    .onChange(of: activeRange) { index in
-                        withAnimation(Motion.resolved(Motion.smooth, reduceMotion: reduceMotion)) {
-                            proxy.scrollTo(index, anchor: .center)
-                        }
+                }
+            },
+            tileMenu: { item in
+                if let episode = episodesByID[item.id] {
+                    Button("播放", icon: AppIcon.play.name) { play(episode, in: group) }
+                    Button("匹配封面", icon: AppIcon.poster.name) { matching = MatchRequest(item: episode) }
+                    Button(episode.isCloud ? "从媒体库移除" : "删除本地文件", icon: AppIcon.trash.name, role: .destructive) {
+                        pendingRemoval = episode
                     }
                 }
             }
-
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 5), spacing: 10) {
-                ForEach(Array(indices.enumerated()), id: \.offset) { _, epIndex in
-                    let episode = episodes[epIndex]
-                    episodeCell(episode, index: epIndex, group: group, isCurrent: episode.id == target?.id)
-                }
-            }
-            // 换季、换段、正序倒序：网格直接换内容，不做整块淡入淡出
-            .transaction { $0.animation = nil }
-        }
-        .onChange(of: isDescending) { descending in
-            episodeRange = Self.rangeContainingTarget(target, in: episodes, isDescending: descending)
-        }
-        .onChange(of: currentSeason) { _ in
-            episodeRange = Self.rangeContainingTarget(target, in: episodes, isDescending: isDescending)
-        }
-    }
-
-    /// 选集里的一格：数字、看过的小勾、看到一半的金色进度线；接下来要看的那一集整块填金。
-    private func episodeCell(_ episode: HomeMediaItem, index: Int, group: SeriesGroup, isCurrent: Bool) -> some View {
-        let recent = recentEntry(for: episode)
-        let progress = recent?.progress ?? 0
-        let finished = progress >= 0.92
-        let number = episode.parsed.episode.map { String($0) } ?? String(index + 1)
-        return Button {
-            Haptics.tap()
-            play(episode, in: group)
-        } label: {
-            ZStack {
-                RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous)
-                    .fill(isCurrent ? Theme.gold : Theme.surface)
-                Text(number)
-                    .font(.scaled(16, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(isCurrent ? Theme.onPrimary : (finished ? Theme.textTertiary : Color.primary))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-                    .padding(.horizontal, 4)
-                if finished && !isCurrent {
-                    Image(appIconNamed: AppIcon.check.name)
-                        .font(.scaled(8, weight: .bold))
-                        .foregroundStyle(Theme.textTertiary)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                        .padding(6)
-                }
-            }
-            .frame(height: 48)
-            .overlay(alignment: .bottom) {
-                if progress > 0.02 && !finished {
-                    Capsule()
-                        .fill(isCurrent ? Theme.onPrimary.opacity(0.55) : Theme.gold)
-                        .frame(height: 2)
-                        .scaleEffect(x: max(0.08, min(progress, 1)), y: 1, anchor: .leading)
-                        .padding(.horizontal, 8)
-                        .padding(.bottom, 5)
-                }
-            }
-            .overlay {
-                if !isCurrent {
-                    RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous)
-                        .strokeBorder(Theme.hairline, lineWidth: 0.5)
-                }
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.pressable(scale: 0.92))
-        .accessibilityLabel(episode.episodeTitle)
-        .accessibilityValue(finished ? "已看完" : (recent?.position).map { "看到 \(playbackTimeText($0))" } ?? "")
-        .contextMenu {
-            Button("播放", icon: AppIcon.play.name) { play(episode, in: group) }
-            Button("匹配封面", icon: AppIcon.poster.name) { matching = MatchRequest(item: episode) }
-            Button(episode.isCloud ? "从媒体库移除" : "删除本地文件", icon: AppIcon.trash.name, role: .destructive) {
-                pendingRemoval = episode
-            }
-        }
+        )
     }
 
     private func episodeDetail(_ episode: HomeMediaItem) -> String? {

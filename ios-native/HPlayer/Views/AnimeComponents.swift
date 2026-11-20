@@ -1,6 +1,7 @@
 import SwiftUI
 
 // 动漫频道顶部的热播轮播和首页共用 ChannelHeroSection（见 ChannelHero.swift）。
+// 选集统一使用 UnifiedEpisodeShelf（见 EpisodeShelfView.swift）。
 
 // MARK: - 动漫海报卡片 (AnimePosterCard)
 //
@@ -51,129 +52,5 @@ struct AnimePosterCard: View {
         case (true, false): return year
         case (true, true): return "在线动漫"
         }
-    }
-}
-
-// MARK: - 选集方块矩阵 (AnimeEpisodeMatrix)
-
-/// 选集格子与剧集详情页（SeriesDetailView.episodeCell）同一套视觉规格：
-/// 48pt 高、当前集整块填金、看完置灰打勾、看到一半画底部金色进度线。
-/// 这里只对齐视觉，不共用代码，剧集页保持原样不动。
-struct AnimeEpisodeMatrix: View {
-    let episodes: [String]
-    let activeEpisode: String?
-    var isDescending: Bool = false
-    /// 单集观看进度（0…1），由详情页按标题从播放记录里查。
-    var progress: (String) -> Double? = { _ in nil }
-    var onSelect: (String) -> Void
-
-    private var orderedEpisodes: [String] {
-        if isDescending {
-            return Array(episodes.reversed())
-        } else {
-            return episodes
-        }
-    }
-
-    var body: some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 5), spacing: 10) {
-            ForEach(Array(orderedEpisodes.enumerated()), id: \.offset) { _, ep in
-                cell(ep)
-            }
-        }
-    }
-
-    private func cell(_ ep: String) -> some View {
-        AnimeEpisodeCell(title: ep, isCurrent: ep == activeEpisode, progress: progress(ep) ?? 0) {
-            onSelect(ep)
-        }
-    }
-
-}
-
-// MARK: - 选集格子 (AnimeEpisodeCell)
-
-/// 一集的格子：48pt 高、当前集整块填主色、看完置灰打勾、看到一半画底部进度线。
-/// 详情页的横排选集、全部选集面板里的网格都用它。
-struct AnimeEpisodeCell: View {
-    let title: String
-    let isCurrent: Bool
-    /// 0…1；≥ 0.92 算看完
-    var progress: Double = 0
-    let onTap: () -> Void
-
-    private var finished: Bool { progress >= 0.92 }
-
-    var body: some View {
-        Button {
-            Haptics.tap()
-            onTap()
-        } label: {
-            ZStack {
-                RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous)
-                    .fill(isCurrent ? Theme.gold : Theme.surface)
-                Text(Self.shortTitle(title))
-                    .font(.scaled(16, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(isCurrent ? Theme.onPrimary : (finished ? Theme.textTertiary : Theme.textPrimary))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.6)
-                    .padding(.horizontal, 4)
-                if finished && !isCurrent {
-                    Image(icon: .check)
-                        .font(.scaled(8, weight: .bold))
-                        .foregroundStyle(Theme.textTertiary)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                        .padding(6)
-                }
-            }
-            .frame(height: 48)
-            .overlay(alignment: .bottom) {
-                if progress > 0.02 && !finished {
-                    Capsule()
-                        .fill(isCurrent ? Theme.onPrimary.opacity(0.55) : Theme.gold)
-                        .frame(height: 2)
-                        .scaleEffect(x: max(0.08, min(progress, 1)), y: 1, anchor: .leading)
-                        .padding(.horizontal, 8)
-                        .padding(.bottom, 5)
-                }
-            }
-            .overlay {
-                if !isCurrent {
-                    RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous)
-                        .strokeBorder(Theme.hairline, lineWidth: 0.5)
-                }
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.pressable)
-        .accessibilityLabel(title)
-        .accessibilityAddTraits(isCurrent ? .isSelected : [])
-    }
-
-    /// "第01集" -> "01"，"第108集" -> "108"；不是这种格式的原样显示（「特别篇」「OVA」）
-    static func shortTitle(_ raw: String) -> String {
-        var slice = raw.drop { $0.isWhitespace }
-        while let last = slice.last, last.isWhitespace {
-            slice = slice.dropLast()
-        }
-        if slice.hasPrefix("第") { slice = slice.dropFirst() }
-        if slice.hasSuffix("集") || slice.hasSuffix("话") { slice = slice.dropLast() }
-        while let first = slice.first, first.isWhitespace { slice = slice.dropFirst() }
-        while let last = slice.last, last.isWhitespace { slice = slice.dropLast() }
-
-        let clean: String
-        if slice.contains(where: { $0 == "第" || $0 == "集" || $0 == "话" }) {
-            clean = String(slice)
-                .replacingOccurrences(of: "第", with: "")
-                .replacingOccurrences(of: "集", with: "")
-                .replacingOccurrences(of: "话", with: "")
-                .trimmingCharacters(in: .whitespaces)
-        } else {
-            clean = String(slice)
-        }
-        if clean.count == 1 && clean.allSatisfy({ $0.isNumber }) {
-            return "0" + clean
-        }
-        return clean.isEmpty ? raw : clean
     }
 }

@@ -37,6 +37,23 @@ final class MotionUITests: XCTestCase {
         detailShot.name = "Series detail navigation bar"
         detailShot.lifetime = .keepAlways
         add(detailShot)
+
+        // 片库详情页选集展开与收起（与动漫详情页、竖屏播放器共用 UnifiedEpisodeShelf）
+        let allEpisodes = app.buttons["series.episodes.all"]
+        XCTAssertTrue(allEpisodes.waitForExistence(timeout: 5))
+        allEpisodes.tap()
+        let descending = app.buttons["series.episodes.descending"]
+        XCTAssertTrue(descending.waitForExistence(timeout: 5), "Expanding series episodes reveals the order toggle")
+        descending.tap()
+        let expandedShot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        expandedShot.name = "Series detail episodes expanded"
+        expandedShot.lifetime = .keepAlways
+        add(expandedShot)
+        allEpisodes.tap()
+        let collapsed = NSPredicate { _, _ in !descending.exists }
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: collapsed, object: nil)], timeout: 5), .completed,
+                       "Collapsing series episodes hides the order toggle")
+
         app.navigationBars.buttons.element(boundBy: 0).tap()
         XCTAssertTrue(series.waitForExistence(timeout: 5), "Returning from detail should keep the shelf usable")
         XCTAssertTrue(more.waitForNonExistence(timeout: 3), "The navigation bar buttons must leave with the page")
