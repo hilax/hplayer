@@ -51,11 +51,10 @@ enum EpisodeShelfLayout {
     static let columns = 5
     static let maxUnscrolledRows = 5
     static let tileHeight: CGFloat = 46
-    static let stripTileMinWidth: CGFloat = 56
+    static let stripTileMinWidth: CGFloat = 58
     static let gridSpacing: CGFloat = Theme.Space.sm
-    static let cardPadding: CGFloat = Theme.Space.md
-    static let stripVerticalPadding: CGFloat = 10
-    /// 超过 5 行（25 集）时限制网格视口高度并露出第 6 行边缘，提示可在卡片内继续上下滑
+    static let verticalInset: CGFloat = 2
+    /// 超过 5 行（25 集）时限制网格视口高度并露出第 6 行边缘，提示可在区域内继续上下滑
     static let scrolledGridHeight: CGFloat = CGFloat(maxUnscrolledRows) * tileHeight
         + CGFloat(maxUnscrolledRows - 1) * gridSpacing
         + 14
@@ -105,13 +104,14 @@ private struct EpisodeExpandedHeightKey: PreferenceKey {
     }
 }
 
-// MARK: - 统一选集容器 (UnifiedEpisodeShelf)
+// MARK: - 统一无框选集容器 (UnifiedEpisodeShelf · 方案 A)
 
-/// 动漫详情页、片库详情页、竖屏播放器页共用的选集组件。
+/// 动漫详情页、片库详情页、竖屏播放器页共用的选集组件（方案 A · 无框拉帘展开）。
 ///
-/// 收起时是一张精致的单行横滑卡片（自动居中到当前集，右侧微渐隐提示可滑）；
-/// 点「全部」后，卡片自身以柔和弹簧向下展开成完整抽屉（正序 / 倒序、超过 50 集分段、五列网格、
-/// 可选底部附加行如「自动连播」），全过程按圆角边界严格裁切，绝不与下方评论 / 接下来 / 文件信息重叠。
+/// 不包裹任何外层卡片底框，每颗单集按钮自身为独立白底方块（深色下为石墨卡片色）+ 极细描边，
+/// 直接铺在页面底色上。收起时单行横排外延滑动；点「全部 ⌄」后，隐形裁切容器以柔和弹簧
+/// 平滑展开成五列白底网格（标题行同步优雅浮现单键「正序 / 倒序」胶囊），全过程严格按高度裁切，
+/// 绝不与下方简介 / 评论 / 接下来 / 文件信息重叠。
 struct UnifiedEpisodeShelf<TopAccessory: View, ExpandedFooter: View, TileMenu: View>: View {
     let items: [EpisodeShelfItem]
     let currentID: String?
@@ -128,9 +128,8 @@ struct UnifiedEpisodeShelf<TopAccessory: View, ExpandedFooter: View, TileMenu: V
     @ViewBuilder var tileMenu: (EpisodeShelfItem) -> TileMenu
 
     @State private var rangeIndex = 0
-    @State private var measuredStripHeight: CGFloat = EpisodeShelfLayout.tileHeight + EpisodeShelfLayout.stripVerticalPadding * 2
+    @State private var measuredStripHeight: CGFloat = EpisodeShelfLayout.tileHeight + EpisodeShelfLayout.verticalInset * 2
     @State private var measuredExpandedHeight: CGFloat? = nil
-    @Namespace private var orderNamespace
     @Namespace private var rangeNamespace
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -169,34 +168,22 @@ struct UnifiedEpisodeShelf<TopAccessory: View, ExpandedFooter: View, TileMenu: V
         return items.firstIndex { $0.id == currentID }
     }
 
-    private var rangeCaption: String {
-        guard !activeRange.isEmpty else { return "" }
-        let start = activeRange.lowerBound + 1
-        let end = activeRange.upperBound
-        return isDescending ? "第 \(end)–\(start) 集" : "第 \(start)–\(end) 集"
-    }
-
-    /// 展开前第 0 帧的精确高度估算，保证动画从第一帧就顺滑展开，首帧渲染后再由 Preference 锁定精确像素高度。
+    /// 展开前第 0 帧的精确高度估算，保证无框拉帘从第一帧就顺滑展开，随后由 Preference 锁定精确像素高度。
     private var estimatedExpandedHeight: CGFloat {
         let rowCount = max(1, gridRows.count)
         let gridHeight: CGFloat = rowCount > EpisodeShelfLayout.maxUnscrolledRows
             ? EpisodeShelfLayout.scrolledGridHeight
             : CGFloat(rowCount) * EpisodeShelfLayout.tileHeight
                 + CGFloat(max(rowCount - 1, 0)) * EpisodeShelfLayout.gridSpacing
-        let toolbarHeight: CGFloat = 30
         let rangeRowHeight: CGFloat = ranges.count > 1 ? 42 : 0
-        let footerHeight: CGFloat = hasExpandedFooter ? 59 : 0
-        let bottomPad: CGFloat = hasExpandedFooter ? 0 : EpisodeShelfLayout.cardPadding
-        return EpisodeShelfLayout.cardPadding
-            + toolbarHeight
-            + 10
+        let footerHeight: CGFloat = hasExpandedFooter ? 55 : 0
+        return EpisodeShelfLayout.verticalInset * 2
             + rangeRowHeight
             + gridHeight
             + footerHeight
-            + bottomPad
     }
 
-    private var targetCardHeight: CGFloat {
+    private var targetCurtainHeight: CGFloat {
         isExpanded ? (measuredExpandedHeight ?? estimatedExpandedHeight) : measuredStripHeight
     }
 
@@ -206,7 +193,7 @@ struct UnifiedEpisodeShelf<TopAccessory: View, ExpandedFooter: View, TileMenu: V
             topAccessory()
 
             if !items.isEmpty {
-                morphingCard
+                morphingCurtain
             }
 
             if let caption, !caption.isEmpty {
@@ -229,7 +216,7 @@ struct UnifiedEpisodeShelf<TopAccessory: View, ExpandedFooter: View, TileMenu: V
         }
     }
 
-    // MARK: 标题与展开/收起按钮
+    // MARK: 标题行（左侧稳定标题与集数摘要，右侧精巧单键排序胶囊 + 展开/收起胶囊）
 
     private var headerRow: some View {
         HStack(alignment: .center, spacing: Theme.Space.sm) {
@@ -248,9 +235,51 @@ struct UnifiedEpisodeShelf<TopAccessory: View, ExpandedFooter: View, TileMenu: V
             }
             Spacer(minLength: Theme.Space.sm)
             if items.count > 1 {
-                expandToggleButton
+                HStack(spacing: 6) {
+                    if isExpanded {
+                        orderToggleButton
+                            .transition(
+                                reduceMotion
+                                    ? .identity
+                                    : .opacity.combined(with: .scale(scale: 0.92, anchor: .trailing))
+                            )
+                    }
+                    expandToggleButton
+                }
             }
         }
+    }
+
+    /// 轻量单键正序 / 倒序切换胶囊：与右侧「收起 ⌃」等高同款（白底细边、无厚重色块抢焦点），
+    /// 一键在正序 / 倒序之间切换，窄屏和大字体下也绝不拥挤。
+    private var orderToggleButton: some View {
+        Button {
+            Haptics.select()
+            withAnimation(Motion.resolved(Motion.snappy, reduceMotion: reduceMotion)) {
+                isDescending.toggle()
+            }
+        } label: {
+            HStack(spacing: Theme.Space.xs) {
+                Image(icon: isDescending ? .sortDescending : .sortAscending)
+                    .font(.scaled(11, weight: .semibold))
+                Text(isDescending ? "倒序" : "正序")
+                    .font(Theme.Typo.caption.weight(.semibold))
+                    .contentTransition(.opacity)
+            }
+            .foregroundStyle(isDescending ? Theme.textPrimary : Theme.textSecondary)
+            .padding(.horizontal, 10)
+            .frame(height: 30)
+            .background(isDescending ? Theme.surfaceHigh : Theme.surface, in: Capsule())
+            .overlay {
+                Capsule().strokeBorder(isDescending ? Theme.rule : Theme.hairline, lineWidth: Theme.Stroke.hairline)
+            }
+            .contentShape(VerticalHitArea(extra: 7))
+            .hoverEffect(.highlight)
+        }
+        .buttonStyle(.pressable(scale: 0.94))
+        .accessibilityLabel(isDescending ? "当前倒序，轻点切换正序" : "当前正序，轻点切换倒序")
+        .accessibilityIdentifier(isDescending ? identifiers.ascending : identifiers.descending)
+        .accessibilityAddTraits(isDescending ? .isSelected : [])
     }
 
     private var expandToggleButton: some View {
@@ -290,11 +319,10 @@ struct UnifiedEpisodeShelf<TopAccessory: View, ExpandedFooter: View, TileMenu: V
         .accessibilityAddTraits(isExpanded ? .isSelected : [])
     }
 
-    // MARK: 变形卡片容器（收起态横排 ↔ 展开态抽屉）
+    // MARK: 无框隐形拉帘容器（收起态横排 ↔ 展开态五列网格）
 
-    private var morphingCard: some View {
-        let cardShape = RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
-        return ZStack(alignment: .top) {
+    private var morphingCurtain: some View {
+        ZStack(alignment: .top) {
             if isExpanded {
                 expandedContent
                     .fixedSize(horizontal: false, vertical: true)
@@ -322,12 +350,11 @@ struct UnifiedEpisodeShelf<TopAccessory: View, ExpandedFooter: View, TileMenu: V
             }
         }
         .frame(maxWidth: .infinity)
-        .frame(height: targetCardHeight, alignment: .top)
-        .background(Theme.surface)
-        .clipShape(cardShape)
-        .overlay {
-            cardShape.strokeBorder(Theme.hairline, lineWidth: Theme.Stroke.hairline)
-        }
+        .frame(height: targetCurtainHeight, alignment: .top)
+        // 横向裁切边界扩到整屏宽，让横滑条和分段胶囊自然通栏滑动；纵向严格按目标高度裁切，绝不压住下方内容
+        .padding(.horizontal, Theme.contentInset)
+        .clipped()
+        .padding(.horizontal, -Theme.contentInset)
         .onPreferenceChange(EpisodeStripHeightKey.self) { height in
             guard height > 0, abs(measuredStripHeight - height) > 0.5 else { return }
             measuredStripHeight = height
@@ -351,7 +378,7 @@ struct UnifiedEpisodeShelf<TopAccessory: View, ExpandedFooter: View, TileMenu: V
         }
     }
 
-    // MARK: 收起态 · 一行横排
+    // MARK: 收起态 · 无框白底单行横排
 
     private var stripContent: some View {
         ScrollViewReader { proxy in
@@ -362,21 +389,22 @@ struct UnifiedEpisodeShelf<TopAccessory: View, ExpandedFooter: View, TileMenu: V
                             .id(item.id)
                     }
                 }
-                .padding(.horizontal, EpisodeShelfLayout.cardPadding)
-                .padding(.vertical, EpisodeShelfLayout.stripVerticalPadding)
+                .padding(.horizontal, Theme.contentInset)
+                .padding(.vertical, EpisodeShelfLayout.verticalInset)
             }
             .scrollIndicators(.hidden)
             .overlay(alignment: .trailing) {
                 if items.count > 5 {
                     LinearGradient(
-                        colors: [Theme.surface.opacity(0), Theme.surface],
+                        colors: [Theme.pageBackground.opacity(0), Theme.pageBackground],
                         startPoint: .leading,
                         endPoint: .trailing
                     )
-                    .frame(width: 18)
+                    .frame(width: 22)
                     .allowsHitTesting(false)
                 }
             }
+            .padding(.horizontal, -Theme.contentInset)
             .onAppear { scrollStripToCurrent(proxy, animated: false) }
             .onChange(of: currentID) { _ in scrollStripToCurrent(proxy, animated: !reduceMotion) }
             .onChange(of: items.first?.id) { _ in scrollStripToCurrent(proxy, animated: false) }
@@ -400,24 +428,12 @@ struct UnifiedEpisodeShelf<TopAccessory: View, ExpandedFooter: View, TileMenu: V
         }
     }
 
-    // MARK: 展开态 · 分段 + 排序 + 五列网格
+    // MARK: 展开态 · 分段胶囊 + 无框五列白底网格
 
     private var expandedContent: some View {
         let allRanges = ranges
         let rows = gridRows
         return VStack(alignment: .leading, spacing: 10) {
-            // 顶部工具栏：当前分段提示 + 正序/倒序滑块
-            HStack(spacing: Theme.Space.sm) {
-                Text(rangeCaption)
-                    .font(Theme.Typo.caption.monospacedDigit())
-                    .foregroundStyle(Theme.textTertiary)
-                    .contentTransition(.opacity)
-                Spacer(minLength: Theme.Space.sm)
-                orderToggle
-            }
-            .padding(.horizontal, EpisodeShelfLayout.cardPadding)
-
-            // 超过 50 集时展示分段胶囊
             if allRanges.count > 1 {
                 ScrollViewReader { proxy in
                     ScrollView(.horizontal) {
@@ -434,9 +450,10 @@ struct UnifiedEpisodeShelf<TopAccessory: View, ExpandedFooter: View, TileMenu: V
                                 .accessibilityIdentifier("\(identifiers.rangePrefix).\(range.lowerBound + 1)")
                             }
                         }
-                        .padding(.horizontal, EpisodeShelfLayout.cardPadding - 2)
+                        .padding(.horizontal, Theme.contentInset - 2)
                     }
                     .scrollIndicators(.hidden)
+                    .padding(.horizontal, -Theme.contentInset)
                     .onAppear {
                         var transaction = Transaction()
                         transaction.disablesAnimations = true
@@ -448,23 +465,21 @@ struct UnifiedEpisodeShelf<TopAccessory: View, ExpandedFooter: View, TileMenu: V
                 }
             }
 
-            // 五列网格：超过 25 集在卡片内部滚动，避免整页被几百集撑成高墙
             if rows.count > EpisodeShelfLayout.maxUnscrolledRows {
                 ScrollViewReader { proxy in
                     ScrollView(.vertical) {
                         episodeGridRows(rows)
-                            .padding(.horizontal, EpisodeShelfLayout.cardPadding)
                             .padding(.bottom, Theme.Space.sm)
                     }
                     .scrollIndicators(.hidden)
                     .frame(height: EpisodeShelfLayout.scrolledGridHeight)
                     .overlay(alignment: .bottom) {
                         LinearGradient(
-                            colors: [Theme.surface.opacity(0), Theme.surface],
+                            colors: [Theme.pageBackground.opacity(0), Theme.pageBackground],
                             startPoint: .top,
                             endPoint: .bottom
                         )
-                        .frame(height: 16)
+                        .frame(height: 18)
                         .allowsHitTesting(false)
                     }
                     .onAppear {
@@ -481,22 +496,18 @@ struct UnifiedEpisodeShelf<TopAccessory: View, ExpandedFooter: View, TileMenu: V
                 }
             } else {
                 episodeGridRows(rows)
-                    .padding(.horizontal, EpisodeShelfLayout.cardPadding)
             }
 
-            // 展开底部附加区（例如竖屏播放器的「自动连播」开关）
             if hasExpandedFooter {
                 VStack(spacing: 0) {
                     Rectangle()
                         .fill(Theme.hairline)
                         .frame(height: Theme.Stroke.hairline)
-                        .padding(.horizontal, EpisodeShelfLayout.cardPadding)
                     expandedFooter()
                 }
             }
         }
-        .padding(.top, EpisodeShelfLayout.cardPadding)
-        .padding(.bottom, hasExpandedFooter ? 0 : EpisodeShelfLayout.cardPadding)
+        .padding(.vertical, EpisodeShelfLayout.verticalInset)
     }
 
     /// 同步计算高度的五列网格；换段、正序/倒序时直接换格子内容，不做整块淡入淡出。
@@ -531,54 +542,6 @@ struct UnifiedEpisodeShelf<TopAccessory: View, ExpandedFooter: View, TileMenu: V
 
     private func rangeContainingCurrent() -> Int {
         EpisodeShelfLayout.rangeIndex(containing: currentItemIndex, in: ranges)
-    }
-
-    // MARK: 正序 / 倒序切换
-
-    private var orderToggle: some View {
-        HStack(spacing: 0) {
-            orderPill("正序", icon: .sortAscending, selected: !isDescending, id: identifiers.ascending) {
-                isDescending = false
-            }
-            orderPill("倒序", icon: .sortDescending, selected: isDescending, id: identifiers.descending) {
-                isDescending = true
-            }
-        }
-        .padding(Theme.Space.hair)
-        .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous)
-                .strokeBorder(Theme.hairline, lineWidth: Theme.Stroke.hairline)
-        }
-    }
-
-    private func orderPill(_ title: String, icon: AppIcon, selected: Bool, id: String, action: @escaping () -> Void) -> some View {
-        Button {
-            guard !selected else { return }
-            Haptics.select()
-            withAnimation(reduceMotion ? nil : Motion.snappy) { action() }
-        } label: {
-            HStack(spacing: 3) {
-                Image(icon: icon)
-                    .font(.scaled(11, weight: .medium))
-                Text(title)
-                    .font(.scaled(11, weight: selected ? .bold : .medium))
-            }
-            .foregroundStyle(selected ? Theme.onPrimary : Theme.textSecondary)
-            .padding(.horizontal, Theme.Space.sm)
-            .frame(minHeight: 26)
-            .background {
-                if selected {
-                    RoundedRectangle(cornerRadius: Theme.Radius.chip - Theme.Space.hair, style: .continuous)
-                        .fill(Theme.primaryAction)
-                        .matchedGeometryEffect(id: "episode.order.thumb", in: orderNamespace)
-                }
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.pressable(scale: 0.95))
-        .accessibilityAddTraits(selected ? .isSelected : [])
-        .accessibilityIdentifier(id)
     }
 
     // MARK: 单集格子
@@ -727,10 +690,10 @@ extension UnifiedEpisodeShelf where ExpandedFooter == EmptyView {
     }
 }
 
-// MARK: - 统一单集格子 (UnifiedEpisodeTile)
+// MARK: - 统一单集方块 (UnifiedEpisodeTile)
 
-/// 统一规格的单集方块：46pt 高、10pt 圆角；
-/// 当前集主操作色实心（播放器里附带正在播放微柱），未看完带底部琥珀进度线，已看完置灰并右上角打勾。
+/// 独立白底（深色下为石墨卡片色）单集按钮：46pt 高、10pt 圆角、极细描边；
+/// 当前集主操作色实心（播放器里附带正在播放微柱），未看完带底部柔金进度条，已看完置灰并右上角打勾。
 struct UnifiedEpisodeTile: View {
     let item: EpisodeShelfItem
     let isCurrent: Bool
@@ -748,7 +711,7 @@ struct UnifiedEpisodeTile: View {
             onTap()
         } label: {
             ZStack {
-                shape.fill(isCurrent ? Theme.primaryAction : Theme.surfaceRaised)
+                shape.fill(isCurrent ? Theme.primaryAction : Theme.surface)
 
                 VStack(spacing: Theme.Space.hair) {
                     Text(item.shortTitle)

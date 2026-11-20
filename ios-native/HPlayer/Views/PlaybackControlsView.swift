@@ -2685,8 +2685,7 @@ struct PlaybackControlsView: View {
                     .tint(Theme.accentFill)
                     .accessibilityIdentifier("playback.episodes.autoNext")
             }
-            .padding(.horizontal, EpisodeShelfLayout.cardPadding)
-            .frame(minHeight: 48)
+            .frame(minHeight: 44)
             }
         )
         .padding(.top, Theme.Space.xl)

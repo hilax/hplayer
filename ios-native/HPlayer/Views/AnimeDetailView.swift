@@ -39,13 +39,12 @@ struct AnimeDetailView: View {
                     VStack(alignment: .leading, spacing: 0) {
                         backdropView(detail)
 
-                        // 海报抬头 → 播放 + 追番主操作栏 → 统一选集 → 数据概览 → 简介与演职信息 → 评论预览
+                        // 海报抬头 → 播放 + 追番主操作栏 → 精简简介 → 无框统一选集 → 评论预览
                         VStack(alignment: .leading, spacing: Theme.Space.xl) {
                             headerView(detail)
                             actionBar(detail)
-                            routesAndEpisodesSection(detail)
-                            metricsStrip(detail)
                             synopsisSection(detail)
+                            routesAndEpisodesSection(detail)
                             commentsSection(detail)
                         }
                         .padding(.horizontal, Theme.contentInset)
@@ -183,7 +182,7 @@ struct AnimeDetailView: View {
                                 .foregroundStyle(Theme.textSecondary)
                                 .padding(.horizontal, 8)
                                 .frame(height: 22)
-                                .background(Theme.tileTint, in: Capsule())
+                                .background(Theme.surface, in: Capsule())
                                 .overlay {
                                     Capsule().strokeBorder(Theme.hairline, lineWidth: Theme.Stroke.hairline)
                                 }
@@ -386,42 +385,7 @@ struct AnimeDetailView: View {
         return countText
     }
 
-    // MARK: - 数据概览条（播放 / 弹幕 / 评论）
-
-    @ViewBuilder
-    private func metricsStrip(_ detail: AnimeVideoDetail) -> some View {
-        let entries: [(value: String, label: String)] = [
-            detail.hits.flatMap { $0 > 0 ? (compactCount($0), "播放") : nil },
-            detail.danmuCount.flatMap { $0 > 0 ? (compactCount($0), "弹幕") : nil },
-            detail.commentTotal.flatMap { $0 > 0 ? (compactCount($0), "评论") : nil },
-        ].compactMap { $0 }
-
-        if !entries.isEmpty {
-            HStack(spacing: 0) {
-                ForEach(Array(entries.enumerated()), id: \.offset) { index, entry in
-                    if index > 0 {
-                        Rectangle()
-                            .fill(Theme.hairline)
-                            .frame(width: Theme.Stroke.hairline, height: 22)
-                    }
-                    VStack(spacing: Theme.Space.hair) {
-                        Text(entry.value)
-                            .font(.numeral(15))
-                            .foregroundStyle(Theme.textPrimary)
-                            .lineLimit(1)
-                        Text(entry.label)
-                            .font(Theme.Typo.badge)
-                            .foregroundStyle(Theme.textTertiary)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-                }
-            }
-            .surfaceCard()
-        }
-    }
-
-    // MARK: - 剧情简介与演职信息
+    // MARK: - 剧情简介与演职信息（紧贴主操作栏，默认精简 2 行，与片库详情页节奏一致）
 
     @ViewBuilder
     private func synopsisSection(_ detail: AnimeVideoDetail) -> some View {
@@ -431,18 +395,16 @@ struct AnimeDetailView: View {
         let hasCredits = !director.isEmpty || !actor.isEmpty
 
         if !text.isEmpty || hasCredits {
-            VStack(alignment: .leading, spacing: Theme.Space.sm) {
-                ShelfHeader(title: "简介", inset: 0) { EmptyView() }
-
+            VStack(alignment: .leading, spacing: 6) {
                 if !text.isEmpty {
                     Text(text)
                         .font(Theme.Typo.row)
                         .foregroundStyle(Theme.textSecondary)
                         .lineSpacing(4)
-                        .lineLimit(isOverviewExpanded ? nil : 3)
+                        .lineLimit(isOverviewExpanded ? nil : 2)
                 }
 
-                if hasCredits && (isOverviewExpanded || text.count <= 60) {
+                if hasCredits && (isOverviewExpanded || text.count <= 44) {
                     VStack(alignment: .leading, spacing: Theme.Space.xs) {
                         if !director.isEmpty {
                             creditLine(label: "导演", value: director)
@@ -454,8 +416,8 @@ struct AnimeDetailView: View {
                     .padding(.top, Theme.Space.xs)
                 }
 
-                if text.count > 60 || (hasCredits && !text.isEmpty) {
-                    Button(isOverviewExpanded ? "收起" : "展开全部") {
+                if text.count > 44 || (hasCredits && !text.isEmpty) {
+                    Button(isOverviewExpanded ? "收起" : "更多") {
                         Haptics.select()
                         withAnimation(Motion.resolved(Motion.snappy, reduceMotion: reduceMotion)) {
                             isOverviewExpanded.toggle()

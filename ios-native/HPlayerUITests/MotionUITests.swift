@@ -38,19 +38,21 @@ final class MotionUITests: XCTestCase {
         detailShot.lifetime = .keepAlways
         add(detailShot)
 
-        // 片库详情页选集展开与收起（与动漫详情页、竖屏播放器共用 UnifiedEpisodeShelf）
+        // 片库详情页选集展开与收起（与动漫详情页、竖屏播放器共用无框 UnifiedEpisodeShelf）
         let allEpisodes = app.buttons["series.episodes.all"]
         XCTAssertTrue(allEpisodes.waitForExistence(timeout: 5))
         allEpisodes.tap()
         let descending = app.buttons["series.episodes.descending"]
         XCTAssertTrue(descending.waitForExistence(timeout: 5), "Expanding series episodes reveals the order toggle")
         descending.tap()
+        let ascending = app.buttons["series.episodes.ascending"]
+        XCTAssertTrue(ascending.waitForExistence(timeout: 5), "Tapping the sort toggle switches to descending order")
         let expandedShot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         expandedShot.name = "Series detail episodes expanded"
         expandedShot.lifetime = .keepAlways
         add(expandedShot)
         allEpisodes.tap()
-        let collapsed = NSPredicate { _, _ in !descending.exists }
+        let collapsed = NSPredicate { _, _ in !descending.exists && !ascending.exists }
         XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: collapsed, object: nil)], timeout: 5), .completed,
                        "Collapsing series episodes hides the order toggle")
 
