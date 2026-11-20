@@ -47,13 +47,18 @@ final class PlayerWindowVolumeGuardTests: XCTestCase {
         XCTAssertFalse(dismissedExternally, "自己关掉的不算被顶替")
     }
 
-    func testExitControllerIsBlackPortraitOnly() {
+    func testExitControllerStartsLandscapeThenTurnsPortraitInBlack() {
         let exit = PlayerExitController()
         exit.loadViewIfNeeded()
-        XCTAssertEqual(exit.supportedInterfaceOrientations, .portrait, "收尾时只支持竖屏，场景才能在黑屏里转回去")
+        XCTAssertEqual(exit.supportedInterfaceOrientations, .landscape, "换上时先保持横屏，窗口不会被立刻改成竖屏")
+        exit.orientations = .portrait
+        XCTAssertEqual(exit.supportedInterfaceOrientations, .portrait, "之后只支持竖屏，场景在黑屏里转回去")
         XCTAssertEqual(exit.view.backgroundColor, .black, "收尾的窗口是全黑的，转屏看不出来")
         XCTAssertFalse(exit.view.isUserInteractionEnabled)
+        XCTAssertTrue(exit.prefersStatusBarHidden, "黑屏转屏时状态栏藏着，不会看到它跟着转")
+        exit.statusBarVisible = true
         exit.statusBarStyle = .darkContent
+        XCTAssertFalse(exit.prefersStatusBarHidden, "页面淡出来时状态栏一起出现")
         XCTAssertEqual(exit.preferredStatusBarStyle, .darkContent, "状态栏跟随 App 外观")
     }
 }
