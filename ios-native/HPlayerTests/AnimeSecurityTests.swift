@@ -151,6 +151,27 @@ final class AnimeSecurityTests: XCTestCase {
         XCTAssertNil(AnimeAccount.loadCachedUser(from: defaults))
     }
 
+    func testCommentKeepsAllInlineRepliesAndPreviewsThree() {
+        let children: [[String: Any]] = (1...5).map { ["id": 900 + $0, "uname": "回复\($0)", "comments": "内容\($0)", "last_id": 264121] }
+        let comment = AnimeComment(json: ["id": 264121, "uname": "老佛爷", "comments": "置顶", "children_total": 655,
+                                          "children": children], kind: .top)
+        XCTAssertEqual(comment?.children.count, 5, "接口带了几条回复就留几条，回复页拿不到完整列表时还能看")
+        XCTAssertEqual(comment?.preview.count, 3, "列表里只预览前三条")
+        XCTAssertEqual(comment?.replies, 655)
+    }
+
+    func testReplyEndpointOnlyAcceptsRealReplies() {
+        let replies: [[String: Any]] = [["id": 1, "comments": "a", "last_id": 264121], ["id": 2, "comments": "b", "last_id": 1]]
+        XCTAssertTrue(AnimeClient.looksLikeReplies(replies, to: 264121))
+        XCTAssertTrue(AnimeClient.looksLikeReplies([["id": 3, "comments": "c", "pid": 264121, "last_id": 0]], to: 264121))
+        let topLevel: [[String: Any]] = [["id": 5, "comments": "顶层", "last_id": 0], ["id": 6, "comments": "顶层2"]]
+        XCTAssertFalse(AnimeClient.looksLikeReplies(topLevel, to: 264121), "服务端忽略参数照样返回顶层评论时不能当回复")
+        XCTAssertFalse(AnimeClient.looksLikeReplies([], to: 264121))
+        XCTAssertTrue(AnimeClient.replyPaths(vid: 7, commentID: 264121, page: 2, limit: 20).allSatisfy {
+            $0.hasPrefix("/app/vod_comment/") && $0.contains("264121") && $0.contains("page=2")
+        })
+    }
+
     func testCommentReadsRealFieldNames() {
         let json: [String: Any] = ["id": 264121, "uname": "用户", "comments": "正文", "hits": 621, "istop": 1,
                                    "isvip": true, "children_total": 135, "created_at": "2026-09-02T13:00:36+08:00",

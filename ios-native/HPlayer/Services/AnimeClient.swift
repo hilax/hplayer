@@ -26,6 +26,8 @@ struct AnimeEnvelope {
 
 final class AnimeClient {
     static let shared = AnimeClient()
+    /// 试出来能拿回复的那种写法（`replyPaths` 里的下标）
+    private let repliesPathIndex = LockedValue<Int?>(nil)
 
     private let host = "bkbfdm.cenmo.fun"
     private let fallbackIPs = ["120.240.157.64", "183.232.189.187", "111.29.14.203", "183.214.145.89"]
@@ -221,6 +223,48 @@ final class AnimeClient {
                                 rawCount: records.count)
     }
 
+    /// 一条评论下面的全部回复。接口文档里没有这个接口，按这套接口的命名依次试几种常见写法，
+    /// 只认真正是这条评论的回复的结果（带 pid / parent_id 等于它，或每条都带 last_id），认到以后这次运行一直用它。
+    /// 都认不出就抛错，页面退回到置顶 / 热评里自带的那几条回复。
+    func fetchReplies(vid: Int, commentID: Int, page: Int = 1, limit: Int = 20) async throws -> AnimeCommentPage {
+        let candidates = Self.replyPaths(vid: vid, commentID: commentID, page: page, limit: limit)
+        if let index = repliesPathIndex.value {
+            let records = AnimeJSON.records(in: try await requestJSON(path: candidates[index]))
+            return AnimeCommentPage(items: records.compactMap { AnimeComment(json: $0, kind: .list) }, rawCount: records.count)
+        }
+        for (index, path) in candidates.enumerated() {
+            guard let data = try? await requestJSON(path: path) else { continue }
+            let records = AnimeJSON.records(in: data)
+            guard Self.looksLikeReplies(records, to: commentID) else { continue }
+            repliesPathIndex.value = index
+            return AnimeCommentPage(items: records.compactMap { AnimeComment(json: $0, kind: .list) }, rawCount: records.count)
+        }
+        throw AnimeClientError.emptyData
+    }
+
+    static func replyPaths(vid: Int, commentID id: Int, page: Int, limit: Int) -> [String] {
+        let tail = "limit=\(limit)&page=\(page)"
+        return [
+            "/app/vod_comment/getlist?vid=\(vid)&pid=\(id)&\(tail)",
+            "/app/vod_comment/getlist?vid=\(vid)&last_id=\(id)&\(tail)",
+            "/app/vod_comment/getlist?vid=\(vid)&parent_id=\(id)&\(tail)",
+            "/app/vod_comment/getchildren?vid=\(vid)&id=\(id)&\(tail)",
+            "/app/vod_comment/getchild?vid=\(vid)&id=\(id)&\(tail)",
+            "/app/vod_comment/getreply?vid=\(vid)&id=\(id)&\(tail)",
+            "/app/vod_comment/getsub?vid=\(vid)&id=\(id)&\(tail)",
+            "/app/vod_comment/children?vid=\(vid)&id=\(id)&\(tail)",
+        ]
+    }
+
+    /// 服务端不认识的参数会被忽略、照样返回顶层评论（last_id 都是 0），这种结果不能当回复用
+    static func looksLikeReplies(_ records: [[String: Any]], to commentID: Int) -> Bool {
+        guard !records.isEmpty else { return false }
+        return records.allSatisfy { record in
+            if let parent = AnimeJSON.int(record, ["pid", "parent_id", "top_id", "root_id"]), parent == commentID { return true }
+            return (AnimeJSON.int(record, ["last_id"]) ?? 0) > 0 && AnimeJSON.int(record, ["id"]) != commentID
+        }
+    }
+
     /// 获取播放凭证 (POST)
     func fetchPlayCredential(id: Int, play: String, part: String) async throws -> AnimePlayResponse {
         guard let encodedPart = part.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
@@ -233,5 +277,16 @@ final class AnimeClient {
             throw AnimeClientError.emptyData
         }
         return first
+    }
+}
+
+/// 跨并发读写的小值（AnimeClient 不是 actor）
+final class LockedValue<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: Value
+    init(_ value: Value) { stored = value }
+    var value: Value {
+        get { lock.lock(); defer { lock.unlock() }; return stored }
+        set { lock.lock(); stored = newValue; lock.unlock() }
     }
 }

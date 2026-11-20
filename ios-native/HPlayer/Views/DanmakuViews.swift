@@ -483,6 +483,10 @@ struct AnimeCommentsView: View {
     let vid: Int
     var bottomInset: CGFloat = 0
     var allowsCompose: Bool = true
+    /// 不为空时是「一条评论的全部回复」：上面是这条评论，下面是回复，输入框默认回复它
+    var root: AnimeComment? = nil
+    /// 打开回复页时直接弹出输入框（点了「回复」进来的）
+    var startsReplying = false
 
     private enum Sort: String, CaseIterable, Identifiable {
         case hot, latest
@@ -509,8 +513,19 @@ struct AnimeCommentsView: View {
     @State private var draft = ""
     @State private var replyTo: AnimeComment?
     @FocusState private var composerFocused: Bool
+    /// 点开某条评论的回复
+    @State private var repliesRequest: AnimeRepliesRequest?
+    /// 回复页：没拿到完整回复列表，只能显示评论里自带的那几条
+    @State private var repliesPartial = false
+
+    /// 发出去时实际回复的那条：回复页里没选具体某条就回复这条评论本身
+    private var replyTarget: AnimeComment? { replyTo ?? root }
 
     private var visible: [AnimeComment] {
+        if root != nil {
+            let mineIDs = Set(mine.map(\.id))
+            return mine + latest.filter { !mineIDs.contains($0.id) }
+        }
         let body = sort == .hot ? (hot.isEmpty ? latest : hot) : latest
         let pinnedIDs = Set(pinned.map(\.id))
         return mine + pinned + body.filter { !pinnedIDs.contains($0.id) }
@@ -554,13 +569,13 @@ struct AnimeCommentsView: View {
 
                     VStack(spacing: 0) {
                         SocialInputBar(
-                            target: .comment(vid: vid, replyTo: replyTo),
+                            target: .comment(vid: vid, replyTo: replyTarget),
                             tracker: tracker,
                             text: $draft,
                             focused: $composerFocused,
                             requiresSignIn: needsSignIn,
                             onRequireSignIn: { showSignIn = true },
-                            onCancelReply: replyTo == nil ? nil : { replyTo = nil },
+                            onCancelReply: replyTo == nil || replyTo?.id == root?.id ? nil : { replyTo = nil },
                             onDidSend: {
                                 replyTo = nil
                                 dismissComposer()
@@ -603,8 +618,22 @@ struct AnimeCommentsView: View {
             }
         }
         .animeSignInSheet(isPresented: $showSignIn)
+        .sheet(item: $repliesRequest) { request in
+            AnimeRepliesSheet(vid: vid, request: request)
+        }
+        .task {
+            guard startsReplying, root != nil else { return }
+            // 等页面推上来、输入框摆好再聚焦
+            try? await Task.sleep(nanoseconds: 450_000_000)
+            compose(nil)
+        }
         .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("player.comments")
+        .accessibilityIdentifier(root == nil ? "player.comments" : "comments.replies")
+    }
+
+    private func openReplies(_ comment: AnimeComment, reply: Bool) {
+        guard root == nil else { compose(comment); return }
+        repliesRequest = AnimeRepliesRequest(root: comment, startsReplying: reply)
     }
 
     private var needsSignIn: Bool {
@@ -616,7 +645,7 @@ struct AnimeCommentsView: View {
 
     private func compose(_ reply: AnimeComment?) {
         guard !needsSignIn else { showSignIn = true; return }
-        replyTo = reply
+        replyTo = reply ?? root
         composerFocused = true
     }
 
@@ -639,7 +668,26 @@ struct AnimeCommentsView: View {
         }
     }
 
+    @ViewBuilder
     private var header: some View {
+        if let root {
+            AnimeCommentRow(comment: root, showsReplies: false,
+                            onReply: allowsCompose ? { _ in compose(nil) } : nil,
+                            onLike: { like($0) })
+            HStack {
+                Text(root.replies > 0 ? "全部回复 · \(root.replies)" : "全部回复")
+                    .font(.scaled(15, weight: .bold))
+                    .foregroundStyle(Theme.textPrimary)
+                Spacer()
+            }
+            .padding(.vertical, 12)
+            .overlay(alignment: .top) { Theme.rule.frame(height: Theme.Stroke.hairline) }
+        } else {
+            listHeader
+        }
+    }
+
+    private var listHeader: some View {
         HStack {
             Text(visible.isEmpty ? "评论" : "评论 · \(visible.count)\(exhausted ? "" : "+")")
                 .font(.scaled(15, weight: .bold))
@@ -681,10 +729,12 @@ struct AnimeCommentsView: View {
             stateMessage
         } else {
             ForEach(visible) { comment in
-                AnimeCommentRow(comment: comment, onReply: allowsCompose ? { compose($0) } : nil,
-                                onLike: { like($0) })
+                AnimeCommentRow(comment: comment,
+                                onReply: allowsCompose ? { compose($0) } : nil,
+                                onLike: { like($0) },
+                                onOpenReplies: root == nil ? { openReplies($0, reply: false) } : nil)
                     .onAppear {
-                        if sort == .latest, comment.id == latest.last?.id { Task { await loadMore() } }
+                        if root != nil || sort == .latest, comment.id == latest.last?.id { Task { await loadMore() } }
                     }
             }
             footer
@@ -716,6 +766,7 @@ struct AnimeCommentsView: View {
     }
 
     private var stateTitle: String {
+        if root != nil { return error.isEmpty ? "还没有回复" : "回复加载失败" }
         if !error.isEmpty { return "评论加载失败" }
         if unsupported { return "评论格式暂不支持" }
         return "还没有评论"
@@ -723,19 +774,26 @@ struct AnimeCommentsView: View {
 
     private var stateDetail: String {
         if !error.isEmpty { return error }
+        if root != nil { return allowsCompose ? "点下面的输入框，回复这条评论" : "" }
         if unsupported { return "接口返回了评论，但字段和预期不一致，后续版本会适配" }
         return allowsCompose ? "点下面的输入框，来抢第一条评论" : "来抢第一条评论吧"
     }
 
     @ViewBuilder
     private var footer: some View {
-        if sort == .latest {
+        if root != nil && repliesPartial {
+            Text("暂时只能看到这几条回复")
+                .font(.caption)
+                .foregroundStyle(Theme.textTertiary)
+                .frame(maxWidth: .infinity)
+                .frame(height: 48)
+        } else if sort == .latest || root != nil {
             HStack {
                 Spacer()
                 if loadingMore {
                     ProgressView().tint(Theme.textSecondary)
                 } else if exhausted {
-                    Text("没有更多评论了")
+                    Text(root == nil ? "没有更多评论了" : "没有更多回复了")
                         .font(.caption)
                         .foregroundStyle(Theme.textTertiary)
                 }
@@ -750,6 +808,27 @@ struct AnimeCommentsView: View {
         loadedVid = vid
         pinned = []; hot = []; latest = []; mine = []; page = 0; exhausted = false; error = ""; unsupported = false
         guard !InterfacePreview.active else { exhausted = true; return }
+        if let root {
+            repliesPartial = false
+            loading = true
+            defer { loading = false }
+            do {
+                let first = try await AnimeClient.shared.fetchReplies(vid: vid, commentID: root.numericID, page: 1)
+                guard loadedVid == vid else { return }
+                latest = first.items
+                page = 1
+                exhausted = first.rawCount < 20
+            } catch {
+                // 拿不到完整列表：先显示评论里自带的几条
+                latest = root.children
+                exhausted = true
+                repliesPartial = !root.children.isEmpty && root.replies > root.children.count
+                if root.children.isEmpty && root.replies > 0 {
+                    self.error = "暂时拿不到这条评论的回复，稍后再试"
+                }
+            }
+            return
+        }
         #if DEBUG
         if ProcessInfo.processInfo.environment["HPLAYER_COMPOSER_TEST"] == "1" {
             latest = (1...15).map { index in
@@ -788,7 +867,13 @@ struct AnimeCommentsView: View {
         loadingMore = true
         defer { loadingMore = false }
         let next = page + 1
-        guard let result = try? await AnimeClient.shared.fetchComments(.list, vid: vid, page: next) else { return }
+        let fetched: AnimeCommentPage?
+        if let root {
+            fetched = try? await AnimeClient.shared.fetchReplies(vid: vid, commentID: root.numericID, page: next)
+        } else {
+            fetched = try? await AnimeClient.shared.fetchComments(.list, vid: vid, page: next)
+        }
+        guard let result = fetched else { return }
         let known = Set(latest.map(\.id))
         latest += result.items.filter { !known.contains($0.id) }
         page = next
@@ -799,8 +884,12 @@ struct AnimeCommentsView: View {
 /// 一条评论：头像、名字和标签、正文；置顶和热评带前几条回复；下面「回复」和点赞。
 struct AnimeCommentRow: View {
     let comment: AnimeComment
+    /// 回复页顶上的那条评论不再带回复预览
+    var showsReplies = true
     var onReply: ((AnimeComment) -> Void)? = nil
     var onLike: ((AnimeComment) -> Void)? = nil
+    /// 点回复预览 / 「N 条回复」打开全部回复
+    var onOpenReplies: ((AnimeComment) -> Void)? = nil
     @ObservedObject private var likes = AnimeLikeStore.shared
 
     var body: some View {
@@ -835,8 +924,15 @@ struct AnimeCommentRow: View {
                 .foregroundStyle(Theme.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
-                if !comment.preview.isEmpty {
-                    repliesPreview
+                if showsReplies && !comment.preview.isEmpty {
+                    if let onOpenReplies {
+                        Button { onOpenReplies(comment) } label: { repliesPreview(openable: true) }
+                            .buttonStyle(.pressable(scale: 0.98))
+                            .accessibilityHint("查看全部回复")
+                            .accessibilityIdentifier("comment.replies.\(comment.id)")
+                    } else {
+                        repliesPreview(openable: false)
+                    }
                 }
                 actions
             }
@@ -844,7 +940,7 @@ struct AnimeCommentRow: View {
         .padding(.vertical, 12)
     }
 
-    private var repliesPreview: some View {
+    private func repliesPreview(openable: Bool) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             ForEach(comment.preview) { reply in
                 (Text(reply.userName).foregroundColor(Theme.textPrimary).fontWeight(.semibold)
@@ -852,10 +948,13 @@ struct AnimeCommentRow: View {
                     .font(.scaled(13))
                     .lineLimit(2)
             }
-            if comment.replies > comment.preview.count {
-                Text("共 \(comment.replies) 条回复")
-                    .font(.scaled(12, weight: .medium))
-                    .foregroundStyle(Theme.textTertiary)
+            if comment.replies > comment.preview.count || openable {
+                HStack(spacing: 2) {
+                    Text(comment.replies > comment.preview.count ? "共 \(comment.replies) 条回复" : "查看回复")
+                    if openable { Image(icon: .forward).font(.scaled(10, weight: .semibold)) }
+                }
+                .font(.scaled(12, weight: .medium))
+                .foregroundStyle(openable ? Theme.textSecondary : Theme.textTertiary)
             }
         }
         .padding(.horizontal, 10)
@@ -879,10 +978,19 @@ struct AnimeCommentRow: View {
                     .foregroundStyle(Theme.textSecondary)
                     .frame(minHeight: 32)
                     .accessibilityIdentifier("comment.reply.\(comment.id)")
-            } else if comment.replies > 0 && comment.preview.isEmpty {
-                Text("\(comment.replies) 条回复")
-                    .font(.scaled(12))
-                    .foregroundStyle(Theme.textTertiary)
+            }
+            if showsReplies && comment.replies > 0 && comment.preview.isEmpty {
+                if let onOpenReplies, comment.numericID > 0 {
+                    Button("\(comment.replies) 条回复") { onOpenReplies(comment) }
+                        .font(.scaled(12, weight: .medium))
+                        .foregroundStyle(Theme.textSecondary)
+                        .frame(minHeight: 32)
+                        .accessibilityIdentifier("comment.replyCount.\(comment.id)")
+                } else {
+                    Text("\(comment.replies) 条回复")
+                        .font(.scaled(12))
+                        .foregroundStyle(Theme.textTertiary)
+                }
             }
             Spacer(minLength: 0)
             if let onLike, comment.numericID > 0 {
@@ -917,6 +1025,37 @@ struct AnimeCommentRow: View {
             .padding(.horizontal, 5)
             .padding(.vertical, 1.5)
             .overlay(Capsule().stroke(color.opacity(0.6), lineWidth: 0.8))
+    }
+}
+
+/// 打开一条评论的全部回复；`startsReplying` 是点「回复」进来的，直接弹出输入框
+struct AnimeRepliesRequest: Identifiable {
+    let root: AnimeComment
+    var startsReplying = false
+    var id: String { root.id + (startsReplying ? "#reply" : "") }
+}
+
+/// 一条评论的全部回复（从评论区、详情页弹出）：可以看回复、给评论或某条回复回复、点赞
+struct AnimeRepliesSheet: View {
+    let vid: Int
+    let request: AnimeRepliesRequest
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            AnimeCommentsView(vid: vid, root: request.root, startsReplying: request.startsReplying)
+                .background(Theme.pageBackground.ignoresSafeArea())
+                .navigationTitle("回复")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("关闭") { dismiss() }
+                            .accessibilityIdentifier("comments.replies.close")
+                    }
+                }
+        }
+        .presentationDetents([.large])
+        .presentationDragIndicator(.visible)
     }
 }
 

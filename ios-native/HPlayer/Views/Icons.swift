@@ -354,8 +354,10 @@ struct NavigationIcon: View {
         let assetName = active ? icon.activeName : icon.name
         let color = resolvedUIColor
         if let bitmap = NavigationIconCache.shared.bitmap(name: assetName, pointSize: size, color: color, scale: displayScale) {
+            // iOS 26 液态玻璃导航栏会在自定义视图两侧各加约 10pt：内容宽 22 时整体是 44×44 的圆，
+            // 和系统返回键一样；以前宽 28，加出来 48×44，右上角按钮就成了扁的椭圆
             Color.clear
-                .frame(width: 28, height: 28)
+                .frame(width: 22, height: 22)
                 .overlay {
                     Image(uiImage: bitmap)
                         .resizable()
@@ -370,7 +372,7 @@ struct NavigationIcon: View {
             Image(icon: icon, active: active)
                 .font(.system(size: size, weight: Theme.iconWeight))
                 .foregroundStyle(Color(uiColor: color))
-                .frame(width: 28, height: 28)
+                .frame(width: 22, height: 22)
                 .contentShape(Rectangle())
         }
     }
