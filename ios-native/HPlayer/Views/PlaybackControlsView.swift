@@ -3961,20 +3961,28 @@ struct PlaybackControlsView: View {
             if revealing { revealControls() }
         }
     }
-    /// 柔和关闭：控制栏和整个播放页一起淡出、轻轻缩小，淡出结束后直接关掉。
-    /// 横屏时下面垫的是主窗口的竖屏截图（见 `PlayerWindowController.willClose`），淡出时就露出关闭后的页面；
-    /// 转回竖屏、放回主窗口都在淡出结束后、画面上看不见的时候做，所以没有翻转，也不需要遮罩。
+    /// 关闭播放页：
+    /// - 横屏：和系统播放器一样，画面立刻切黑，在黑屏里转回竖屏，转好以后页面从黑里淡出来（见 `PlayerWindowController.willClose`）；
+    /// - 竖屏：控制栏和整个播放页一起淡出、轻轻缩小，露出下面的页面，淡出结束后关掉。
     private func closePlayer() {
         guard !closing else { return }
         closing = true
         hideTask?.cancel()
         playback.setBoost(false)
-        PlayerWindowController.shared.willClose()
         popover = nil
         popoverCloseTask?.cancel()
         showList = false
         quickMenu = nil
         showSleepMenu = false
+        if PlayerWindowController.shared.willClose() {
+            playback.pauseForClose()
+            Task { @MainActor in
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) { onClose() }
+            }
+            return
+        }
         withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.3)) {
             controlsVisible = false
             closeFade = true

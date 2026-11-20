@@ -30,7 +30,7 @@ final class PlayerWindowVolumeGuardTests: XCTestCase {
         }
         guard presented != nil else {
             // 没有可用的场景：关闭流程什么都不做，也不能崩
-            controller.willClose()
+            XCTAssertFalse(controller.willClose())
             controller.dismiss(token: token)
             XCTAssertFalse(controller.isPresented)
             return
@@ -38,7 +38,8 @@ final class PlayerWindowVolumeGuardTests: XCTestCase {
         defer { controller.dismiss(token: token) }
 
         XCTAssertTrue(controller.isShowing(token))
-        controller.willClose()
+        XCTAssertFalse(controller.willClose(), "竖屏播放器走整页淡出，不切黑")
+        XCTAssertFalse(controller.willClose(), "重复调用不再处理")
         XCTAssertFalse(controller.needsRevealHold, "开始关闭后不再等转屏淡入")
         controller.dismiss(token: token)
         XCTAssertFalse(controller.isPresented)
@@ -46,25 +47,13 @@ final class PlayerWindowVolumeGuardTests: XCTestCase {
         XCTAssertFalse(dismissedExternally, "自己关掉的不算被顶替")
     }
 
-    func testCloseBackdropSitsUnderEverythingAndFollowsPortraitBounds() throws {
-        guard let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first else {
-            throw XCTSkip("单元测试宿主没有可用的场景")
-        }
-        if scene.interfaceOrientation.isLandscape { throw XCTSkip("只在竖屏宿主里检查摆放") }
-        let window = PlayerWindow(windowScene: scene)
-        window.frame = scene.coordinateSpace.bounds
-        let snapshot = UIView()
-        window.showCloseBackdrop(snapshot)
-
-        XCTAssertTrue(window.hasCloseBackdrop)
-        XCTAssertTrue(window.subviews.first === snapshot, "截图垫在播放画面最下面")
-        XCTAssertFalse(snapshot.isUserInteractionEnabled, "截图不接收点击")
-        XCTAssertTrue(snapshot.transform.isIdentity, "竖屏时截图正着放")
-        XCTAssertEqual(snapshot.frame.width, window.bounds.width, accuracy: 0.5)
-        XCTAssertEqual(snapshot.frame.height, window.bounds.height, accuracy: 0.5)
-
-        window.removeCloseBackdrop()
-        XCTAssertNil(snapshot.superview)
-        XCTAssertFalse(window.hasCloseBackdrop)
+    func testExitControllerIsBlackPortraitOnly() {
+        let exit = PlayerExitController()
+        exit.loadViewIfNeeded()
+        XCTAssertEqual(exit.supportedInterfaceOrientations, .portrait, "收尾时只支持竖屏，场景才能在黑屏里转回去")
+        XCTAssertEqual(exit.view.backgroundColor, .black, "收尾的窗口是全黑的，转屏看不出来")
+        XCTAssertFalse(exit.view.isUserInteractionEnabled)
+        exit.statusBarStyle = .darkContent
+        XCTAssertEqual(exit.preferredStatusBarStyle, .darkContent, "状态栏跟随 App 外观")
     }
 }
