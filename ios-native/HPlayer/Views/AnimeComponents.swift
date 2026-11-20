@@ -77,7 +77,7 @@ struct AnimeEpisodeMatrix: View {
 
     var body: some View {
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 5), spacing: 10) {
-            ForEach(orderedEpisodes, id: \.self) { ep in
+            ForEach(Array(orderedEpisodes.enumerated()), id: \.offset) { _, ep in
                 cell(ep)
             }
         }
@@ -129,15 +129,12 @@ struct AnimeEpisodeCell: View {
             .frame(height: 48)
             .overlay(alignment: .bottom) {
                 if progress > 0.02 && !finished {
-                    GeometryReader { proxy in
-                        Capsule()
-                            .fill(isCurrent ? Theme.onPrimary.opacity(0.55) : Theme.gold)
-                            .frame(width: max(4, (proxy.size.width - 16) * progress), height: 2)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.leading, 8)
-                    }
-                    .frame(height: 2)
-                    .padding(.bottom, 5)
+                    Capsule()
+                        .fill(isCurrent ? Theme.onPrimary.opacity(0.55) : Theme.gold)
+                        .frame(height: 2)
+                        .scaleEffect(x: max(0.08, min(progress, 1)), y: 1, anchor: .leading)
+                        .padding(.horizontal, 8)
+                        .padding(.bottom, 5)
                 }
             }
             .overlay {
@@ -155,12 +152,27 @@ struct AnimeEpisodeCell: View {
 
     /// "第01集" -> "01"，"第108集" -> "108"；不是这种格式的原样显示（「特别篇」「OVA」）
     static func shortTitle(_ raw: String) -> String {
-        var clean = raw.replacingOccurrences(of: "第", with: "")
-            .replacingOccurrences(of: "集", with: "")
-            .replacingOccurrences(of: "话", with: "")
-            .trimmingCharacters(in: .whitespaces)
+        var slice = raw.drop { $0.isWhitespace }
+        while let last = slice.last, last.isWhitespace {
+            slice = slice.dropLast()
+        }
+        if slice.hasPrefix("第") { slice = slice.dropFirst() }
+        if slice.hasSuffix("集") || slice.hasSuffix("话") { slice = slice.dropLast() }
+        while let first = slice.first, first.isWhitespace { slice = slice.dropFirst() }
+        while let last = slice.last, last.isWhitespace { slice = slice.dropLast() }
+
+        let clean: String
+        if slice.contains(where: { $0 == "第" || $0 == "集" || $0 == "话" }) {
+            clean = String(slice)
+                .replacingOccurrences(of: "第", with: "")
+                .replacingOccurrences(of: "集", with: "")
+                .replacingOccurrences(of: "话", with: "")
+                .trimmingCharacters(in: .whitespaces)
+        } else {
+            clean = String(slice)
+        }
         if clean.count == 1 && clean.allSatisfy({ $0.isNumber }) {
-            clean = "0" + clean
+            return "0" + clean
         }
         return clean.isEmpty ? raw : clean
     }

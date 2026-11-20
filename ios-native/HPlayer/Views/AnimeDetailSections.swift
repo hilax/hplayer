@@ -11,17 +11,36 @@ struct AnimeEpisodePanel: View {
     let progress: (String) -> Double?
     let onSelect: (String) -> Void
 
-    @State private var rangeIndex = 0
+    @State private var rangeIndex: Int
     @Namespace private var rangeSpace
 
     static let rangeSize = 50
 
-    /// 50 集一段：「1-50」「51-100」…；倒序时段落也倒过来
-    private var ranges: [Range<Int>] {
-        let count = episodes.count
+    init(episodes: [String], activeEpisode: String?, isDescending: Bool,
+         progress: @escaping (String) -> Double?, onSelect: @escaping (String) -> Void) {
+        self.episodes = episodes
+        self.activeEpisode = activeEpisode
+        self.isDescending = isDescending
+        self.progress = progress
+        self.onSelect = onSelect
+        let initialRanges = Self.makeRanges(count: episodes.count, isDescending: isDescending)
+        _rangeIndex = State(initialValue: Self.rangeIndex(for: activeEpisode, in: episodes, ranges: initialRanges))
+    }
+
+    static func makeRanges(count: Int, isDescending: Bool) -> [Range<Int>] {
         guard count > 0 else { return [] }
         let list = stride(from: 0, to: count, by: Self.rangeSize).map { $0..<min($0 + Self.rangeSize, count) }
         return isDescending ? list.reversed() : list
+    }
+
+    static func rangeIndex(for activeEpisode: String?, in episodes: [String], ranges: [Range<Int>]) -> Int {
+        guard let activeEpisode, let position = episodes.firstIndex(of: activeEpisode) else { return 0 }
+        return ranges.firstIndex { $0.contains(position) } ?? 0
+    }
+
+    /// 50 集一段：「1-50」「51-100」…；倒序时段落也倒过来
+    private var ranges: [Range<Int>] {
+        Self.makeRanges(count: episodes.count, isDescending: isDescending)
     }
 
     private var visibleEpisodes: [String] {
@@ -49,7 +68,11 @@ struct AnimeEpisodePanel: View {
                     }
                     .scrollIndicators(.hidden)
                     .padding(.horizontal, -Theme.contentInset)
-                    .onAppear { proxy.scrollTo(rangeIndex, anchor: .center) }
+                    .onAppear {
+                        var transaction = Transaction()
+                        transaction.disablesAnimations = true
+                        withTransaction(transaction) { proxy.scrollTo(rangeIndex, anchor: .center) }
+                    }
                     .onChange(of: rangeIndex) { index in
                         withAnimation(Motion.smooth) { proxy.scrollTo(index, anchor: .center) }
                     }
@@ -62,15 +85,13 @@ struct AnimeEpisodePanel: View {
             }
             .transaction { $0.animation = nil }
         }
-        .onAppear { rangeIndex = rangeContainingActive() }
         .onChange(of: isDescending) { _ in rangeIndex = rangeContainingActive() }
         .onChange(of: episodes) { _ in rangeIndex = rangeContainingActive() }
     }
 
     /// 当前在看的那一集落在哪一段（没有就第一段）
     private func rangeContainingActive() -> Int {
-        guard let activeEpisode, let position = episodes.firstIndex(of: activeEpisode) else { return 0 }
-        return ranges.firstIndex { $0.contains(position) } ?? 0
+        Self.rangeIndex(for: activeEpisode, in: episodes, ranges: ranges)
     }
 }
 

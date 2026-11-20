@@ -303,10 +303,9 @@ struct AnimeDetailView: View {
                     if episodes.count > 1 {
                         Button {
                             Haptics.select()
-                            // 不做过渡动画：展开的网格很高，边淡入边挤开下面的内容时会和评论区叠在一起
-                            var transaction = Transaction()
-                            transaction.disablesAnimations = true
-                            withTransaction(transaction) { episodesExpanded.toggle() }
+                            withAnimation(Motion.resolved(Motion.snappy, reduceMotion: reduceMotion)) {
+                                episodesExpanded.toggle()
+                            }
                         } label: {
                             HStack(spacing: 3) {
                                 Text(episodesExpanded ? "收起" : "全部")
@@ -343,16 +342,25 @@ struct AnimeDetailView: View {
             }
 
             if !episodes.isEmpty {
-                if episodesExpanded {
-                    // 「全部」：在选集栏里原地展开成五列网格，超过 50 集分段
-                    AnimeEpisodePanel(episodes: episodes, activeEpisode: activeEpisode, isDescending: isDescending,
-                                      progress: { episodeProgress($0, detail: detail) }) { episode in
-                        activeEpisode = episode
-                        startPlay(episode: episode, detail: detail)
+                ZStack(alignment: .topLeading) {
+                    if episodesExpanded {
+                        // 「全部」：在选集栏里原地展开成五列网格，超过 50 集分段
+                        AnimeEpisodePanel(episodes: episodes, activeEpisode: activeEpisode, isDescending: isDescending,
+                                          progress: { episodeProgress($0, detail: detail) }) { episode in
+                            activeEpisode = episode
+                            startPlay(episode: episode, detail: detail)
+                        }
+                        .compositingGroup()
+                        .transition(.opacity)
+                    } else {
+                        episodeStrip(episodes, detail: detail)
+                            .transition(.opacity)
                     }
-                } else {
-                    episodeStrip(episodes, detail: detail)
                 }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .padding(.horizontal, Theme.contentInset)
+                .clipped()
+                .padding(.horizontal, -Theme.contentInset)
 
                 if let ep = activeEpisode, let line = episodeDetailLine(ep, detail: detail) {
                     Text(line)
@@ -441,7 +449,15 @@ struct AnimeDetailView: View {
     private func scrollStrip(_ proxy: ScrollViewProxy, animated: Bool) {
         guard let activeEpisode else { return }
         DispatchQueue.main.async {
-            withAnimation(animated ? Motion.smooth : nil) { proxy.scrollTo(activeEpisode, anchor: .center) }
+            if animated {
+                withAnimation(Motion.resolved(Motion.smooth, reduceMotion: reduceMotion)) {
+                    proxy.scrollTo(activeEpisode, anchor: .center)
+                }
+            } else {
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) { proxy.scrollTo(activeEpisode, anchor: .center) }
+            }
         }
     }
 

@@ -2655,11 +2655,14 @@ struct PlaybackControlsView: View {
                 if items.count > 1 {
                     Button {
                         Haptics.select()
-                        // 不做过渡动画：展开的网格很高，边淡入边挤开下面的内容时会叠在一起（和动漫详情页一样）
-                        var transaction = Transaction()
-                        transaction.disablesAnimations = true
-                        withTransaction(transaction) {
-                            if !episodesExpanded { episodeRange = rangeContainingCurrent() }
+                        if !episodesExpanded {
+                            var transaction = Transaction()
+                            transaction.disablesAnimations = true
+                            withTransaction(transaction) {
+                                episodeRange = rangeContainingCurrent()
+                            }
+                        }
+                        withAnimation(Motion.resolved(Motion.snappy, reduceMotion: reduceMotion)) {
                             episodesExpanded.toggle()
                         }
                     } label: {
@@ -2678,11 +2681,20 @@ struct PlaybackControlsView: View {
                 }
             }
             if !items.isEmpty {
-                if episodesExpanded {
-                    episodeGridPanel
-                } else {
-                    episodeStrip
+                ZStack(alignment: .topLeading) {
+                    if episodesExpanded {
+                        episodeGridPanel
+                            .compositingGroup()
+                            .transition(.opacity)
+                    } else {
+                        episodeStrip
+                            .transition(.opacity)
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .padding(.horizontal, 16)
+                .clipped()
+                .padding(.horizontal, -16)
             }
         }
         .padding(.top, 22)
@@ -2704,7 +2716,13 @@ struct PlaybackControlsView: View {
                 .padding(.vertical, 2)
             }
             .scrollIndicators(.hidden)
-            .onAppear { proxy.scrollTo(selectedID, anchor: .center) }
+            .onAppear {
+                DispatchQueue.main.async {
+                    var transaction = Transaction()
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) { proxy.scrollTo(selectedID, anchor: .center) }
+                }
+            }
             .onChange(of: selectedID) { id in
                 withAnimation(reduceMotion ? nil : Motion.smooth) { proxy.scrollTo(id, anchor: .center) }
             }
@@ -2747,7 +2765,11 @@ struct PlaybackControlsView: View {
                         }
                     }
                     .scrollIndicators(.hidden)
-                    .onAppear { proxy.scrollTo(episodeRange, anchor: .center) }
+                    .onAppear {
+                        var transaction = Transaction()
+                        transaction.disablesAnimations = true
+                        withTransaction(transaction) { proxy.scrollTo(episodeRange, anchor: .center) }
+                    }
                     .onChange(of: episodeRange) { index in
                         withAnimation(reduceMotion ? nil : Motion.smooth) { proxy.scrollTo(index, anchor: .center) }
                     }
@@ -2755,7 +2777,7 @@ struct PlaybackControlsView: View {
             }
             // 换段、正序倒序：格子直接换内容，不再整块换 id 重建再淡入
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 5), spacing: 10) {
-                ForEach(indices, id: \.self) { index in
+                ForEach(Array(indices.enumerated()), id: \.offset) { _, index in
                     stripCell(items[index], index: index, currentIndex: currentIndex, fill: true)
                 }
             }
