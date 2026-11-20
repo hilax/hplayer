@@ -10,6 +10,10 @@ final class PlayerWindow: UIWindow {
     var allowedOrientations: UIInterfaceOrientationMask = .landscape
 
     private var volumeHUDGuard: MPVolumeView?
+    /// 横屏关闭时垫在播放画面下面的主窗口竖屏截图（见 `PlayerWindowController.willClose`）
+    private var closeBackdrop: UIView?
+
+    var hasCloseBackdrop: Bool { closeBackdrop != nil }
 
     /// 调音量（滑动手势、音量键）时，系统只有在 App 里有一个「看得见」的 MPVolumeView 才不弹自带的音量条。
     /// 播放器窗口刚创建时 alpha 是 0（要等转好屏才淡入），那时登记的音量控件会被系统当成不可见，
@@ -24,6 +28,42 @@ final class PlayerWindow: UIWindow {
         view.accessibilityElementsHidden = true
         addSubview(view)
         volumeHUDGuard = view
+    }
+
+    /// 横屏关闭：把主窗口的竖屏截图垫在播放画面下面，按竖屏的实际朝向摆放——横着拿手机时，看到的就是关闭后那张侧着的竖屏页面。
+    /// 播放画面淡出时露出它；之后场景转回竖屏，它按竖屏重新摆好，看起来一动不动。
+    func showCloseBackdrop(_ snapshot: UIView) {
+        closeBackdrop?.removeFromSuperview()
+        snapshot.isUserInteractionEnabled = false
+        snapshot.accessibilityElementsHidden = true
+        insertSubview(snapshot, at: 0)
+        closeBackdrop = snapshot
+        layoutCloseBackdrop()
+    }
+
+    func removeCloseBackdrop() {
+        closeBackdrop?.removeFromSuperview()
+        closeBackdrop = nil
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        layoutCloseBackdrop()
+    }
+
+    /// 截图是按屏幕固定的竖屏坐标截的：换算到窗口当前（横 / 竖）的坐标里摆好
+    private func layoutCloseBackdrop() {
+        guard let backdrop = closeBackdrop, let screen = windowScene?.screen else { return }
+        let fixed = screen.fixedCoordinateSpace
+        let size = fixed.bounds.size
+        let origin = convert(CGPoint.zero, from: fixed)
+        let xAxis = convert(CGPoint(x: 1, y: 0), from: fixed)
+        let yAxis = convert(CGPoint(x: 0, y: 1), from: fixed)
+        backdrop.transform = .identity
+        backdrop.bounds = CGRect(origin: .zero, size: size)
+        backdrop.center = convert(CGPoint(x: size.width / 2, y: size.height / 2), from: fixed)
+        backdrop.transform = CGAffineTransform(a: xAxis.x - origin.x, b: xAxis.y - origin.y,
+                                               c: yAxis.x - origin.x, d: yAxis.y - origin.y, tx: 0, ty: 0)
     }
 }
 
@@ -55,6 +95,31 @@ final class PlayerHostingController: UIHostingController<AnyView> {
     }
 }
 
+/// 横屏关闭的最后一步：播放内容已经淡出，窗口里只剩主窗口截图。这个空控制器只支持竖屏，
+/// 场景转回竖屏时不带转屏动画（截图按竖屏重新摆好，看起来一动不动），转好以后通知收尾。
+final class PlayerExitController: UIViewController {
+    var onRotated: (() -> Void)?
+
+    override var supportedInterfaceOrientations: UIInterfaceOrientationMask { .portrait }
+    override var shouldAutorotate: Bool { true }
+
+    override func loadView() {
+        let view = UIView()
+        view.backgroundColor = .clear
+        view.isUserInteractionEnabled = false
+        self.view = view
+    }
+
+    override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
+        super.viewWillTransition(to: size, with: coordinator)
+        UIView.setAnimationsEnabled(false)
+        coordinator.animate(alongsideTransition: nil) { [weak self] _ in
+            UIView.setAnimationsEnabled(true)
+            self?.onRotated?()
+        }
+    }
+}
+
 /// 打开 / 关闭播放器窗口。同一时间只有一个播放器。
 @MainActor
 final class PlayerWindowController {
@@ -80,19 +145,16 @@ final class PlayerWindowController {
     private var revealWaiters: [CheckedContinuation<Void, Never>] = []
     /// 播放期间暂时隐藏的主窗口：系统校验「支持的方向」时会把它也算进去，它只支持竖屏，横屏请求就被拒绝
     private var hiddenMain: UIWindow?
-    /// 关闭横屏播放后等待主窗口回到竖屏再淡入，避免露出横屏布局或触发双窗口方向冲突
-    private var mainRevealTask: Task<Void, Never>?
+    /// 藏主窗口那一刻截下的主窗口画面。主窗口藏着的时候一直保持竖屏、不会重排，横屏关闭时就用它垫在播放画面下面
+    private var mainSnapshot: UIView?
+    /// 播放页已经开始关闭淡出：晚到的转屏重试、淡入都不再执行
+    private var closing = false
+    /// 横屏关闭的收尾：播放内容已淡出，窗口里只剩主窗口截图，等场景转回竖屏再放回主窗口、撤掉它
+    private var exitingWindow: PlayerWindow?
+    /// 盯着场景转回竖屏（换上竖屏控制器时窗口会直接改成竖屏，不一定走转屏回调），最多等 0.8 秒
+    private var exitWatch: Task<Void, Never>?
     /// 这一次弹出的标记。关闭只认自己弹出的那个窗口：别的播放入口复位状态时，不会把正在播的窗口误关掉。
     private var token: UUID?
-    /// 正在执行关闭淡出，阻止晚到的转屏重试或淡入回调
-    private var closing = false
-    /// 横屏关闭时等待播放器自己先完成竖屏过渡的兜底任务与回调
-    private var closeFallbackTask: Task<Void, Never>?
-    private var closeFadeTask: Task<Void, Never>?
-    private var closeToken: UUID?
-    private var closeCompletion: (() -> Void)?
-    private var closeAnimated = true
-    private var closeTransitionStarted = false
     /// 每发起一轮转屏请求加一：旧一轮的重试看到编号变了就停下，不和新一轮（比如点了横竖屏按钮）打架。
     private var orientationRound = 0
     /// 最近一次打开播放器的转屏过程和主线程卡顿，附在「复制播放诊断信息」里，真机排查不用开调试文字。
@@ -135,7 +197,8 @@ final class PlayerWindowController {
     /// 弹出播放器窗口，返回这次弹出的标记（关闭时要带上）。
     /// `onDismissed` 在窗口被调用方以外的原因关掉时调用（被新的播放顶替、没有可用的场景），让调用方把自己的状态复位。
     @discardableResult
-    func present(_ root: AnyView, token requestedToken: UUID = UUID(), landscape: Bool, onDismissed: @escaping () -> Void) -> UUID? {
+    func present(_ root: AnyView, token requestedToken: UUID = UUID(), landscape: Bool,
+                 onDismissed: @escaping () -> Void) -> UUID? {
         if window != nil {
             // 另一个入口要播放时，正在播的窗口让位：先关掉它、通知它的入口复位，再弹出新的。
             // 例如磁力页从 BT 播放改用 115 播放：关旧窗口和开新窗口发生在同一次刷新里，两边的回调谁先谁后不固定，
@@ -144,18 +207,15 @@ final class PlayerWindowController {
             dismiss(replacing: true)
             previous?()
         }
-        mainRevealTask?.cancel()
-        mainRevealTask = nil
+        // 上一次横屏关闭还在收尾（转回竖屏中）：直接撤掉它，还藏着的主窗口和截图交给这一次
+        abandonExit()
         pendingDebug = []
         log = []
         presentedAt = Date()
         guard let scene = activeScene() else {
-            restoreMainVisibility(in: activeScene())
+            restoreMain()
             onDismissed()
             return nil
-        }
-        if let main = hiddenMain ?? mainWindow(in: scene) {
-            main.alpha = 1
         }
         self.onDismissed = onDismissed
         revealed = false
@@ -167,20 +227,21 @@ final class PlayerWindowController {
             // 不再等 80 毫秒以后才藏（那时第一次转屏请求很可能已经按「主窗口可见」被拒绝了）。
             hideMain(in: scene)
         } else {
-            restoreMainVisibility(in: scene)
+            // 竖屏打开（短剧）时主窗口要在下面露着
+            restoreMain()
         }
 
         let player = PlayerWindow(windowScene: scene)
         player.allowedOrientations = landscape ? .landscape : .portrait
         player.overrideUserInterfaceStyle = .dark
         player.backgroundColor = .clear
-        // 窗口层级必须比主窗口高，同时保持透明：竖屏关闭时淡出会露出下面的页面
+        // 窗口层级必须比主窗口高，同时保持透明：关闭时淡出会露出下面的页面（横屏时是主窗口的竖屏截图）
         player.windowLevel = UIWindow.Level.normal + 1
         player.isOpaque = false
 
         let host = PlayerHostingController(rootView: root)
         host.view.backgroundColor = .clear
-        host.onRotated = { [weak self] in self?.handleHostRotated() }
+        host.onRotated = { [weak self] in self?.revealWhenReady() }
         player.rootViewController = host
         player.alpha = 0
         player.makeKeyAndVisible()
@@ -188,13 +249,6 @@ final class PlayerWindowController {
         self.window = player
         self.host = host
         self.token = requestedToken
-        self.closeToken = nil
-        self.closeCompletion = nil
-        self.closeTransitionStarted = false
-        self.closeFallbackTask?.cancel()
-        self.closeFallbackTask = nil
-        self.closeFadeTask?.cancel()
-        self.closeFadeTask = nil
         UIDevice.current.beginGeneratingDeviceOrientationNotifications()
 
         if landscape {
@@ -227,145 +281,51 @@ final class PlayerWindowController {
     }
 
     private func hideMain(in scene: UIWindowScene) {
-        mainRevealTask?.cancel()
-        mainRevealTask = nil
         guard hiddenMain == nil, let main = mainWindow(in: scene) else { return }
-        main.alpha = 1
+        // 藏之前先截下主窗口现在的竖屏画面：横屏关闭时垫在播放画面下面，就不用提前放回只支持竖屏的主窗口
+        mainSnapshot = main.snapshotView(afterScreenUpdates: false)
         main.isHidden = true
         hiddenMain = main
         let presented = main.rootViewController?.presentedViewController
-        debug("隐藏主窗 presented=\(presented.map { String(describing: type(of: $0)) } ?? "无") state=\(scene.activationState.rawValue)")
+        debug("隐藏主窗 截图=\(mainSnapshot != nil) presented=\(presented.map { String(describing: type(of: $0)) } ?? "无") state=\(scene.activationState.rawValue)")
     }
 
-    private func restoreMainVisibility(in scene: UIWindowScene?) {
-        let main = hiddenMain ?? mainWindow(in: scene)
+    /// 把藏起来的主窗口放回来（只在场景是竖屏、或主窗口本来就该露着的时候调用）
+    private func restoreMain() {
+        mainSnapshot = nil
+        guard let main = hiddenMain else { return }
         hiddenMain = nil
-        main?.alpha = 1
-        main?.isHidden = false
+        main.isHidden = false
     }
 
-    /// 播放页开始关闭：
-    /// - 已经在竖屏时立刻放回主窗口，播放器直接淡出并轻微缩小露出底下的页面（零黑屏）；
-    /// - 处于横屏时先保持画面可见并立刻把播放器窗口自身转回竖屏（避免主窗口先露出来引发双窗口方向冲突，也不先把画面淡成纯黑），
-    ///   竖屏几何刚落定就立刻在底层放回竖屏主窗口再叠化收起播放窗，消除关闭时的黑屏空档。
-    func willClose(animated: Bool = true, completion: @escaping () -> Void) {
-        guard let window, !closing else {
-            if !closing { completion() }
-            return
-        }
+    private static func isLandscape(_ window: UIWindow) -> Bool {
+        (window.windowScene?.interfaceOrientation.isLandscape ?? false) || window.bounds.width > window.bounds.height
+    }
+
+    /// 播放页开始关闭淡出（整页淡出、轻轻缩小）时调用：
+    /// - 竖屏：先把主窗口放回来，淡出时露出的就是它；
+    /// - 横屏：不能现在放回只支持竖屏的主窗口——它一可见，系统会先把整个首页按横屏重排一遍，再把场景强行转回竖屏，
+    ///   主线程卡上一两秒，横屏播放画面被留在竖屏的上半截、下面全黑（片库页最明显）。
+    ///   改成把藏主窗口时截下的竖屏画面按竖屏的实际朝向垫在播放画面下面，淡出时露出的就是它；
+    ///   转回竖屏、放回主窗口都留到淡出结束以后（见 `dismiss`）。
+    func willClose() {
+        guard let window, !closing else { return }
         closing = true
-        closeAnimated = animated
-        closeToken = token
-        closeCompletion = completion
-        closeTransitionStarted = false
-        closeFallbackTask?.cancel()
-        closeFallbackTask = nil
-        closeFadeTask?.cancel()
-        closeFadeTask = nil
         revealTask?.cancel()
         revealTask = nil
         orientationRound += 1
         resumeRevealWaiters()
-        window.isUserInteractionEnabled = false
-
-        let inLandscape = (window.windowScene?.interfaceOrientation.isLandscape == true)
-            || window.bounds.width > window.bounds.height
-            || window.allowedOrientations != .portrait
-        if !inLandscape {
-            restoreMainVisibility(in: window.windowScene)
-            crossfadeWindowOut(window, animated: animated)
-            return
-        }
-
-        // 先让播放器自己切回 `.portrait`（期间主窗口仍隐藏、播放器保持当前暂停帧不黑屏），
-        // 避免横屏窗口与竖屏主窗口同时可见触发双窗口方向冲突。
-        window.allowedOrientations = .portrait
-        host?.setNeedsUpdateOfSupportedInterfaceOrientations()
-        if let scene = window.windowScene {
-            requestClosePortrait(in: scene, targetToken: closeToken, attempt: 0)
-        }
-        // 兜底：若系统延迟或跳过 viewWillTransition，最多 420ms 后按安全路径收尾，绝不卡住关闭。
-        let targetToken = closeToken
-        closeFallbackTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 420_000_000)
-            guard let self, !Task.isCancelled, self.closing, self.token == targetToken else { return }
-            self.completeLandscapeClose()
-        }
-    }
-
-    private func requestClosePortrait(in scene: UIWindowScene, targetToken: UUID?, attempt: Int) {
-        guard closing, let targetToken, self.token == targetToken else { return }
-        scene.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait)) { [weak self, weak scene] _ in
-            guard attempt < 2 else { return }
-            Task { @MainActor [weak self, weak scene] in
-                try? await Task.sleep(nanoseconds: 50_000_000)
-                guard let self, let scene, self.closing, self.token == targetToken, !self.closeTransitionStarted else { return }
-                self.requestClosePortrait(in: scene, targetToken: targetToken, attempt: attempt + 1)
+        guard hiddenMain != nil else { return }
+        if Self.isLandscape(window) {
+            if let snapshot = mainSnapshot {
+                window.showCloseBackdrop(snapshot)
+                debug("关闭：横屏，垫上主窗口截图")
+            } else {
+                debug("关闭：横屏，没有主窗口截图")
             }
-        }
-    }
-
-    private func handleHostRotated() {
-        if closing {
-            guard let window, window.bounds.height >= window.bounds.width else { return }
-            completeLandscapeClose()
         } else {
-            revealWhenReady()
-        }
-    }
-
-    private func completeLandscapeClose() {
-        guard closing, !closeTransitionStarted else { return }
-        closeTransitionStarted = true
-        closeFallbackTask?.cancel()
-        closeFallbackTask = nil
-        guard let window else {
-            let finish = closeCompletion
-            closeCompletion = nil
-            finish?()
-            return
-        }
-        let scene = window.windowScene
-        let stillLandscape = (scene?.interfaceOrientation.isLandscape == true) || (window.bounds.width > window.bounds.height)
-        if stillLandscape {
-            // 系统在超时前未切到竖屏：先按安全路径卸掉播放窗，再由 dismiss 恢复主窗并补发竖屏请求
-            let finish = closeCompletion
-            closeCompletion = nil
-            finish?()
-            return
-        }
-        // 场景与播放窗均已回到竖屏，不再有方向冲突：先在底层把主窗口放回可见并留 1 帧让分页器对齐，随后直接叠化隐去播放窗
-        restoreMainVisibility(in: scene)
-        mainWindow(in: scene)?.makeKey()
-        let targetToken = closeToken
-        let animated = closeAnimated
-        closeFadeTask = Task { @MainActor [weak self, weak window] in
-            if animated {
-                try? await Task.sleep(nanoseconds: 16_000_000)
-            }
-            guard let self, !Task.isCancelled, self.closing, self.token == targetToken, let window else { return }
-            self.crossfadeWindowOut(window, animated: animated)
-        }
-    }
-
-    private func crossfadeWindowOut(_ window: PlayerWindow, animated: Bool) {
-        let targetToken = closeToken
-        let finish = { [weak self] in
-            guard let self, self.token == targetToken else { return }
-            let completion = self.closeCompletion
-            self.closeCompletion = nil
-            completion?()
-        }
-        guard animated else {
-            window.alpha = 0
-            finish()
-            return
-        }
-        UIView.animate(withDuration: 0.14, delay: 0, options: [.curveEaseOut, .beginFromCurrentState]) { [weak self, weak window] in
-            window?.alpha = 0
-            self?.host?.view.transform = CGAffineTransform(scaleX: 0.96, y: 0.96)
-        } completion: { _ in
-            finish()
+            restoreMain()
+            debug("关闭：竖屏，放回主窗口")
         }
     }
 
@@ -375,108 +335,118 @@ final class PlayerWindowController {
         dismiss(replacing: false)
     }
 
-    /// 关闭：先彻底隐藏并从场景卸下播放器窗口，再恢复主窗口与竖屏方向，避免双窗口方向冲突导致横屏画面残留在竖屏上半屏。
+    /// 关闭：卸下播放器窗口，放回主窗口，场景回到竖屏。
+    /// 横屏、主窗口还藏着时不能直接放回（会和横屏场景冲突，见 `willClose`）：先把窗口里的播放内容换成只支持竖屏的空控制器，
+    /// 只留主窗口截图，无动画转回竖屏，再放回主窗口、撤掉播放器窗口。
+    /// `replacing`：被新的播放顶替，主窗口先不放回，交给新的那次弹出处理。
     private func dismiss(replacing: Bool = false) {
         guard let player = window else { return }
         let scene = player.windowScene
-        let wasLandscape = (scene?.interfaceOrientation.isLandscape == true)
-            || player.bounds.width > player.bounds.height
-            || player.allowedOrientations != .portrait
-        let mainWasHidden = hiddenMain != nil
-
         revealTask?.cancel()
         revealTask = nil
-        closeFallbackTask?.cancel()
-        closeFallbackTask = nil
-        closeFadeTask?.cancel()
-        closeFadeTask = nil
-        closeToken = nil
-        closeCompletion = nil
-        closeTransitionStarted = false
         resumeRevealWaiters()
-        let hostView = host?.view
         window = nil
         host = nil
         token = nil
         closing = false
         orientationRound += 1
-        let returnRound = orientationRound
         watchdog?.cancel()
         watchdog = nil
         onDismissed = nil
         debugLabel = nil
         debugLines = []
         pendingDebug = []
-
-        hostView?.transform = .identity
-        player.alpha = 0
-        player.isHidden = true
-        player.rootViewController = nil
-        player.windowScene = nil
         UIDevice.current.endGeneratingDeviceOrientationNotifications()
 
-        guard !replacing else { return }
+        if replacing {
+            removeWindow(player)
+            return
+        }
+        if hiddenMain != nil, let scene, Self.isLandscape(player) {
+            beginExit(player, in: scene)
+            return
+        }
+        removeWindow(player)
+        restoreMain()
+        let main = mainWindow(in: scene)
+        main?.makeKey()
+        main?.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
+        scene?.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait)) { _ in }
+    }
 
-        mainRevealTask?.cancel()
-        mainRevealTask = nil
-        let main = hiddenMain ?? mainWindow(in: scene)
-        hiddenMain = nil
+    private func removeWindow(_ player: PlayerWindow) {
+        player.isHidden = true
+        player.rootViewController = nil
+        player.removeCloseBackdrop()
+    }
 
-        if wasLandscape && mainWasHidden, let main {
-            main.alpha = 0
-            main.isHidden = false
-            main.makeKey()
-            main.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
-            if let scene, scene.interfaceOrientation.isLandscape {
-                requestPortraitReturn(in: scene, round: returnRound, attempt: 0)
-            }
-            mainRevealTask = Task { @MainActor [weak self, weak main, weak scene] in
-                // 仅在超时未能在窗口内转回竖屏的兜底分支下等待场景切换完成，避免露出横屏布局
-                for _ in 0..<4 {
-                    if let scene, !scene.interfaceOrientation.isLandscape { break }
-                    try? await Task.sleep(nanoseconds: 25_000_000)
-                    guard !Task.isCancelled, self?.window == nil else {
-                        main?.alpha = 1
-                        return
-                    }
-                }
-                guard let main, !Task.isCancelled, self?.window == nil else {
-                    main?.alpha = 1
+    /// 横屏关闭的收尾（主窗口还藏着）：窗口里只留主窗口截图（没有截图就是黑底），换成只支持竖屏的空控制器，
+    /// 无动画转回竖屏；场景一转成竖屏（最多等 0.8 秒）就放回主窗口，再撤掉播放器窗口。
+    private func beginExit(_ player: PlayerWindow, in scene: UIWindowScene) {
+        exitingWindow = player
+        player.isUserInteractionEnabled = false
+        // 没走淡出就直接关掉的（短剧全屏、磁力加载页）：这时才垫上截图
+        if !player.hasCloseBackdrop, let snapshot = mainSnapshot { player.showCloseBackdrop(snapshot) }
+        let exit = PlayerExitController()
+        exit.onRotated = { [weak self] in self?.finishExit() }
+        if !player.hasCloseBackdrop { exit.view.backgroundColor = .black }
+        UIView.performWithoutAnimation {
+            player.allowedOrientations = .portrait
+            player.rootViewController = exit
+            exit.setNeedsUpdateOfSupportedInterfaceOrientations()
+            player.layoutIfNeeded()
+        }
+        debug("关闭：转回竖屏")
+        scene.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait)) { [weak self] error in
+            // 只记一笔：场景到底转没转过去由下面盯着，超时也会收尾
+            Task { @MainActor in self?.debug("关闭：竖屏请求被拒绝 \(error.localizedDescription)") }
+        }
+        exitWatch = Task { @MainActor [weak self, weak player, weak scene] in
+            for _ in 0..<40 {
+                try? await Task.sleep(nanoseconds: 20_000_000)
+                guard !Task.isCancelled, let self, let player, self.exitingWindow === player else { return }
+                if let scene, !scene.interfaceOrientation.isLandscape, player.bounds.height >= player.bounds.width {
+                    self.finishExit()
                     return
                 }
-                UIView.animate(withDuration: 0.12, delay: 0, options: [.curveEaseOut, .beginFromCurrentState]) {
-                    main.alpha = 1
-                }
             }
-        } else {
-            main?.alpha = 1
-            main?.isHidden = false
-            main?.makeKey()
-            main?.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
-            if let scene, scene.interfaceOrientation.isLandscape {
-                requestPortraitReturn(in: scene, round: returnRound, attempt: 0)
-            }
+            guard !Task.isCancelled else { return }
+            self?.finishExit()
         }
     }
 
-    /// 关闭播放器后请求场景回到竖屏；真机上首次请求偶发被系统拒绝时短间隔补发，避免停留在横屏。
-    private func requestPortraitReturn(in scene: UIWindowScene, round: Int, attempt: Int) {
-        guard window == nil, round == orientationRound else { return }
-        scene.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait)) { [weak self, weak scene] _ in
-            guard attempt < 3 else { return }
-            Task { @MainActor [weak self, weak scene] in
-                try? await Task.sleep(nanoseconds: 120_000_000)
-                guard let self, let scene, self.window == nil, round == self.orientationRound else { return }
-                self.requestPortraitReturn(in: scene, round: round, attempt: attempt + 1)
-            }
+    /// 场景已经转回竖屏：放回主窗口（它藏着的时候一直是竖屏，不用重排），再撤掉只剩截图的播放器窗口
+    private func finishExit() {
+        guard let player = exitingWindow else { return }
+        exitingWindow = nil
+        exitWatch?.cancel()
+        exitWatch = nil
+        UIView.setAnimationsEnabled(true)
+        let scene = player.windowScene
+        restoreMain()
+        let main = mainWindow(in: scene)
+        main?.makeKey()
+        main?.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
+        if let scene, scene.interfaceOrientation.isLandscape {
+            // 系统没转过去（被拒绝或超时）：补发一次竖屏请求
+            debug("关闭：场景仍是横屏，补发竖屏请求")
+            scene.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait)) { _ in }
         }
-        guard attempt < 3 else { return }
-        Task { @MainActor [weak self, weak scene] in
-            try? await Task.sleep(nanoseconds: 180_000_000)
-            guard let self, let scene, self.window == nil, round == self.orientationRound,
-                  scene.interfaceOrientation.isLandscape else { return }
-            self.requestPortraitReturn(in: scene, round: round, attempt: attempt + 1)
+        // 等主窗口在下面画好再撤掉播放器窗口，中间不露空白
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            self?.removeWindow(player)
         }
+    }
+
+    /// 新的播放要弹出时，上一次横屏关闭如果还在收尾，直接撤掉那个窗口；主窗口仍藏着（连同截图）留给新的这次
+    private func abandonExit() {
+        guard let player = exitingWindow else { return }
+        exitingWindow = nil
+        exitWatch?.cancel()
+        exitWatch = nil
+        UIView.setAnimationsEnabled(true)
+        removeWindow(player)
     }
 
     // MARK: 内部
@@ -700,8 +670,8 @@ private struct PlayerWindowModifier<Root: View>: ViewModifier {
             .hudHost(.player)
             .environmentObject(appState)
             .environment(\.dismissPlayerWindow, {
-                // 先复位绑定状态再直接关闭独立窗口：即使宿主页面在隐藏主窗或横向分页屏外未收到 onChange，
-                // 播放器窗口也能立即可靠卸下，且主窗恢复可见时 onAppear 不会再次误弹播放器。
+                // 先复位绑定状态再直接关闭独立窗口：不依赖宿主页面（主窗口藏着、在横向分页的屏外）及时收到 onChange，
+                // 主窗口放回来时 onAppear 也不会再把播放器弹出来。
                 binding.wrappedValue = false
                 PlayerWindowController.shared.dismiss(token: presentationToken)
             })

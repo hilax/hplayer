@@ -21,7 +21,7 @@ final class PlayerWindowVolumeGuardTests: XCTestCase {
         XCTAssertFalse(view.isUserInteractionEnabled, "不能挡住播放页的手势")
     }
 
-    func testWillCloseCompletesAndResetsStateAcrossDismiss() throws {
+    func testWillCloseThenDismissResetsState() throws {
         let controller = PlayerWindowController.shared
         let token = UUID()
         var dismissedExternally = false
@@ -29,24 +29,42 @@ final class PlayerWindowVolumeGuardTests: XCTestCase {
             dismissedExternally = true
         }
         guard presented != nil else {
-            // 无窗口场景时 willClose 仍应立即触发完成回调
-            var completed = false
-            controller.willClose(animated: false) { completed = true }
-            XCTAssertTrue(completed)
-            XCTAssertFalse(dismissedExternally)
+            // 没有可用的场景：关闭流程什么都不做，也不能崩
+            controller.willClose()
+            controller.dismiss(token: token)
+            XCTAssertFalse(controller.isPresented)
             return
         }
         defer { controller.dismiss(token: token) }
 
         XCTAssertTrue(controller.isShowing(token))
-        var completed = false
-        controller.willClose(animated: false) {
-            completed = true
-            controller.dismiss(token: token)
-        }
-        XCTAssertTrue(completed, "无动画关闭应立即完成并卸掉窗口")
+        controller.willClose()
+        XCTAssertFalse(controller.needsRevealHold, "开始关闭后不再等转屏淡入")
+        controller.dismiss(token: token)
         XCTAssertFalse(controller.isPresented)
         XCTAssertFalse(controller.isShowing(token))
-        XCTAssertFalse(dismissedExternally)
+        XCTAssertFalse(dismissedExternally, "自己关掉的不算被顶替")
+    }
+
+    func testCloseBackdropSitsUnderEverythingAndFollowsPortraitBounds() throws {
+        guard let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first else {
+            throw XCTSkip("单元测试宿主没有可用的场景")
+        }
+        if scene.interfaceOrientation.isLandscape { throw XCTSkip("只在竖屏宿主里检查摆放") }
+        let window = PlayerWindow(windowScene: scene)
+        window.frame = scene.coordinateSpace.bounds
+        let snapshot = UIView()
+        window.showCloseBackdrop(snapshot)
+
+        XCTAssertTrue(window.hasCloseBackdrop)
+        XCTAssertTrue(window.subviews.first === snapshot, "截图垫在播放画面最下面")
+        XCTAssertFalse(snapshot.isUserInteractionEnabled, "截图不接收点击")
+        XCTAssertTrue(snapshot.transform.isIdentity, "竖屏时截图正着放")
+        XCTAssertEqual(snapshot.frame.width, window.bounds.width, accuracy: 0.5)
+        XCTAssertEqual(snapshot.frame.height, window.bounds.height, accuracy: 0.5)
+
+        window.removeCloseBackdrop()
+        XCTAssertNil(snapshot.superview)
+        XCTAssertFalse(window.hasCloseBackdrop)
     }
 }
