@@ -49,10 +49,12 @@ final class PlayerWindowVolumeGuardTests: XCTestCase {
     }
 
     func testLandscapeCloseFollowsReferenceTiming() {
-        // 参考 App：切黑后黑约 0.2 秒，大约 0.4 秒整个淡完
+        // 参考 App 录屏逐帧量的：切黑后黑约 0.17 秒，ease-in-out 约 0.25 秒淡完，大约 0.42 秒关完
         XCTAssertGreaterThanOrEqual(PlayerWindowController.exitBlackHold, 0.15)
         XCTAssertLessThanOrEqual(PlayerWindowController.exitBlackHold, 0.2)
-        XCTAssertEqual(PlayerWindowController.exitBlackHold + PlayerWindowController.exitFadeDuration, 0.4, accuracy: 0.02)
+        XCTAssertEqual(PlayerWindowController.exitBlackHold + PlayerWindowController.exitFadeDuration, 0.42, accuracy: 0.03)
+        XCTAssertLessThan(PlayerWindowController.exitStatusBarFade, PlayerWindowController.exitBlackHold,
+                          "状态栏在页面淡出来之前就在黑屏上出现了")
     }
 
     func testExitControllerStartsLandscapeThenTurnsPortraitInBlack() {
@@ -66,9 +68,13 @@ final class PlayerWindowVolumeGuardTests: XCTestCase {
         XCTAssertTrue(exit.prefersStatusBarHidden, "黑屏转屏时状态栏藏着，不会看到它跟着转")
         XCTAssertTrue(exit.prefersHomeIndicatorAutoHidden, "黑屏时底部横条和横屏播放一样自动隐藏")
         exit.statusBarVisible = true
-        exit.statusBarStyle = .darkContent
-        XCTAssertFalse(exit.prefersStatusBarHidden, "页面淡出来时状态栏一起出现")
+        XCTAssertFalse(exit.prefersStatusBarHidden, "转好竖屏后状态栏先在黑屏上出现")
+        XCTAssertEqual(exit.preferredStatusBarStyle, .lightContent, "黑屏上是白字状态栏，和参考 App 一样")
+        XCTAssertTrue(exit.prefersHomeIndicatorAutoHidden, "底部横条等页面淡出来时才出现")
+        exit.homeIndicatorVisible = true
         XCTAssertFalse(exit.prefersHomeIndicatorAutoHidden, "页面淡出来时底部横条照常显示")
-        XCTAssertEqual(exit.preferredStatusBarStyle, .darkContent, "状态栏跟随 App 外观")
+        exit.pageStatusBarStyle = .darkContent
+        exit.statusBarStyle = exit.pageStatusBarStyle
+        XCTAssertEqual(exit.preferredStatusBarStyle, .darkContent, "淡完后状态栏换成页面自己的样式（跟随 App 外观）")
     }
 }
