@@ -56,12 +56,16 @@ final class PlayerHostingController: UIHostingController<AnyView> {
 
 /// 横屏关闭时接手播放器窗口的全黑控制器。
 /// 换上时仍按横屏（窗口不会被立刻改成竖屏），之后再改成只支持竖屏，让场景走正常的转屏流程——这样能拿到
-/// 「转屏结束」的回调。系统转屏大约 0.3～0.4 秒，场景在刚开始转时就已经报竖屏了，所以页面一定要等这个回调
-/// 才露出来；转屏全程画面是黑的、状态栏也藏着，看不到任何东西在转。
+/// 「转屏结束」的回调。改竖屏之前全局关掉了 UIView 动画，系统这次转屏的时长是 0，一下子就转完；
+/// 页面照样要等这个回调才露出来（万一系统还是转了动画，也不会在转的时候露出来）。
+/// 转屏全程画面是黑的、状态栏和底部横条也藏着，看不到任何东西在转。
 final class PlayerExitController: UIViewController {
+    /// 系统开始转屏，带上这次转屏的时长（关了动画时应该是 0），只用来记诊断
+    var onWillRotate: ((TimeInterval) -> Void)?
     var onRotated: (() -> Void)?
     var orientations: UIInterfaceOrientationMask = .landscape
     var statusBarStyle: UIStatusBarStyle = .lightContent
+    /// 页面开始从黑里淡出来时才设为 true：状态栏、底部横条和页面一起出现
     var statusBarVisible = false
 
     override var supportedInterfaceOrientations: UIInterfaceOrientationMask { orientations }
@@ -69,6 +73,8 @@ final class PlayerExitController: UIViewController {
     override var preferredStatusBarStyle: UIStatusBarStyle { statusBarStyle }
     override var prefersStatusBarHidden: Bool { !statusBarVisible }
     override var preferredStatusBarUpdateAnimation: UIStatusBarAnimation { .fade }
+    /// 黑屏时和横屏播放一样让底部横条自动隐藏，不会看到它从横屏的底边跳到竖屏的底边
+    override var prefersHomeIndicatorAutoHidden: Bool { !statusBarVisible }
 
     override func loadView() {
         let view = UIView()
@@ -79,6 +85,7 @@ final class PlayerExitController: UIViewController {
 
     override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
         super.viewWillTransition(to: size, with: coordinator)
+        onWillRotate?(coordinator.transitionDuration)
         coordinator.animate(alongsideTransition: nil) { [weak self] _ in
             self?.onRotated?()
         }
@@ -116,7 +123,18 @@ final class PlayerWindowController {
     private var exitingWindow: PlayerWindow?
     /// 兜底：没等到转屏结束的回调时，场景报竖屏后再等一整段转屏时长（0.5 秒）才收尾，最多等 1.1 秒
     private var exitWatch: Task<Void, Never>?
+    /// 点关闭、画面切黑的那一刻；黑屏多久从这里算
+    private var blackCutAt: Date?
     private var exitStartedAt = Date()
+    /// 为了让系统瞬间转完屏，横屏关闭收尾期间全局关掉了 UIView 动画；淡出前（或被新的播放打断时）一定要恢复
+    private var animationsPausedForExit = false
+    /// 每次横屏关闭收尾加一：上一次收尾晚到的淡出不会把新一次收尾关掉的动画提前打开
+    private var exitGeneration = 0
+    /// 最近一次横屏关闭的时间线（从切黑算起），附在「复制播放诊断信息」里；下次打开播放器也保留，方便真机核对节奏
+    private var closeLog: [String] = []
+    /// 参考 App 的节奏：切黑后黑屏约 0.18 秒，再用 0.22 秒淡出，大约 0.4 秒整个关完
+    static let exitBlackHold: TimeInterval = 0.18
+    static let exitFadeDuration: TimeInterval = 0.22
     /// 这一次弹出的标记。关闭只认自己弹出的那个窗口：别的播放入口复位状态时，不会把正在播的窗口误关掉。
     private var token: UUID?
     /// 每发起一轮转屏请求加一：旧一轮的重试看到编号变了就停下，不和新一轮（比如点了横竖屏按钮）打架。
@@ -173,6 +191,7 @@ final class PlayerWindowController {
         }
         // 上一次横屏关闭还在收尾（黑屏里转竖屏中）：直接撤掉它，还藏着的主窗口交给这一次
         abandonExit()
+        blackCutAt = nil
         pendingDebug = []
         log = []
         presentedAt = Date()
@@ -266,7 +285,7 @@ final class PlayerWindowController {
     /// 播放页开始关闭时调用，返回 true 表示走了横屏的「切黑」关法（播放页不用再做淡出，直接关）：
     /// - 横屏：不能现在放回只支持竖屏的主窗口——它一可见，系统会先把整个首页按横屏重排一遍，再把场景强行转回竖屏，
     ///   主线程卡上一两秒，横屏画面被留在竖屏的上半截。也不在画面可见时转屏（会看到页面转一圈、四角露黑边）。
-    ///   像系统播放器一样：画面立刻切成全黑，在黑屏里转回竖屏，转好以后放回主窗口，页面从黑里淡出来（见 `dismiss`）；
+    ///   和参考 App 一样：画面立刻切成全黑，黑屏里瞬间转回竖屏，约 0.18 秒后页面用 0.22 秒从黑里淡出来（见 `dismiss`）；
     /// - 竖屏：先把主窗口放回来，播放页整页淡出时露出的就是它。
     @discardableResult
     func willClose() -> Bool {
@@ -280,6 +299,8 @@ final class PlayerWindowController {
             window.backgroundColor = .black
             window.alpha = 1
             host?.view.isHidden = true
+            blackCutAt = Date()
+            startCloseLog("切黑")
             debug("关闭：横屏，切黑")
             return true
         }
@@ -300,6 +321,8 @@ final class PlayerWindowController {
     private func dismiss(replacing: Bool = false) {
         guard let player = window else { return }
         let scene = player.windowScene
+        let cutAt = blackCutAt
+        blackCutAt = nil
         revealTask?.cancel()
         revealTask = nil
         resumeRevealWaiters()
@@ -321,7 +344,9 @@ final class PlayerWindowController {
             return
         }
         if hiddenMain != nil, let scene, Self.isLandscape(player) {
-            beginExit(player, in: scene)
+            // 不是从播放页的关闭按钮来的（没走 willClose）：这一刻才切黑
+            if cutAt == nil { startCloseLog("切黑（直接关闭）") }
+            beginExit(player, in: scene, cutAt: cutAt ?? Date())
             return
         }
         removeWindow(player)
@@ -337,30 +362,42 @@ final class PlayerWindowController {
         player.rootViewController = nil
     }
 
-    /// 横屏关闭的收尾（主窗口还藏着）：窗口换成全黑的控制器，在黑屏里转回竖屏；转屏完全结束后才收尾（见 `finishExit`）。
-    private func beginExit(_ player: PlayerWindow, in scene: UIWindowScene) {
+    /// 横屏关闭的收尾（主窗口还藏着）：窗口换成全黑的控制器，关掉动画后在黑屏里瞬间转回竖屏；
+    /// 转屏回调来了才收尾（见 `finishExit`）。
+    private func beginExit(_ player: PlayerWindow, in scene: UIWindowScene, cutAt: Date) {
         exitingWindow = player
-        exitStartedAt = Date()
+        exitStartedAt = cutAt
+        exitGeneration += 1
         player.isUserInteractionEnabled = false
         player.backgroundColor = .black
         player.alpha = 1
         let exit = PlayerExitController()
         exit.statusBarStyle = appColorScheme == .light ? .darkContent : .lightContent
-        exit.onRotated = { [weak self] in self?.finishExit() }
+        exit.onWillRotate = { [weak self] duration in
+            self?.closeNote(String(format: "系统开始转屏，时长 %.2f 秒", duration))
+        }
+        // 回调是在系统转屏的流程里调的：放到下一轮再收尾，不在系统转屏的中途放回主窗口
+        exit.onRotated = { [weak self] in
+            Task { @MainActor in self?.finishExit(by: "转屏回调") }
+        }
         // 换上时仍按场景当前的方向（一般是横屏），窗口保持原样
         exit.orientations = scene.interfaceOrientation.isLandscape ? .landscape : .portrait
         UIView.performWithoutAnimation {
             player.rootViewController = exit
             player.layoutIfNeeded()
         }
-        // 再改成只支持竖屏：场景在全黑里转回竖屏，转完会走 exit 的转屏回调
+        // 先关掉 UIView 动画，再改成只支持竖屏：系统这次转屏的时长变成 0，在全黑里一下子转完，
+        // 不用再干等 0.3～0.4 秒的转屏动画，黑屏就能和参考 App 一样短。
+        // 动画一直关到页面开始淡出之前（不在转屏回调里就恢复）：系统可能分几轮才转完，提前恢复的话剩下的部分又会带动画转。
+        pauseAnimationsForExit()
         player.allowedOrientations = .portrait
         exit.orientations = .portrait
         exit.setNeedsUpdateOfSupportedInterfaceOrientations()
+        closeNote("关动画，请求竖屏")
         debug("关闭：黑屏里转回竖屏")
         scene.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait)) { [weak self] error in
             // 只记一笔：转没转过去由转屏回调和下面的兜底决定
-            Task { @MainActor in self?.debug("关闭：竖屏请求被拒绝 \(error.localizedDescription)") }
+            Task { @MainActor in self?.closeNote("竖屏请求被拒绝 \(error.localizedDescription)") }
         }
         exitWatch = Task { @MainActor [weak self, weak player, weak scene] in
             var portraitSince: Date?
@@ -368,22 +405,25 @@ final class PlayerWindowController {
                 try? await Task.sleep(nanoseconds: 20_000_000)
                 guard !Task.isCancelled, let self, let player, self.exitingWindow === player else { return }
                 let now = Date()
-                if portraitSince == nil, let scene, !scene.interfaceOrientation.isLandscape { portraitSince = now }
-                // 场景报竖屏时转屏动画才刚开始：再等一整段转屏时长（0.5 秒）；总共最多等 1.1 秒
+                if portraitSince == nil, let scene, !scene.interfaceOrientation.isLandscape {
+                    portraitSince = now
+                    self.closeNote("场景报竖屏")
+                }
+                // 正常都会等到转屏回调；万一没有：场景报竖屏后再等一整段转屏时长（0.5 秒），总共最多等 1.1 秒
                 let rotated = portraitSince.map { now.timeIntervalSince($0) >= 0.5 } ?? false
                 if rotated || now.timeIntervalSince(self.exitStartedAt) >= 1.1 {
                     self.debug("关闭：没等到转屏回调，兜底收尾")
-                    self.finishExit()
+                    self.finishExit(by: "兜底")
                     return
                 }
             }
         }
     }
 
-    /// 转屏已经结束：在黑屏下面不带动画地放回主窗口（它藏着的时候一直是竖屏，不用重排）；
-    /// 从开始关闭算起黑屏至少 0.5 秒（真机上系统转屏约 0.4 秒，回调来早了也不会让页面在转的时候露出来），
-    /// 再 0.22 秒先慢后快再慢地淡掉，页面和状态栏一起从黑里亮起来。
-    private func finishExit() {
+    /// 转屏已经结束：趁动画还关着、在黑屏下面放回主窗口（它藏着的时候一直是竖屏，不用重排，也不会转）；
+    /// 黑屏从切黑算约 0.18 秒（回调来得晚也至少再黑 0.05 秒，让放回来的页面先画好），
+    /// 然后恢复动画，0.22 秒先慢后快再慢地淡掉黑屏，页面、状态栏和底部横条一起从黑里亮起来。
+    private func finishExit(by reason: String) {
         guard let player = exitingWindow else { return }
         exitingWindow = nil
         exitWatch?.cancel()
@@ -398,30 +438,66 @@ final class PlayerWindowController {
         }
         if let scene, scene.interfaceOrientation.isLandscape {
             // 系统没转过去（被拒绝）：补发一次竖屏请求
-            debug("关闭：场景仍是横屏，补发竖屏请求")
+            closeNote("场景仍是横屏，补发竖屏请求")
             scene.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait)) { _ in }
         }
         let exit = player.rootViewController as? PlayerExitController
-        let hold = max(0.02, 0.5 - Date().timeIntervalSince(exitStartedAt))
+        let hold = max(0.05, Self.exitBlackHold - Date().timeIntervalSince(exitStartedAt))
+        let generation = exitGeneration
+        closeNote(String(format: "转好（%@），放回页面，再黑 %.2f 秒", reason, hold))
         Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(hold * 1_000_000_000))
+            guard let self else { return }
+            // 期间又开始了新的一次横屏关闭：动画由那一次负责恢复
+            if self.exitGeneration == generation { self.resumeAnimationsAfterExit() }
+            self.closeNote("开始淡出")
             exit?.statusBarVisible = true
-            UIView.animate(withDuration: 0.22, delay: 0, options: [.curveEaseInOut, .allowUserInteraction]) {
+            UIView.animate(withDuration: Self.exitFadeDuration, delay: 0, options: [.curveEaseInOut, .allowUserInteraction]) {
                 player.alpha = 0
                 exit?.setNeedsStatusBarAppearanceUpdate()
+                exit?.setNeedsUpdateOfHomeIndicatorAutoHidden()
             } completion: { _ in
-                self?.removeWindow(player)
+                self.closeNote("淡完")
+                self.removeWindow(player)
             }
         }
     }
 
     /// 新的播放要弹出时，上一次横屏关闭如果还在收尾，直接撤掉那个黑窗口；主窗口仍藏着，留给新的这次
     private func abandonExit() {
+        // 关掉的动画先恢复：上一次收尾可能正停在「转好了、等着淡出」那一段
+        resumeAnimationsAfterExit()
         guard let player = exitingWindow else { return }
         exitingWindow = nil
         exitWatch?.cancel()
         exitWatch = nil
         removeWindow(player)
+    }
+
+    private func pauseAnimationsForExit() {
+        // 别处已经关着就不管：只恢复自己关掉的
+        guard !animationsPausedForExit, UIView.areAnimationsEnabled else { return }
+        UIView.setAnimationsEnabled(false)
+        animationsPausedForExit = true
+    }
+
+    private func resumeAnimationsAfterExit() {
+        guard animationsPausedForExit else { return }
+        animationsPausedForExit = false
+        UIView.setAnimationsEnabled(true)
+    }
+
+    private var closeLogStart = Date()
+
+    private func startCloseLog(_ text: String) {
+        closeLogStart = Date()
+        closeLog = []
+        closeNote(text)
+    }
+
+    private func closeNote(_ text: String) {
+        closeLog.append(String(format: "%4.2fs ", Date().timeIntervalSince(closeLogStart)) + text)
+        if closeLog.count > 20 { closeLog.removeFirst(closeLog.count - 20) }
     }
 
     // MARK: 内部
@@ -531,7 +607,10 @@ final class PlayerWindowController {
 
     /// 附在「复制播放诊断信息」后面的播放器窗口记录
     var diagnostics: String {
-        log.isEmpty ? "" : "[播放器窗口]\n" + log.joined(separator: "\n")
+        var parts: [String] = []
+        if !log.isEmpty { parts.append("[播放器窗口]\n" + log.joined(separator: "\n")) }
+        if !closeLog.isEmpty { parts.append("[上次横屏关闭]\n" + closeLog.joined(separator: "\n")) }
+        return parts.joined(separator: "\n\n")
     }
 
     /// 打开后 15 秒内每 0.1 秒看一眼主线程：被占住超过 0.25 秒就记一笔，排查「打开就卡住」用

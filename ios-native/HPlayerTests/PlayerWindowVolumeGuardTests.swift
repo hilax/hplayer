@@ -45,6 +45,14 @@ final class PlayerWindowVolumeGuardTests: XCTestCase {
         XCTAssertFalse(controller.isPresented)
         XCTAssertFalse(controller.isShowing(token))
         XCTAssertFalse(dismissedExternally, "自己关掉的不算被顶替")
+        XCTAssertTrue(UIView.areAnimationsEnabled, "关闭流程不能把全局动画留在关着的状态")
+    }
+
+    func testLandscapeCloseFollowsReferenceTiming() {
+        // 参考 App：切黑后黑约 0.2 秒，大约 0.4 秒整个淡完
+        XCTAssertGreaterThanOrEqual(PlayerWindowController.exitBlackHold, 0.15)
+        XCTAssertLessThanOrEqual(PlayerWindowController.exitBlackHold, 0.2)
+        XCTAssertEqual(PlayerWindowController.exitBlackHold + PlayerWindowController.exitFadeDuration, 0.4, accuracy: 0.02)
     }
 
     func testExitControllerStartsLandscapeThenTurnsPortraitInBlack() {
@@ -56,9 +64,11 @@ final class PlayerWindowVolumeGuardTests: XCTestCase {
         XCTAssertEqual(exit.view.backgroundColor, .black, "收尾的窗口是全黑的，转屏看不出来")
         XCTAssertFalse(exit.view.isUserInteractionEnabled)
         XCTAssertTrue(exit.prefersStatusBarHidden, "黑屏转屏时状态栏藏着，不会看到它跟着转")
+        XCTAssertTrue(exit.prefersHomeIndicatorAutoHidden, "黑屏时底部横条和横屏播放一样自动隐藏")
         exit.statusBarVisible = true
         exit.statusBarStyle = .darkContent
         XCTAssertFalse(exit.prefersStatusBarHidden, "页面淡出来时状态栏一起出现")
+        XCTAssertFalse(exit.prefersHomeIndicatorAutoHidden, "页面淡出来时底部横条照常显示")
         XCTAssertEqual(exit.preferredStatusBarStyle, .darkContent, "状态栏跟随 App 外观")
     }
 }
