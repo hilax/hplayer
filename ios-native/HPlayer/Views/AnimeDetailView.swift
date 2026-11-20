@@ -19,8 +19,6 @@ struct AnimeDetailView: View {
     /// 评论预览（前三条）；nil = 还没拉到 / 拉失败
     @State private var commentPreview: [AnimeComment]?
     @State private var commentsLoading = false
-    /// 点开某条评论的回复（或点「回复」直接回复它）
-    @State private var repliesRequest: AnimeRepliesRequest?
     @State private var isLoading = true
     @State private var errorMessage: String? = nil
 
@@ -100,9 +98,6 @@ struct AnimeDetailView: View {
                 .accessibilityLabel(watched ? "取消追番" : "追番")
                 .accessibilityIdentifier("anime.watchlist.\(animeId)")
             }
-        }
-        .sheet(item: $repliesRequest) { request in
-            AnimeRepliesSheet(vid: animeId, request: request)
         }
         .task {
             watchlist.markUpdateChecked(id: animeId)
@@ -474,9 +469,7 @@ struct AnimeDetailView: View {
 
             if let comments = commentPreview, !comments.isEmpty {
                 ForEach(comments) { comment in
-                    AnimeCommentRow(comment: comment,
-                                    onReply: { repliesRequest = AnimeRepliesRequest(root: $0, startsReplying: true) },
-                                    onOpenReplies: { repliesRequest = AnimeRepliesRequest(root: $0) })
+                    AnimeCommentRow(comment: comment)
                 }
             } else if commentsLoading {
                 HStack {

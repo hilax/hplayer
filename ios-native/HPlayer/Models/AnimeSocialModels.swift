@@ -74,10 +74,8 @@ struct AnimeComment: Identifiable, Hashable {
     let numericID: Int
     /// 我是否赞过
     let liked: Bool
-    /// 置顶、热评里带的回复（接口给几条就有几条）
-    let children: [AnimeComment]
-    /// 列表里直接显示的前几条回复
-    var preview: [AnimeComment] { Array(children.prefix(3)) }
+    /// 置顶、热评里带的前几条回复
+    let preview: [AnimeComment]
     /// 这条是回复谁的
     let replyTo: String
 
@@ -95,7 +93,7 @@ struct AnimeComment: Identifiable, Hashable {
         role = ""
         numericID = localID
         liked = false
-        children = []
+        preview = []
         self.replyTo = replyTo
     }
 
@@ -117,7 +115,7 @@ struct AnimeComment: Identifiable, Hashable {
         role = AnimeJSON.string(((json["roles"] as? [[String: Any]]) ?? []).first ?? [:], ["group_name"]) ?? ""
         numericID = AnimeJSON.int(json, ["id", "cid", "comment_id"]) ?? 0
         liked = DramaJSON.bool(json["islike"])
-        children = ((json["children"] as? [[String: Any]]) ?? []).compactMap { AnimeComment(json: $0, kind: .list) }
+        preview = ((json["children"] as? [[String: Any]]) ?? []).prefix(3).compactMap { AnimeComment(json: $0, kind: .list) }
         // 顶层评论 last_id 为 0；回复里 last_name 是被回复的人
         replyTo = (AnimeJSON.int(json, ["last_id"]) ?? 0) > 0 ? (AnimeJSON.string(json, ["last_name"]) ?? "") : ""
     }
