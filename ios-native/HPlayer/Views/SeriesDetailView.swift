@@ -24,6 +24,7 @@ struct SeriesDetailView: View {
     @State private var pendingRemoval: HomeMediaItem?
     @Namespace private var seasonNamespace
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
 
     private static let scrollSpace = "series.scroll"
     private let backdropHeight: CGFloat = 265
@@ -130,23 +131,52 @@ struct SeriesDetailView: View {
         GeometryReader { proxy in
             let minY = proxy.frame(in: .named(Self.scrollSpace)).minY
             let stretch = max(minY, 0)
-            ZStack(alignment: .bottom) {
-                ArtworkView(urlString: group.backgroundURL, fallbackURLString: group.posterURL, title: group.title)
-                    .scaledToFill()
-                    .frame(width: proxy.size.width, height: backdropHeight + stretch)
-                    .clipped()
+            let height = backdropHeight + stretch
 
-                LinearGradient(
-                    stops: [
-                        .init(color: Theme.pageBackground.opacity(0), location: 0.4),
-                        .init(color: Theme.pageBackground.opacity(0.85), location: 0.8),
-                        .init(color: Theme.pageBackground, location: 1),
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
+            ZStack {
+                Theme.pageBackground
+
+                ArtworkView(
+                    urlString: group.backgroundURL,
+                    fallbackURLString: group.posterURL,
+                    title: group.title,
+                    maxPixel: ArtworkSize.hero,
+                    loading: .clear,
+                    drawsFallback: false
                 )
+                .scaledToFill()
+                .frame(width: proxy.size.width, height: height)
+                .clipped()
+                // 图片的加载缩放也必须经过同一个蒙版；底部留 2pt 全透明区，
+                // 避免合成、裁剪边界的像素取样露出一条原图色边。
+                .mask {
+                    LinearGradient(
+                        stops: [
+                            .init(color: .black, location: 0.4),
+                            .init(color: .black.opacity(Theme.Opacity.faint), location: 0.8),
+                            .init(color: .clear, location: 1 - 2 / height),
+                            .init(color: .clear, location: 1),
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                }
+
+                // 深色模式下封面顶部偏亮时压柔一点，保证导航栏返回键对比度
+                if colorScheme == .dark {
+                    LinearGradient(
+                        colors: [Color.black.opacity(Theme.Opacity.medium), .clear],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .frame(height: min(116, height))
+                    .frame(maxHeight: .infinity, alignment: .top)
+                    .allowsHitTesting(false)
+                }
             }
-            .frame(width: proxy.size.width, height: backdropHeight + stretch)
+            .frame(width: proxy.size.width, height: height)
+            .compositingGroup()
+            .clipped()
             .offset(y: -stretch)
         }
         .frame(height: backdropHeight)
