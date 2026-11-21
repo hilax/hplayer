@@ -342,8 +342,6 @@ struct PlayerSeekHUD: View {
             }
         }
         .foregroundStyle(.white)
-        .shadow(color: .black.opacity(Theme.Opacity.heavy), radius: 8, y: 1)
-        .shadow(color: .black.opacity(Theme.Opacity.strong), radius: 1)
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("playback.seekHUD")
     }
