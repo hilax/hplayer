@@ -15,7 +15,7 @@ struct OnlineSubtitleSourcesView: View {
             VStack(alignment: .leading, spacing: Theme.Space.xl) {
                 SettingsSection(
                     title: "免费字幕来源",
-                    footnote: "自动匹配时会优先计算文件指纹（本地或 HTTP Range 抽样），未命中时再按片名、剧集与 AV 番号搜索中文字幕。"
+                    footnote: "视频本身已有自带字幕时，开启自动匹配也只会优先显示自带字幕；未检测到自带字幕时再按指纹、片名、剧集或番号搜索中文字幕。"
                 ) {
                     sourceRow(.xunlei, binding: $xunlei, identifier: "onlineSubtitle.source.xunlei")
                     RowDivider()

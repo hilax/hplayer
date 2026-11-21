@@ -484,4 +484,112 @@ final class OnlineSubtitleTests: XCTestCase {
         await player.applyOnlineSubtitle(c1)
         XCTAssertEqual(player.notice, "", "在线字幕加载与失败均不应弹出播放页顶部提示")
     }
+
+    @MainActor
+    func testDisablingAutoOnlineSubtitleClearsMountedSubtitleAndKeepsBuiltInTrack() {
+        let originalPref = OnlineSubtitlePrefs.autoMatchEnabled
+        defer { OnlineSubtitlePrefs.autoMatchEnabled = originalPref }
+
+        // 1. 挂载了在线字幕后关闭「自动匹配在线字幕」：必须立刻关闭并移除已挂载的在线字幕轨
+        let player = PlaybackController()
+        defer { player.stop() }
+        let onlineTrack = MediaTrack(id: 1, title: "在线 · 简体中文", detail: "ZH · SRT · 外挂", external: true)
+        player.seedSubtitleStateForTesting(
+            tracks: [onlineTrack],
+            selectedSubtitle: 1,
+            mountedOnlineTrackID: 1,
+            activeOnlineSubtitleID: "sub|online-1",
+            autoEnabled: true
+        )
+
+        player.setAutoOnlineSubtitleEnabled(false)
+
+        XCTAssertFalse(player.autoOnlineSubtitleEnabled)
+        XCTAssertNil(player.selectedSubtitle, "关闭自动字幕开关后，当前显示的在线字幕必须立即隐藏")
+        XCTAssertNil(player.activeOnlineSubtitleID, "关闭自动字幕开关后，在线字幕挂载标记必须清空")
+        XCTAssertTrue(player.subtitleTracks.isEmpty, "关闭自动字幕开关后，已挂载的在线字幕轨应从轨道列表移除")
+        XCTAssertFalse(player.onlineSubtitleSearching)
+
+        // 2. 视频本身自带内嵌字幕且未挂载在线字幕时，关闭自动匹配不应误关视频自带字幕
+        let builtInTrack = MediaTrack(id: 1, title: "字幕 1", detail: "ASS", external: false)
+        player.seedSubtitleStateForTesting(
+            tracks: [builtInTrack],
+            selectedSubtitle: 1,
+            mountedOnlineTrackID: nil,
+            activeOnlineSubtitleID: nil,
+            autoEnabled: true
+        )
+
+        player.setAutoOnlineSubtitleEnabled(false)
+
+        XCTAssertEqual(player.selectedSubtitle, 1, "未挂载在线字幕时，关闭自动匹配开关不应关掉视频原本的自带字幕")
+        XCTAssertEqual(player.subtitleTracks, [builtInTrack])
+    }
+
+    @MainActor
+    func testAutoOnlineSubtitlePrefersAnyBuiltInSubtitleOverOnlineMount() {
+        let originalPref = OnlineSubtitlePrefs.autoMatchEnabled
+        defer { OnlineSubtitlePrefs.autoMatchEnabled = originalPref }
+
+        // 无中文语言标签的内嵌软字幕（例如「字幕 1 · ASS」或英文轨）也必须识别为视频已自带字幕
+        let untaggedBuiltIn = MediaTrack(id: 1, title: "字幕 1", detail: "ASS", external: false)
+        let chineseBuiltIn = MediaTrack(id: 2, title: "简体中文", detail: "chi · ASS", external: false)
+        let onlineMounted = MediaTrack(id: 3, title: "在线 · 中文", detail: "zh · SRT · 外挂", external: true)
+
+        XCTAssertEqual(
+            PlaybackController.preferredBuiltInSubtitleTrack(
+                from: [untaggedBuiltIn],
+                selectedSubtitle: nil,
+                mountedOnlineTrackIDs: []
+            )?.id,
+            1,
+            "即使内嵌字幕没有中文语言标签，也应识别并优先使用自带字幕"
+        )
+        XCTAssertEqual(
+            PlaybackController.preferredBuiltInSubtitleTrack(
+                from: [untaggedBuiltIn, chineseBuiltIn],
+                selectedSubtitle: nil,
+                mountedOnlineTrackIDs: []
+            )?.id,
+            2,
+            "有多条自带字幕且未手动选中时，优先选自带中文字幕"
+        )
+        XCTAssertEqual(
+            PlaybackController.preferredBuiltInSubtitleTrack(
+                from: [untaggedBuiltIn, chineseBuiltIn],
+                selectedSubtitle: 1,
+                mountedOnlineTrackIDs: []
+            )?.id,
+            1,
+            "已选中某条自带字幕时应尊重当前选择"
+        )
+        XCTAssertNil(
+            PlaybackController.preferredBuiltInSubtitleTrack(
+                from: [onlineMounted],
+                selectedSubtitle: 3,
+                mountedOnlineTrackIDs: [3]
+            ),
+            "不能把在线挂载的外挂轨道误判为视频自带字幕"
+        )
+
+        // 存在自带字幕（哪怕先前手动挂过在线字幕或未选中字幕）时，开启自动字幕开关只显示自带字幕、不触发在线搜索
+        let player = PlaybackController()
+        defer { player.stop() }
+        player.seedSubtitleStateForTesting(
+            tracks: [untaggedBuiltIn, onlineMounted],
+            selectedSubtitle: 3,
+            mountedOnlineTrackID: 3,
+            activeOnlineSubtitleID: "sub|manual-3",
+            autoEnabled: false
+        )
+
+        player.setAutoOnlineSubtitleEnabled(true)
+
+        XCTAssertTrue(player.autoOnlineSubtitleEnabled)
+        XCTAssertFalse(player.onlineSubtitleSearching, "已有自带字幕时不得启动在线搜索")
+        XCTAssertNil(player.activeOnlineSubtitleID, "已有自带字幕时应卸载在线字幕、只显示自带字幕")
+        XCTAssertEqual(player.selectedSubtitle, 1, "应自动切换到视频自带字幕轨")
+        XCTAssertEqual(player.subtitleTracks, [untaggedBuiltIn])
+        XCTAssertEqual(player.onlineSubtitleStatus, "视频已自带字幕")
+    }
 }

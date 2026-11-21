@@ -2197,6 +2197,7 @@ struct PlaybackControlsView: View {
     private var onlineSubtitleEntryBadge: String {
         if playback.onlineSubtitleSearching { return "匹配中" }
         if playback.activeOnlineSubtitleID != nil { return "已挂载" }
+        if playback.autoOnlineSubtitleEnabled && playback.hasBuiltInSubtitles { return "已自带" }
         if !playback.onlineSubtitles.isEmpty { return "\(playback.onlineSubtitles.count) 条" }
         return ""
     }
