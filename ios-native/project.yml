@@ -115,7 +115,12 @@ targets:
               NSIncludesSubdomains: true
               NSExceptionAllowsInsecureHTTPLoads: true
         NSPhotoLibraryAddUsageDescription: "截图时把当前画面保存到相册。"
-        NSLocalNetworkUsageDescription: "用于磁力播放时在本机播放缓存并发现局域网节点。"
+        NSLocalNetworkUsageDescription: "用于磁力播放缓存及搜索局域网内的投屏设备。"
+        NSBonjourServices:
+          - _airplay._tcp
+          - _raop._tcp
+          - _dlna._tcp
+          - _http._tcp
         CFBundleURLTypes:
           - CFBundleURLName: app.hplayer.magnet
             CFBundleURLSchemes:

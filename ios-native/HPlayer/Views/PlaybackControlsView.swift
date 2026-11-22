@@ -237,9 +237,12 @@ struct PlaybackControlsView: View {
     var onOpenQuality: () -> Void = { }
     var onQuality: (String) -> Void = { _ in }
     var onRetry: () -> Void = { }
+    var onResolveAirPlayStream: (() async -> CastResolvedStream?)? = nil
     var onClose: () -> Void
 
     @StateObject private var systemVolume = SystemVolumeController()
+    @StateObject private var castManager = CastManager()
+    @State private var showCastPicker = false
     @State private var controlsVisible = true
     @State private var locked = false
     @State private var showList = false
@@ -398,6 +401,33 @@ struct PlaybackControlsView: View {
                         playlistPanel(landscape: false, insets: insets)
                             .zIndex(9)
                     }
+
+                    if showCastPicker {
+                        let descriptor = playback.castMediaDescriptor
+                        let airplayUnsupported = descriptor.map { !AirPlayCastController.isAirPlayNativelySupported(url: $0.url) } ?? false
+                        CastDevicePickerView(
+                            castManager: castManager,
+                            discovery: castManager.discovery,
+                            isLandscape: landscape,
+                            mediaTitle: title,
+                            isMKVOrUnsupportedAirPlay: airplayUnsupported,
+                            onSelectDLNA: { device in
+                                guard let media = playback.castMediaDescriptor else { return }
+                                Task { await castManager.castToDLNA(device, media: media) }
+                            },
+                            onPrepareAirPlay: {
+                                guard let media = playback.castMediaDescriptor else { return false }
+                                return await castManager.prepareAirPlay(media: media, fallbackResolver: onResolveAirPlayStream)
+                            },
+                            onClose: {
+                                withAnimation(Motion.snappy) { showCastPicker = false }
+                                castManager.cancelPendingAirPlay()
+                                revealControls()
+                            }
+                        )
+                        .transition(.opacity)
+                        .zIndex(20)
+                    }
                 }
                 // 横屏整页深色；竖屏信息区和面板跟随 App 外观（浅色 / 深色）
                 .foregroundStyle(landscape ? Color.white : Color.primary)
@@ -443,6 +473,7 @@ struct PlaybackControlsView: View {
             originalBrightness = ScreenBrightness.screen.brightness
             brightnessLevel = Double(ScreenBrightness.screen.brightness)
             systemVolume.start()
+            bindCastCallbacks()
             #if DEBUG
             switch InterfacePreview.screen {
             case "playback": quickMenu = .speed
@@ -467,8 +498,24 @@ struct PlaybackControlsView: View {
             boostLocked = false
             boostLockPrimed = false
             playback.setBoost(false)
+            castManager.stopCasting(resumeLocal: false)
+            castManager.discovery.stopScan()
             systemVolume.stop()
             if brightnessAdjusted, let originalBrightness { ScreenBrightness.screen.brightness = originalBrightness }
+        }
+        .onChange(of: playback.castMediaRevision) { _ in
+            guard castManager.isCasting, let media = playback.castMediaDescriptor else { return }
+            playback.pauseForCasting()
+            Task { await castManager.updateMedia(media, fallbackResolver: onResolveAirPlayStream) }
+        }
+        .onChange(of: castManager.ended) { didEnd in
+            guard didEnd, autoPlayNext || Self.testAutoNext, !Self.isUITest || Self.testAutoNext, let id = nextID else { return }
+            onSelect(id)
+        }
+        .onChange(of: castManager.notice) { text in
+            guard !text.isEmpty else { return }
+            showNotice(text)
+            castManager.notice = ""
         }
         .onChange(of: playback.playing) { playing in
             if !playing, boostLocked || boosting {
@@ -546,6 +593,20 @@ struct PlaybackControlsView: View {
             // 字幕和音轨在底栏右边已经有一个按钮，顶栏不再重复
             // 顶栏只在横屏出现；竖屏的「…」在视频区自己的控制层里
             GlassButtonGroup {
+                GlassIconButton(systemImage: AppIcon.cast.name, label: castManager.isCasting ? "投屏中" : "投屏") { openCastPicker() }
+                    .overlay(alignment: .topTrailing) {
+                        if castManager.isCasting {
+                            Circle()
+                                .fill(Theme.gold)
+                                .frame(width: 8, height: 8)
+                                .overlay { Circle().strokeBorder(Color.black.opacity(Theme.Opacity.strong), lineWidth: 1.5) }
+                                .padding(.top, 6)
+                                .padding(.trailing, 6)
+                                .allowsHitTesting(false)
+                                .accessibilityHidden(true)
+                        }
+                    }
+                    .accessibilityIdentifier("playback.cast")
                 if playback.pictureInPictureSupported {
                     GlassIconButton(systemImage: pipIconName, label: pipLabel) { togglePictureInPicture() }
                         .accessibilityIdentifier("playback.pip")
@@ -1594,61 +1655,92 @@ struct PlaybackControlsView: View {
                 DanmakuOverlay(store: danmaku, time: playback.currentTime, playing: playback.playing,
                                rate: Double(playback.effectiveRate))
             }
-            PlaybackGestureSurface(
-                status: gestureStatus,
-                doubleTapEnabled: gestureSettings.doubleTapAction != .off,
-                longPressEnabled: gestureSettings.longPressBoostEnabled,
-                longPressDuration: 0.30,
-                allowSimultaneousPanWithLongPress: gestureSettings.longPressExtra == .slideToSeek,
-                pinchEnabled: gestureSettings.pinchAction != .off,
-                onTap: handleSingleTap,
-                onDoubleTapAt: handleDoubleTap,
-                onBoost: setBoost,
-                onLongPressDrag: handleLongPressDrag,
-                onPan: handlePan,
-                onPinch: handlePinch,
-                onPanStartsAtSystemEdge: { panFromSystemEdge = $0 },
-                onPanStartsAtSideEdge: { panFromSideEdge = $0 }
-            )
-
-            if controlsVisible && !locked {
-                if landscape {
-                    landscapeControls(insets: insets, width: width)
-                } else {
-                    inlineControls
-                }
-            } else if controlsVisible && locked {
-                HStack {
-                    if landscape { Spacer() }
-                    GlassIconButton(systemImage: AppIcon.lock.name, label: "解锁", diameter: 40, action: unlock)
-                        .accessibilityIdentifier("playback.unlock")
-                    if !landscape { Spacer() }
-                }
-                .padding(.leading, landscape ? 0 : 16)
-                .padding(.trailing, landscape ? edgeControlInset(safe: insets.trailing, width: width) : 0)
-                .transition(.opacity)
-                .zIndex(3)
-            }
-
-            if let region = doubleTapRegion, doubleTapSeconds != 0 {
-                doubleTapOverlay(region: region, seconds: doubleTapSeconds)
-                    .transition(.opacity)
-                    .allowsHitTesting(false)
-                    .zIndex(4)
-            }
-
-            centerStatus
-                .scaleEffect(landscape ? 1 : 0.8)
+            if castManager.isCasting {
+                CastRemoteOverlayView(
+                    castManager: castManager,
+                    landscape: landscape,
+                    insets: insets,
+                    title: title,
+                    items: items,
+                    selectedID: selectedID,
+                    qualities: qualities,
+                    selectedQuality: selectedQuality,
+                    hasPrevious: previousID != nil,
+                    hasNext: nextID != nil,
+                    onPrevious: { move(-1) },
+                    onNext: { move(1) },
+                    onSelectEpisode: { onSelect($0) },
+                    onOpenQuality: onOpenQuality,
+                    onSelectQuality: { onQuality($0) },
+                    onSwitchDevice: { openCastPicker() },
+                    onRetry: {
+                        Task { await castManager.retry(fallbackResolver: onResolveAirPlayStream) }
+                    },
+                    onExitCasting: {
+                        castManager.stopCasting(resumeLocal: true)
+                        revealControls()
+                    },
+                    onToggleOrientation: { toggleOrientation(landscape: landscape) },
+                    onClosePlayer: closePlayer
+                )
                 .zIndex(4)
+            } else {
+                PlaybackGestureSurface(
+                    status: gestureStatus,
+                    doubleTapEnabled: gestureSettings.doubleTapAction != .off,
+                    longPressEnabled: gestureSettings.longPressBoostEnabled,
+                    longPressDuration: 0.30,
+                    allowSimultaneousPanWithLongPress: gestureSettings.longPressExtra == .slideToSeek,
+                    pinchEnabled: gestureSettings.pinchAction != .off,
+                    onTap: handleSingleTap,
+                    onDoubleTapAt: handleDoubleTap,
+                    onBoost: setBoost,
+                    onLongPressDrag: handleLongPressDrag,
+                    onPan: handlePan,
+                    onPinch: handlePinch,
+                    onPanStartsAtSystemEdge: { panFromSystemEdge = $0 },
+                    onPanStartsAtSideEdge: { panFromSideEdge = $0 }
+                )
 
-            if boosting && adjustment == nil {
-                boostPill
-                    .frame(maxWidth: hudWidth)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                    .padding(.top, hudInsets.top + Self.hudTopInset)
+                if controlsVisible && !locked {
+                    if landscape {
+                        landscapeControls(insets: insets, width: width)
+                    } else {
+                        inlineControls
+                    }
+                } else if controlsVisible && locked {
+                    HStack {
+                        if landscape { Spacer() }
+                        GlassIconButton(systemImage: AppIcon.lock.name, label: "解锁", diameter: 40, action: unlock)
+                            .accessibilityIdentifier("playback.unlock")
+                        if !landscape { Spacer() }
+                    }
+                    .padding(.leading, landscape ? 0 : 16)
+                    .padding(.trailing, landscape ? edgeControlInset(safe: insets.trailing, width: width) : 0)
                     .transition(.opacity)
-                    .allowsHitTesting(boostLocked)
-                    .zIndex(5)
+                    .zIndex(3)
+                }
+
+                if let region = doubleTapRegion, doubleTapSeconds != 0 {
+                    doubleTapOverlay(region: region, seconds: doubleTapSeconds)
+                        .transition(.opacity)
+                        .allowsHitTesting(false)
+                        .zIndex(4)
+                }
+
+                centerStatus
+                    .scaleEffect(landscape ? 1 : 0.8)
+                    .zIndex(4)
+
+                if boosting && adjustment == nil {
+                    boostPill
+                        .frame(maxWidth: hudWidth)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        .padding(.top, hudInsets.top + Self.hudTopInset)
+                        .transition(.opacity)
+                        .allowsHitTesting(boostLocked)
+                        .zIndex(5)
+                }
             }
 
             hudLayer(insets: hudInsets, width: hudWidth)
@@ -1716,6 +1808,20 @@ struct PlaybackControlsView: View {
                         .accessibilityIdentifier("playback.close")
                     Spacer(minLength: 8)
                     GlassButtonGroup {
+                        GlassIconButton(systemImage: AppIcon.cast.name, label: castManager.isCasting ? "投屏中" : "投屏") { openCastPicker() }
+                            .overlay(alignment: .topTrailing) {
+                                if castManager.isCasting {
+                                    Circle()
+                                        .fill(Theme.gold)
+                                        .frame(width: 8, height: 8)
+                                        .overlay { Circle().strokeBorder(Color.black.opacity(Theme.Opacity.strong), lineWidth: 1.5) }
+                                        .padding(.top, 6)
+                                        .padding(.trailing, 6)
+                                        .allowsHitTesting(false)
+                                        .accessibilityHidden(true)
+                                }
+                            }
+                            .accessibilityIdentifier("playback.cast")
                         if playback.pictureInPictureSupported {
                             GlassIconButton(systemImage: pipIconName, label: pipLabel) { togglePictureInPicture() }
                                 .accessibilityIdentifier("playback.pip")
@@ -3117,9 +3223,9 @@ struct PlaybackControlsView: View {
     /// 为两侧操作按钮留出空间；横屏还保留至少一段片名，竖屏使用较短的提示条。
     private func topHUDWidth(landscape: Bool, insets: EdgeInsets, width: CGFloat) -> CGFloat {
         let side = landscape
-            // 右上角有截图、画面比例、更多（及可选的小窗按钮）
-            ? max(max(insets.leading, insets.trailing), 28) + 42 + 12 + 132 + 12 + (playback.pictureInPictureSupported ? 52 : 0)
-            : 4 + 88 + 12
+            // 右上角有投屏、截图、画面比例、更多（及可选的小窗按钮）
+            ? max(max(insets.leading, insets.trailing), 28) + 42 + 12 + 176 + 12 + (playback.pictureInPictureSupported ? 52 : 0)
+            : 4 + 128 + 12
         return max(96, min(280, width - side * 2))
     }
 
@@ -3797,6 +3903,31 @@ struct PlaybackControlsView: View {
             if revealing { revealControls() }
         }
     }
+    private func openCastPicker() {
+        hideTask?.cancel()
+        popover = nil
+        showSleepMenu = false
+        quickMenu = nil
+        withAnimation(Motion.snappy) {
+            showCastPicker = true
+        }
+    }
+
+    private func bindCastCallbacks() {
+        castManager.onStartedCasting = {
+            playback.pauseForCasting()
+            withAnimation(Motion.snappy) { showCastPicker = false }
+        }
+        castManager.onPositionSync = { time, duration in
+            playback.syncCastingPosition(time, duration: duration)
+        }
+        castManager.onStoppedCasting = { resumeLocal, finalTime in
+            if resumeLocal {
+                playback.resumeFromCasting(at: finalTime)
+            }
+        }
+    }
+
     /// 关闭播放页：
     /// - 横屏：和系统播放器一样，画面立刻切黑，在黑屏里转回竖屏，转好以后页面从黑里淡出来（见 `PlayerWindowController.willClose`）；
     /// - 竖屏：控制栏和整个播放页一起淡出、轻轻缩小，露出下面的页面，淡出结束后关掉。
@@ -3810,6 +3941,9 @@ struct PlaybackControlsView: View {
         showList = false
         quickMenu = nil
         showSleepMenu = false
+        showCastPicker = false
+        castManager.stopCasting(resumeLocal: false)
+        castManager.discovery.stopScan()
         if PlayerWindowController.shared.willClose() {
             playback.pauseForClose()
             Task { @MainActor in

@@ -193,6 +193,8 @@ final class PlaybackController: ObservableObject {
     @Published private(set) var errorDetail = ""
     /// 需要在画面上方短暂提示的一句话，显示后由界面清空
     @Published var notice = ""
+    /// 投屏媒体源（地址或本地代理）准备/变更时递增，用于通知活跃中的投屏会话同步切流
+    @Published private(set) var castMediaRevision = 0
     /// 内核报告的真实播放时间（不含正在跳转的目标），给 UI 测试读。
     /// 它每一帧都在变：不能用 @Published，否则整个播放页（连同下面的信息页、选集）会跟着视频帧率
     /// 每秒重算几十次，CPU 一直闲不下来，长时间播放手机发烫。变化超过 0.25 秒才通知界面刷新一次。
@@ -253,6 +255,7 @@ final class PlaybackController: ObservableObject {
     private var onlineSubtitleAutoHandledSession = -1
     private var mountedOnlineTrackID: Int?
     private var mountedOnlineTrackIDs: Set<Int> = []
+    private var mountedOnlineSubtitleFileURL: URL?
     private var cachedFingerprint: VideoSubtitleFingerprint?
     private var subtitleDelayHydratedSession = -1
     private var rawCacheSpeed: Int = 0
@@ -273,6 +276,8 @@ final class PlaybackController: ObservableObject {
 
     /// 用户自己按了暂停
     private var userPaused = false
+    /// 正在由外部设备（DLNA / AirPlay）接管投屏播放
+    private var pausedForCasting = false
     /// 窗口仍在转屏淡入前：先让 mpv 在后台拉流、解头并解码首帧，淡入瞬间放开立即起播
     private var awaitingReveal = false
     /// Prevent late asynchronous opens from restarting audio while closing.
@@ -564,6 +569,7 @@ final class PlaybackController: ObservableObject {
             activeOnlineSubtitleID = nil
             mountedOnlineTrackID = nil
             mountedOnlineTrackIDs.removeAll()
+            mountedOnlineSubtitleFileURL = nil
             cachedFingerprint = nil
             onlineSubtitleAutoHandledSession = -1
             subtitleDelay = 0
@@ -589,7 +595,7 @@ final class PlaybackController: ObservableObject {
         watchdogEnabled = autoRecover
         self.openTimeoutSeconds = openTimeoutSeconds
         let position = preservingPosition ? resumePoint : max(0, startTime ?? 0)
-        let keepPlaying = preservingPosition ? !userPaused : true
+        let keepPlaying = pausedForCasting ? false : (preservingPosition ? !userPaused : true)
         if !preservingPosition {
             aspect = .fit
             zoom = 1
@@ -680,7 +686,14 @@ final class PlaybackController: ObservableObject {
                   self.engine === engine else { return }
             self.addressTask = nil
             self.currentEngineURL = URL(string: address)
+            self.castMediaRevision &+= 1
+            if self.pausedForCasting || self.userPaused {
+                engine.set("pause", true)
+            }
             _ = await engine.commandAsync(["loadfile", address, "replace"])
+            if self.pausedForCasting || self.userPaused {
+                engine.set("pause", true)
+            }
         }
         startWatchdog()
 
@@ -798,6 +811,7 @@ final class PlaybackController: ObservableObject {
     func pauseForClose() {
         pictureInPicture?.stop()
         closingPlayback = true
+        pausedForCasting = false
         awaitingReveal = false
         userPaused = true
         pausedAtUptime = ProcessInfo.processInfo.systemUptime
@@ -833,15 +847,104 @@ final class PlaybackController: ObservableObject {
     }
 
     /// Magnet playback can reuse its controller for the next presentation.
-    func prepareForPresentation() { closingPlayback = false }
+    func prepareForPresentation() {
+        closingPlayback = false
+        pausedForCasting = false
+    }
 
     /// 播放器窗口完成转屏淡入后放开首帧暂挂，立即起播。
     func releaseRevealHold() {
         guard awaitingReveal else { return }
         awaitingReveal = false
-        guard !closingPlayback, !userPaused else { return }
+        guard !closingPlayback, !userPaused, !pausedForCasting else { return }
         engine?.set("pause", false)
         updateFlags()
+    }
+
+    // MARK: 投屏衔接
+
+    var castMediaDescriptor: CastMediaDescriptor? {
+        guard let url = currentURL else { return nil }
+        var headers: [String: String] = [:]
+        if currentDirect115 {
+            headers["User-Agent"] = Direct115Client.userAgent
+            headers["Referer"] = "https://115.com/"
+            let cookie = Self.cookieHeader(currentCookie)
+            if !cookie.isEmpty { headers["Cookie"] = cookie }
+        }
+        for (key, value) in currentCustomHeaders {
+            headers[key] = value
+        }
+        let proxyURL: URL?
+        if !url.isFileURL, let engineURL = currentEngineURL,
+           let scheme = engineURL.scheme?.lowercased(), scheme == "http" || scheme == "https" {
+            proxyURL = engineURL
+        } else {
+            proxyURL = nil
+        }
+        return CastMediaDescriptor(
+            url: url,
+            localProxyURL: proxyURL,
+            title: currentTitle,
+            headers: headers,
+            position: currentTime,
+            duration: duration,
+            subtitleFileURL: activeOnlineSubtitleID != nil ? mountedOnlineSubtitleFileURL : nil,
+            isTorrentStream: currentTorrentStream
+        )
+    }
+
+    func pauseForCasting() {
+        guard !closingPlayback else { return }
+        pausedForCasting = true
+        awaitingReveal = false
+        userPaused = true
+        pausedAtUptime = ProcessInfo.processInfo.systemUptime
+        recoveryTask?.cancel()
+        recoveryTask = nil
+        openTimeoutTask?.cancel()
+        engine?.set("pause", true)
+        captureResumeFrame()
+        updateFlags()
+    }
+
+    func resumeFromCasting(at seconds: Double?) {
+        pausedForCasting = false
+        userPaused = false
+        pausedAtUptime = nil
+        noDataSeconds = 0
+        openingSeconds = 0
+        guard !closingPlayback, currentURL != nil else { return }
+        if let seconds, seconds.isFinite, seconds >= 0 {
+            if loaded && seekable {
+                seek(to: seconds)
+            } else {
+                resumePoint = seconds
+                currentTime = seconds
+                engine?.set("pause", false)
+                if !loaded && !opening {
+                    recoveryAttempts = []
+                    recover(reason: "")
+                } else {
+                    updateFlags()
+                }
+            }
+        } else {
+            engine?.set("pause", false)
+            updateFlags()
+        }
+    }
+
+    func syncCastingPosition(_ seconds: Double, duration total: Double) {
+        guard !closingPlayback else { return }
+        if total.isFinite && total > 0 {
+            duration = total
+        }
+        if seconds.isFinite && seconds >= 0 {
+            currentTime = seconds
+            confirmedTime = seconds
+            resumePoint = seconds
+        }
     }
 
     func toggle() {
@@ -1059,6 +1162,7 @@ final class PlaybackController: ObservableObject {
         onlineSubtitleStatus = ""
         mountedOnlineTrackID = nil
         mountedOnlineTrackIDs.removeAll()
+        mountedOnlineSubtitleFileURL = nil
         activeOnlineSubtitleID = nil
         cachedFingerprint = nil
         subtitleDelay = 0
@@ -1511,6 +1615,7 @@ final class PlaybackController: ObservableObject {
 
         mountedOnlineTrackID = nil
         mountedOnlineTrackIDs.subtract(idsToRemove)
+        mountedOnlineSubtitleFileURL = nil
         activeOnlineSubtitleID = nil
         onlineSubtitleStatus = ""
 
@@ -1710,6 +1815,7 @@ final class PlaybackController: ObservableObject {
             }
         }
         activeOnlineSubtitleID = candidate.id
+        mountedOnlineSubtitleFileURL = fileURL
         applySubtitleStyle(engine)
         return true
     }
@@ -2291,6 +2397,7 @@ final class PlaybackController: ObservableObject {
     }
 
     private func checkHealth() {
+        if pausedForCasting { return }
         let now = ProcessInfo.processInfo.systemUptime
         avSync = loaded ? engine?.double("avsync") : nil
         if boosted { checkBoostSync(avSync, at: now) }

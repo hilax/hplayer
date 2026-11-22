@@ -57,6 +57,7 @@ struct PlayerView: View {
                 let source = current
                 Task { await load(source) }
             },
+            onResolveAirPlayStream: { await resolveAirPlayFallbackStream() },
             onClose: { if let dismissPlayerWindow { dismissPlayerWindow() } else { dismiss() } }
         )
         .task(id: current.id) {
@@ -343,6 +344,30 @@ struct PlayerView: View {
     private func requestQuality(_ id: String) {
         let source = current
         Task { _ = await switchQuality(id, source: source) }
+    }
+
+    /// 115 原画（常见为 MKV）不兼容原生 AirPlay 时，自动尝试拉取第一档转码 HLS 流供隔空播放使用。
+    private func resolveAirPlayFallbackStream() async -> CastResolvedStream? {
+        guard case .p115(_, let pickCode) = current,
+              let client = appState.directClient() else { return nil }
+        if !directQualitiesAreFresh, let task = loadDirectQualities() {
+            await task.value
+        }
+        guard case .p115(_, let currentPickCode) = current, currentPickCode == pickCode,
+              let chosen = directQualities.first else { return nil }
+        let headers = PlaybackController.direct115Headers(cookie: client.cookie)
+        let refresher = Self.streamRefresher(client, pickCode: pickCode, title: chosen.title)
+        let proxyURL = await LocalStreamProxy.shared.localURL(
+            for: chosen.url,
+            headers: headers,
+            streamID: "p115:\(pickCode):hls:\(chosen.title)",
+            playlistRenew: refresher
+        )
+        return CastResolvedStream(
+            url: proxyURL ?? chosen.url,
+            headers: proxyURL == nil ? headers : [:],
+            qualityNotice: "原画格式不支持隔空播放，已自动切换为 \(chosen.title)"
+        )
     }
 
     /// 自动重连时换新的 115 原画地址：旧地址可能已过期，或者连接被 115 限制

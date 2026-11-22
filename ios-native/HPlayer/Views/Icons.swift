@@ -37,6 +37,7 @@ enum AppIcon: String, CaseIterable {
     case volumeMute, volumeLow, volumeMedium, volumeHigh
     case battery0, battery25, battery50, battery75, battery100, batteryCharging
     case playback
+    case cast, airplay
 
     // MARK: 影视内容
     case video, series, tv, poster, posterBatch, posterSearch, rating
@@ -160,6 +161,8 @@ enum AppIcon: String, CaseIterable {
         case .battery100: return "电量满"
         case .batteryCharging: return "正在充电"
         case .playback: return "播放"
+        case .cast: return "投屏"
+        case .airplay: return "隔空播放"
         case .video: return "视频"
         case .series: return "剧集"
         case .tv: return "电视"
