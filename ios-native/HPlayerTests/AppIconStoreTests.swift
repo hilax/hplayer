@@ -71,6 +71,8 @@ final class AppIconStoreTests: XCTestCase {
         await complete(completion, store: store)
         XCTAssertFalse(store.isChanging)
         XCTAssertTrue(huds.isEmpty, "System alert already confirms success; app must not stack a duplicate success HUD")
+        XCTAssertEqual(store.appliedFeedback?.icon, .ocean)
+        XCTAssertEqual(store.appliedFeedback?.message, "已更换为「晴空蓝」")
         XCTAssertGreaterThanOrEqual(dismissCount, 2, "Start and completion should clear any stale HUD")
         XCTAssertEqual(defaults.string(forKey: AppIconStore.choiceKey), "ocean")
     }
@@ -316,5 +318,69 @@ final class AppIconStoreTests: XCTestCase {
             XCTAssertEqual(store.selected, .ocean)
             XCTAssertEqual(defaults.string(forKey: AppIconStore.choiceKey), "ocean")
         }
+    }
+
+    func testRestoringDefaultShowsCompactFeedbackAndDismissesOnTimerOrManualClear() async throws {
+        var completion: ((Error?) -> Void)?
+        var huds: [RecordedHUD] = []
+        let store = AppIconStore(
+            defaults: makeDefaults(),
+            systemName: { nil },
+            apply: { _, done in completion = done },
+            suppressesSystemAlert: true,
+            feedbackDuration: 0.12,
+            supportsAlternateIcons: { true },
+            showHUD: { text, tone in huds.append(RecordedHUD(text: text, tone: tone)) }
+        )
+
+        store.select(.ocean)
+        await complete(completion, store: store)
+        XCTAssertEqual(store.appliedFeedback?.icon, .ocean)
+        XCTAssertEqual(store.appliedFeedback?.message, "已更换为「晴空蓝」")
+        XCTAssertTrue(huds.isEmpty)
+
+        try await Task.sleep(nanoseconds: 250_000_000)
+        XCTAssertNil(store.appliedFeedback, "Compact banner should dismiss automatically after feedbackDuration")
+
+        store.select(.prism)
+        await complete(completion, store: store)
+        XCTAssertEqual(store.appliedFeedback?.icon, .prism)
+        XCTAssertEqual(store.appliedFeedback?.message, "已恢复默认图标")
+
+        store.dismissFeedback()
+        XCTAssertNil(store.appliedFeedback, "Explicit dismissal should clear feedback immediately")
+    }
+
+    func testNonSilentFallbackSuppressesInAppFeedbackAndFailureClearsFeedback() async {
+        var fallbackCompletion: ((Error?) -> Void)?
+        var huds: [RecordedHUD] = []
+        let fallbackStore = AppIconStore(
+            defaults: makeDefaults(),
+            systemName: { nil },
+            apply: { _, done in fallbackCompletion = done },
+            suppressesSystemAlert: false,
+            supportsAlternateIcons: { true },
+            showHUD: { text, tone in huds.append(RecordedHUD(text: text, tone: tone)) }
+        )
+        fallbackStore.select(.mint)
+        await complete(fallbackCompletion, store: fallbackStore)
+        XCTAssertNil(fallbackStore.appliedFeedback, "Public API fallback lets system show its own alert without duplicating in-app feedback")
+        XCTAssertTrue(huds.isEmpty)
+
+        var failureCompletion: ((Error?) -> Void)?
+        var failureHUDs: [RecordedHUD] = []
+        let failureStore = AppIconStore(
+            defaults: makeDefaults(),
+            systemName: { nil },
+            apply: { _, done in failureCompletion = done },
+            suppressesSystemAlert: true,
+            supportsAlternateIcons: { true },
+            showHUD: { text, tone in failureHUDs.append(RecordedHUD(text: text, tone: tone)) }
+        )
+        failureStore.select(.iris)
+        await complete(failureCompletion, error: NSError(domain: "test", code: 9,
+                                                        userInfo: [NSLocalizedDescriptionKey: "拒绝"]), store: failureStore)
+        XCTAssertNil(failureStore.appliedFeedback)
+        XCTAssertEqual(failureHUDs, [RecordedHUD(text: "更换失败：拒绝", tone: .error)])
     }
 }

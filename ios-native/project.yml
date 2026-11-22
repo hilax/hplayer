@@ -127,6 +127,73 @@ targets:
               - magnet
         UIBackgroundModes:
           - audio
+        CFBundleIcons:
+          CFBundleAlternateIcons:
+            AppIconClassic:
+              CFBundleIconFiles:
+                - AppIconClassic
+              UIPrerenderedIcon: false
+            AppIconPrism:
+              CFBundleIconFiles:
+                - AppIconPrism
+              UIPrerenderedIcon: false
+            AppIconOcean:
+              CFBundleIconFiles:
+                - AppIconOcean
+              UIPrerenderedIcon: false
+            AppIconMint:
+              CFBundleIconFiles:
+                - AppIconMint
+              UIPrerenderedIcon: false
+            AppIconIris:
+              CFBundleIconFiles:
+                - AppIconIris
+              UIPrerenderedIcon: false
+            HPIconCoral:
+              CFBundleIconFiles:
+                - HPIconCoral
+              UIPrerenderedIcon: false
+            AppIconCoral:
+              CFBundleIconFiles:
+                - HPIconCoral
+              UIPrerenderedIcon: false
+        CFBundleIcons~ipad:
+          CFBundleAlternateIcons:
+            AppIconClassic:
+              CFBundleIconFiles:
+                - AppIconClassic
+                - AppIconClassic-83.5
+              UIPrerenderedIcon: false
+            AppIconPrism:
+              CFBundleIconFiles:
+                - AppIconPrism
+                - AppIconPrism-83.5
+              UIPrerenderedIcon: false
+            AppIconOcean:
+              CFBundleIconFiles:
+                - AppIconOcean
+                - AppIconOcean-83.5
+              UIPrerenderedIcon: false
+            AppIconMint:
+              CFBundleIconFiles:
+                - AppIconMint
+                - AppIconMint-83.5
+              UIPrerenderedIcon: false
+            AppIconIris:
+              CFBundleIconFiles:
+                - AppIconIris
+                - AppIconIris-83.5
+              UIPrerenderedIcon: false
+            HPIconCoral:
+              CFBundleIconFiles:
+                - HPIconCoral
+                - HPIconCoral-83.5
+              UIPrerenderedIcon: false
+            AppIconCoral:
+              CFBundleIconFiles:
+                - HPIconCoral
+                - HPIconCoral-83.5
+              UIPrerenderedIcon: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.hplayer.native
@@ -138,6 +205,8 @@ targets:
     postBuildScripts:
       - name: Bundle Alternate App Icons
         script: python3 "$SRCROOT/scripts/bundle-alternate-icons.py"
+        inputFiles:
+          - $(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)
         basedOnDependencyAnalysis: false
 
   HPlayerUITests:

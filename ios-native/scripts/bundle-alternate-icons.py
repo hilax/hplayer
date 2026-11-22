@@ -65,7 +65,7 @@ def render_png(source: pathlib.Path, destination: pathlib.Path, pixels: int) -> 
     )
 
 
-def populate_alternate_icons(plist: dict, root_key: str, icon_files_for_name) -> None:
+def populate_alternate_icons(plist: dict, root_key: str, icon_files_for_name) -> bool:
     icons = plist.setdefault(root_key, {})
     alternates = {}
     for name in ALTERNATE_ICONS:
@@ -80,7 +80,10 @@ def populate_alternate_icons(plist: dict, root_key: str, icon_files_for_name) ->
             "CFBundleIconFiles": icon_files_for_name(current),
             "UIPrerenderedIcon": False,
         }
+    if icons.get("CFBundleAlternateIcons") == alternates:
+        return False
     icons["CFBundleAlternateIcons"] = alternates
+    return True
 
 
 def main() -> int:
@@ -97,6 +100,7 @@ def main() -> int:
         print(f"bundle-alternate-icons: Info.plist not found at {infoplist_path}", file=sys.stderr)
         return 1
 
+    app_dir.mkdir(parents=True, exist_ok=True)
     for name in ALTERNATE_ICONS:
         src = masters_dir / f"{name}.png"
         if not src.exists():
@@ -108,21 +112,29 @@ def main() -> int:
     with infoplist_path.open("rb") as f:
         plist = plistlib.load(f)
 
-    populate_alternate_icons(
+    changed_iphone = populate_alternate_icons(
         plist,
         "CFBundleIcons",
         lambda name: [name],
     )
-    populate_alternate_icons(
+    changed_ipad = populate_alternate_icons(
         plist,
         "CFBundleIcons~ipad",
         lambda name: [name, f"{name}-83.5"],
     )
 
-    with infoplist_path.open("wb") as f:
-        plistlib.dump(plist, f, fmt=plistlib.FMT_BINARY)
+    for root_key in ("CFBundleIcons", "CFBundleIcons~ipad"):
+        primary = plist.get(root_key, {}).get("CFBundlePrimaryIcon")
+        if not isinstance(primary, dict) or not primary.get("CFBundleIconName"):
+            print(f"bundle-alternate-icons: missing CFBundlePrimaryIcon in {root_key}", file=sys.stderr)
+            return 1
 
-    print(f"bundle-alternate-icons: packaged {len(ALTERNATE_ICONS)} alternate icon sets into {app_dir.name}")
+    if changed_iphone or changed_ipad:
+        with infoplist_path.open("wb") as f:
+            plistlib.dump(plist, f, fmt=plistlib.FMT_BINARY)
+        print(f"bundle-alternate-icons: updated {infoplist_path.name} and verified {len(ALTERNATE_ICONS)} alternate icon sets in {app_dir.name}")
+    else:
+        print(f"bundle-alternate-icons: verified {len(ALTERNATE_ICONS)} alternate icon sets in {app_dir.name}")
     return 0
 
 

@@ -41,13 +41,16 @@ final class SettingsUITests: XCTestCase {
         XCTAssertTrue(ocean.isHittable)
         XCTAssertTrue(ocean.isEnabled)
         ocean.tap()
-        XCTAssertTrue(wait { ocean.isSelected }, "Selection must follow the tap immediately, before any system callback")
-        dismissIconChangeAlert(in: app)
-        XCTAssertTrue(wait { ocean.isSelected && ocean.isEnabled }, "The system should switch to the requested alternate")
+        let feedback = app.descendants(matching: .any)["settings.appIcon.feedback"]
+        XCTAssertTrue(feedback.waitForExistence(timeout: 3), "Silent icon switch should show compact top feedback capsule")
+        let oceanFeedbackFrame = feedback.frame
+        XCTAssertLessThanOrEqual(oceanFeedbackFrame.height, 56, "Feedback capsule should remain compact vertically")
+        XCTAssertLessThan(oceanFeedbackFrame.width, app.frame.width * 0.8, "Feedback capsule must not span full screen width")
+        XCTAssertTrue(wait { ocean.isSelected && ocean.isEnabled }, "Selection must follow the tap immediately and commit cleanly")
         XCTAssertFalse(app.descendants(matching: .any)["settings.appIcon.notice"].exists,
                        "Legacy custom notice card should be removed to prevent duplicate alerts")
         XCTAssertFalse(app.descendants(matching: .any)["hud.toast"].exists,
-                       "Successful icon change should not stack a duplicate toast over the system alert")
+                       "Successful icon change should not stack a duplicate toast over the compact capsule")
 
         let restore = app.buttons["settings.appIcon.restoreDefault"]
         for _ in 0..<6 {
@@ -57,8 +60,8 @@ final class SettingsUITests: XCTestCase {
         XCTAssertTrue(restore.isHittable)
         XCTAssertTrue(restore.isEnabled)
         restore.tap()
-        dismissIconChangeAlert(in: app)
         let prism = app.buttons["settings.appIcon.prism"]
+        XCTAssertTrue(feedback.waitForExistence(timeout: 3), "Restoring default should confirm with compact top capsule")
         XCTAssertTrue(wait { prism.isSelected && !restore.isEnabled },
                       "Restore must return the system to its primary icon, not another named alternate")
 
@@ -87,7 +90,10 @@ final class SettingsUITests: XCTestCase {
         }
         XCTAssertTrue(coral.isHittable)
         coral.tap()
-        dismissIconChangeAlert(in: app)
+        let feedback = app.descendants(matching: .any)["settings.appIcon.feedback"]
+        XCTAssertTrue(feedback.waitForExistence(timeout: 3), "Switching icon should display compact top capsule")
+        XCTAssertLessThanOrEqual(feedback.frame.height, 56)
+        XCTAssertLessThan(feedback.frame.width, app.frame.width * 0.8)
         XCTAssertTrue(wait { coral.isSelected && coral.isEnabled })
         XCTAssertFalse(app.descendants(matching: .any)["settings.appIcon.notice"].exists)
         XCTAssertFalse(app.descendants(matching: .any)["hud.toast"].exists)
@@ -98,7 +104,6 @@ final class SettingsUITests: XCTestCase {
             app.swipeDown()
         }
         prism.tap()
-        dismissIconChangeAlert(in: app)
         XCTAssertTrue(wait { prism.isSelected && prism.isEnabled }, "Tapping the previous style should switch back directly")
     }
 
@@ -206,13 +211,6 @@ final class SettingsUITests: XCTestCase {
         XCTAssertTrue(iconSettings.waitForExistence(timeout: 10))
         iconSettings.tap()
         XCTAssertTrue(app.navigationBars["应用图标"].waitForExistence(timeout: 10))
-    }
-
-    private func dismissIconChangeAlert(in app: XCUIApplication) {
-        for owner in [app, XCUIApplication(bundleIdentifier: "com.apple.springboard")] {
-            let alert = owner.alerts.firstMatch
-            if alert.waitForExistence(timeout: 2) { alert.buttons.firstMatch.tap() }
-        }
     }
 
     private func wait(timeout: TimeInterval = 10, _ predicate: @escaping () -> Bool) -> Bool {
