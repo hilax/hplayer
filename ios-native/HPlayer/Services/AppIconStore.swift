@@ -6,24 +6,14 @@ import UIKit
 /// 系统完成切换后，保存已确认的选择。系统回读只用于首次迁移和核实错误，
 /// 不在页面出现 / 回到前台时覆盖用户选择；固定的等待时间不能保证系统缓存已更新。
 ///
-/// 提示交互分工：
-/// - 优先通过 `_setAlternateIconName:completionHandler:` 静默切换图标，避免弹出体积庞大且
-///   必须手动关闭的 iOS 原生模态弹窗；切换成功后仅设置轻量 `appliedFeedback`，由设置页顶部
-///   悬浮小胶囊短时确认并自动消失。
-/// - 若静默接口不可用并回退到公开 `setAlternateIconName`（系统已弹出原生框），则不再叠加应用内成功提示，
-///   避免重复弹窗。
-/// - 切换失败或设备不支持时，统一通过全局 `HUD.show(...)` 反馈，并在下次操作前自动清理。
+/// 所有应用内提示统一由全局 `HUD`（`HUD.swift`）管理：
+/// - 公开 API `setAlternateIconName` 切换成功时，iOS 系统自身会弹出一次原生确认框，
+///   这里不再叠加应用内成功弹窗，彻底消除「系统弹窗 + 页内提示」重复弹窗；
+///   同时通过 `HUD.dismiss()` 收起可能残留的旧提示。
+/// - 切换失败或设备不支持时，统一通过 `HUD.show(...)` 反馈，
+///   由 `HUDCenter` 负责样式、防重复去重、停留时长、触觉反馈与读屏播报。
 @MainActor
 final class AppIconStore: ObservableObject {
-    struct AppliedFeedback: Equatable {
-        let id: UInt64
-        let icon: HomeScreenIcon
-
-        var message: String {
-            icon == .prism ? "已恢复默认图标" : "已更换为「\(icon.title)」"
-        }
-    }
-
     /// 页面重建或多个窗口共用同一笔切换，避免请求尚未完成时出现第二份旧状态。
     static let shared = AppIconStore()
 
@@ -31,21 +21,16 @@ final class AppIconStore: ObservableObject {
     nonisolated static let simulatedKey = "hplayer.simulated_alternate_icon"
     nonisolated static let simulatedChoiceKey = "hplayer.home_icon_choice.simulated"
 
-    private static let silentSelector = NSSelectorFromString("_setAlternateIconName:completionHandler:")
-
     @Published private(set) var selected: HomeScreenIcon
     @Published private(set) var isChanging = false
-    @Published private(set) var appliedFeedback: AppliedFeedback?
 
     private let systemName: @MainActor () -> String?
-    private let applyAction: @MainActor (String?, @escaping (Error?, Bool) -> Void) -> Void
+    private let apply: @MainActor (String?, @escaping (Error?) -> Void) -> Void
     private let defaults: UserDefaults
     private let storageKey: String
     private let supportsIcons: @MainActor () -> Bool
     private let showHUD: @MainActor (String, HUDTone) -> Void
     private let dismissHUD: @MainActor () -> Void
-    private let feedbackDuration: TimeInterval
-    private var feedbackTask: Task<Void, Never>?
     private var activeRequestID: UInt64?
     private var nextRequestID: UInt64 = 0
 
@@ -53,14 +38,11 @@ final class AppIconStore: ObservableObject {
         defaults: UserDefaults = .standard,
         systemName: (@MainActor () -> String?)? = nil,
         apply: (@MainActor (String?, @escaping (Error?) -> Void) -> Void)? = nil,
-        suppressesSystemAlert: Bool = true,
-        feedbackDuration: TimeInterval = 2.4,
         supportsAlternateIcons: (@MainActor () -> Bool)? = nil,
         showHUD: (@MainActor (String, HUDTone) -> Void)? = nil,
         dismissHUD: (@MainActor () -> Void)? = nil
     ) {
         self.defaults = defaults
-        self.feedbackDuration = feedbackDuration
         let simulated = Self.isSimulatedTest
         self.storageKey = simulated ? Self.simulatedChoiceKey : Self.choiceKey
         // 只影响模拟器 UI 测试，真实偏好与模拟的系统值各自保存。
@@ -78,22 +60,14 @@ final class AppIconStore: ObservableObject {
         self.supportsIcons = supportsAlternateIcons ?? {
             simulated || UIApplication.shared.supportsAlternateIcons
         }
-        if let apply {
-            self.applyAction = { name, completion in
-                apply(name) { error in
-                    completion(error, suppressesSystemAlert)
-                }
+        self.apply = apply ?? { name, completion in
+            if simulated {
+                // 截图 / UI 测试不触碰 SpringBoard，避免模拟器 POSIX 35 与系统弹窗干扰。
+                defaults.set(name, forKey: Self.simulatedKey)
+                DispatchQueue.main.async { completion(nil) }
+                return
             }
-        } else {
-            self.applyAction = { name, completion in
-                if simulated {
-                    // 截图 / UI 测试不触碰 SpringBoard，避免模拟器 POSIX 35 与系统弹窗干扰。
-                    defaults.set(name, forKey: Self.simulatedKey)
-                    DispatchQueue.main.async { completion(nil, true) }
-                    return
-                }
-                Self.applySystemIcon(name, completion: completion)
-            }
+            UIApplication.shared.setAlternateIconName(name, completionHandler: completion)
         }
         self.showHUD = showHUD ?? { text, tone in
             HUD.show(text, tone)
@@ -147,22 +121,15 @@ final class AppIconStore: ObservableObject {
         commit(icon, previous: selected)
     }
 
-    func dismissFeedback() {
-        feedbackTask?.cancel()
-        feedbackTask = nil
-        appliedFeedback = nil
-    }
-
     private func commit(_ icon: HomeScreenIcon, previous: HomeScreenIcon) {
         nextRequestID &+= 1
         let requestID = nextRequestID
         activeRequestID = requestID
         isChanging = true
-        dismissFeedback()
         dismissHUD()
         selected = icon
         Haptics.select()
-        applyAction(icon.alternateName) { [weak self] error, usedSilentAPI in
+        apply(icon.alternateName) { [weak self] error in
             Task { @MainActor [weak self] in
                 guard let self, self.activeRequestID == requestID else { return }
                 self.activeRequestID = nil
@@ -174,7 +141,6 @@ final class AppIconStore: ObservableObject {
                         && icon.matchesCurrentName(self.systemName())
                     if !appliedDespiteError {
                         self.selected = previous
-                        self.appliedFeedback = nil
                         let detail = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
                         let message = detail.isEmpty ? "更换失败，已保留原图标" : "更换失败：\(detail)"
                         self.showHUD(message, .error)
@@ -183,56 +149,7 @@ final class AppIconStore: ObservableObject {
                 }
                 self.defaults.set(icon.rawValue, forKey: self.storageKey)
                 self.dismissHUD()
-                if usedSilentAPI {
-                    self.presentFeedback(id: requestID, icon: icon)
-                } else {
-                    self.appliedFeedback = nil
-                }
             }
-        }
-    }
-
-    private func presentFeedback(id: UInt64, icon: HomeScreenIcon) {
-        feedbackTask?.cancel()
-        Haptics.success()
-        let feedback = AppliedFeedback(id: id, icon: icon)
-        appliedFeedback = feedback
-        UIAccessibility.post(notification: .announcement, argument: feedback.message)
-        let delay = max(0.05, feedbackDuration)
-        feedbackTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-            guard !Task.isCancelled, let self, self.appliedFeedback?.id == feedback.id else { return }
-            self.appliedFeedback = nil
-        }
-    }
-
-    private static func applySystemIcon(
-        _ name: String?,
-        completion: @escaping (Error?, Bool) -> Void
-    ) {
-        let app = UIApplication.shared
-        guard app.responds(to: silentSelector) else {
-            app.setAlternateIconName(name) { error in
-                completion(error, false)
-            }
-            return
-        }
-
-        typealias SilentIMP = @convention(c) (
-            AnyObject,
-            Selector,
-            NSString?,
-            (@convention(block) (NSError?) -> Void)?
-        ) -> Void
-
-        let imp = app.method(for: silentSelector)
-        let fn = unsafeBitCast(imp, to: SilentIMP.self)
-        let nsName = name as NSString?
-        let block: @convention(block) (NSError?) -> Void = { error in
-            completion(error, true)
-        }
-        withExtendedLifetime((nsName, block)) {
-            fn(app, silentSelector, nsName, block)
         }
     }
 }

@@ -115,7 +115,7 @@ struct AppIconSettingsView: View {
                 DesignNotice(
                     symbol: store.supportsAlternateIcons ? AppIcon.info.name : AppIcon.alert.name,
                     text: store.supportsAlternateIcons
-                        ? "点按样式即可即时更换主屏幕图标，切换后会在顶部轻提示确认。"
+                        ? "点按样式即可更换主屏幕图标，更换完成后系统会显示一次确认提示。"
                         : "当前设备暂不支持更换应用图标。",
                     warning: !store.supportsAlternateIcons
                 )
@@ -128,29 +128,12 @@ struct AppIconSettingsView: View {
         }
         .scrollIndicators(.hidden)
         .background(Theme.pageBackground.ignoresSafeArea())
-        .overlay(alignment: .top) {
-            if let feedback = store.appliedFeedback {
-                IconAppliedBanner(feedback: feedback)
-                    .id(feedback.id)
-                    .padding(.top, Theme.Space.sm)
-                    .padding(.horizontal, Theme.Space.lg)
-                    .transition(
-                        reduceMotion
-                            ? .opacity
-                            : .move(edge: .top).combined(with: .scale(scale: 0.94)).combined(with: .opacity)
-                    )
-            }
-        }
         .navigationTitle("应用图标")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
         .designScreen("app-icon")
         .animation(Motion.resolved(Motion.snappy, reduceMotion: reduceMotion), value: store.selected)
         .animation(Motion.resolved(Motion.snappy, reduceMotion: reduceMotion), value: previewDark)
-        .animation(Motion.resolved(Motion.snappy, reduceMotion: reduceMotion), value: store.appliedFeedback?.id)
-        .onDisappear {
-            store.dismissFeedback()
-        }
     }
 
     // MARK: - 顶部主屏幕预览舞台
@@ -471,56 +454,5 @@ private struct IconArtwork: View {
                 )
             }
             .accessibilityHidden(true)
-    }
-}
-
-private struct IconAppliedBanner: View {
-    let feedback: AppIconStore.AppliedFeedback
-    @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-
-    var body: some View {
-        let shadowColor = Color.black.opacity(colorScheme == .dark ? 0.35 : 0.12)
-        let content = HStack(spacing: Theme.Space.sm) {
-            IconArtwork(icon: feedback.icon, size: 22, darkBackdrop: colorScheme == .dark)
-
-            Text(feedback.message)
-                .font(Theme.Typo.meta.weight(.semibold))
-                .foregroundStyle(Theme.textPrimary)
-                .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
-
-            Image(icon: .success)
-                .font(.scaled(13, weight: .semibold))
-                .foregroundStyle(Theme.success)
-                .accessibilityHidden(true)
-        }
-        .padding(.leading, Theme.Space.sm)
-        .padding(.trailing, Theme.Space.md)
-        .padding(.vertical, Theme.Space.sm)
-        .fixedSize(horizontal: !dynamicTypeSize.isAccessibilitySize, vertical: true)
-
-        Group {
-            if #available(iOS 26.0, *) {
-                content
-                    .glassEffect(.regular, in: Capsule())
-                    .shadow(color: shadowColor, radius: 12, y: 4)
-            } else {
-                content
-                    .background {
-                        ZStack {
-                            Capsule().fill(.ultraThinMaterial)
-                            Capsule().fill(Theme.surfaceRaised.opacity(colorScheme == .dark ? 0.85 : 0.9))
-                        }
-                    }
-                    .overlay {
-                        Capsule().strokeBorder(Theme.rule, lineWidth: Theme.Stroke.hairline)
-                    }
-                    .shadow(color: shadowColor, radius: 12, y: 4)
-            }
-        }
-        .allowsHitTesting(false)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(feedback.message)
-        .accessibilityIdentifier("settings.appIcon.feedback")
     }
 }
