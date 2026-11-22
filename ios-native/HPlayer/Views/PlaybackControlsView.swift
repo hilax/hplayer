@@ -569,8 +569,8 @@ struct PlaybackControlsView: View {
     /// 左边关闭和片名，右边画面比例、字幕音轨、更多设置；按钮都是液态玻璃
     private func topBar(landscape: Bool, insets: EdgeInsets, width: CGFloat) -> some View {
         let hudWidth = topHUDWidth(landscape: landscape, insets: insets, width: width)
+        let boostShowing = boosting && adjustment == nil
         let leadingWidth = (width - hudWidth) / 2 - max(insets.leading, 28) - 12
-        let trailingWidth = (width - hudWidth) / 2 - max(insets.trailing, 28) - 12
         return HStack(alignment: .center, spacing: 0) {
             HStack(spacing: 12) {
                 GlassIconButton(systemImage: AppIcon.close.name, label: "关闭播放", action: closePlayer)
@@ -586,7 +586,7 @@ struct PlaybackControlsView: View {
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(width: topHUDShowing ? max(0, leadingWidth) : nil, alignment: .leading)
+            .frame(width: boostShowing ? max(0, leadingWidth) : nil, alignment: .leading)
 
             Spacer(minLength: 8)
 
@@ -622,7 +622,6 @@ struct PlaybackControlsView: View {
                     .accessibilityIdentifier("playback.more")
                     .playerAnchor(.popover(.more))
             }
-            .frame(width: topHUDShowing ? max(0, trailingWidth) : nil, alignment: .trailing)
         }
     }
 
@@ -1635,7 +1634,10 @@ struct PlaybackControlsView: View {
             ? EdgeInsets(top: insets.top + Self.landscapeStatusShift, leading: insets.leading,
                          bottom: insets.bottom, trailing: insets.trailing)
             : EdgeInsets()
-        let hudWidth = topHUDWidth(landscape: landscape, insets: hudInsets, width: width)
+        let levelWidth = Self.levelHUDWidth(landscape: landscape, width: width)
+        let boostWidth = (controlsVisible && !locked)
+            ? topHUDWidth(landscape: landscape, insets: hudInsets, width: width)
+            : min(280, max(180, width - 32))
         ZStack {
             Theme.playerBackground
             PlayerVideoSurface(playback: playback)
@@ -1734,16 +1736,16 @@ struct PlaybackControlsView: View {
 
                 if boosting && adjustment == nil {
                     boostPill
-                        .frame(maxWidth: hudWidth)
+                        .frame(maxWidth: boostWidth)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                        .padding(.top, hudInsets.top + Self.hudTopInset)
+                        .padding(.top, hudInsets.top + (!landscape && controlsVisible && !locked ? 56 : Self.hudTopInset))
                         .transition(.opacity)
                         .allowsHitTesting(boostLocked)
                         .zIndex(5)
                 }
             }
 
-            hudLayer(insets: hudInsets, width: hudWidth)
+            hudLayer(insets: hudInsets, landscape: landscape, width: width, levelWidth: levelWidth)
                 .zIndex(6)
         }
         .frame(maxWidth: .infinity, maxHeight: landscape ? .infinity : inlineHeight)
@@ -1759,6 +1761,9 @@ struct PlaybackControlsView: View {
             PlayerStatusRow(networkSpeed: statusRowNetworkSpeed)
                 .padding(.bottom, 12 + Self.landscapeStatusShift - 6 - PlayerStatusRow.height)
             topBar(landscape: true, insets: insets, width: width)
+                .opacity(topBarYieldingToHUD ? 0 : 1)
+                .allowsHitTesting(!topBarYieldingToHUD)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: topBarYieldingToHUD)
             Spacer(minLength: 0)
             bottomBar(landscape: true)
         }
@@ -1856,6 +1861,9 @@ struct PlaybackControlsView: View {
                 }
                 .padding(.horizontal, 12)
                 .padding(.top, 6)
+                .opacity(topBarYieldingToHUD ? 0 : 1)
+                .allowsHitTesting(!topBarYieldingToHUD)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: topBarYieldingToHUD)
 
                 Spacer(minLength: 0)
 
@@ -3216,22 +3224,35 @@ struct PlaybackControlsView: View {
     /// 手势提示始终位于同一顶部位置，操作栏显隐不改变这个距离。
     private static let hudTopInset: CGFloat = 18
 
-    private var topHUDShowing: Bool {
-        boosting || adjustment != nil
+    /// 亮度、音量、跳转或轻提示出现在顶部时，顶栏按钮淡出让位，避免挤压胶囊长度或互相重叠；底栏保持可见。
+    private var topBarYieldingToHUD: Bool {
+        adjustment != nil
     }
 
-    /// 为两侧操作按钮留出空间；横屏还保留至少一段片名，竖屏使用较短的提示条。
+    /// 亮度与音量提示胶囊的正常宽度：不受右上角投屏、小窗等功能图标数量挤压。
+    nonisolated static func levelHUDWidth(landscape: Bool, width: CGFloat) -> CGFloat {
+        let target: CGFloat = landscape ? 280 : 240
+        let margin: CGFloat = landscape ? 32 : 48
+        return min(target, max(180, width - margin))
+    }
+
+    /// 仅用于锁定倍速胶囊与可见顶栏共存时给两侧操作按钮留出空间（取左右单侧较大值）。
     private func topHUDWidth(landscape: Bool, insets: EdgeInsets, width: CGFloat) -> CGFloat {
-        let side = landscape
-            // 右上角有投屏、截图、画面比例、更多（及可选的小窗按钮）
-            ? max(max(insets.leading, insets.trailing), 28) + 42 + 12 + 176 + 12 + (playback.pictureInPictureSupported ? 52 : 0)
-            : 4 + 128 + 12
+        let side: CGFloat
+        if landscape {
+            let leadingSide = max(insets.leading, 28) + 42 + 12 + 80 + 12
+            let trailingSide = max(insets.trailing, 28) + (playback.pictureInPictureSupported ? 260 : 206) + 12
+            side = max(leadingSide, trailingSide)
+        } else {
+            side = 4 + 128 + 12
+        }
         return max(96, min(280, width - side * 2))
     }
 
-    /// 跳转时间、亮度、音量提示共用顶部位置，同时保留操作栏。
+    /// 跳转时间、亮度、音量提示共用顶部位置；顶部按钮在让位期间淡出。
     @ViewBuilder
-    private func hudLayer(insets: EdgeInsets, width: CGFloat) -> some View {
+    private func hudLayer(insets: EdgeInsets, landscape: Bool, width: CGFloat, levelWidth: CGFloat) -> some View {
+        let maxNoticeWidth = max(180, width - 32)
         ZStack {
             if let adjustment {
                 switch adjustment.kind {
@@ -3240,19 +3261,19 @@ struct PlaybackControlsView: View {
                                   delta: "\(adjustment.title) \(adjustment.valueText)",
                                   progress: playback.duration > 0 ? adjustment.progress : nil,
                                   cancelled: adjustment.cancelled)
-                        .frame(maxWidth: width)
+                        .frame(maxWidth: max(180, width - 32))
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                         .padding(.top, insets.top + Self.hudTopInset)
                         .transition(.opacity)
                 case .brightness, .volume:
                     PlayerLevelHUD(kind: adjustment.kind == .brightness ? .brightness : .volume,
-                                   value: adjustment.progress, width: width)
+                                   value: adjustment.progress, width: levelWidth)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                         .padding(.top, insets.top + Self.hudTopInset)
                         .transition(.opacity)
                 case .notice:
                     PlayerNoticeHUD(text: adjustment.valueText)
-                        .frame(maxWidth: width)
+                        .frame(maxWidth: min(landscape ? 360 : maxNoticeWidth, maxNoticeWidth))
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                         .padding(.top, insets.top + Self.hudTopInset)
                         .transition(.opacity)

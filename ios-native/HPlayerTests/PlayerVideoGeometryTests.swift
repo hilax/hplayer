@@ -123,4 +123,18 @@ final class PlayerVideoGeometryTests: XCTestCase {
         XCTAssertEqual(scope.width, 852, accuracy: 0.001)
         XCTAssertEqual(scope.height, 852 / 2.35, accuracy: 0.001)
     }
+
+    func testLevelHUDWidthStaysFullLengthAcrossPhoneSizes() {
+        for landscapeWidth: CGFloat in [667, 812, 852, 956] {
+            XCTAssertEqual(PlaybackControlsView.levelHUDWidth(landscape: true, width: landscapeWidth), 280, accuracy: 0.01)
+        }
+        for portraitWidth: CGFloat in [375, 393, 402, 440] {
+            let hudWidth = PlaybackControlsView.levelHUDWidth(landscape: false, width: portraitWidth)
+            XCTAssertEqual(hudWidth, 240, accuracy: 0.01)
+            XCTAssertGreaterThanOrEqual(hudWidth, 180)
+        }
+        // 极窄容器下仍保留可读下限且不超过容器可用宽度
+        XCTAssertEqual(PlaybackControlsView.levelHUDWidth(landscape: false, width: 240), 192, accuracy: 0.01)
+        XCTAssertEqual(PlaybackControlsView.levelHUDWidth(landscape: false, width: 200), 180, accuracy: 0.01)
+    }
 }
