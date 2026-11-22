@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// 投屏设备选择面板：整合局域网 DLNA 设备列表（自动搜索 + 历史设备 + 手动输入 IP）与系统 AirPlay 入口。
 struct CastDevicePickerView: View {
@@ -41,6 +42,14 @@ struct CastDevicePickerView: View {
         .onAppear {
             discovery.startScan()
         }
+        .onDisappear {
+            discovery.stopScan()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            if discovery.devices.isEmpty && !discovery.isScanning {
+                discovery.startScan()
+            }
+        }
     }
 
     private var card: some View {
@@ -58,10 +67,15 @@ struct CastDevicePickerView: View {
                         errorBanner(castManager.errorMessage)
                     }
 
-                    if discovery.multicastRestricted && discovery.devices.isEmpty {
-                        hintBanner(
-                            "未检测到自动搜索权限，可通过下方「手动添加」输入电视 IP（连接一次后会自动记住）。"
-                        )
+                    switch discovery.scanDiagnosis {
+                    case .noWiFi:
+                        hintBanner("当前未检测到 Wi-Fi 连接，请确认手机与电视/机顶盒连接至同一 Wi-Fi。")
+                    case .localNetworkDenied:
+                        errorBanner("未获得「本地网络」权限，请前往系统「设置 → 隐私与安全性 → 本地网络」开启 HPlayer 开关，返回后将自动重新搜索。")
+                    case .multicastRestrictedNoDevices where discovery.devices.isEmpty:
+                        hintBanner("已自动使用局域网单播扫描但暂未发现设备，请确认机顶盒已开启投屏接收、关闭拦截局域网的 VPN，或点击「手动添加」输入机顶盒 IP。")
+                    case .multicastRestrictedNoDevices, .none:
+                        EmptyView()
                     }
 
                     dlnaSection
@@ -136,9 +150,10 @@ struct CastDevicePickerView: View {
     private var dlnaSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("DLNA 电视与盒子")
+                Text(discovery.localWiFiIP.map { "DLNA 电视与盒子 · \($0)" } ?? "DLNA 电视与盒子")
                     .font(.scaled(12, weight: .semibold))
                     .foregroundStyle(Color.white.opacity(Theme.Opacity.strong))
+                    .lineLimit(1)
                 Spacer()
                 Button {
                     withAnimation(Motion.snappy) {

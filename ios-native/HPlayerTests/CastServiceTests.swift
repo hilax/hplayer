@@ -1,3 +1,4 @@
+import Darwin
 import Network
 import XCTest
 @testable import HPlayer
@@ -498,6 +499,131 @@ final class CastServiceTests: XCTestCase {
         XCTAssertTrue(AirPlayCastController.isAirPlayNativelySupported(url: URL(string: "https://cdn.example/clip.mov")!))
         XCTAssertTrue(AirPlayCastController.isAirPlayNativelySupported(url: URL(string: "https://cdn.example/stream")!))
     }
+
+    // MARK: - Wi-Fi 子网扫描范围、容错解析与单播 SSDP 手动发现
+
+    func testWiFiNetworkInfoUnicastSweepTargets() {
+        let slash24 = WiFiNetworkInfo.unicastSweepTargets(ip: "192.168.1.42", netmask: "255.255.255.0")
+        XCTAssertEqual(slash24.count, 253)
+        XCTAssertFalse(slash24.contains("192.168.1.42"))
+        XCTAssertTrue(slash24.contains("192.168.1.1"))
+        XCTAssertTrue(slash24.contains("192.168.1.254"))
+
+        let info24 = WiFiNetworkInfo(ip: "192.168.1.42", netmask: "255.255.255.0", interfaceName: "en0", interfaceIndex: 1)
+        XCTAssertEqual(info24.broadcastAddress, "192.168.1.255")
+
+        let slash29 = WiFiNetworkInfo.unicastSweepTargets(ip: "10.0.0.10", netmask: "255.255.255.248")
+        XCTAssertEqual(slash29, ["10.0.0.9", "10.0.0.11", "10.0.0.12", "10.0.0.13", "10.0.0.14"])
+
+        let slash16 = WiFiNetworkInfo.unicastSweepTargets(ip: "172.16.5.20", netmask: "255.255.0.0")
+        XCTAssertEqual(slash16.count, 253)
+        XCTAssertFalse(slash16.contains("172.16.5.20"))
+        XCTAssertTrue(slash16.contains("172.16.5.1"))
+        XCTAssertTrue(slash16.contains("172.16.5.254"))
+    }
+
+    func testParserHandlesBOMTrailingNULBogusURLBaseAndCaseInsensitiveTags() throws {
+        let ssdpWithNUL = "HTTP/1.1 200 OK\r\nLOCATION: http://192.168.1.88:41234/dev/uuid-1/desc.xml\0\0\r\nST: ssdp:all\r\n\r\n\0"
+        let expectedLoc = try XCTUnwrap(URL(string: "http://192.168.1.88:41234/dev/uuid-1/desc.xml"))
+        XCTAssertEqual(DLNADeviceParser.parseSSDPHeaders(ssdpWithNUL), expectedLoc)
+
+        let rawBody = """
+        <?xml version="1.0" encoding="utf-8"?>
+        <root xmlns="urn:schemas-upnp-org:device-1-0">
+          <urlbase>http://127.0.0.1:41234/</urlbase>
+          <device>
+            <friendlyname>中国移动机顶盒</friendlyname>
+            <manufacturer>CMCC</manufacturer>
+            <modelname>CM311-1a</modelname>
+            <udn>uuid:cmcc-stb-1</udn>
+            <servicelist>
+              <service>
+                <servicetype>urn:schemas-upnp-org:service:avtransport:1</servicetype>
+                <controlurl>/upnp/control/avt</controlurl>
+              </service>
+              <service>
+                <servicetype>urn:schemas-upnp-org:service:renderingcontrol:1</servicetype>
+                <controlurl>upnp/control/rc</controlurl>
+              </service>
+            </servicelist>
+          </device>
+        <!-- truncated tail
+        """
+        var xmlBytes: [UInt8] = [0xEF, 0xBB, 0xBF]
+        xmlBytes.append(contentsOf: rawBody.utf8)
+        xmlBytes.append(contentsOf: [0x00, 0x00, 0x00])
+
+        let device = try XCTUnwrap(DLNADeviceParser.parseDeviceDescription(Data(xmlBytes), locationURL: expectedLoc))
+        XCTAssertEqual(device.name, "中国移动机顶盒")
+        XCTAssertEqual(device.host, "192.168.1.88")
+        XCTAssertEqual(device.avTransportControlURL.absoluteString, "http://192.168.1.88:41234/upnp/control/avt")
+        XCTAssertEqual(device.renderingControlURL?.absoluteString, "http://192.168.1.88:41234/dev/uuid-1/upnp/control/rc")
+    }
+
+    @MainActor
+    func testManualBareIPDiscoversDynamicPortUUIDDeviceViaUnicastSSDP() async throws {
+        let httpServer = try LoopbackHTTPServer { path, _, _ in
+            guard path == "/dev/uuid-stb-999/desc.xml" else {
+                return .init(status: 404, headers: [:], body: Data())
+            }
+            let desc = """
+            <?xml version="1.0" encoding="utf-8"?>
+            <root xmlns="urn:schemas-upnp-org:device-1-0">
+              <device>
+                <friendlyName>客厅机顶盒-Cling</friendlyName>
+                <manufacturer>Lebo</manufacturer>
+                <modelName>STB-Pro</modelName>
+                <UDN>uuid:stb-999</UDN>
+                <serviceList>
+                  <service>
+                    <serviceType>urn:schemas-upnp-org:service:AVTransport:1</serviceType>
+                    <controlURL>/dev/uuid-stb-999/svc/upnp-org/AVTransport/action</controlURL>
+                  </service>
+                </serviceList>
+              </device>
+            </root>
+            """
+            return .init(status: 200, headers: ["Content-Type": "text/xml; charset=utf-8"], body: Data(desc.utf8))
+        }
+        defer { httpServer.stop() }
+
+        let locationURL = try XCTUnwrap(URL(string: "http://127.0.0.1:\(httpServer.port)/dev/uuid-stb-999/desc.xml"))
+        let responder = try LoopbackUDPSSDPResponder(locationURL: locationURL)
+        defer { responder.stop() }
+
+        let defaults = UserDefaults(suiteName: suiteName)!
+        let discovery = DLNADiscovery(defaults: defaults, ssdpPort: responder.port)
+        let bareDevice = try await discovery.addManualDevice(input: "127.0.0.1")
+        XCTAssertEqual(bareDevice.name, "客厅机顶盒-Cling")
+        XCTAssertEqual(bareDevice.locationURL, locationURL)
+        XCTAssertEqual(
+            bareDevice.avTransportControlURL.absoluteString,
+            "http://127.0.0.1:\(httpServer.port)/dev/uuid-stb-999/svc/upnp-org/AVTransport/action"
+        )
+        XCTAssertEqual(discovery.devices.map(\.id), ["uuid:stb-999"])
+
+        let suite2 = "\(suiteName!).2"
+        defer { UserDefaults(suiteName: suite2)?.removePersistentDomain(forName: suite2) }
+        let discovery2 = DLNADiscovery(defaults: UserDefaults(suiteName: suite2)!, ssdpPort: responder.port)
+        let httpNoPortDevice = try await discovery2.addManualDevice(input: "http://127.0.0.1")
+        XCTAssertEqual(httpNoPortDevice.id, "uuid:stb-999")
+
+        let suite3 = "\(suiteName!).3"
+        defer { UserDefaults(suiteName: suite3)?.removePersistentDomain(forName: suite3) }
+        let discovery3 = DLNADiscovery(defaults: UserDefaults(suiteName: suite3)!, ssdpPort: responder.port)
+        let fullWidthDevice = try await discovery3.addManualDevice(input: "127。0。0。1")
+        XCTAssertEqual(fullWidthDevice.id, "uuid:stb-999")
+    }
+
+    @MainActor
+    func testCandidateDescriptionURLsHandlesSchemeWithoutPortAndFullWidthPunctuation() {
+        let httpNoPort = DLNADiscovery.candidateDescriptionURLs(for: "http://192.168.1.20")
+        XCTAssertTrue(httpNoPort.contains(URL(string: "http://192.168.1.20:49152/description.xml")!))
+        XCTAssertTrue(httpNoPort.contains(URL(string: "http://192.168.1.20:25826/description.xml")!))
+
+        let fullWidthPort = DLNADiscovery.candidateDescriptionURLs(for: "192。168。1。20：9999")
+        XCTAssertEqual(fullWidthPort.first, URL(string: "http://192.168.1.20:9999/description.xml"))
+    }
 }
 
 // MARK: - 轻量环回测试服务器
@@ -609,5 +735,118 @@ private final class LoopbackHTTPServer {
             }
         }
         receiveMore()
+    }
+}
+
+private final class LoopbackUDPSSDPResponder {
+    let port: UInt16
+
+    private let lock = NSLock()
+    private var stopped = false
+    private let finishedSemaphore = DispatchSemaphore(value: 0)
+
+    init(locationURL: URL) throws {
+        let fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
+        guard fd >= 0 else {
+            throw XCTSkip("Unable to create loopback UDP socket (errno=\(errno))")
+        }
+
+        var reuse: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout<Int32>.size))
+        let flags = fcntl(fd, F_GETFL, 0)
+        if flags >= 0 {
+            _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
+        }
+
+        var addr = sockaddr_in()
+        addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = 0
+        inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr)
+
+        let bindResult = withUnsafePointer(to: &addr) { ptr in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
+                Darwin.bind(fd, sa, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        guard bindResult == 0 else {
+            let err = errno
+            close(fd)
+            throw XCTSkip("Unable to bind loopback UDP socket (errno=\(err))")
+        }
+
+        var boundAddr = sockaddr_in()
+        var boundLen = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let socknameResult = withUnsafeMutablePointer(to: &boundAddr) { ptr in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
+                getsockname(fd, sa, &boundLen)
+            }
+        }
+        guard socknameResult == 0 else {
+            close(fd)
+            throw XCTSkip("Unable to inspect loopback UDP socket port")
+        }
+        let assignedPort = UInt16(bigEndian: boundAddr.sin_port)
+        self.port = assignedPort
+
+        let responseString =
+            "HTTP/1.1 200 OK\r\n" +
+            "CACHE-CONTROL: max-age=1800\r\n" +
+            "EXT:\r\n" +
+            "LOCATION: \(locationURL.absoluteString)\r\n" +
+            "ST: urn:schemas-upnp-org:service:AVTransport:1\r\n" +
+            "USN: uuid:stb-999::urn:schemas-upnp-org:service:AVTransport:1\r\n\r\n"
+        let responseBytes = Array(responseString.utf8)
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            defer {
+                close(fd)
+                self?.finishedSemaphore.signal()
+            }
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            while true {
+                guard let self else { break }
+                self.lock.lock()
+                let shouldStop = self.stopped
+                self.lock.unlock()
+                if shouldStop { break }
+
+                var pfd = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+                let ready = Darwin.poll(&pfd, 1, 25)
+                guard ready > 0, (pfd.revents & Int16(POLLIN)) != 0 else { continue }
+
+                var sender = sockaddr_in()
+                var senderLen = socklen_t(MemoryLayout<sockaddr_in>.size)
+                let received = buffer.withUnsafeMutableBytes { rawBuffer in
+                    withUnsafeMutablePointer(to: &sender) { ptr in
+                        ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
+                            recvfrom(fd, rawBuffer.baseAddress, rawBuffer.count, 0, sa, &senderLen)
+                        }
+                    }
+                }
+                if received > 0 {
+                    let msg = String(decoding: buffer[..<received], as: UTF8.self)
+                    if msg.contains("M-SEARCH") {
+                        responseBytes.withUnsafeBytes { rawResp in
+                            withUnsafePointer(to: &sender) { ptr in
+                                ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
+                                    _ = sendto(fd, rawResp.baseAddress, rawResp.count, 0, sa, senderLen)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    func stop() {
+        lock.lock()
+        let alreadyStopped = stopped
+        stopped = true
+        lock.unlock()
+        if !alreadyStopped {
+            _ = finishedSemaphore.wait(timeout: .now() + 1.0)
+        }
     }
 }

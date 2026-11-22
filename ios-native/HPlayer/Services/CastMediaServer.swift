@@ -23,6 +23,75 @@ struct CastMediaDescriptor {
     }
 }
 
+/// 本机当前活跃局域网网卡信息（IPv4 地址、子网掩码与网卡索引）。
+struct WiFiNetworkInfo: Equatable, Sendable {
+    let ip: String
+    let netmask: String
+    let interfaceName: String
+    let interfaceIndex: UInt32
+
+    /// 所在子网的定向广播地址（如 192.168.1.255）。
+    var broadcastAddress: String? {
+        guard let ipHost = Self.ipv4HostOrder(ip) else { return nil }
+        let rawMask = Self.ipv4HostOrder(netmask) ?? 0xFFFF_FF00
+        let maskHost = (rawMask == 0 || rawMask == 0xFFFF_FFFF) ? UInt32(0xFFFF_FF00) : rawMask
+        let broadcast = (ipHost & maskHost) | ~maskHost
+        return Self.ipv4String(fromHostOrder: broadcast)
+    }
+
+    func unicastSweepTargets(maxHosts: Int = 254) -> [String] {
+        Self.unicastSweepTargets(ip: ip, netmask: netmask, maxHosts: maxHosts)
+    }
+
+    /// 计算同网段可单播探测的主机 IPv4 列表（自动排除本机 IP，大网段收敛到所在 /24）。
+    static func unicastSweepTargets(ip: String, netmask: String, maxHosts: Int = 254) -> [String] {
+        guard let ipHost = ipv4HostOrder(ip) else { return [] }
+        let rawMask = ipv4HostOrder(netmask) ?? 0xFFFF_FF00
+        let maskHost = (rawMask == 0 || rawMask == 0xFFFF_FFFF) ? UInt32(0xFFFF_FF00) : rawMask
+
+        let network = ipHost & maskHost
+        let broadcast = network | ~maskHost
+        guard broadcast > network + 1 else { return [] }
+
+        let hostCount = UInt64(broadcast) - UInt64(network) - 1
+        let startHost: UInt32
+        let endHost: UInt32
+        if hostCount <= UInt64(max(1, maxHosts)) {
+            startHost = network + 1
+            endHost = broadcast - 1
+        } else {
+            let sub24 = ipHost & 0xFFFF_FF00
+            startHost = sub24 + 1
+            endHost = sub24 + 254
+        }
+
+        var targets: [String] = []
+        targets.reserveCapacity(Int(endHost - startHost + 1))
+        var candidate = startHost
+        while candidate <= endHost {
+            if candidate != ipHost, let text = ipv4String(fromHostOrder: candidate) {
+                targets.append(text)
+            }
+            if candidate == UInt32.max { break }
+            candidate += 1
+        }
+        return targets
+    }
+
+    private static func ipv4HostOrder(_ string: String) -> UInt32? {
+        var addr = in_addr()
+        guard inet_pton(AF_INET, string, &addr) == 1 else { return nil }
+        return UInt32(bigEndian: addr.s_addr)
+    }
+
+    private static func ipv4String(fromHostOrder hostOrder: UInt32) -> String? {
+        var addr = in_addr(s_addr: hostOrder.bigEndian)
+        var buffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+        guard inet_ntop(AF_INET, &addr, &buffer, socklen_t(INET_ADDRSTRLEN)) != nil else { return nil }
+        return String(cString: buffer)
+    }
+}
+
 /// 隔空播放遇不支持封装格式（如 115 原画 MKV）时的降级流解析结果。
 struct CastResolvedStream {
     let url: URL
@@ -71,14 +140,15 @@ final class CastMediaServer: NSObject, URLSessionDelegate, @unchecked Sendable {
 
     // MARK: - 网络地址发现
 
-    /// 获取本机当前 Wi-Fi（优先 en0，回退 en*）的 IPv4 地址。
-    static func wifiIPv4Address() -> String? {
+    /// 获取本机当前 Wi-Fi（优先 en0，回退 en* 与个人热点 bridge100）的网卡与子网信息。
+    static func wifiNetworkInfo() -> WiFiNetworkInfo? {
         var ifaddrPointer: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&ifaddrPointer) == 0, let first = ifaddrPointer else { return nil }
         defer { freeifaddrs(ifaddrPointer) }
 
-        var preferredEn0: String?
-        var fallbackEn: String?
+        var preferredEn0: WiFiNetworkInfo?
+        var fallbackEn: WiFiNetworkInfo?
+        var fallbackBridge: WiFiNetworkInfo?
         var cursor: UnsafeMutablePointer<ifaddrs>? = first
         while let current = cursor {
             defer { cursor = current.pointee.ifa_next }
@@ -94,14 +164,37 @@ final class CastMediaServer: NSObject, URLSessionDelegate, @unchecked Sendable {
             let ip = String(cString: buffer)
             guard !ip.isEmpty, !ip.hasPrefix("169.254.") else { continue }
 
+            var netmask = "255.255.255.0"
+            if let maskPointer = current.pointee.ifa_netmask,
+               maskPointer.pointee.sa_family == UInt8(AF_INET) {
+                var maskAddr = maskPointer.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee.sin_addr }
+                var maskBuffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+                if inet_ntop(AF_INET, &maskAddr, &maskBuffer, socklen_t(INET_ADDRSTRLEN)) != nil {
+                    let parsedMask = String(cString: maskBuffer)
+                    if !parsedMask.isEmpty {
+                        netmask = parsedMask
+                    }
+                }
+            }
+
+            let ifIndex = if_nametoindex(current.pointee.ifa_name)
+            let info = WiFiNetworkInfo(ip: ip, netmask: netmask, interfaceName: name, interfaceIndex: ifIndex)
+
             if name == "en0" {
-                preferredEn0 = ip
+                preferredEn0 = info
                 break
             } else if name.hasPrefix("en"), fallbackEn == nil {
-                fallbackEn = ip
+                fallbackEn = info
+            } else if name == "bridge100", fallbackBridge == nil {
+                fallbackBridge = info
             }
         }
-        return preferredEn0 ?? fallbackEn
+        return preferredEn0 ?? fallbackEn ?? fallbackBridge
+    }
+
+    /// 获取本机当前 Wi-Fi（优先 en0，回退 en*）的 IPv4 地址。
+    static func wifiIPv4Address() -> String? {
+        wifiNetworkInfo()?.ip
     }
 
     var currentLANHost: String? {
