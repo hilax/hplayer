@@ -272,6 +272,17 @@ struct MagnetPosterCard: View {
                             MagnetCodeChip(code: movie.code).padding(5)
                         }
                     }
+                    .overlay(alignment: .topTrailing) {
+                        if movie.isFresh {
+                            Text("新种")
+                                .font(.scaled(9, weight: .bold))
+                                .foregroundStyle(Theme.onPrimary)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 2)
+                                .background(Theme.accent, in: Capsule())
+                                .padding(5)
+                        }
+                    }
 
                 // 和动漫、片库的海报卡同一套字：13pt 标题（两行，番号已经在封面上）、11pt 次要信息
                 Text(movie.title)
@@ -313,25 +324,36 @@ struct MagnetPosterGrid: View {
     }
 }
 
-/// 影片行：左边封面，右边番号、标题、女优与日期。最热榜带序号，搜索结果不带。
+/// 最新出种横滑货架（Sukebei RSS）。
+struct MagnetFreshShelf: View {
+    let movies: [MagnetSearchItem]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            MagnetSectionHeader(title: "最新出种", trailing: "Sukebei RSS")
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(alignment: .top, spacing: 10) {
+                    ForEach(movies) { movie in
+                        MagnetPosterCard(movie: movie)
+                            .frame(width: 108)
+                    }
+                }
+                .padding(.horizontal, Theme.contentInset)
+            }
+            .padding(.horizontal, -Theme.contentInset)
+        }
+    }
+}
+
+/// 影片行：左边封面，右边番号、标题、女优与日期。
 struct MagnetListRow: View {
     let movie: MagnetSearchItem
-    var rank: Int?
 
     var body: some View {
         NavigationLink {
             MagnetDetailView(item: movie)
         } label: {
             HStack(alignment: .top, spacing: 10) {
-                if let rank {
-                    Text("\(rank)")
-                        .font(.display(20))
-                        .foregroundStyle(rank <= 3 ? Theme.accent : Color.secondary)
-                        .frame(width: 24)
-                        .padding(.top, 2)
-                        .accessibilityLabel("第 \(rank) 名")
-                }
-
                 MagnetCover(url: movie.coverURL, code: movie.code)
                     .frame(width: 72, height: 96)
                     .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
@@ -341,10 +363,22 @@ struct MagnetListRow: View {
                     }
 
                 VStack(alignment: .leading, spacing: 4) {
-                    if !movie.code.isEmpty {
-                        Text(movie.code)
-                            .font(.scaled(15, weight: .bold))
-                            .foregroundStyle(Theme.textPrimary)
+                    if !movie.code.isEmpty || movie.isFresh {
+                        HStack(spacing: 6) {
+                            if !movie.code.isEmpty {
+                                Text(movie.code)
+                                    .font(.scaled(15, weight: .bold))
+                                    .foregroundStyle(Theme.textPrimary)
+                            }
+                            if movie.isFresh {
+                                Text("新种")
+                                    .font(.scaled(10, weight: .bold))
+                                    .foregroundStyle(Theme.onPrimary)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Theme.accent, in: Capsule())
+                            }
+                        }
                     }
 
                     Text(movie.title)

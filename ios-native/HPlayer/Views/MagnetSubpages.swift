@@ -394,8 +394,8 @@ struct StudioMoviesView: View {
         errorText = nil
         paging = PagingState()
         do {
-            let list = try await JavBusSource.shared.fetchStudio(studio, page: 1)
-            movies = mergeUnique([], with: list).merged
+            let list = try await MagnetAggregator.shared.fetchStudio(studio, page: 1)
+            movies = MagnetAggregator.mergeUniqueMovies([], with: list).merged
             paging.hasMore = !list.isEmpty
             isLoading = false
         } catch {
@@ -412,8 +412,8 @@ struct StudioMoviesView: View {
         paging.loadMoreFailed = false
         let nextPage = paging.page + 1
         do {
-            let list = try await JavBusSource.shared.fetchStudio(studio, page: nextPage)
-            let result = mergeUnique(movies, with: list)
+            let list = try await MagnetAggregator.shared.fetchStudio(studio, page: nextPage)
+            let result = MagnetAggregator.mergeUniqueMovies(movies, with: list)
             movies = result.merged
             paging.hasMore = result.added > 0
             paging.page = nextPage
@@ -479,6 +479,16 @@ private struct MagnetTorrentCard: View {
                 .foregroundStyle(Theme.textSecondary)
                 .lineLimit(2)
                 .multilineTextAlignment(.leading)
+
+            let metaParts = [
+                torrent.source,
+                torrent.seeders.map { "\($0) 做种" },
+            ].compactMap { $0 }
+            if !metaParts.isEmpty {
+                Text(metaParts.joined(separator: " · "))
+                    .font(.caption2)
+                    .foregroundStyle(Theme.textTertiary)
+            }
 
             MagnetPlayActions(magnet: torrent.magnetURL, title: title, onPlay: onPlay)
         }
@@ -648,7 +658,7 @@ struct MagnetDetailView: View {
                         .foregroundStyle(Theme.textSecondary)
                 }
 
-                Text("已按中文字幕、高清优先排序")
+                Text("已按中文字幕、高清、做种优先排序")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .padding(.top, 4)
@@ -680,7 +690,7 @@ struct MagnetDetailView: View {
         isLoading = true
         errorText = nil
         do {
-            let (actresses, torrents) = try await JavBusSource.shared.fetchDetailInfo(for: item)
+            let (actresses, torrents) = try await MagnetAggregator.shared.fetchDetailInfo(for: item)
             stars = actresses
             magnets = torrents
             isLoading = false

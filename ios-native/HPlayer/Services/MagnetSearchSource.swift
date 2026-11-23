@@ -1,11 +1,10 @@
 import Foundation
 
-/// 分类浏览类型：最新、专题（按片商）、女优、最热。
+/// 分类浏览类型：最新、专题（按片商）、女优。
 enum MagnetCategory: String, CaseIterable, Identifiable, Sendable {
     case latest
     case topics
     case actresses
-    case hot
 
     var id: String { rawValue }
 
@@ -14,7 +13,6 @@ enum MagnetCategory: String, CaseIterable, Identifiable, Sendable {
         case .latest: return "最新"
         case .topics: return "专题"
         case .actresses: return "女优"
-        case .hot: return "最热"
         }
     }
 }
@@ -98,6 +96,27 @@ enum MagnetStudio: String, CaseIterable, Identifiable, Sendable {
         case .kmp: return "MKMP · VRKM · UMSO"
         }
     }
+
+    /// Sukebei RSS 检索使用的现役番号前缀（避免已停用老前缀稀释 75 条窗口）。
+    var sukebeiPrefixes: [String] {
+        switch self {
+        case .s1: return ["SONE", "SNOS"]
+        case .moodyz: return ["MIDA", "MIMK"]
+        case .ideaPocket: return ["IPZZ", "IPBZ"]
+        case .sod: return ["START", "STARS", "SDAB"]
+        case .prestige: return ["ABF", "ABW"]
+        case .attackers: return ["ATID", "ADN", "SAME"]
+        case .eBody: return ["EBWH", "EYAN"]
+        case .kawaii: return ["CAWD", "CAWB", "KAVR"]
+        case .faleno: return ["FNS", "FSDSS", "FCDSS"]
+        case .kmp: return ["MKMP", "VRKM", "UMSO"]
+        }
+    }
+
+    /// 传给 Sukebei RSS `q=` 参数的 OR 查询串。
+    var sukebeiQuery: String {
+        sukebeiPrefixes.joined(separator: "|")
+    }
 }
 
 /// 演员/女优资料条目。
@@ -132,6 +151,8 @@ struct MagnetSearchItem: Identifiable, Equatable, Hashable, Sendable {
     let releaseDate: String?
     let detailPath: String
     let stars: [MagnetStarItem]
+    let isFresh: Bool
+    let prefetchedMagnets: [MagnetTorrentItem]
 
     init(
         id: String? = nil,
@@ -140,7 +161,9 @@ struct MagnetSearchItem: Identifiable, Equatable, Hashable, Sendable {
         coverURL: URL?,
         releaseDate: String? = nil,
         detailPath: String,
-        stars: [MagnetStarItem] = []
+        stars: [MagnetStarItem] = [],
+        isFresh: Bool = false,
+        prefetchedMagnets: [MagnetTorrentItem] = []
     ) {
         self.id = id ?? (detailPath.isEmpty ? code : detailPath)
         self.code = code
@@ -149,19 +172,8 @@ struct MagnetSearchItem: Identifiable, Equatable, Hashable, Sendable {
         self.releaseDate = releaseDate
         self.detailPath = detailPath
         self.stars = stars
-    }
-
-    /// 换上已知的主演名单（最热榜用它标出这部片是哪位女优带来的）。
-    func withStars(_ stars: [MagnetStarItem]) -> MagnetSearchItem {
-        MagnetSearchItem(
-            id: id,
-            code: code,
-            title: title,
-            coverURL: coverURL,
-            releaseDate: releaseDate,
-            detailPath: detailPath,
-            stars: stars
-        )
+        self.isFresh = isFresh
+        self.prefetchedMagnets = prefetchedMagnets
     }
 }
 
@@ -174,6 +186,8 @@ struct MagnetTorrentItem: Identifiable, Equatable, Hashable, Sendable {
     let date: String?
     let isHD: Bool
     let hasSubtitles: Bool
+    let seeders: Int?
+    let source: String?
 
     init(
         id: String? = nil,
@@ -182,7 +196,9 @@ struct MagnetTorrentItem: Identifiable, Equatable, Hashable, Sendable {
         size: String,
         date: String? = nil,
         isHD: Bool = false,
-        hasSubtitles: Bool = false
+        hasSubtitles: Bool = false,
+        seeders: Int? = nil,
+        source: String? = nil
     ) {
         self.id = id ?? magnetURL
         self.magnetURL = magnetURL
@@ -191,6 +207,8 @@ struct MagnetTorrentItem: Identifiable, Equatable, Hashable, Sendable {
         self.date = date
         self.isHD = isHD
         self.hasSubtitles = hasSubtitles
+        self.seeders = seeders
+        self.source = source
     }
 }
 
@@ -202,7 +220,6 @@ protocol MagnetSearchSource: Sendable {
     func fetchMagnets(for item: MagnetSearchItem) async throws -> [MagnetTorrentItem]
     func fetchCategory(_ category: MagnetCategory, page: Int) async throws -> [MagnetSearchItem]
     func fetchStudio(_ studio: MagnetStudio, page: Int) async throws -> [MagnetSearchItem]
-    func fetchHot() async throws -> [MagnetSearchItem]
     func fetchActresses(page: Int) async throws -> [MagnetStarItem]
     func searchActresses(name: String) async throws -> [MagnetStarItem]
     func fetchStarDetail(starPath: String, page: Int) async throws -> (star: MagnetStarItem?, movies: [MagnetSearchItem])

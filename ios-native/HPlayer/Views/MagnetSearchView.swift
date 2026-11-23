@@ -47,8 +47,8 @@ func mergeUnique<T: Identifiable>(_ existing: [T], with new: [T]) -> (merged: [T
 
 // MARK: - 磁力聚合主页
 
-/// 磁力聚合页面：按番号/女优搜索，按「最新 / 专题 / 女优 / 最热」分类浏览。
-/// 四个分类左右滑动切换（PagedHeaderContainer）：分类条和搜索框是固定头部，往上滑时分类条淡出、搜索框固定在顶端。
+/// 磁力聚合页面：按番号/女优搜索，按「最新 / 专题 / 女优」分类浏览。
+/// 三个分类左右滑动切换（PagedHeaderContainer）：分类条和搜索框是固定头部，往上滑时分类条淡出、搜索框固定在顶端。
 /// 每个分类的数据各存各的，滑过去不用重新加载。搜索或粘贴了链接时，结果盖在分页上面。
 /// 影片、女优、片商都是普通的逐层跳转（左上角返回上一层）；在磁力详情页点播放，
 /// 播放页盖在详情页上面，关掉就回到详情页。版式见 docs/ui-design-system.md「磁力聚合」。
@@ -69,6 +69,9 @@ struct MagnetSearchView: View {
 
     // 分类浏览数据：每个分类各存一份
     @State private var movies: [MagnetCategory: [MagnetSearchItem]] = [:]
+    @State private var freshMovies: [MagnetSearchItem] = []
+    @State private var freshLoading = false
+    @State private var freshTask: Task<Void, Never>?
     @State private var stars: [MagnetStarItem] = []
     @State private var paging: [MagnetCategory: PagingState] = [:]
     @State private var loading: Set<MagnetCategory> = []
@@ -140,9 +143,13 @@ struct MagnetSearchView: View {
         }
     }
 
+    private var displayedFreshMovies: [MagnetSearchItem] {
+        MagnetAggregator.enrichSukebeiShelf(freshMovies, with: movies[.latest] ?? [])
+    }
+
     // MARK: - 头部
 
-    /// 第一行：分类（最新 / 专题 / 女优 / 最热，和首页频道条同一个样子），右边「播放记录」。
+    /// 第一行：分类（最新 / 专题 / 女优，和首页频道条同一个样子），右边「播放记录」。
     /// 粘贴链接不再单独占一个入口：搜索框认出磁力链接 / 哈希就直接给出解析面板（右边自带粘贴按钮）。
     private var topRow: some View {
         HStack(spacing: 4) {
@@ -228,31 +235,24 @@ struct MagnetSearchView: View {
 
     @ViewBuilder
     private func categoryContent(_ category: MagnetCategory) -> some View {
-        if category == .topics {
+        switch category {
+        case .topics:
             topicsContent
-        } else if loading.contains(category) && isEmpty(category) {
-            MagnetLoadingView(style: loadingStyle(category))
-        } else if let error = errors[category], isEmpty(category) {
-            MagnetErrorState(message: error, retry: { loadCategory(category) })
-        } else {
-            switch category {
-            case .actresses: actressesContent
-            case .hot: hotContent
-            case .latest, .topics: latestContent
+        case .latest:
+            latestContent
+        case .actresses:
+            if loading.contains(.actresses) && stars.isEmpty {
+                MagnetLoadingView(style: .avatars)
+            } else if let error = errors[.actresses], stars.isEmpty {
+                MagnetErrorState(message: error, retry: { loadCategory(.actresses) })
+            } else {
+                actressesContent
             }
         }
     }
 
     private func isEmpty(_ category: MagnetCategory) -> Bool {
         category == .actresses ? stars.isEmpty : (movies[category] ?? []).isEmpty
-    }
-
-    private func loadingStyle(_ category: MagnetCategory) -> MagnetLoadingView.Style {
-        switch category {
-        case .actresses: return .avatars
-        case .hot: return .list
-        case .latest, .topics: return .grid
-        }
     }
 
     /// 点轮播进磁力详情
@@ -327,20 +327,46 @@ struct MagnetSearchView: View {
         }
     }
 
-    // MARK: - 四个分类
+    // MARK: - 三个分类
 
-    /// 最新：「最新上架」标题 + 三列海报网格，分页加载。
+    /// 最新：「最新出种」横滑货架（Sukebei RSS）+「最新上架」三列海报网格，分页加载。
     private var latestContent: some View {
+        let fresh = displayedFreshMovies
         let list = movies[.latest] ?? []
         let state = paging[.latest] ?? PagingState()
+        let isLatestLoading = loading.contains(.latest)
+        let latestError = errors[.latest]
+
         return Group {
-            if list.isEmpty {
-                emptyCategory
+            if fresh.isEmpty && list.isEmpty {
+                if isLatestLoading || freshLoading {
+                    MagnetLoadingView(style: .grid)
+                } else if let latestError {
+                    MagnetErrorState(message: latestError, retry: { loadCategory(.latest) })
+                } else {
+                    emptyCategory
+                }
             } else {
-                VStack(alignment: .leading, spacing: 12) {
-                    MagnetSectionHeader(title: "最新上架", trailing: "点按查看磁力")
-                    MagnetPosterGrid(movies: list, loadMore: { loadMore(.latest) })
-                    PagingFooter(isLoading: state.isLoadingMore, failed: state.loadMoreFailed, retry: { loadMore(.latest) })
+                VStack(alignment: .leading, spacing: 24) {
+                    if !fresh.isEmpty {
+                        MagnetFreshShelf(movies: fresh)
+                    }
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        MagnetSectionHeader(title: "最新上架", trailing: "点按查看磁力")
+                        if list.isEmpty {
+                            if isLatestLoading {
+                                MagnetLoadingView(style: .grid)
+                            } else if let latestError {
+                                MagnetErrorState(message: latestError, retry: { loadCategory(.latest) })
+                            } else {
+                                emptyCategory
+                            }
+                        } else {
+                            MagnetPosterGrid(movies: list, loadMore: { loadMore(.latest) })
+                            PagingFooter(isLoading: state.isLoadingMore, failed: state.loadMoreFailed, retry: { loadMore(.latest) })
+                        }
+                    }
                 }
             }
         }
@@ -405,42 +431,6 @@ struct MagnetSearchView: View {
         }
     }
 
-    /// 最热：一次算好的榜单（没有下一页），顶部说明口径，前三名序号是强调色。
-    private var hotContent: some View {
-        let list = movies[.hot] ?? []
-        return VStack(alignment: .leading, spacing: 18) {
-            // 口径：站点没有榜单页，这里是按女优人气排的近期主演新作。
-            HStack(alignment: .top, spacing: 10) {
-                Image(appIconNamed: AppIcon.info.name)
-                    .font(.scaled(15, weight: .semibold))
-                    .foregroundStyle(Theme.accent)
-                    .padding(.top, 1)
-                Text("站点没有月榜。这里取人气靠前的女优，合并她们近 \(JavBusSource.hotWindowDays) 天已发行的主演新作（不含合集），按女优人气排序。")
-                    .font(.caption)
-                    .foregroundStyle(Theme.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous))
-
-            if list.isEmpty {
-                emptyCategory
-            } else {
-                LazyVStack(spacing: 14) {
-                    ForEach(Array(list.enumerated()), id: \.element.id) { index, movie in
-                        MagnetListRow(movie: movie, rank: index + 1)
-                    }
-                }
-
-                Text("已显示全部")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, minHeight: 40)
-            }
-        }
-    }
-
     private var emptyCategory: some View {
         MagnetEmptyState(
             icon: .archive,
@@ -463,6 +453,9 @@ struct MagnetSearchView: View {
         paging[category] = PagingState()
         errors[category] = nil
         loading.insert(category)
+        if category == .latest {
+            loadFreshLatest()
+        }
         tasks[category] = Task { @MainActor in
             do {
                 switch category {
@@ -471,12 +464,11 @@ struct MagnetSearchView: View {
                     guard !Task.isCancelled else { return }
                     stars = mergeUnique([], with: result).merged
                     paging[category]?.hasMore = !result.isEmpty
-                case .latest, .hot:
-                    let result = try await JavBusSource.shared.fetchCategory(category, page: 1)
+                case .latest:
+                    let result = try await MagnetAggregator.shared.fetchLatest(page: 1)
                     guard !Task.isCancelled else { return }
-                    movies[category] = mergeUnique([], with: result).merged
-                    // 最热是一次算好的榜单，没有下一页。
-                    paging[category]?.hasMore = category == .latest && !result.isEmpty
+                    movies[category] = MagnetAggregator.mergeUniqueMovies([], with: result).merged
+                    paging[category]?.hasMore = !result.isEmpty
                 case .topics:
                     break
                 }
@@ -485,6 +477,22 @@ struct MagnetSearchView: View {
                 guard !Task.isCancelled, !(error is CancellationError) else { return }
                 errors[category] = error.localizedDescription
                 loading.remove(category)
+            }
+        }
+    }
+
+    private func loadFreshLatest() {
+        freshTask?.cancel()
+        freshLoading = true
+        freshTask = Task { @MainActor in
+            do {
+                let items = try await MagnetAggregator.shared.fetchFreshLatest()
+                guard !Task.isCancelled else { return }
+                freshMovies = items
+                freshLoading = false
+            } catch {
+                guard !Task.isCancelled else { return }
+                freshLoading = false
             }
         }
     }
@@ -506,12 +514,12 @@ struct MagnetSearchView: View {
                     stars = merged.merged
                     paging[category]?.hasMore = merged.added > 0
                 case .latest:
-                    let result = try await JavBusSource.shared.fetchCategory(category, page: nextPage)
+                    let result = try await MagnetAggregator.shared.fetchLatest(page: nextPage)
                     guard !Task.isCancelled else { return }
-                    let merged = mergeUnique(movies[category] ?? [], with: result)
+                    let merged = MagnetAggregator.mergeUniqueMovies(movies[category] ?? [], with: result)
                     movies[category] = merged.merged
                     paging[category]?.hasMore = merged.added > 0
-                case .topics, .hot:
+                case .topics:
                     paging[category]?.hasMore = false
                 }
                 paging[category]?.page = nextPage
@@ -547,10 +555,10 @@ struct MagnetSearchView: View {
 
         searchTask = Task { @MainActor in
             do {
-                // 影片与女优并发搜索；女优搜索失败不影响影片结果。
-                let result = try await JavBusSource.shared.searchAll(keyword: q)
+                // 影片（JavBus + Sukebei）与女优并发搜索；单源失败不影响另一边结果。
+                let result = try await MagnetAggregator.shared.searchAll(keyword: q)
                 guard !Task.isCancelled else { return }
-                searchMovies = mergeUnique([], with: result.movies).merged
+                searchMovies = MagnetAggregator.mergeUniqueMovies([], with: result.movies).merged
                 matchedStars = result.stars
                 searchPaging.hasMore = !result.movies.isEmpty
                 isSearching = false
@@ -573,7 +581,7 @@ struct MagnetSearchView: View {
             do {
                 let movies = try await JavBusSource.shared.search(keyword: q, page: nextPage)
                 guard !Task.isCancelled else { return }
-                let result = mergeUnique(searchMovies, with: movies)
+                let result = MagnetAggregator.mergeUniqueMovies(searchMovies, with: movies)
                 searchMovies = result.merged
                 searchPaging.hasMore = result.added > 0
                 searchPaging.page = nextPage

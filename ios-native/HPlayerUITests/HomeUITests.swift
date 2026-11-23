@@ -96,14 +96,15 @@ final class HomeUITests: XCTestCase {
         XCTAssertFalse(app.buttons["cloud.transfers"].exists, "The transfer center is gone")
         XCTAssertFalse(app.buttons["cloud.local"].exists, "Local videos moved to the Mine tab")
         XCTAssertFalse(app.buttons["library.manage"].exists, "Library management lives in the Mine tab only")
-        // 2.0：磁力是一级 Tab。磁力聚合：搜索框 + 四个分类标签；专题是固定的片商入口，不依赖网络
+        // 2.0：磁力是一级 Tab。磁力聚合：搜索框 + 三个分类标签；专题是固定的片商入口，不依赖网络
         app.tabButton("磁力").tap()
         XCTAssertTrue(app.textFields["magnet.search"].waitForExistence(timeout: 5), "Magnet tab offers one search field")
         XCTAssertFalse(app.buttons["magnet.linkPlayer"].exists, "Pasting a link goes through the search field; no separate link-player entry")
         XCTAssertTrue(app.buttons["magnet.history"].exists, "Magnet tab offers its play history")
-        for key in ["latest", "topics", "actresses", "hot"] {
+        for key in ["latest", "topics", "actresses"] {
             XCTAssertTrue(app.buttons["magnet.category.\(key)"].exists, "Category tab \(key) exists")
         }
+        XCTAssertFalse(app.buttons["magnet.category.hot"].exists, "Hot category is removed")
         app.buttons["magnet.category.topics"].tap()
         XCTAssertTrue(app.buttons["magnet.studio.s1"].waitForExistence(timeout: 5), "Topics lists the studios")
         // 智能输入：输入框认出信息哈希时直接给出解析面板，不去站点搜索
