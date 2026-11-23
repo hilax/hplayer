@@ -169,7 +169,7 @@ private struct MagnetHistoryRow: View {
         if let title = item.lastFileTitle, item.videoCount > 1 { parts.append("看到：\(title)") }
         let size = formatSize(Int(clamping: item.totalSize))
         if !size.isEmpty { parts.append(size) }
-        parts.append(item.updatedAt.formatted(.relative(presentation: .named)))
+        parts.append(WatchedTimeText.text(item.updatedAt))
         return parts.joined(separator: " · ")
     }
 }

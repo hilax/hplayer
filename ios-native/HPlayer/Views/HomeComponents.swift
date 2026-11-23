@@ -269,6 +269,37 @@ func playbackTimeText(_ value: Double) -> String {
         : String(format: "%02d:%02d", seconds / 60, seconds % 60)
 }
 
+/// 继续观看与播放历史的时间：固定简体中文 + 24 小时制时间，不受 App 默认区域影响。
+/// 示例：今天 14:30、昨天 22:08、前天 19:45、11月18日 09:15、2025年12月31日 08:05。
+enum WatchedTimeText {
+    static func text(_ date: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
+        let clock = clockText(date, calendar: calendar)
+        if calendar.isDate(date, inSameDayAs: now) { return "今天 \(clock)" }
+        if let yesterday = calendar.date(byAdding: .day, value: -1, to: now),
+           calendar.isDate(date, inSameDayAs: yesterday) {
+            return "昨天 \(clock)"
+        }
+        if let dayBeforeYesterday = calendar.date(byAdding: .day, value: -2, to: now),
+           calendar.isDate(date, inSameDayAs: dayBeforeYesterday) {
+            return "前天 \(clock)"
+        }
+        let comps = calendar.dateComponents([.year, .month, .day], from: date)
+        let nowYear = calendar.component(.year, from: now)
+        if let year = comps.year, let month = comps.month, let day = comps.day {
+            if year == nowYear {
+                return "\(month)月\(day)日 \(clock)"
+            }
+            return "\(year)年\(month)月\(day)日 \(clock)"
+        }
+        return clock
+    }
+
+    private static func clockText(_ date: Date, calendar: Calendar) -> String {
+        let comps = calendar.dateComponents([.hour, .minute], from: date)
+        return String(format: "%02d:%02d", comps.hour ?? 0, comps.minute ?? 0)
+    }
+}
+
 // MARK: - 海报与卡片
 
 extension View {

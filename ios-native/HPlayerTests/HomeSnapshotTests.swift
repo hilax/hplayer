@@ -110,6 +110,32 @@ final class HomeSnapshotTests: XCTestCase {
         XCTAssertTrue(FeaturedStore(defaults: defaults).hidden.isEmpty)
     }
 
+    func testWatchedTimeTextFormatsSimplifiedChineseWithTime() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        func date(_ year: Int, _ month: Int, _ day: Int, _ hour: Int, _ minute: Int) -> Date {
+            DateComponents(calendar: calendar, year: year, month: month, day: day, hour: hour, minute: minute).date!
+        }
+
+        let now = date(2026, 11, 23, 14, 0)
+        let samples: [(Date, String)] = [
+            (date(2026, 11, 23, 9, 5), "今天 09:05"),
+            (date(2026, 11, 22, 22, 8), "昨天 22:08"),
+            (date(2026, 11, 21, 19, 45), "前天 19:45"),
+            (date(2026, 11, 18, 8, 30), "11月18日 08:30"),
+            (date(2025, 12, 31, 8, 5), "2025年12月31日 08:05"),
+        ]
+
+        for (target, expected) in samples {
+            let formatted = WatchedTimeText.text(target, now: now, calendar: calendar)
+            XCTAssertEqual(formatted, expected)
+            XCTAssertFalse(
+                formatted.contains(where: { $0.isASCII && $0.isLetter }),
+                "WatchedTimeText must not output English words: \(formatted)"
+            )
+        }
+    }
+
     private func item(_ name: String, metadata: MediaMetadata?) -> HomeMediaItem {
         HomeMediaItem(media: LibraryMedia(local: LocalMedia(url: URL(fileURLWithPath: "/tmp/\(name)"), size: 100, modified: .distantPast)), metadata: metadata)
     }

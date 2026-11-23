@@ -42,8 +42,10 @@ struct AnimeBrowseView: View {
                             .background {
                                 if route.allowsFiltering {
                                     GeometryReader { geometry in
-                                        Color.clear.preference(key: BrowseHeaderBottomKey.self,
-                                                               value: geometry.frame(in: .named(Self.space)).maxY)
+                                        let bottom = geometry.size.height > 1
+                                            ? geometry.frame(in: .named(Self.space)).maxY
+                                            : CGFloat.greatestFiniteMagnitude
+                                        Color.clear.preference(key: BrowseHeaderBottomKey.self, value: bottom)
                                     }
                                 }
                             }
@@ -53,7 +55,7 @@ struct AnimeBrowseView: View {
                 }
                 .coordinateSpace(name: Self.space)
                 .scrollIndicators(.hidden)
-                .refreshable { await model.reload() }
+                .refreshable { await model.reload(preservingItems: true) }
                 .onPreferenceChange(BrowseHeaderBottomKey.self) { bottom in
                     let hidden = bottom < 8
                     guard hidden != headerHidden else { return }
@@ -235,13 +237,13 @@ struct AnimeBrowseView: View {
 
     private var countText: String? {
         if let total = model.trustedTotal { return "共 \(total.formatted()) 部" }
-        guard !model.items.isEmpty else { return nil }
+        guard !model.items.isEmpty, model.hasLoaded else { return nil }
         return model.hasMore ? "已找到 \(model.items.count) 部" : "共 \(model.items.count) 部"
     }
 
     private func summaryText(options: AnimeFilterOptions) -> String {
         let parts = model.filter.activeFields.map { AnimeBrowseRows.title(of: $0, in: model.filter, options: options) }
-        if model.isReloading && model.items.isEmpty {
+        if model.showsInitialSkeleton {
             return parts.isEmpty ? "正在加载…" : parts.joined(separator: " · ")
         }
         return (parts + [countText].compactMap { $0 }).joined(separator: " · ")
@@ -257,7 +259,7 @@ struct AnimeBrowseView: View {
 
     @ViewBuilder
     private func content(_ metrics: Metrics) -> some View {
-        if model.isReloading && model.items.isEmpty {
+        if model.showsInitialSkeleton {
             LazyVGrid(columns: columns(metrics), alignment: .leading, spacing: 16) {
                 ForEach(0..<9, id: \.self) { _ in AnimePosterSkeleton(width: metrics.cell) }
             }

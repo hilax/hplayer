@@ -98,4 +98,53 @@ final class AnimeBrowseFilterTests: XCTestCase {
         XCTAssertTrue(model.filter.admits(item(2, year: "2026", isend: 0), knownYears: []))
         XCTAssertTrue(AnimeBrowseRoute(channelId: nil, title: "最多播放", sort: "hits").allowsFiltering)
     }
+
+    func testUnseededModelShowsInitialSkeletonBeforeFirstLoad() {
+        let model = AnimeBrowseModel(route: .newReleases, initialItems: [])
+        XCTAssertTrue(model.items.isEmpty)
+        XCTAssertFalse(model.hasLoaded)
+        XCTAssertFalse(model.isReloading)
+        XCTAssertTrue(model.showsInitialSkeleton)
+    }
+
+    func testSeedMatchesHomeFeedRoutesAndDeduplicates() {
+        let trending = [item(1, year: "2026"), item(1, year: "2026"), item(2, year: "2025")]
+        let latest = [item(10, year: "2026"), item(11, year: "2026")]
+
+        let hotSeed = AnimeBrowseModel.seed(
+            for: .newReleases,
+            trending: trending,
+            trendingTotal: 120,
+            latest: latest,
+            latestTotal: 80
+        )
+        XCTAssertEqual(hotSeed.items.map(\.id), [1, 2])
+        XCTAssertEqual(hotSeed.total, 120)
+
+        let freshSeed = AnimeBrowseModel.seed(
+            for: AnimeBrowseRoute(channelId: nil, title: "最新更新", sort: "addtime"),
+            trending: trending,
+            trendingTotal: 120,
+            latest: latest,
+            latestTotal: 80
+        )
+        XCTAssertEqual(freshSeed.items.map(\.id), [10, 11])
+        XCTAssertEqual(freshSeed.total, 80)
+
+        let channelSeed = AnimeBrowseModel.seed(
+            for: AnimeBrowseRoute(channelId: 1, title: "日漫", sort: "hits"),
+            trending: trending,
+            trendingTotal: 120,
+            latest: latest,
+            latestTotal: 80
+        )
+        XCTAssertTrue(channelSeed.items.isEmpty)
+        XCTAssertNil(channelSeed.total)
+
+        let model = AnimeBrowseModel(route: .newReleases, initialItems: trending, initialTotal: 120)
+        XCTAssertEqual(model.items.map(\.id), [1, 2])
+        XCTAssertEqual(model.trustedTotal, 120)
+        XCTAssertFalse(model.hasLoaded)
+        XCTAssertFalse(model.showsInitialSkeleton)
+    }
 }

@@ -732,6 +732,7 @@ private struct HomeContinueShelf: View {
 private final class ContinueEntriesCache: ObservableObject {
     private struct Key: Equatable {
         let revision: Int
+        let dayStart: TimeInterval
         let recentStamps: [String]
         let magnetStamps: [String]
     }
@@ -739,9 +740,11 @@ private final class ContinueEntriesCache: ObservableObject {
     private var lastKey: Key?
     private var cached: [ContinueEntry] = []
 
-    func entries(library: HomeSnapshot, revision: Int, recents: [RecentItem], magnets: [MagnetHistoryItem]) -> [ContinueEntry] {
+    func entries(library: HomeSnapshot, revision: Int, recents: [RecentItem], magnets: [MagnetHistoryItem], now: Date = Date()) -> [ContinueEntry] {
+        let dayStart = Calendar.current.startOfDay(for: now).timeIntervalSince1970
         let key = Key(
             revision: revision,
+            dayStart: dayStart,
             recentStamps: recents.map { "\($0.id)|\($0.position ?? -1)|\($0.playedAt.timeIntervalSince1970)" },
             magnetStamps: magnets.map {
                 let cloud = $0.playedViaCloud.map { $0 ? 1 : 0 } ?? -1
@@ -750,11 +753,11 @@ private final class ContinueEntriesCache: ObservableObject {
         )
         if key == lastKey { return cached }
         lastKey = key
-        cached = Self.build(library: library, recents: recents, magnets: magnets)
+        cached = Self.build(library: library, recents: recents, magnets: magnets, now: now)
         return cached
     }
 
-    private static func build(library: HomeSnapshot, recents: [RecentItem], magnets: [MagnetHistoryItem]) -> [ContinueEntry] {
+    private static func build(library: HomeSnapshot, recents: [RecentItem], magnets: [MagnetHistoryItem], now: Date) -> [ContinueEntry] {
         guard !recents.isEmpty || !magnets.isEmpty else { return [] }
         let byID = Dictionary(library.items.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let localByName = Dictionary(
@@ -780,7 +783,7 @@ private final class ContinueEntriesCache: ObservableObject {
             if let position = recent.position {
                 detail.append("看到 \(playbackTimeText(position))")
             } else {
-                detail.append(recent.playedAt.formatted(.relative(presentation: .named)))
+                detail.append(WatchedTimeText.text(recent.playedAt, now: now))
             }
             let artwork: String
             if let match {
@@ -822,7 +825,7 @@ private final class ContinueEntriesCache: ObservableObject {
             if let progress {
                 detail.append("看到 \(playbackTimeText(progress.seconds))")
             } else {
-                detail.append(item.updatedAt.formatted(.relative(presentation: .named)))
+                detail.append(WatchedTimeText.text(item.updatedAt, now: now))
             }
             let parsed = MediaNameParser.parse(item.name).title
             entries.append(ContinueEntry(

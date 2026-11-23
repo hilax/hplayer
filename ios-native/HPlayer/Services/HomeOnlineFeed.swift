@@ -11,8 +11,10 @@ final class HomeOnlineFeed: ObservableObject {
     @Published private(set) var banners: [AnimeBanner] = []
     /// 热门新番：按播放量排（sort=hits）。接口的 weight 排序和 addtime 一模一样，不能拿来当「热门」。
     @Published private(set) var trending: [AnimeVideoItem] = []
+    @Published private(set) var trendingTotal: Int?
     /// 最新更新：按上架时间排（sort=addtime）
     @Published private(set) var latest: [AnimeVideoItem] = []
+    @Published private(set) var latestTotal: Int?
     private var loadedAt: Date?
     private var loading = false
 
@@ -42,8 +44,14 @@ final class HomeOnlineFeed: ObservableObject {
         async let fresh = try? AnimeClient.shared.fetchVideoList(sort: "addtime", limit: 12, page: 1)
         async let heroes = try? AnimeClient.shared.fetchBanners()
         let (hotResult, freshResult, bannerResult) = await (hot, fresh, heroes)
-        if let items = hotResult?.items, !items.isEmpty { trending = items }
-        if let items = freshResult?.items, !items.isEmpty { latest = items }
+        if let hotResult, !hotResult.items.isEmpty {
+            trending = hotResult.items
+            if hotResult.total > 0 { trendingTotal = hotResult.total }
+        }
+        if let freshResult, !freshResult.items.isEmpty {
+            latest = freshResult.items
+            if freshResult.total > 0 { latestTotal = freshResult.total }
+        }
         if let bannerResult, !bannerResult.isEmpty { banners = bannerResult.filter { !$0.img.isEmpty } }
         if hotResult != nil || freshResult != nil { loadedAt = Date() }
         AnimeWatchlistStore.shared.refreshUpdates(from: trending + latest)
