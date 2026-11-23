@@ -217,8 +217,30 @@ final class AnimeClient {
         }
         let data = try await requestJSON(path: path)
         let records = AnimeJSON.records(in: data)
+        let total = (data as? [String: Any]).flatMap { AnimeJSON.int($0, ["total"]) }
         return AnimeCommentPage(items: records.compactMap { AnimeComment(json: $0, kind: kind) },
-                                rawCount: records.count)
+                                rawCount: records.count,
+                                total: total)
+    }
+
+    static func subCommentsPath(themeCommentID: Int, marker: Int? = nil, limit: Int = 20) -> String {
+        var query = ["theme_cid=\(themeCommentID)"]
+        if let marker, marker > 0 {
+            query.append("marker=\(marker)")
+        }
+        query.append("limit=\(limit)")
+        return "/app/vod_comment/getsublist?" + query.joined(separator: "&")
+    }
+
+    /// 查看某条评论下的全部回复（游标分页：`theme_cid` 为父评论 ID，`marker` 为上一页最后一条回复的 ID）
+    func fetchSubComments(themeCommentID: Int, marker: Int? = nil, limit: Int = 20) async throws -> AnimeCommentPage {
+        let path = Self.subCommentsPath(themeCommentID: themeCommentID, marker: marker, limit: limit)
+        let data = try await requestJSON(path: path)
+        let records = AnimeJSON.records(in: data)
+        let total = (data as? [String: Any]).flatMap { AnimeJSON.int($0, ["total"]) }
+        return AnimeCommentPage(items: records.compactMap { AnimeComment(json: $0, kind: .list) },
+                                rawCount: records.count,
+                                total: total)
     }
 
     /// 获取播放凭证 (POST)

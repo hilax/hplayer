@@ -78,31 +78,39 @@ struct AnimeTask: Identifiable, Equatable {
     var isSign: Bool { action == "sign" || title.contains("签到") }
 }
 
-/// 一条消息（回复我的 / 系统通知 / 反馈）。字段同样按常见名字宽松解析。
+/// 一条消息（回复我的 / 系统通知 / 反馈）。`/app/messagebox/reply` 字段来自实测及反编译模型。
 struct AnimeMessage: Identifiable, Equatable {
     let id: String
+    let numericID: Int
     let sender: String
     let title: String
     let content: String
     /// 被回复的我的那条评论
     let quote: String
+    /// 被引用原评论的作者名
+    let quoteAuthor: String
     let time: String
     let videoID: Int?
     let videoName: String
     let unread: Bool
 
-    init?(json: [String: Any]) {
+    init?(json: [String: Any], kind: AnimeMessageKind? = nil) {
         let text = AnimeJSON.string(json, ["content", "comments", "message", "msg", "reply", "body"]) ?? ""
         let title = AnimeJSON.string(json, ["title", "subject"]) ?? ""
         guard !text.isEmpty || !title.isEmpty else { return nil }
         id = AnimeJSON.string(json, ["id", "mid"]) ?? UUID().uuidString
-        sender = AnimeJSON.string(json, ["uname", "user_name", "from_name", "sender", "nickname"]) ?? ""
+        numericID = AnimeJSON.int(json, ["id", "mid"]) ?? 0
+        let isReply = (kind == .reply) || json["quote_comments"] != nil || json["quote_name"] != nil
+        sender = AnimeJSON.string(json, isReply
+            ? ["uname", "user_name", "name", "from_name", "sender", "nickname"]
+            : ["uname", "user_name", "from_name", "sender", "nickname"]) ?? ""
         self.title = title
         content = text
-        quote = AnimeJSON.string(json, ["last_comments", "last_content", "quote", "source_content", "my_comments"]) ?? ""
+        quote = AnimeJSON.string(json, ["quote_comments", "last_comments", "last_content", "quote", "source_content", "my_comments"]) ?? ""
+        quoteAuthor = AnimeJSON.string(json, ["quote_name", "last_name"]) ?? ""
         time = AnimeComment.displayTime(AnimeJSON.string(json, ["created_at", "updated_at", "time"]) ?? "")
         videoID = AnimeJSON.int(json, ["vid", "video_id"])
-        videoName = AnimeJSON.string(json, ["vname", "video_name", "name"]) ?? ""
+        videoName = AnimeJSON.string(json, isReply ? ["vname", "video_name"] : ["vname", "video_name", "name"]) ?? ""
         let read = json["isread"] ?? json["is_read"] ?? json["read"] ?? json["state"]
         unread = read.map { !DramaJSON.bool($0) } ?? false
     }
@@ -384,7 +392,7 @@ final class AnimeAccount: ObservableObject {
 
     func messages(_ kind: AnimeMessageKind, page: Int) async throws -> [AnimeMessage] {
         let data = try await AnimeClient.shared.perform("/app/messagebox/\(kind.rawValue)?limit=20&page=\(page)")
-        return AnimeJSON.records(in: data).compactMap(AnimeMessage.init(json:))
+        return AnimeJSON.records(in: data).compactMap { AnimeMessage(json: $0, kind: kind) }
     }
 
     func markRead(_ kind: AnimeMessageKind) {

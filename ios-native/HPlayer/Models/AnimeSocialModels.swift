@@ -54,6 +54,13 @@ enum AnimeCommentKind: Hashable {
 struct AnimeCommentPage {
     let items: [AnimeComment]
     let rawCount: Int
+    let total: Int?
+
+    init(items: [AnimeComment], rawCount: Int, total: Int? = nil) {
+        self.items = items
+        self.rawCount = rawCount
+        self.total = total
+    }
 }
 
 /// 一条评论。API 文档没有展开评论的解密结构，这里按常见字段名宽松解析；
@@ -74,14 +81,18 @@ struct AnimeComment: Identifiable, Hashable {
     let numericID: Int
     /// 我是否赞过
     let liked: Bool
-    /// 置顶、热评里带的前几条回复
-    let preview: [AnimeComment]
+    /// 置顶、热评里带的回复（接口给几条就有几条）
+    let children: [AnimeComment]
+    /// 列表里直接显示的前三条回复
+    var preview: [AnimeComment] { Array(children.prefix(3)) }
+    /// 被回复评论 ID；顶层评论为 0
+    let lastID: Int
     /// 这条是回复谁的
     let replyTo: String
 
-    /// 自己刚发出去的评论（接口不回完整记录，先在本地显示）
-    init(localID: Int, userName: String, content: String, replyTo: String) {
-        id = "local-\(localID)-\(UUID().uuidString)"
+    /// 自己刚发出去的评论（接口只回 id / last_id 时先在本地拼出展示结构）
+    init(localID: Int, userName: String, content: String, replyTo: String, lastID: Int = 0) {
+        id = localID > 0 ? "\(localID)" : "local-\(localID)-\(UUID().uuidString)"
         self.userName = userName
         self.content = content
         time = "刚刚"
@@ -93,7 +104,8 @@ struct AnimeComment: Identifiable, Hashable {
         role = ""
         numericID = localID
         liked = false
-        preview = []
+        children = []
+        self.lastID = lastID
         self.replyTo = replyTo
     }
 
@@ -115,9 +127,18 @@ struct AnimeComment: Identifiable, Hashable {
         role = AnimeJSON.string(((json["roles"] as? [[String: Any]]) ?? []).first ?? [:], ["group_name"]) ?? ""
         numericID = AnimeJSON.int(json, ["id", "cid", "comment_id"]) ?? 0
         liked = DramaJSON.bool(json["islike"])
-        preview = ((json["children"] as? [[String: Any]]) ?? []).prefix(3).compactMap { AnimeComment(json: $0, kind: .list) }
+        let parsedLastID = AnimeJSON.int(json, ["last_id"]) ?? 0
+        lastID = parsedLastID
+        children = ((json["children"] as? [[String: Any]]) ?? []).compactMap { AnimeComment(json: $0, kind: .list) }
         // 顶层评论 last_id 为 0；回复里 last_name 是被回复的人
-        replyTo = (AnimeJSON.int(json, ["last_id"]) ?? 0) > 0 ? (AnimeJSON.string(json, ["last_name"]) ?? "") : ""
+        replyTo = parsedLastID > 0 ? (AnimeJSON.string(json, ["last_name"]) ?? "") : ""
+    }
+
+    /// 在根评论的回复详情页里，直接回复楼主时不必每条都写「回复 楼主：」，只保留对楼中楼的「回复 某人：」。
+    func displayedReplyTarget(under rootCommentID: Int?) -> String {
+        guard !replyTo.isEmpty else { return "" }
+        if let rootCommentID, lastID == rootCommentID { return "" }
+        return replyTo
     }
 
     static func list(from data: Any, kind: AnimeCommentKind) -> [AnimeComment] {

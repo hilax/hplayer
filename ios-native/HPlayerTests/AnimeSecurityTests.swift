@@ -151,6 +151,120 @@ final class AnimeSecurityTests: XCTestCase {
         XCTAssertNil(AnimeAccount.loadCachedUser(from: defaults))
     }
 
+    func testCommentKeepsAllInlineRepliesAndPreviewsThree() {
+        let children: [[String: Any]] = (1...5).map {
+            ["id": 900 + $0, "uname": "回复\($0)", "comments": "内容\($0)", "last_id": $0 == 2 ? 901 : 264121,
+             "last_name": $0 == 2 ? "回复1" : "老佛爷"]
+        }
+        let comment = AnimeComment(json: ["id": 264121, "uname": "老佛爷", "comments": "置顶", "children_total": 135,
+                                          "children": children], kind: .top)
+        XCTAssertEqual(comment?.children.count, 5, "保留接口内嵌的全部回复")
+        XCTAssertEqual(comment?.preview.count, 3, "列表里只预览前三条")
+        XCTAssertEqual(comment?.replies, 135)
+        XCTAssertEqual(comment?.children.first?.displayedReplyTarget(under: 264121), "", "直接回复楼主时不重复显示回复对象")
+        XCTAssertEqual(comment?.children[1].displayedReplyTarget(under: 264121), "回复1", "楼中楼回复保留被回复人")
+    }
+
+    func testSubCommentsPathUsesThemeCIDAndOptionalMarker() {
+        XCTAssertEqual(
+            AnimeClient.subCommentsPath(themeCommentID: 264121, marker: nil, limit: 20),
+            "/app/vod_comment/getsublist?theme_cid=264121&limit=20"
+        )
+        XCTAssertEqual(
+            AnimeClient.subCommentsPath(themeCommentID: 264121, marker: 897906, limit: 5),
+            "/app/vod_comment/getsublist?theme_cid=264121&marker=897906&limit=5"
+        )
+    }
+
+    func testCommentWritePayloadsMatchProtocol() {
+        let likeOn = AnimeLikeStore.likeBody(vid: 181964, commentID: 264121, like: true)
+        XCTAssertEqual(likeOn["vid"] as? Int, 181964)
+        XCTAssertEqual(likeOn["id"] as? Int, 264121)
+        XCTAssertEqual(likeOn["like"] as? Bool, true)
+
+        let likeOff = AnimeLikeStore.likeBody(vid: 181964, commentID: 264121, like: false)
+        XCTAssertEqual(likeOff["like"] as? Bool, false)
+
+        let topBody = AnimeSocial.createBody(vid: 181964, text: "顶层评论", replyTo: nil, captcha: nil, answer: "")
+        XCTAssertEqual(topBody["vid"] as? Int, 181964)
+        XCTAssertEqual(topBody["comments"] as? String, "顶层评论")
+        XCTAssertEqual(topBody["last_id"] as? Int, 0)
+        XCTAssertNil(topBody["uuid"])
+
+        let parent = AnimeComment(localID: 264121, userName: "老佛爷", content: "置顶", replyTo: "")
+        let child = AnimeComment(localID: 897906, userName: "可乐", content: "回复", replyTo: "老佛爷", lastID: 264121)
+        let captcha = AnimeCaptcha(uuid: "ygqf2sve1qq4UyMNcqoV", image: UIImage())
+
+        let replyTopBody = AnimeSocial.createBody(vid: 181964, text: "回楼主", replyTo: parent, captcha: captcha, answer: " 42 ")
+        XCTAssertEqual(replyTopBody["last_id"] as? Int, 264121)
+        XCTAssertEqual(replyTopBody["uuid"] as? String, "ygqf2sve1qq4UyMNcqoV")
+        XCTAssertEqual(replyTopBody["dots"] as? String, "42")
+
+        let replyChildBody = AnimeSocial.createBody(vid: 181964, text: "回楼中楼", replyTo: child, captcha: nil, answer: "")
+        XCTAssertEqual(replyChildBody["last_id"] as? Int, 897906)
+    }
+
+    @MainActor
+    func testCommentReplyStoreMergesAndDeduplicates() {
+        let store = AnimeCommentReplyStore.shared
+        store.reset()
+        defer { store.reset() }
+
+        let root = AnimeComment(json: [
+            "id": 264121,
+            "uname": "老佛爷",
+            "comments": "置顶",
+            "children_total": 1,
+            "children": [["id": 897906, "uname": "可乐", "comments": "旧回复", "last_id": 264121, "last_name": "老佛爷"]]
+        ], kind: .top)!
+
+        let newReply = AnimeComment(localID: 900999, userName: "我", content: "刚刚发的新回复", replyTo: "老佛爷", lastID: 264121)
+        store.record(newReply, under: 264121)
+
+        XCTAssertEqual(store.totalReplies(for: root), 2)
+        XCTAssertEqual(store.mergedPreview(for: root).map(\.numericID), [900999, 897906])
+        XCTAssertEqual(store.mergedSubComments(for: 264121, fetched: root.children).map(\.numericID), [900999, 897906])
+
+        let fetchedWithServerCopy = [newReply] + root.children
+        XCTAssertEqual(store.mergedSubComments(for: 264121, fetched: fetchedWithServerCopy).map(\.numericID), [900999, 897906],
+                       "服务端已经返回同 id 回复时不能重复出现")
+
+        let refreshedRoot = AnimeComment(json: [
+            "id": 264121,
+            "uname": "老佛爷",
+            "comments": "置顶",
+            "children_total": 2,
+            "children": [
+                ["id": 900999, "uname": "我", "comments": "刚刚发的新回复", "last_id": 264121, "last_name": "老佛爷"],
+                ["id": 897906, "uname": "可乐", "comments": "旧回复", "last_id": 264121, "last_name": "老佛爷"]
+            ]
+        ], kind: .top)!
+        XCTAssertEqual(store.totalReplies(for: refreshedRoot), 2, "服务端已计入该回复时不重复累加")
+    }
+
+    func testReplyMessageReadsRealMessageboxReplyFields() {
+        let json: [String: Any] = [
+            "id": 900100,
+            "uid": 1051175,
+            "vid": 181964,
+            "comments": "同意你的看法",
+            "name": "可乐满贯",
+            "quote_comments": "原评论内容",
+            "quote_name": "我的昵称",
+            "created_at": "2026-09-02T13:00:36+08:00",
+            "state": 0
+        ]
+        let msg = AnimeMessage(json: json, kind: .reply)
+        XCTAssertEqual(msg?.numericID, 900100)
+        XCTAssertEqual(msg?.videoID, 181964)
+        XCTAssertEqual(msg?.sender, "可乐满贯")
+        XCTAssertEqual(msg?.content, "同意你的看法")
+        XCTAssertEqual(msg?.quote, "原评论内容")
+        XCTAssertEqual(msg?.quoteAuthor, "我的昵称")
+        XCTAssertEqual(msg?.videoName, "", "回复消息里的 name 是回复者用户名，不能当成影片名")
+        XCTAssertEqual(msg?.unread, true)
+    }
+
     func testCommentReadsRealFieldNames() {
         let json: [String: Any] = ["id": 264121, "uname": "用户", "comments": "正文", "hits": 621, "istop": 1,
                                    "isvip": true, "children_total": 135, "created_at": "2026-09-02T13:00:36+08:00",

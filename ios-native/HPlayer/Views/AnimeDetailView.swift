@@ -19,6 +19,9 @@ struct AnimeDetailView: View {
     /// 评论预览（前三条）；nil = 还没拉到 / 拉失败
     @State private var commentPreview: [AnimeComment]?
     @State private var commentsLoading = false
+    /// 点开某条评论的全部回复（或点「回复」直接回复它）
+    @State private var repliesRequest: AnimeRepliesRequest?
+    @State private var showSignIn = false
     @State private var isLoading = true
     @State private var errorMessage: String? = nil
 
@@ -99,6 +102,10 @@ struct AnimeDetailView: View {
             PlayerView(source: queue.source, playlist: queue.items)
                 .environmentObject(appState)
         }
+        .sheet(item: $repliesRequest) { request in
+            AnimeRepliesSheet(vid: animeId, request: request)
+        }
+        .animeSignInSheet(isPresented: $showSignIn)
     }
 
     // MARK: - 氛围拉伸大图背景
@@ -467,7 +474,10 @@ struct AnimeDetailView: View {
 
             if let comments = commentPreview, !comments.isEmpty {
                 ForEach(comments) { comment in
-                    AnimeCommentRow(comment: comment)
+                    AnimeCommentRow(comment: comment,
+                                    onReply: { repliesRequest = AnimeRepliesRequest(root: $0, startsReplying: true) },
+                                    onLike: { likeComment($0) },
+                                    onOpenReplies: { repliesRequest = AnimeRepliesRequest(root: $0) })
                 }
             } else if commentsLoading {
                 HStack {
@@ -494,6 +504,17 @@ struct AnimeDetailView: View {
         commentsLoading = true
         commentPreview = await AnimeCommentPreview.load(vid: animeId)
         commentsLoading = false
+    }
+
+    private func likeComment(_ comment: AnimeComment) {
+        guard AnimeAccount.shared.isSignedIn else { showSignIn = true; return }
+        Task {
+            do {
+                try await AnimeLikeStore.shared.toggle(comment, vid: animeId)
+            } catch {
+                HUD.show(error.localizedDescription, .error)
+            }
+        }
     }
 
     /// 单集进度：流地址带时效签名不能用 URL 查，按稳定标题「番剧名 第XX集」找最近一条记录。

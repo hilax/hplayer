@@ -4,12 +4,12 @@ import UIKit
 /// 输入层要发什么：弹幕，或者一条评论（可能是回复某条）
 enum SocialComposerTarget: Identifiable, Equatable {
     case danmaku
-    case comment(vid: Int, replyTo: AnimeComment?)
+    case comment(vid: Int, replyTo: AnimeComment?, rootID: Int? = nil)
 
     var id: String {
         switch self {
         case .danmaku: return "danmaku"
-        case .comment(let vid, let reply): return "comment-\(vid)-\(reply?.id ?? "")"
+        case .comment(let vid, let reply, let rootID): return "comment-\(vid)-\(rootID ?? 0)-\(reply?.id ?? "")"
         }
     }
 }
@@ -372,7 +372,7 @@ struct SocialInputBar: View {
     private var trimmed: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
 
     private var replyUserName: String? {
-        if case .comment(_, let reply) = target { return reply?.userName }
+        if case .comment(_, let reply, _) = target { return reply?.userName }
         return nil
     }
 
@@ -386,7 +386,7 @@ struct SocialInputBar: View {
         if requiresSignIn { return "登录后参与评论" }
         switch target {
         case .danmaku: return "发个弹幕见证当下"
-        case .comment(_, let reply):
+        case .comment(_, let reply, _):
             if let reply { return "回复 \(reply.userName)" }
             return "说点什么…"
         }
@@ -616,11 +616,13 @@ struct SocialInputBar: View {
                 case .danmaku:
                     try await danmaku?.send(text: content, color: selectedColor, at: currentTime(),
                                             captcha: captcha, answer: answer)
-                case .comment(let vid, let reply):
-                    try await AnimeSocial.postComment(vid: vid, text: content, replyTo: reply, captcha: captcha, answer: answer)
-                    let mine = AnimeComment(localID: 0, userName: account.user?.displayName ?? "我",
-                                            content: content, replyTo: reply?.userName ?? "")
-                    AnimeSocial.announce(mine, vid: vid)
+                case .comment(let vid, let reply, let rootID):
+                    let createdID = try await AnimeSocial.postComment(vid: vid, text: content, replyTo: reply, captcha: captcha, answer: answer)
+                    let mine = AnimeComment(localID: createdID, userName: account.user?.displayName ?? "我",
+                                            content: content, replyTo: reply?.userName ?? "",
+                                            lastID: reply?.numericID ?? 0)
+                    let resolvedRootID = rootID ?? ((reply?.numericID ?? 0) > 0 ? reply?.numericID : nil)
+                    AnimeSocial.announce(mine, vid: vid, rootID: resolvedRootID)
                 }
                 succeeded = true
                 Haptics.success()

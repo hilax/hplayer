@@ -526,7 +526,7 @@ struct AnimeTasksView: View {
 
 // MARK: - 消息通知
 
-/// 消息通知：回复 / 系统 / 影片反馈 / 求片反馈，分页加载。点带影片的消息进动漫详情。
+/// 消息通知：回复 / 系统 / 影片反馈 / 求片反馈，分页加载。点带影片的消息进动漫详情，回复消息可直接回复。
 struct AnimeMessagesView: View {
     @ObservedObject private var account = AnimeAccount.shared
     @State private var kind: AnimeMessageKind = .reply
@@ -535,6 +535,7 @@ struct AnimeMessagesView: View {
     @State private var exhausted = false
     @State private var loading = false
     @State private var error = ""
+    @State private var replyTarget: SocialComposerTarget?
 
     var body: some View {
         ScrollView {
@@ -561,6 +562,11 @@ struct AnimeMessagesView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
         .designScreen("anime-messages")
+        .overlay {
+            if let replyTarget {
+                SocialComposer(target: replyTarget) { self.replyTarget = nil }
+            }
+        }
         .refreshable { await reload() }
         .task(id: kind) { await reload() }
     }
@@ -582,6 +588,7 @@ struct AnimeMessagesView: View {
         } else {
             VStack(spacing: 0) {
                 ForEach(Array(items.enumerated()), id: \.element.id) { index, message in
+                    if index > 0 { RowDivider(leading: Theme.Space.lg + 40 + Theme.Space.md) }
                     row(message)
                         .onAppear { if index == items.count - 1 { Task { await loadMore() } } }
                 }
@@ -593,16 +600,58 @@ struct AnimeMessagesView: View {
 
     @ViewBuilder
     private func row(_ message: AnimeMessage) -> some View {
-        if let vid = message.videoID, vid > 0 {
-            NavigationLink(value: AnimeDetailRoute(animeId: vid)) { messageBody(message) }
+        if kind == .reply, let vid = message.videoID, vid > 0, message.numericID > 0 {
+            VStack(alignment: .leading, spacing: 0) {
+                NavigationLink(value: AnimeDetailRoute(animeId: vid)) {
+                    messageBody(message, showsFooter: false)
+                }
+                .buttonStyle(.pressable(scale: 0.985))
+
+                HStack(spacing: Theme.Space.sm) {
+                    let meta = [message.videoName, message.time].filter { !$0.isEmpty }.joined(separator: " · ")
+                    if !meta.isEmpty {
+                        Text(meta)
+                            .font(Theme.Typo.caption)
+                            .foregroundStyle(Theme.textTertiary)
+                    }
+                    Spacer(minLength: 0)
+                    Button {
+                        let targetComment = AnimeComment(
+                            localID: message.numericID,
+                            userName: message.sender.isEmpty ? "用户" : message.sender,
+                            content: message.content,
+                            replyTo: ""
+                        )
+                        replyTarget = .comment(vid: vid, replyTo: targetComment, rootID: nil)
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(icon: .comment).iconStyle(size: 12, color: Theme.textSecondary)
+                            Text("回复")
+                        }
+                        .font(.scaled(12, weight: .medium))
+                        .foregroundStyle(Theme.textSecondary)
+                        .padding(.horizontal, 10)
+                        .frame(minHeight: 32)
+                        .background(Theme.tileTint, in: Capsule())
+                    }
+                    .buttonStyle(.pressable(scale: 0.95))
+                    .accessibilityIdentifier("messages.reply.\(message.id)")
+                }
+                .padding(.leading, Theme.Space.lg + 40 + Theme.Space.md)
+                .padding(.trailing, Theme.Space.lg)
+                .padding(.bottom, Theme.Space.md)
+            }
+        } else if let vid = message.videoID, vid > 0 {
+            NavigationLink(value: AnimeDetailRoute(animeId: vid)) { messageBody(message, showsFooter: true) }
                 .buttonStyle(.pressable(scale: 0.985))
         } else {
-            messageBody(message)
+            messageBody(message, showsFooter: true)
         }
     }
 
-    private func messageBody(_ message: AnimeMessage) -> some View {
-        HStack(alignment: .top, spacing: Theme.Space.md) {
+    private func messageBody(_ message: AnimeMessage, showsFooter: Bool) -> some View {
+        let quoteLine = message.quoteAuthor.isEmpty ? message.quote : "@\(message.quoteAuthor)：\(message.quote)"
+        return HStack(alignment: .top, spacing: Theme.Space.md) {
             Text(String((message.sender.isEmpty ? (kind == .sys ? "系" : "?") : message.sender).prefix(1)))
                 .font(Theme.Typo.row.weight(.semibold))
                 .foregroundStyle(Theme.textSecondary)
@@ -628,8 +677,8 @@ struct AnimeMessagesView: View {
                         .foregroundStyle(Theme.textPrimary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                if !message.quote.isEmpty {
-                    Text(message.quote)
+                if !quoteLine.isEmpty {
+                    Text(quoteLine)
                         .font(Theme.Typo.meta)
                         .foregroundStyle(Theme.textSecondary)
                         .lineLimit(2)
@@ -638,9 +687,11 @@ struct AnimeMessagesView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .background(Theme.tileTint, in: RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous))
                 }
-                Text([message.videoName, message.time].filter { !$0.isEmpty }.joined(separator: " · "))
-                    .font(Theme.Typo.caption)
-                    .foregroundStyle(Theme.textTertiary)
+                if showsFooter {
+                    Text([message.videoName, message.time].filter { !$0.isEmpty }.joined(separator: " · "))
+                        .font(Theme.Typo.caption)
+                        .foregroundStyle(Theme.textTertiary)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             if message.unread {
@@ -649,7 +700,8 @@ struct AnimeMessagesView: View {
             }
         }
         .padding(.horizontal, Theme.Space.lg)
-        .padding(.vertical, Theme.Space.md + 2)
+        .padding(.top, Theme.Space.md + 2)
+        .padding(.bottom, showsFooter ? Theme.Space.md + 2 : Theme.Space.xs)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
     }
@@ -694,6 +746,7 @@ struct AnimeDiagnosticsView: View {
 
     private let probes = ["/app/users/info", "/app/task", "/app/task/sign_rule", "/app/messagebox",
                           "/app/messagebox/reply?limit=5&page=1", "/app/messagebox/sys?limit=5&page=1",
+                          "/app/vod_comment/getsublist?theme_cid=264121&limit=5",
                           "/app/vod_comment/captcha", "/app/config"].map(Probe.init)
     @State private var results: [String: String] = [:]
     @State private var running = false
