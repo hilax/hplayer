@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 enum SukebeiError: LocalizedError {
@@ -21,7 +22,7 @@ enum SukebeiError: LocalizedError {
 }
 
 /// Sukebei Nyaa RSS 解析出来的单条种子记录。
-struct SukebeiRSSItem: Equatable, Hashable, Sendable {
+struct SukebeiRSSItem: Equatable, Hashable, Sendable, Codable {
     let title: String
     let infoHash: String
     let size: String
@@ -33,35 +34,62 @@ struct SukebeiRSSItem: Equatable, Hashable, Sendable {
 
 /// Sukebei Nyaa RSS 客户端与解析器（无 Cloudflare，直接提供 infoHash 与做种数）。
 final class SukebeiSource: @unchecked Sendable {
-    static let shared = SukebeiSource()
+    static let shared = SukebeiSource(cacheDirectory: defaultCacheDirectory)
 
     static let defaultHost = "https://sukebei.nyaa.si"
     static let realLifeVideosCategory = "2_2"
+    static let diskCacheMaxAge: TimeInterval = 24 * 60 * 60
+
+    static var defaultCacheDirectory: URL? {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("SukebeiRSSCache", isDirectory: true)
+    }
+
+    private struct DiskCacheEntry: Codable {
+        let savedAt: Date
+        let items: [SukebeiRSSItem]
+    }
+
+    private struct InFlightEntry {
+        let id: UUID
+        let task: Task<[SukebeiRSSItem], Error>
+    }
 
     private let session: URLSession
     private let host: String
     private let cacheLifetime: TimeInterval
+    private let cacheDirectory: URL?
     private let now: @Sendable () -> Date
     private let cacheLock = NSLock()
     private var cache: [String: (time: Date, items: [SukebeiRSSItem])] = [:]
+    private var inFlight: [String: InFlightEntry] = [:]
 
     init(
         session: URLSession? = nil,
         host: String = defaultHost,
         cacheLifetime: TimeInterval = 180,
+        cacheDirectory: URL? = nil,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.host = host
         self.cacheLifetime = cacheLifetime
+        self.cacheDirectory = cacheDirectory
         self.now = now
+        if let cacheDirectory {
+            try? FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+        }
         if let session {
             self.session = session
         } else {
-            let config = URLSessionConfiguration.ephemeral
+            // 使用 default 配置保留 TLS 会话票据与 HTTP keep-alive 连接池，显著降低多次查询握手延迟；
+            // 关闭 Cookie 与系统 URLCache，只由自己的磁盘与 TTL 缓存管理。
+            let config = URLSessionConfiguration.default
             config.httpShouldSetCookies = false
             config.httpCookieStorage = nil
-            config.timeoutIntervalForRequest = 10
-            config.timeoutIntervalForResource = 15
+            config.urlCache = nil
+            config.httpMaximumConnectionsPerHost = 4
+            config.timeoutIntervalForRequest = 8
+            config.timeoutIntervalForResource = 12
             self.session = URLSession(configuration: config)
         }
     }
@@ -96,28 +124,122 @@ final class SukebeiSource: @unchecked Sendable {
         return components.url
     }
 
-    // MARK: - RSS 网络请求与短时缓存
+    // MARK: - RSS 网络请求、磁盘 SWR 缓存与并发去重
+
+    private func diskCacheFile(for key: String) -> URL? {
+        guard let cacheDirectory else { return nil }
+        let raw = key.isEmpty ? "__global__" : key
+        let hash = SHA256.hash(data: Data(raw.utf8)).map { String(format: "%02x", $0) }.joined()
+        return cacheDirectory.appendingPathComponent("\(hash).json")
+    }
+
+    private func readDiskEntry(for key: String) -> DiskCacheEntry? {
+        guard let file = diskCacheFile(for: key),
+              let data = try? Data(contentsOf: file),
+              let entry = try? JSONDecoder().decode(DiskCacheEntry.self, from: data),
+              now().timeIntervalSince(entry.savedAt) < Self.diskCacheMaxAge else {
+            return nil
+        }
+        return entry
+    }
+
+    private func writeDiskEntry(_ items: [SukebeiRSSItem], savedAt: Date, for key: String) {
+        guard let file = diskCacheFile(for: key),
+              let data = try? JSONEncoder().encode(DiskCacheEntry(savedAt: savedAt, items: items)) else {
+            return
+        }
+        try? data.write(to: file, options: .atomic)
+    }
 
     private func cachedItems(for key: String) -> [SukebeiRSSItem]? {
         cacheLock.lock()
-        defer { cacheLock.unlock() }
-        guard let entry = cache[key], now().timeIntervalSince(entry.time) < cacheLifetime else {
+        if let entry = cache[key], now().timeIntervalSince(entry.time) < cacheLifetime {
+            cacheLock.unlock()
+            return entry.items
+        }
+        cacheLock.unlock()
+
+        guard let disk = readDiskEntry(for: key),
+              now().timeIntervalSince(disk.savedAt) < cacheLifetime else {
             return nil
         }
-        return entry.items
+        cacheLock.lock()
+        cache[key] = (disk.savedAt, disk.items)
+        cacheLock.unlock()
+        return disk.items
+    }
+
+    func staleCachedItems(for query: String? = nil) -> [SukebeiRSSItem]? {
+        let key = (query ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        cacheLock.lock()
+        if let entry = cache[key], now().timeIntervalSince(entry.time) < Self.diskCacheMaxAge {
+            cacheLock.unlock()
+            return entry.items
+        }
+        cacheLock.unlock()
+        return readDiskEntry(for: key)?.items
+    }
+
+    /// 同步读取本地可用缓存（含超过 180 秒 TTL 但仍在 24 小时内的旧缓存），供首屏先出结果再后台静默更新。
+    func cachedLatest() -> [MagnetSearchItem] {
+        guard let entries = staleCachedItems(for: nil) else { return [] }
+        return Self.groupMovies(from: entries)
+    }
+
+    func cachedStudio(_ studio: MagnetStudio) -> [MagnetSearchItem] {
+        guard let entries = staleCachedItems(for: studio.sukebeiQuery) else { return [] }
+        return Self.groupMovies(from: entries, allowedPrefixes: Set(studio.sukebeiPrefixes))
     }
 
     private func storeItems(_ items: [SukebeiRSSItem], for key: String) {
+        let savedAt = now()
         cacheLock.lock()
-        defer { cacheLock.unlock() }
-        cache[key] = (now(), items)
+        cache[key] = (savedAt, items)
+        cacheLock.unlock()
+        writeDiskEntry(items, savedAt: savedAt, for: key)
     }
 
-    func fetchRSS(query: String? = nil) async throws -> [SukebeiRSSItem] {
+    func fetchRSS(query: String? = nil, forceRefresh: Bool = false) async throws -> [SukebeiRSSItem] {
+        try Task.checkCancellation()
         let trimmedQuery = (query ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if let cached = cachedItems(for: trimmedQuery) {
+        if !forceRefresh, let cached = cachedItems(for: trimmedQuery) {
             return cached
         }
+
+        let task: Task<[SukebeiRSSItem], Error>
+        cacheLock.lock()
+        if !forceRefresh,
+           let entry = cache[trimmedQuery],
+           now().timeIntervalSince(entry.time) < cacheLifetime {
+            cacheLock.unlock()
+            return entry.items
+        }
+        if !forceRefresh, let existing = inFlight[trimmedQuery] {
+            task = existing.task
+            cacheLock.unlock()
+        } else {
+            let token = UUID()
+            let created = Task<[SukebeiRSSItem], Error> { [self] in
+                defer {
+                    self.cacheLock.lock()
+                    if self.inFlight[trimmedQuery]?.id == token {
+                        self.inFlight[trimmedQuery] = nil
+                    }
+                    self.cacheLock.unlock()
+                }
+                return try await self.performFetchRSS(trimmedQuery: trimmedQuery)
+            }
+            inFlight[trimmedQuery] = InFlightEntry(id: token, task: created)
+            task = created
+            cacheLock.unlock()
+        }
+
+        let items = try await task.value
+        try Task.checkCancellation()
+        return items
+    }
+
+    private func performFetchRSS(trimmedQuery: String) async throws -> [SukebeiRSSItem] {
         guard let url = Self.makeRSSURL(host: host, query: trimmedQuery.isEmpty ? nil : trimmedQuery) else {
             throw SukebeiError.invalidURL
         }
@@ -151,43 +273,43 @@ final class SukebeiSource: @unchecked Sendable {
     // MARK: - 业务接口
 
     /// 最新出种（Real Life - Videos 全局前 75 条按番号聚合）。
-    func fetchLatest() async throws -> [MagnetSearchItem] {
-        let entries = try await fetchRSS(query: nil)
+    func fetchLatest(forceRefresh: Bool = false) async throws -> [MagnetSearchItem] {
+        let entries = try await fetchRSS(query: nil, forceRefresh: forceRefresh)
         return Self.groupMovies(from: entries)
     }
 
     /// 某家片商在 Sukebei 上刚出种的新作（严格按该片商现役番号前缀过滤）。
-    func fetchStudio(_ studio: MagnetStudio) async throws -> [MagnetSearchItem] {
-        let entries = try await fetchRSS(query: studio.sukebeiQuery)
+    func fetchStudio(_ studio: MagnetStudio, forceRefresh: Bool = false) async throws -> [MagnetSearchItem] {
+        let entries = try await fetchRSS(query: studio.sukebeiQuery, forceRefresh: forceRefresh)
         return Self.groupMovies(from: entries, allowedPrefixes: Set(studio.sukebeiPrefixes))
     }
 
     /// 关键词或番号搜索。
-    func search(keyword: String) async throws -> [MagnetSearchItem] {
+    func search(keyword: String, forceRefresh: Bool = false) async throws -> [MagnetSearchItem] {
         let trimmed = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
         if let code = AVCatalogCode.extract(trimmed) {
             let query = "\(code)|\(code.replacingOccurrences(of: "-", with: ""))"
-            let entries = try await fetchRSS(query: query)
+            let entries = try await fetchRSS(query: query, forceRefresh: forceRefresh)
             let filtered = entries.filter { AVCatalogCode.extract($0.title) == code }
             return Self.groupMovies(from: filtered)
         }
-        let entries = try await fetchRSS(query: trimmed)
+        let entries = try await fetchRSS(query: trimmed, forceRefresh: forceRefresh)
         return Self.groupMovies(from: entries)
     }
 
     /// 按番号查磁力列表。
-    func fetchMagnets(code: String) async throws -> [MagnetTorrentItem] {
+    func fetchMagnets(code: String, forceRefresh: Bool = false) async throws -> [MagnetTorrentItem] {
         let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
 
         let matching: [SukebeiRSSItem]
         if let canonical = AVCatalogCode.extract(trimmed) {
             let query = "\(canonical)|\(canonical.replacingOccurrences(of: "-", with: ""))"
-            let entries = try await fetchRSS(query: query)
+            let entries = try await fetchRSS(query: query, forceRefresh: forceRefresh)
             matching = entries.filter { AVCatalogCode.extract($0.title) == canonical }
         } else {
-            let entries = try await fetchRSS(query: trimmed)
+            let entries = try await fetchRSS(query: trimmed, forceRefresh: forceRefresh)
             let escaped = NSRegularExpression.escapedPattern(for: trimmed)
             let regex = try? NSRegularExpression(
                 pattern: "(?:^|[^A-Za-z0-9])\(escaped)(?!\\d)",

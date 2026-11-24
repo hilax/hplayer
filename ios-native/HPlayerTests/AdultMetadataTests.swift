@@ -355,9 +355,25 @@ final class DMMSourceTests: XCTestCase {
         XCTAssertTrue(match.posterURL.hasSuffix("/digital/video/1start00656/1start00656pl.jpg"))
         XCTAssertTrue(match.isWideJacket)
         let recorded = DMMURLProtocol.requests()
-        XCTAssertEqual(recorded.count, 4)
+        XCTAssertEqual(recorded.count, 2, "命中 digital/video 第一批探测后应立即返回，不再多发 mono 探测")
         XCTAssertTrue(recorded.allSatisfy { $0.httpMethod == "HEAD" && $0.url?.host == "pics.dmm.co.jp" })
         XCTAssertTrue(recorded.allSatisfy { $0.value(forHTTPHeaderField: "Cookie") == nil })
+
+        // 第二批兜底：仅 mono/movie/adult 存在时应共发 4 次并返回命中地址
+        DMMURLProtocol.reset()
+        let monoFound = await client.lookup("MON-001")
+        let monoMatch = try XCTUnwrap(monoFound)
+        XCTAssertTrue(monoMatch.posterURL.hasSuffix("/mono/movie/adult/mon00001/mon00001pl.jpg"))
+        XCTAssertEqual(DMMURLProtocol.requests().count, 4)
+
+        // 302 跳转到 imgsrc.dmm.com now_printing 时应拦截跳转且判无图，不跨域名重发请求
+        DMMURLProtocol.reset()
+        let redirectedMissing = await client.lookup("RED-302")
+        XCTAssertNil(redirectedMissing)
+        let redirectRequests = DMMURLProtocol.requests()
+        XCTAssertEqual(redirectRequests.count, 4)
+        XCTAssertTrue(redirectRequests.allSatisfy { $0.url?.host == "pics.dmm.co.jp" }, "不得跟随 302 到 imgsrc.dmm.com")
+
         let missing = await client.lookup("ZZZ-999")
         XCTAssertNil(missing)
     }
@@ -403,7 +419,15 @@ private final class DMMURLProtocol: URLProtocol {
         Self.lock.lock()
         Self.recorded.append(request)
         Self.lock.unlock()
-        let exists = request.url?.absoluteString.contains("/digital/video/1start00656/") == true
+        let urlText = request.url?.absoluteString ?? ""
+        if urlText.contains("red00302") {
+            let target = URL(string: "https://imgsrc.dmm.com/pics/mono/movie/n/now_printing/now_printing.jpg")!
+            let redirect = HTTPURLResponse(url: request.url!, statusCode: 302, httpVersion: nil,
+                                           headerFields: ["Location": target.absoluteString])!
+            client?.urlProtocol(self, wasRedirectedTo: URLRequest(url: target), redirectResponse: redirect)
+            return
+        }
+        let exists = urlText.contains("/digital/video/1start00656/") || urlText.contains("/mono/movie/adult/mon00001/")
         let response = HTTPURLResponse(url: request.url!, statusCode: exists ? 200 : 404, httpVersion: nil,
                                        headerFields: ["Content-Type": exists ? "image/jpeg" : "text/html"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)

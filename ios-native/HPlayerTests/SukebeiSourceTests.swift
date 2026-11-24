@@ -388,6 +388,141 @@ final class SukebeiSourceTests: XCTestCase {
         XCTAssertTrue(searchFallback.stars.isEmpty)
     }
 
+    // MARK: - 性能优化：并发去重、磁盘 SWR、非阻塞渐进返回与软超时
+
+    func testInFlightDeduplicationDiskCacheForceRefreshAndSWR() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("sukebei-cache-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let clock = Clock()
+        let hits = Counter()
+        let xml1 = rssDocument(items: [
+            (title: "SONE-201.mp4", hash: String(repeating: "a", count: 40), size: "2.0 GiB", pubDate: "Mon, 23 Nov 2026 10:00:00 -0000", seeders: 12),
+        ])
+        let xml2 = rssDocument(items: [
+            (title: "SONE-202.mp4", hash: String(repeating: "b", count: 40), size: "2.5 GiB", pubDate: "Mon, 23 Nov 2026 11:00:00 -0000", seeders: 30),
+        ])
+
+        RoutedURLProtocol.install { _ in
+            let n = hits.increment()
+            Thread.sleep(forTimeInterval: 0.08)
+            return .init(status: 200, body: Data((n == 1 ? xml1 : xml2).utf8))
+        }
+
+        let source = SukebeiSource(session: RoutedURLProtocol.session(), cacheLifetime: 180, cacheDirectory: dir, now: { clock.date })
+        async let a = source.fetchLatest()
+        async let b = source.fetchLatest()
+        let (resA, resB) = try await (a, b)
+        XCTAssertEqual(resA.map(\.code), ["SONE-201"])
+        XCTAssertEqual(resB.map(\.code), ["SONE-201"])
+        XCTAssertEqual(hits.value, 1, "并发同时请求同一 query 必须合并为一次 HTTP")
+
+        // 超过内存与短时 TTL 后，新实例仍可同步从磁盘读取 SWR 缓存；forceRefresh 会跳过缓存
+        clock.advance(300)
+        let restarted = SukebeiSource(session: RoutedURLProtocol.session(), cacheLifetime: 180, cacheDirectory: dir, now: { clock.date })
+        XCTAssertEqual(restarted.cachedLatest().map(\.code), ["SONE-201"], "重启后应能直接同步读取旧磁盘缓存")
+
+        let refreshed = try await restarted.fetchLatest(forceRefresh: true)
+        XCTAssertEqual(refreshed.map(\.code), ["SONE-202"])
+        XCTAssertEqual(hits.value, 2)
+    }
+
+    @MainActor
+    func testProgressiveAggregatorDeliversJavBusImmediatelyWithoutBlockingOnSlowSukebei() async throws {
+        let jbStudioHTML = """
+        <a class="movie-box" href="/SONE-100">
+          <img src="https://pics.javbus.com/cover/100_b.jpg" title="片商首发作品">
+          <date>SONE-100</date> / <date>2026-11-23</date>
+        </a>
+        """
+
+        let jbHits = Counter()
+        let sbHits = Counter()
+        RoutedURLProtocol.install { request in
+            if request.url?.host == "sukebei.nyaa.si" {
+                _ = sbHits.increment()
+                return .init(status: 500, delay: 2.0)
+            }
+            _ = jbHits.increment()
+            return .init(status: 200, body: Data(jbStudioHTML.utf8))
+        }
+
+        let jbSession = RoutedURLProtocol.session()
+        let sbSession = RoutedURLProtocol.session()
+        defer {
+            jbSession.invalidateAndCancel()
+            sbSession.invalidateAndCancel()
+        }
+        let agg = MagnetAggregator(
+            javbus: JavBusSource(session: jbSession),
+            sukebei: SukebeiSource(session: sbSession),
+            sukebeiSoftTimeout: 0.15
+        )
+
+        var firstDeliveryElapsed: TimeInterval?
+        let start = Date()
+        let result = try await agg.loadStudioPage1(.s1) { partial in
+            if firstDeliveryElapsed == nil {
+                firstDeliveryElapsed = Date().timeIntervalSince(start)
+            }
+            XCTAssertEqual(partial.map(\.code), ["SONE-100"])
+        }
+        let totalElapsed = Date().timeIntervalSince(start)
+
+        XCTAssertEqual(result.map(\.code), ["SONE-100"])
+        XCTAssertEqual(jbHits.value, 1)
+        XCTAssertEqual(sbHits.value, 1)
+        XCTAssertLessThan(firstDeliveryElapsed ?? 99, 0.12, "JavBus 结果应在卡慢的 Sukebei 之前立即交付 UI")
+        XCTAssertLessThan(totalElapsed, 0.8, "超过 0.15s 软超时后应结束等待，不得阻塞满 2s")
+
+        // 搜索与详情页同样不阻塞在慢速 Sukebei 上
+        let jbDetailHTML = """
+        <span class="genre"><a href="https://www.javbus.com/star/2js">三上悠亚</a></span>
+        <table>
+          <tr>
+            <td><a href="magnet:?xt=urn:btih:\(String(repeating: "c", count: 40))">sone100.mp4</a></td>
+            <td>2.40GB</td><td>2026-11-23</td>
+          </tr>
+        </table>
+        """
+        RoutedURLProtocol.install { request in
+            if request.url?.host == "sukebei.nyaa.si" {
+                return .init(status: 500, delay: 1.5)
+            }
+            if request.url?.path.hasPrefix("/search/") == true {
+                return .init(status: 200, body: Data(jbStudioHTML.utf8))
+            }
+            return .init(status: 200, body: Data(jbDetailHTML.utf8))
+        }
+        let searchStart = Date()
+        let searchResult = try await agg.searchAllProgressive(keyword: "SONE-100") { partial in
+            XCTAssertEqual(partial.movies.map(\.code), ["SONE-100"])
+        }
+        XCTAssertEqual(searchResult.movies.map(\.code), ["SONE-100"])
+        XCTAssertLessThan(Date().timeIntervalSince(searchStart), 0.5)
+
+        let prefetched = MagnetTorrentItem(
+            magnetURL: "magnet:?xt=urn:btih:\(String(repeating: "d", count: 40))",
+            name: "prefetched",
+            size: "4.1 GiB",
+            source: "Sukebei"
+        )
+        let detailItem = MagnetSearchItem(
+            code: "SONE-100",
+            title: "t",
+            coverURL: nil,
+            detailPath: "/SONE-100",
+            prefetchedMagnets: [prefetched]
+        )
+        let detailStart = Date()
+        let detailResult = try await agg.loadDetailInfo(for: detailItem) { partial in
+            XCTAssertEqual(partial.stars.map(\.name), ["三上悠亚"])
+            XCTAssertEqual(partial.magnets.count, 2)
+        }
+        XCTAssertEqual(detailResult.magnets.count, 2)
+        XCTAssertLessThan(Date().timeIntervalSince(detailStart), 0.5)
+    }
+
     // MARK: - 辅助
 
     private func rssDocument(items: [(title: String, hash: String, size: String, pubDate: String, seeders: Int)]) -> String {

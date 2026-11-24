@@ -483,7 +483,13 @@ struct MagnetSearchView: View {
 
     private func loadFreshLatest() {
         freshTask?.cancel()
-        freshLoading = true
+        if freshMovies.isEmpty {
+            let cached = MagnetAggregator.shared.cachedFreshLatest()
+            if !cached.isEmpty {
+                freshMovies = cached
+            }
+        }
+        freshLoading = freshMovies.isEmpty
         freshTask = Task { @MainActor in
             do {
                 let items = try await MagnetAggregator.shared.fetchFreshLatest()
@@ -555,8 +561,14 @@ struct MagnetSearchView: View {
 
         searchTask = Task { @MainActor in
             do {
-                // 影片（JavBus + Sukebei）与女优并发搜索；单源失败不影响另一边结果。
-                let result = try await MagnetAggregator.shared.searchAll(keyword: q)
+                // 影片（JavBus + Sukebei）与女优并发搜索：先到先渲染，Sukebei 在软超时内到达后合并。
+                let result = try await MagnetAggregator.shared.searchAllProgressive(keyword: q) { partial in
+                    guard !Task.isCancelled else { return }
+                    searchMovies = MagnetAggregator.mergeUniqueMovies([], with: partial.movies).merged
+                    matchedStars = partial.stars
+                    searchPaging.hasMore = !partial.movies.isEmpty
+                    isSearching = false
+                }
                 guard !Task.isCancelled else { return }
                 searchMovies = MagnetAggregator.mergeUniqueMovies([], with: result.movies).merged
                 matchedStars = result.stars

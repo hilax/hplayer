@@ -8,10 +8,16 @@ final class MagnetAggregator: @unchecked Sendable {
 
     private let javbus: JavBusSource
     private let sukebei: SukebeiSource
+    private let sukebeiSoftTimeout: TimeInterval
 
-    init(javbus: JavBusSource = .shared, sukebei: SukebeiSource = .shared) {
+    init(
+        javbus: JavBusSource = .shared,
+        sukebei: SukebeiSource = .shared,
+        sukebeiSoftTimeout: TimeInterval = 3.5
+    ) {
         self.javbus = javbus
         self.sukebei = sukebei
+        self.sukebeiSoftTimeout = sukebeiSoftTimeout
     }
 
     // MARK: - 合并与排序辅助
@@ -166,45 +172,144 @@ final class MagnetAggregator: @unchecked Sendable {
         }.map(\.element)
     }
 
-    // MARK: - 聚合异步接口
+    // MARK: - 聚合异步接口（非阻塞渐进返回 + Sukebei 软超时）
 
     func fetchLatest(page: Int = 1) async throws -> [MagnetSearchItem] {
         try await javbus.fetchCategory(.latest, page: page)
+    }
+
+    /// 同步读取磁盘/内存缓存的 Sukebei 最新出种列表，用于首屏秒开后再后台更新。
+    func cachedFreshLatest() -> [MagnetSearchItem] {
+        sukebei.cachedLatest()
     }
 
     func fetchFreshLatest() async throws -> [MagnetSearchItem] {
         try await sukebei.fetchLatest()
     }
 
+    /// 片商第 1 页渐进加载：JavBus 先返回即先通过 `onUpdate` 渲染，Sukebei 在后台软超时内到达后合并新种。
+    func loadStudioPage1(
+        _ studio: MagnetStudio,
+        onUpdate: @MainActor @escaping ([MagnetSearchItem]) -> Void
+    ) async throws -> [MagnetSearchItem] {
+        try await loadStudioPage1Internal(studio, onUpdate: onUpdate)
+    }
+
+    private func loadStudioPage1Internal(
+        _ studio: MagnetStudio,
+        onUpdate: @MainActor @escaping ([MagnetSearchItem]) -> Void
+    ) async throws -> [MagnetSearchItem] {
+        let jbTask = Task<Result<[MagnetSearchItem], Error>, Never> {
+            do { return .success(try await self.javbus.fetchStudio(studio, page: 1)) }
+            catch { return .failure(error) }
+        }
+        let sbTask = Task<Result<[MagnetSearchItem], Error>, Never> {
+            do { return .success(try await self.sukebei.fetchStudio(studio)) }
+            catch { return .failure(error) }
+        }
+
+        return try await withTaskCancellationHandler {
+            let jb = await jbTask.value
+            try Task.checkCancellation()
+
+            switch jb {
+            case .success(let jbItems):
+                if !jbItems.isEmpty {
+                    await onUpdate(jbItems)
+                }
+                if let sb = await awaitWithSoftTimeout(sbTask, timeout: sukebeiSoftTimeout),
+                   case .success(let sbItems) = sb {
+                    let merged = Self.mergeStudioPage1(javbus: jbItems, sukebei: sbItems)
+                    if merged != jbItems || jbItems.isEmpty {
+                        await onUpdate(merged)
+                    }
+                    return merged
+                }
+                if jbItems.isEmpty {
+                    await onUpdate(jbItems)
+                }
+                return jbItems
+
+            case .failure(let jbError):
+                if jbError is CancellationError {
+                    sbTask.cancel()
+                    throw jbError
+                }
+                let sb = await sbTask.value
+                try Task.checkCancellation()
+                if case .success(let sbItems) = sb, !sbItems.isEmpty {
+                    await onUpdate(sbItems)
+                    return sbItems
+                }
+                throw jbError
+            }
+        } onCancel: {
+            jbTask.cancel()
+            sbTask.cancel()
+        }
+    }
+
     func fetchStudio(_ studio: MagnetStudio, page: Int = 1) async throws -> [MagnetSearchItem] {
         if page > 1 {
             return try await javbus.fetchStudio(studio, page: page)
         }
+        return try await loadStudioPage1Internal(studio) { _ in }
+    }
 
-        async let jbResult: Result<[MagnetSearchItem], Error> = {
-            do { return .success(try await javbus.fetchStudio(studio, page: 1)) }
+    /// 搜索第 1 页渐进加载：JavBus 与女优先到先显示，Sukebei 在软超时内抵达后再增量合并。
+    func searchAllProgressive(
+        keyword: String,
+        onUpdate: @MainActor @escaping ((movies: [MagnetSearchItem], stars: [MagnetStarItem])) -> Void
+    ) async throws -> (movies: [MagnetSearchItem], stars: [MagnetStarItem]) {
+        let jbTask = Task<Result<(movies: [MagnetSearchItem], stars: [MagnetStarItem]), Error>, Never> {
+            do { return .success(try await self.javbus.searchAll(keyword: keyword, page: 1)) }
             catch { return .failure(error) }
-        }()
-        async let sbResult: Result<[MagnetSearchItem], Error> = {
-            do { return .success(try await sukebei.fetchStudio(studio)) }
+        }
+        let sbTask = Task<Result<[MagnetSearchItem], Error>, Never> {
+            do { return .success(try await self.sukebei.search(keyword: keyword)) }
             catch { return .failure(error) }
-        }()
+        }
 
-        let (jb, sb) = await (jbResult, sbResult)
-        if case let .failure(err) = jb, err is CancellationError { throw err }
-        if case let .failure(err) = sb, err is CancellationError { throw err }
-        try Task.checkCancellation()
+        return try await withTaskCancellationHandler {
+            let jb = await jbTask.value
+            try Task.checkCancellation()
 
-        switch (jb, sb) {
-        case let (.success(jbItems), .success(sbItems)):
-            return Self.mergeStudioPage1(javbus: jbItems, sukebei: sbItems)
-        case let (.success(jbItems), .failure):
-            return jbItems
-        case let (.failure(jbError), .success(sbItems)):
-            if !sbItems.isEmpty { return sbItems }
-            throw jbError
-        case let (.failure(jbError), .failure):
-            throw jbError
+            switch jb {
+            case .success(let jbValue):
+                if !jbValue.movies.isEmpty || !jbValue.stars.isEmpty {
+                    await onUpdate(jbValue)
+                }
+                if let sb = await awaitWithSoftTimeout(sbTask, timeout: sukebeiSoftTimeout),
+                   case .success(let sbMovies) = sb {
+                    let merged = Self.mergeSearchPage1(keyword: keyword, javbus: jbValue.movies, sukebei: sbMovies)
+                    let finalValue = (movies: merged, stars: jbValue.stars)
+                    if merged != jbValue.movies || (jbValue.movies.isEmpty && jbValue.stars.isEmpty) {
+                        await onUpdate(finalValue)
+                    }
+                    return finalValue
+                }
+                if jbValue.movies.isEmpty && jbValue.stars.isEmpty {
+                    await onUpdate(jbValue)
+                }
+                return jbValue
+
+            case .failure(let jbError):
+                if jbError is CancellationError {
+                    sbTask.cancel()
+                    throw jbError
+                }
+                let sb = await sbTask.value
+                try Task.checkCancellation()
+                if case .success(let sbMovies) = sb, !sbMovies.isEmpty {
+                    let fallback = (movies: sbMovies, stars: [MagnetStarItem]())
+                    await onUpdate(fallback)
+                    return fallback
+                }
+                throw jbError
+            }
+        } onCancel: {
+            jbTask.cancel()
+            sbTask.cancel()
         }
     }
 
@@ -212,72 +317,151 @@ final class MagnetAggregator: @unchecked Sendable {
         if page > 1 {
             return (try await javbus.search(keyword: keyword, page: page), [])
         }
+        return try await searchAllProgressive(keyword: keyword) { _ in }
+    }
 
-        async let jbResult: Result<(movies: [MagnetSearchItem], stars: [MagnetStarItem]), Error> = {
-            do { return .success(try await javbus.searchAll(keyword: keyword, page: 1)) }
+    /// 影片详情渐进加载：JavBus 拿到女优与磁力立即合并已有预取返回，Sukebei 到后再补充做种数与新资源。
+    func loadDetailInfo(
+        for item: MagnetSearchItem,
+        onUpdate: @MainActor @escaping ((stars: [MagnetStarItem], magnets: [MagnetTorrentItem])) -> Void
+    ) async throws -> (stars: [MagnetStarItem], magnets: [MagnetTorrentItem]) {
+        let jbTask = Task<Result<(stars: [MagnetStarItem], magnets: [MagnetTorrentItem]), Error>, Never> {
+            do { return .success(try await self.javbus.fetchDetailInfo(for: item)) }
             catch { return .failure(error) }
-        }()
-        async let sbResult: Result<[MagnetSearchItem], Error> = {
-            do { return .success(try await sukebei.search(keyword: keyword)) }
+        }
+        let sbTask = Task<Result<[MagnetTorrentItem], Error>, Never> {
+            guard !item.code.isEmpty else { return .success([]) }
+            do { return .success(try await self.sukebei.fetchMagnets(code: item.code)) }
             catch { return .failure(error) }
-        }()
+        }
 
-        let (jb, sb) = await (jbResult, sbResult)
-        if case let .failure(err) = jb, err is CancellationError { throw err }
-        if case let .failure(err) = sb, err is CancellationError { throw err }
-        try Task.checkCancellation()
+        return try await withTaskCancellationHandler {
+            let jb = await jbTask.value
+            try Task.checkCancellation()
 
-        switch (jb, sb) {
-        case let (.success(jbValue), .success(sbMovies)):
-            return (Self.mergeSearchPage1(keyword: keyword, javbus: jbValue.movies, sukebei: sbMovies), jbValue.stars)
-        case let (.success(jbValue), .failure):
-            return jbValue
-        case let (.failure(jbError), .success(sbMovies)):
-            if !sbMovies.isEmpty { return (sbMovies, []) }
-            throw jbError
-        case let (.failure(jbError), .failure):
-            throw jbError
+            switch jb {
+            case .success(let jbValue):
+                let initialMerged = Self.mergeMagnets(
+                    javbus: jbValue.magnets,
+                    sukebei: [],
+                    prefetched: item.prefetchedMagnets
+                )
+                let initial = (stars: jbValue.stars, magnets: initialMerged)
+                await onUpdate(initial)
+
+                guard !item.code.isEmpty else { return initial }
+                if let sb = await awaitWithSoftTimeout(sbTask, timeout: sukebeiSoftTimeout),
+                   case .success(let sbMagnets) = sb,
+                   !sbMagnets.isEmpty {
+                    let finalMerged = Self.mergeMagnets(
+                        javbus: jbValue.magnets,
+                        sukebei: sbMagnets,
+                        prefetched: item.prefetchedMagnets
+                    )
+                    if finalMerged != initialMerged {
+                        let finalValue = (stars: jbValue.stars, magnets: finalMerged)
+                        await onUpdate(finalValue)
+                        return finalValue
+                    }
+                }
+                return initial
+
+            case .failure(let jbError):
+                if jbError is CancellationError {
+                    sbTask.cancel()
+                    throw jbError
+                }
+                let sb = await sbTask.value
+                try Task.checkCancellation()
+                let sbMagnets = (try? sb.get()) ?? []
+                let merged = Self.mergeMagnets(javbus: [], sukebei: sbMagnets, prefetched: item.prefetchedMagnets)
+                if !merged.isEmpty {
+                    let result = (stars: [MagnetStarItem](), magnets: merged)
+                    await onUpdate(result)
+                    return result
+                }
+                if case JavBusError.notFound = jbError, case .success = sb {
+                    let empty = (stars: [MagnetStarItem](), magnets: [MagnetTorrentItem]())
+                    await onUpdate(empty)
+                    return empty
+                }
+                throw jbError
+            }
+        } onCancel: {
+            jbTask.cancel()
+            sbTask.cancel()
         }
     }
 
     func fetchDetailInfo(for item: MagnetSearchItem) async throws -> (stars: [MagnetStarItem], magnets: [MagnetTorrentItem]) {
-        async let jbResult: Result<(stars: [MagnetStarItem], magnets: [MagnetTorrentItem]), Error> = {
-            do { return .success(try await javbus.fetchDetailInfo(for: item)) }
-            catch { return .failure(error) }
-        }()
-        async let sbResult: Result<[MagnetTorrentItem], Error> = {
-            guard !item.code.isEmpty else { return .success([]) }
-            do { return .success(try await sukebei.fetchMagnets(code: item.code)) }
-            catch { return .failure(error) }
-        }()
+        try await loadDetailInfo(for: item) { _ in }
+    }
 
-        let (jb, sb) = await (jbResult, sbResult)
-        if case let .failure(err) = jb, err is CancellationError { throw err }
-        if case let .failure(err) = sb, err is CancellationError { throw err }
-        try Task.checkCancellation()
+    private func awaitWithSoftTimeout<T: Sendable>(
+        _ task: Task<Result<T, Error>, Never>,
+        timeout: TimeInterval
+    ) async -> Result<T, Error>? {
+        guard timeout > 0 else {
+            task.cancel()
+            return nil
+        }
+        let race = SoftTimeoutRace<Result<T, Error>>()
+        let sleeper = Task {
+            try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+            if race.complete(with: nil) {
+                task.cancel()
+            }
+        }
+        let waiter = Task {
+            let value = await task.value
+            if race.complete(with: value) {
+                sleeper.cancel()
+            }
+        }
+        return await withTaskCancellationHandler {
+            await race.awaitResult()
+        } onCancel: {
+            sleeper.cancel()
+            waiter.cancel()
+            task.cancel()
+            race.complete(with: nil)
+        }
+    }
+}
 
-        let jbValue = try? jb.get()
-        let sbMagnets = (try? sb.get()) ?? []
-        let merged = Self.mergeMagnets(
-            javbus: jbValue?.magnets ?? [],
-            sukebei: sbMagnets,
-            prefetched: item.prefetchedMagnets
-        )
+private final class SoftTimeoutRace<Value: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Value?, Never>?
+    private var resolved = false
+    private var resolvedValue: Value?
 
-        if let jbValue {
-            return (stars: jbValue.stars, magnets: merged)
+    func awaitResult() async -> Value? {
+        await withCheckedContinuation { cont in
+            lock.lock()
+            if resolved {
+                let value = resolvedValue
+                lock.unlock()
+                cont.resume(returning: value)
+            } else {
+                continuation = cont
+                lock.unlock()
+            }
         }
-        if !merged.isEmpty {
-            return (stars: [], magnets: merged)
+    }
+
+    @discardableResult
+    func complete(with value: Value?) -> Bool {
+        lock.lock()
+        guard !resolved else {
+            lock.unlock()
+            return false
         }
-        if case let .failure(jbError) = jb,
-           case JavBusError.notFound = jbError,
-           case .success = sb {
-            return (stars: [], magnets: [])
-        }
-        if case let .failure(jbError) = jb {
-            throw jbError
-        }
-        return (stars: [], magnets: merged)
+        resolved = true
+        resolvedValue = value
+        let cont = continuation
+        continuation = nil
+        lock.unlock()
+        cont?.resume(returning: value)
+        return true
     }
 }

@@ -56,4 +56,48 @@ final class MagnetCoverFallbackTests: XCTestCase {
         XCTAssertEqual(results, [cover, cover])
         XCTAssertEqual(calls.all.count, 1)
     }
+
+    func testCancelledLookupIsNotCachedAsMiss() async throws {
+        let calls = Calls()
+        let fallback = MagnetCoverFallback(lookup: { code in
+            calls.add(code)
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            return nil
+        })
+
+        let pending = Task { await fallback.url(for: "CANC-001") }
+        try await Task.sleep(nanoseconds: 30_000_000)
+        pending.cancel()
+        let cancelledResult = await pending.value
+        XCTAssertNil(cancelledResult)
+
+        _ = await fallback.url(for: "CANC-001")
+        XCTAssertEqual(calls.all.count, 2, "中途取消的探测不得记为未命中缓存")
+    }
+
+    func testDiskCachePersistsAcrossInstancesAndSupportsSyncRead() async throws {
+        let tempFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cover-fallback-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: tempFile) }
+
+        let cover = try XCTUnwrap(URL(string: "https://pics.example/disk001pl.jpg"))
+        let firstCalls = Calls()
+        let first = MagnetCoverFallback(cacheFile: tempFile, lookup: { code in
+            firstCalls.add(code)
+            return cover
+        })
+        let resolved = await first.url(for: "disk-001")
+        XCTAssertEqual(resolved, cover)
+        XCTAssertEqual(first.cachedURL(for: "DISK-001"), cover)
+
+        let secondCalls = Calls()
+        let second = MagnetCoverFallback(cacheFile: tempFile, lookup: { code in
+            secondCalls.add(code)
+            return nil
+        })
+        XCTAssertEqual(second.cachedURL(for: "disk-001"), cover)
+        let restored = await second.url(for: "DISK-001")
+        XCTAssertEqual(restored, cover)
+        XCTAssertTrue(secondCalls.all.isEmpty, "命中磁盘缓存后不应再次探测")
+    }
 }

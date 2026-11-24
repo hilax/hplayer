@@ -168,6 +168,17 @@ struct MagnetFallbackCover: View {
     @State private var url: URL?
     @State private var finished = false
 
+    init(code: String) {
+        self.code = code
+        if !code.isEmpty, let cached = MagnetCoverFallback.shared.cachedURL(for: code) {
+            _url = State(initialValue: cached)
+            _finished = State(initialValue: true)
+        } else {
+            _url = State(initialValue: nil)
+            _finished = State(initialValue: false)
+        }
+    }
+
     var body: some View {
         Group {
             if let url {
@@ -193,9 +204,18 @@ struct MagnetFallbackCover: View {
             }
         }
         .task(id: code) {
+            guard !code.isEmpty else {
+                url = nil
+                finished = true
+                return
+            }
+            if let cached = MagnetCoverFallback.shared.cachedURL(for: code) {
+                url = cached
+                finished = true
+                return
+            }
             url = nil
             finished = false
-            guard !code.isEmpty else { return }
             let found = await MagnetCoverFallback.shared.url(for: code)
             guard !Task.isCancelled else { return }
             url = found
@@ -324,8 +344,9 @@ struct MagnetPosterGrid: View {
     }
 }
 
-/// 最新出种横滑货架（Sukebei RSS）。
+/// 最新出种横滑货架（Sukebei RSS，限制最多 20 部避免过多离屏封面探测）。
 struct MagnetFreshShelf: View {
+    static let maxItems = 20
     let movies: [MagnetSearchItem]
 
     var body: some View {
@@ -333,7 +354,7 @@ struct MagnetFreshShelf: View {
             MagnetSectionHeader(title: "最新出种", trailing: "Sukebei RSS")
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(alignment: .top, spacing: 10) {
-                    ForEach(movies) { movie in
+                    ForEach(Array(movies.prefix(Self.maxItems))) { movie in
                         MagnetPosterCard(movie: movie)
                             .frame(width: 108)
                     }

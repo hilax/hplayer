@@ -31,9 +31,12 @@ actor DMMClient {
         if let session {
             self.session = session
         } else {
-            let configuration = URLSessionConfiguration.ephemeral
+            // 使用 default 配置复用 HTTP/2 连接池（无 Cookie / URLCache），避免每批封面探测重复握手。
+            let configuration = URLSessionConfiguration.default
             configuration.httpShouldSetCookies = false
             configuration.httpCookieStorage = nil
+            configuration.urlCache = nil
+            configuration.httpMaximumConnectionsPerHost = 6
             self.session = URLSession(configuration: configuration)
         }
     }
@@ -107,23 +110,40 @@ actor DMMClient {
 
     // MARK: 封面图片服务
 
+    private static let noRedirectDelegate = NoRedirectDelegate()
+
     func lookupCover(_ code: String) async -> MediaMetadata? {
         guard let urls = Self.coverURLs(for: code) else { return nil }
-        // 几个常见的地址同时检查，按先后顺序取第一个存在的。
-        var found: [Int: URL] = [:]
-        await withTaskGroup(of: (Int, URL?).self) { group in
-            for (index, url) in urls.enumerated() {
-                group.addTask { (index, await self.exists(url)) }
-            }
-            for await (index, url) in group { if let url { found[index] = url } }
+        // 分两批探测：优先命中率最高的 digital/video，任一命中立即返回，跳过 mono/movie/adult 的无效探测。
+        let firstBatch = Array(urls.prefix(2))
+        let secondBatch = Array(urls.dropFirst(2))
+
+        var matchedURL = await probeBatch(firstBatch)
+        if matchedURL == nil, !secondBatch.isEmpty, !Task.isCancelled {
+            matchedURL = await probeBatch(secondBatch)
         }
-        guard let index = found.keys.sorted().first, let url = found[index] else {
-            MatchDiagnostics.shared.record("DMM 封面 \(code) 4 个常见地址都不存在")
+
+        guard let url = matchedURL else {
+            MatchDiagnostics.shared.record("DMM 封面 \(code) 常见地址都不存在")
             return nil
         }
         guard let normalized = AVCatalogCode.extract(code) else { return nil }
         MatchDiagnostics.shared.record("DMM 封面 \(code) 找到 \(url.deletingLastPathComponent().lastPathComponent)")
         return Self.metadata(code: normalized, title: "", year: "", poster: url.absoluteString)
+    }
+
+    private func probeBatch(_ urls: [URL]) async -> URL? {
+        var found: [Int: URL] = [:]
+        await withTaskGroup(of: (Int, URL?).self) { group in
+            for (index, url) in urls.enumerated() {
+                group.addTask { (index, await self.exists(url)) }
+            }
+            for await (index, url) in group {
+                if let url { found[index] = url }
+            }
+        }
+        guard let index = found.keys.sorted().first else { return nil }
+        return found[index]
     }
 
     /// START-656 → start00656、1start00656，分别在数字影片和碟片两个目录下找。
@@ -146,11 +166,12 @@ actor DMMClient {
         var request = URLRequest(url: url)
         request.httpMethod = "HEAD"
         request.httpShouldHandleCookies = false
-        request.timeoutInterval = 8
-        guard await waitForSlot(interval: 0.1), !Task.isCancelled else { return nil }
+        request.timeoutInterval = 6
+        guard await waitForSlot(interval: 0.03), !Task.isCancelled else { return nil }
         let result: (Data, URLResponse)
         do {
-            result = try await session.data(for: request)
+            // 禁止自动跟随 302 到 now_printing.jpg，遇到跳转直接判无图，避免多一轮跨域名请求。
+            result = try await session.data(for: request, delegate: Self.noRedirectDelegate)
         } catch {
             if !(error is CancellationError) {
                 MatchDiagnostics.shared.record("DMM 封面 \(url.deletingLastPathComponent().lastPathComponent) 请求失败：\(MatchDiagnostics.describe(error))")
@@ -252,4 +273,16 @@ actor DMMClient {
 extension MediaMetadata {
     /// R18.dev 和 DMM 的封面是横版的整张包装（正面在右半边），海报位置要靠右裁切。
     var isWideJacket: Bool { sourceKind == .r18dev || sourceKind == .dmm }
+}
+
+private final class NoRedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        completionHandler(nil)
+    }
 }

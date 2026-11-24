@@ -393,10 +393,26 @@ struct StudioMoviesView: View {
         isLoading = true
         errorText = nil
         paging = PagingState()
+        var appliedFirstUpdate = false
         do {
-            let list = try await MagnetAggregator.shared.fetchStudio(studio, page: 1)
-            movies = MagnetAggregator.mergeUniqueMovies([], with: list).merged
-            paging.hasMore = !list.isEmpty
+            let list = try await MagnetAggregator.shared.loadStudioPage1(studio) { partial in
+                guard !Task.isCancelled else { return }
+                if !appliedFirstUpdate {
+                    movies = MagnetAggregator.mergeUniqueMovies([], with: partial).merged
+                    appliedFirstUpdate = true
+                } else {
+                    movies = MagnetAggregator.mergeUniqueMovies(partial, with: movies).merged
+                }
+                paging.hasMore = !movies.isEmpty
+                isLoading = false
+            }
+            guard !Task.isCancelled else { return }
+            if !appliedFirstUpdate {
+                movies = MagnetAggregator.mergeUniqueMovies([], with: list).merged
+            } else {
+                movies = MagnetAggregator.mergeUniqueMovies(list, with: movies).merged
+            }
+            paging.hasMore = !movies.isEmpty
             isLoading = false
         } catch {
             if error is CancellationError { return }
@@ -505,12 +521,19 @@ struct MagnetDetailView: View {
     let item: MagnetSearchItem
 
     @EnvironmentObject private var appState: AppState
-    @State private var magnets: [MagnetTorrentItem] = []
+    @State private var magnets: [MagnetTorrentItem]
     @State private var stars: [MagnetStarItem] = []
-    @State private var isLoading = true
+    @State private var isLoading: Bool
+    @State private var hasLoadedDetails = false
     @State private var errorText: String?
     /// 点了播放：直接打开播放窗口，解析进度在窗口里显示；关掉后仍停留在这一页。
     @State private var playLaunch: MagnetPlaybackRequest?
+
+    init(item: MagnetSearchItem) {
+        self.item = item
+        _magnets = State(initialValue: item.prefetchedMagnets)
+        _isLoading = State(initialValue: item.prefetchedMagnets.isEmpty)
+    }
 
     var body: some View {
         ScrollView {
@@ -555,8 +578,8 @@ struct MagnetDetailView: View {
             play(torrent, mode: mode)
         }
         .task {
-            // 从女优页返回时页面会再次出现，已经取到的磁力不重新拉取。
-            guard magnets.isEmpty, stars.isEmpty, errorText == nil else { return }
+            // 从女优页返回时页面会再次出现，已经拉完详情就不再重复请求。
+            guard !hasLoadedDetails, errorText == nil else { return }
             await fetchDetails()
         }
     }
@@ -644,7 +667,10 @@ struct MagnetDetailView: View {
         if isLoading {
             MagnetLoadingView(style: .list)
         } else if let error = errorText {
-            MagnetErrorState(message: error) { Task { await fetchDetails() } }
+            MagnetErrorState(message: error) {
+                hasLoadedDetails = false
+                Task { await fetchDetails() }
+            }
         } else if magnets.isEmpty {
             MagnetEmptyState(icon: .archive, title: "该影片暂无可用的磁力链接")
         } else {
@@ -687,17 +713,25 @@ struct MagnetDetailView: View {
 
     @MainActor
     private func fetchDetails() async {
-        isLoading = true
+        isLoading = magnets.isEmpty
         errorText = nil
         do {
-            let (actresses, torrents) = try await MagnetAggregator.shared.fetchDetailInfo(for: item)
+            let (actresses, torrents) = try await MagnetAggregator.shared.loadDetailInfo(for: item) { partial in
+                guard !Task.isCancelled else { return }
+                stars = partial.stars
+                magnets = partial.magnets
+                isLoading = false
+            }
             stars = actresses
             magnets = torrents
+            hasLoadedDetails = true
             isLoading = false
         } catch {
             // 页面被关闭时任务会被取消，不用再更新界面。
             if error is CancellationError { return }
-            errorText = error.localizedDescription
+            if magnets.isEmpty {
+                errorText = error.localizedDescription
+            }
             isLoading = false
         }
     }

@@ -6,6 +6,7 @@ final class RoutedURLProtocol: URLProtocol {
         var status = 200
         var headers: [String: String] = [:]
         var body = Data()
+        var delay: TimeInterval = 0
 
         static func json(_ object: Any, status: Int = 200) -> Reply {
             Reply(status: status, headers: ["Content-Type": "application/json"], body: (try? JSONSerialization.data(withJSONObject: object)) ?? Data())
@@ -67,6 +68,10 @@ final class RoutedURLProtocol: URLProtocol {
         return result
     }
 
+    private let instanceLock = NSLock()
+    private var isCancelled = false
+    private var pendingWork: DispatchWorkItem?
+
     override func startLoading() {
         let request = Self.materialized(self.request)
         Self.lock.lock()
@@ -74,11 +79,42 @@ final class RoutedURLProtocol: URLProtocol {
         let route = Self.route
         Self.lock.unlock()
         let reply = route(request)
-        let response = HTTPURLResponse(url: request.url!, statusCode: reply.status, httpVersion: nil, headerFields: reply.headers)!
-        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: reply.body)
-        client?.urlProtocolDidFinishLoading(self)
+        if reply.delay <= 0 {
+            let response = HTTPURLResponse(url: request.url!, statusCode: reply.status, httpVersion: nil, headerFields: reply.headers)!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: reply.body)
+            client?.urlProtocolDidFinishLoading(self)
+            return
+        }
+
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.instanceLock.lock()
+            let stopped = self.isCancelled
+            self.pendingWork = nil
+            self.instanceLock.unlock()
+            guard !stopped else { return }
+            let response = HTTPURLResponse(url: request.url!, statusCode: reply.status, httpVersion: nil, headerFields: reply.headers)!
+            self.client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            self.client?.urlProtocol(self, didLoad: reply.body)
+            self.client?.urlProtocolDidFinishLoading(self)
+        }
+        instanceLock.lock()
+        if isCancelled {
+            instanceLock.unlock()
+            return
+        }
+        pendingWork = work
+        instanceLock.unlock()
+        DispatchQueue.global().asyncAfter(deadline: .now() + reply.delay, execute: work)
     }
 
-    override func stopLoading() {}
+    override func stopLoading() {
+        instanceLock.lock()
+        isCancelled = true
+        let work = pendingWork
+        pendingWork = nil
+        instanceLock.unlock()
+        work?.cancel()
+    }
 }
