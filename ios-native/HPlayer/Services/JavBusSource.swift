@@ -403,6 +403,15 @@ final class JavBusSource: MagnetSearchSource, @unchecked Sendable {
         return (stars, Self.sortMagnets(Self.parseMagnetsFromHTML(detailHTML)))
     }
 
+    /// 只取影片详情页里的参演女优，不取磁力（少一次 AJAX 请求）。列表卡片显示女优名用。
+    func fetchStars(detailPath: String) async throws -> [MagnetStarItem] {
+        guard !detailPath.isEmpty, let detailURL = makeURL(path: detailPath) else {
+            throw JavBusError.invalidURL
+        }
+        let html = try await fetchData(from: detailURL)
+        return Self.parseStarsFromMovieDetail(html, baseURLString: currentHost)
+    }
+
     func fetchMagnets(for item: MagnetSearchItem) async throws -> [MagnetTorrentItem] {
         let (_, magnets) = try await fetchDetailInfo(for: item)
         return magnets

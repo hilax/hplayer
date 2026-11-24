@@ -340,7 +340,12 @@ struct MagnetSearchView: View {
         return Group {
             if fresh.isEmpty && list.isEmpty {
                 if isLatestLoading || freshLoading {
-                    MagnetLoadingView(style: .grid)
+                    VStack(alignment: .leading, spacing: 24) {
+                        if freshLoading {
+                            MagnetFreshShelfSkeleton()
+                        }
+                        MagnetLoadingView(style: .grid)
+                    }
                 } else if let latestError {
                     MagnetErrorState(message: latestError, retry: { loadCategory(.latest) })
                 } else {
@@ -350,6 +355,8 @@ struct MagnetSearchView: View {
                 VStack(alignment: .leading, spacing: 24) {
                     if !fresh.isEmpty {
                         MagnetFreshShelf(movies: fresh)
+                    } else if freshLoading {
+                        MagnetFreshShelfSkeleton()
                     }
 
                     VStack(alignment: .leading, spacing: 12) {

@@ -236,6 +236,7 @@ struct HomeSlideImage: View {
 /// 卡片上不放按钮：点卡片就是播放 / 进详情，更多操作长按卡片。
 struct HomeSlideCaption: View {
     let slide: HomeSlide
+    @State private var resolvedMagnetStars: [String: [String]] = [:]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -249,8 +250,9 @@ struct HomeSlideCaption: View {
                            subtitle: ["在线动漫", banner.displayRemarks].filter { !$0.isEmpty }.joined(separator: " · "))
             case .magnet(let movie):
                 titleBlock(title: movie.code.isEmpty ? movie.title : movie.code,
-                           subtitle: [movie.stars.first?.name ?? "", movie.releaseDate ?? ""].filter { !$0.isEmpty }
+                           subtitle: [magnetStarNames(movie) ?? "", movie.releaseDate ?? ""].filter { !$0.isEmpty }
                                .joined(separator: " · "))
+                    .task(id: movie.id) { await resolveMagnetStars(movie) }
             case .drama(let drama):
                 titleBlock(title: drama.title, subtitle: drama.subtitle)
             case .jable(let video):
@@ -271,6 +273,20 @@ struct HomeSlideCaption: View {
         if case .library(let item) = slide.content, !HomeSlide.hasWideArtwork(item) { return 124 }
         if case .drama = slide.content { return 124 }
         return 64
+    }
+
+    /// 磁力轮播的女优名：条目自带的、缓存里的，或者停留后查到的。
+    private func magnetStarNames(_ movie: MagnetSearchItem) -> String? {
+        let names = resolvedMagnetStars[movie.id] ?? MagnetStarNamesText.known(movie)
+        return MagnetStarNames.display(names ?? [], limit: 2)
+    }
+
+    private func resolveMagnetStars(_ movie: MagnetSearchItem) async {
+        guard MagnetStarNamesText.known(movie) == nil, resolvedMagnetStars[movie.id] == nil else { return }
+        try? await Task.sleep(nanoseconds: MagnetStarNamesText.settleDelay)
+        guard !Task.isCancelled, let found = await MagnetStarNames.shared.names(for: movie),
+              !Task.isCancelled else { return }
+        resolvedMagnetStars[movie.id] = found
     }
 
     private func librarySubtitle(_ item: HomeMediaItem) -> String {

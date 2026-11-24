@@ -22,6 +22,49 @@ enum MagnetLayout {
     ]
 
     static let posterRatio: CGFloat = 3.0 / 4.0
+
+    /// 最新出种的横版卡片：JavBus / DMM 大封面的比例约 1.49，用 3:2 几乎不裁
+    static let wideRatio: CGFloat = 3.0 / 2.0
+}
+
+// MARK: - 日期
+
+enum MagnetDates {
+    private static let dayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
+
+    /// 「2026-11-21」：今年的写成「11-21」，往年的保持原样。
+    static func short(_ date: String, now: Date = Date()) -> String {
+        let parts = date.split(separator: "-")
+        guard parts.count == 3, parts[0].count == 4 else { return date }
+        let year = Calendar(identifier: .gregorian).component(.year, from: now)
+        return String(parts[0]) == String(year) ? "\(parts[1])-\(parts[2])" : date
+    }
+
+    /// 出种时间：今天 / 昨天 / N 天前（一周内）/ 月-日。Sukebei 的日期是按 UTC 记的，天数也按 UTC 算。
+    static func freshness(_ date: String?, now: Date = Date()) -> (label: String, isToday: Bool)? {
+        guard let date, let day = dayFormatter.date(from: date) else { return nil }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? calendar.timeZone
+        let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: day),
+                                           to: calendar.startOfDay(for: now)).day ?? 0
+        switch days {
+        case ..<1:
+            return ("今天", true)
+        case 1:
+            return ("昨天", false)
+        case 2...6:
+            return ("\(days) 天前", false)
+        default:
+            return (short(date, now: now), false)
+        }
+    }
 }
 
 // MARK: - 封面 / 头像
@@ -165,11 +208,14 @@ struct MagnetCover: View {
 /// 查到之前只显示底色；确实没有（还没发行、DMM 也没收录）才显示占位图标。
 struct MagnetFallbackCover: View {
     let code: String
+    /// 横版卡片（最新出种）：整张封面都显示，不只取正面
+    var wide = false
     @State private var url: URL?
     @State private var finished = false
 
-    init(code: String) {
+    init(code: String, wide: Bool = false) {
         self.code = code
+        self.wide = wide
         if !code.isEmpty, let cached = MagnetCoverFallback.shared.cachedURL(for: code) {
             _url = State(initialValue: cached)
             _finished = State(initialValue: true)
@@ -188,6 +234,8 @@ struct MagnetFallbackCover: View {
                         // DMM 对没有封面的片会回一张 90×122 的「暂无图片」占位图（状态码还是 200），当作没有。
                         if max(image.size.width, image.size.height) < 200 {
                             placeholder
+                        } else if wide {
+                            MagnetWideCover.artwork(image)
                         } else {
                             MagnetCover.front(of: image, crop: MagnetCover.crop(for: image.size) ?? .full)
                         }
@@ -230,6 +278,66 @@ struct MagnetFallbackCover: View {
     }
 }
 
+/// 横版封面（最新出种卡片）：JavBus / DMM 的大封面本来就是横版（左背面、右正面），整张显示；
+/// 竖版的图（单张正面、列表小图）放在同一张图的模糊放大底上居中，不硬裁成一条。
+/// 取图顺序和 MagnetCover 一样：JavBus 大图 → 列表小图 → DMM 官方封面。
+struct MagnetWideCover: View {
+    let url: URL?
+    var code: String = ""
+
+    var body: some View {
+        if let hires = MagnetCover.highResURL(for: url) {
+            PipelineImage(url: hires, maxPixel: 800) { phase in
+                switch phase {
+                case let .loaded(image):
+                    Self.artwork(image)
+                case .loading:
+                    Rectangle().fill(Theme.surfaceRaised)
+                case .failed:
+                    thumbnail
+                }
+            }
+        } else if url != nil {
+            thumbnail
+        } else {
+            MagnetFallbackCover(code: code, wide: true)
+        }
+    }
+
+    private var thumbnail: some View {
+        PipelineImage(url: url, maxPixel: 420) { phase in
+            switch phase {
+            case let .loaded(image):
+                Self.artwork(image)
+            case .loading:
+                Rectangle().fill(Theme.surfaceRaised)
+            case .failed:
+                MagnetFallbackCover(code: code, wide: true)
+            }
+        }
+    }
+
+    @ViewBuilder
+    static func artwork(_ image: UIImage) -> some View {
+        if image.size.width >= image.size.height * 1.2 {
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFill()
+        } else {
+            ZStack {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .blur(radius: 18, opaque: true)
+                    .overlay { Color.black.opacity(0.28) }
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+            }
+        }
+    }
+}
+
 /// 浮在封面上的番号小标签。底色固定是深色，文字就必须固定是白色：
 /// 之前用的 `Theme.goldLight` 在浅色模式下是深灰，深灰字落在深色底上几乎看不见。
 struct MagnetCodeChip: View {
@@ -266,9 +374,92 @@ struct MagnetStarAvatar: View {
     }
 }
 
+// MARK: - 卡片上的女优名
+
+private struct MagnetShowsStarNamesKey: EnvironmentKey {
+    static let defaultValue = true
+}
+
+extension EnvironmentValues {
+    /// 卡片上要不要写女优名。女优页自己的作品列表全是她，不用每张都写一遍（也省掉一批详情页请求）。
+    var magnetShowsStarNames: Bool {
+        get { self[MagnetShowsStarNamesKey.self] }
+        set { self[MagnetShowsStarNamesKey.self] = newValue }
+    }
+}
+
+/// 卡片上的女优名（「A、B 等」）。列表页本身不带演员：已经查过的从缓存直接出（首帧就有，不跳），
+/// 没查过的等卡片在屏幕上停一会儿再去查（MagnetStarNames），快速滑过的卡片不发请求。
+/// 没有名字时显示 fallback（灰一档），fallback 也没有就是一段空文字（占住这一行的高度）。
+struct MagnetStarNamesText: View {
+    let movie: MagnetSearchItem
+    var font: Font
+    var color: Color
+    var fallback: String?
+    var limit: Int
+
+    @Environment(\.magnetShowsStarNames) private var enabled
+    @State private var names: [String]?
+
+    /// 卡片停留多久才去查
+    static let settleDelay: UInt64 = 450_000_000
+
+    init(movie: MagnetSearchItem, font: Font = .scaled(11, weight: .semibold),
+         color: Color = Theme.textSecondary, fallback: String? = nil, limit: Int = 2) {
+        self.movie = movie
+        self.font = font
+        self.color = color
+        self.fallback = fallback
+        self.limit = limit
+        _names = State(initialValue: Self.known(movie))
+    }
+
+    /// 已经知道的名字：条目自带的，或者缓存里的。
+    static func known(_ movie: MagnetSearchItem) -> [String]? {
+        if !movie.stars.isEmpty { return movie.stars.map(\.name) }
+        return MagnetStarNames.shared.cachedNames(for: movie)
+    }
+
+    private var shownNames: String? {
+        guard enabled, let names else { return nil }
+        return MagnetStarNames.display(names, limit: limit)
+    }
+
+    var body: some View {
+        Group {
+            if let shownNames {
+                Text(shownNames)
+                    .font(font)
+                    .foregroundStyle(color)
+                    .transition(.opacity)
+            } else {
+                Text(fallback ?? "")
+                    .font(font.weight(.regular))
+                    .foregroundStyle(Theme.textTertiary)
+            }
+        }
+        .lineLimit(1)
+        .task(id: movie.id) { await resolve() }
+    }
+
+    private func resolve() async {
+        if let known = Self.known(movie) {
+            names = known
+            return
+        }
+        names = nil
+        guard enabled, !movie.code.isEmpty || !movie.detailPath.isEmpty else { return }
+        try? await Task.sleep(nanoseconds: Self.settleDelay)
+        guard !Task.isCancelled else { return }
+        let found = await MagnetStarNames.shared.names(for: movie)
+        guard !Task.isCancelled, let found else { return }
+        withAnimation(.easeOut(duration: 0.2)) { names = found }
+    }
+}
+
 // MARK: - 影片：海报卡片与行
 
-/// 海报卡片：3:4 封面（左上角番号）、两行标题、发行日期。点击进入磁力详情。
+/// 海报卡片：3:4 封面（左上角番号）、两行标题、女优与发行日期。点击进入磁力详情。
 struct MagnetPosterCard: View {
     let movie: MagnetSearchItem
 
@@ -312,10 +503,18 @@ struct MagnetPosterCard: View {
                     .multilineTextAlignment(.leading)
                     .frame(maxWidth: .infinity, minHeight: 32, alignment: .topLeading)
 
-                Text([movie.stars.first?.name ?? "", movie.releaseDate ?? ""].filter { !$0.isEmpty }.joined(separator: " · "))
-                    .font(.scaled(11))
-                    .secondaryTextStyle()
-                    .lineLimit(1)
+                // 女优在左（放不下先截女优名），日期在右；今年的日期省掉年份
+                HStack(spacing: 6) {
+                    MagnetStarNamesText(movie: movie)
+                    Spacer(minLength: 0)
+                    if let date = movie.releaseDate {
+                        Text(MagnetDates.short(date))
+                            .font(.scaled(11).monospacedDigit())
+                            .tertiaryTextStyle()
+                            .lineLimit(1)
+                            .layoutPriority(1)
+                    }
+                }
             }
         }
         .buttonStyle(.pressable(scale: 0.97))
@@ -344,25 +543,206 @@ struct MagnetPosterGrid: View {
     }
 }
 
-/// 最新出种横滑货架（Sukebei RSS，限制最多 20 部避免过多离屏封面探测）。
+// MARK: - 最新出种
+
+/// 最新出种卡片用到的种子信息：从 Sukebei 预取的磁力里汇总。
+struct MagnetFreshSummary {
+    var freshness: (label: String, isToday: Bool)?
+    var hasSubtitles: Bool
+    /// 「4K」或「高清」，都不是就没有
+    var quality: String?
+    /// 各个种子里最多的做种数
+    var seeders: Int?
+    /// 排第一的种子的大小
+    var size: String?
+
+    init(_ movie: MagnetSearchItem, now: Date = Date()) {
+        let torrents = movie.prefetchedMagnets
+        freshness = MagnetDates.freshness(movie.releaseDate, now: now)
+        hasSubtitles = torrents.contains { $0.hasSubtitles }
+        if torrents.contains(where: { MagnetFreshSummary.isUHD($0.name) }) {
+            quality = "4K"
+        } else if torrents.contains(where: { $0.isHD }) {
+            quality = "高清"
+        } else {
+            quality = nil
+        }
+        seeders = torrents.compactMap(\.seeders).max()
+        let firstSize = torrents.first?.size ?? ""
+        size = firstSize.isEmpty || firstSize == "未知大小" ? nil : firstSize
+    }
+
+    static func isUHD(_ name: String) -> Bool {
+        name.range(of: #"(?i)(?<![a-z0-9])(?:4k|2160p|uhd)(?![a-z0-9])"#, options: .regularExpression) != nil
+    }
+}
+
+/// 最新出种卡片：3:2 横版大封面（整张封面），左上角出种时间（今天是琥珀色），左下角番号，
+/// 右下角「中字」（白底黑字）和「4K / 高清」（白色描边）——和磁力详情页的资源标签同一套语义；
+/// 下面一行片名，一行女优（还没查到时先写大小）+ 做种数。点进磁力详情。
+struct MagnetFreshCard: View {
+    static let width: CGFloat = 264
+
+    let movie: MagnetSearchItem
+
+    var body: some View {
+        let info = MagnetFreshSummary(movie)
+        NavigationLink {
+            MagnetDetailView(item: movie)
+        } label: {
+            VStack(alignment: .leading, spacing: 8) {
+                cover(info)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(movie.title)
+                        .font(.scaled(13, weight: .medium))
+                        .foregroundStyle(Theme.textPrimary)
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    HStack(spacing: 8) {
+                        MagnetStarNamesText(movie: movie, font: .scaled(12, weight: .semibold),
+                                            color: Theme.textSecondary, fallback: info.size)
+                        Spacer(minLength: 0)
+                        if let seeders = info.seeders, seeders > 0 {
+                            Text("\(seeders) 做种")
+                                .font(.scaled(11).monospacedDigit())
+                                .foregroundStyle(Theme.textTertiary)
+                                .lineLimit(1)
+                                .layoutPriority(1)
+                        }
+                    }
+                }
+            }
+            .frame(width: Self.width, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.pressable(scale: 0.97))
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("magnet.fresh.\(movie.id)")
+    }
+
+    private func cover(_ info: MagnetFreshSummary) -> some View {
+        let shape = RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
+        return Color.clear
+            .aspectRatio(MagnetLayout.wideRatio, contentMode: .fit)
+            .overlay {
+                MagnetWideCover(url: movie.coverURL, code: movie.code)
+            }
+            // 底部压一层渐暗，番号和标签在任何封面上都看得清
+            .overlay(alignment: .bottom) {
+                LinearGradient(colors: [Color.black.opacity(0), Color.black.opacity(0.62)],
+                               startPoint: .top, endPoint: .bottom)
+                    .frame(height: 64)
+                    .allowsHitTesting(false)
+            }
+            .clipShape(shape)
+            .contentShape(shape)
+            .overlay {
+                shape.strokeBorder(Theme.hairline, lineWidth: Theme.Stroke.hairline)
+            }
+            .overlay(alignment: .topLeading) {
+                if let freshness = info.freshness {
+                    TagBadge(text: freshness.label, style: freshness.isToday ? .accent : .onArtwork)
+                        .padding(8)
+                }
+            }
+            .overlay(alignment: .bottomLeading) {
+                if !movie.code.isEmpty {
+                    Text(movie.code)
+                        .font(.scaled(15, weight: .bold).monospacedDigit())
+                        .foregroundStyle(Color.white)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                        .shadow(color: Color.black.opacity(0.35), radius: 3, y: 1)
+                        .padding(.leading, 10)
+                        .padding(.bottom, 8)
+                }
+            }
+            .overlay(alignment: .bottomTrailing) {
+                HStack(spacing: 4) {
+                    if info.hasSubtitles {
+                        artworkTag("中字", filled: true)
+                    }
+                    if let quality = info.quality {
+                        artworkTag(quality, filled: false)
+                    }
+                }
+                .padding(.trailing, 8)
+                .padding(.bottom, 9)
+            }
+    }
+
+    /// 封面上的小标签：实心是白底黑字，空心是白色描边白字。
+    private func artworkTag(_ text: String, filled: Bool) -> some View {
+        let shape = RoundedRectangle(cornerRadius: Theme.Radius.badge, style: .continuous)
+        return Text(text)
+            .font(Theme.Typo.badge)
+            .foregroundStyle(filled ? Theme.ink : Color.white)
+            .lineLimit(1)
+            .padding(.horizontal, 5)
+            .frame(minHeight: 18)
+            .background(filled ? Theme.paper : Color.black.opacity(0.28), in: shape)
+            .overlay {
+                if !filled {
+                    shape.strokeBorder(Color.white.opacity(0.75), lineWidth: 1)
+                }
+            }
+    }
+}
+
+/// 最新出种横滑货架（Sukebei RSS 刚出种的新作，最多 20 部，避免过多离屏封面探测）。
+/// 横版大卡片，和下面「最新上架」的三列竖海报拉开层次；松手按卡片吸附。
 struct MagnetFreshShelf: View {
     static let maxItems = 20
     let movies: [MagnetSearchItem]
 
     var body: some View {
+        let shown = Array(movies.prefix(Self.maxItems))
         VStack(alignment: .leading, spacing: 12) {
-            MagnetSectionHeader(title: "最新出种", trailing: "Sukebei RSS")
+            MagnetSectionHeader(title: "最新出种", trailing: "按出种时间")
             ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(alignment: .top, spacing: 10) {
-                    ForEach(Array(movies.prefix(Self.maxItems))) { movie in
-                        MagnetPosterCard(movie: movie)
-                            .frame(width: 108)
+                LazyHStack(alignment: .top, spacing: 12) {
+                    ForEach(Array(shown.enumerated()), id: \.element.id) { index, movie in
+                        MagnetFreshCard(movie: movie)
+                            .shelfCard()
+                            .prefetchArtwork(after: index, in: shown, count: 3, maxPixel: 800) {
+                                MagnetCover.highResURL(for: $0.coverURL)?.absoluteString ?? ""
+                            }
                     }
                 }
-                .padding(.horizontal, Theme.contentInset)
+                .shelfContent()
             }
+            .shelfScrolling()
             .padding(.horizontal, -Theme.contentInset)
         }
+    }
+}
+
+/// 最新出种还没到时的占位：和卡片同尺寸的灰块，到了不跳。
+struct MagnetFreshShelfSkeleton: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            MagnetSectionHeader(title: "最新出种", trailing: "按出种时间")
+            HStack(alignment: .top, spacing: 12) {
+                ForEach(0 ..< 2, id: \.self) { _ in
+                    VStack(alignment: .leading, spacing: 8) {
+                        RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
+                            .fill(Theme.surfaceRaised)
+                            .frame(width: MagnetFreshCard.width, height: MagnetFreshCard.width / MagnetLayout.wideRatio)
+                        RoundedRectangle(cornerRadius: Theme.Radius.badge, style: .continuous)
+                            .fill(Theme.surfaceRaised)
+                            .frame(width: MagnetFreshCard.width * 0.78, height: 10)
+                        RoundedRectangle(cornerRadius: Theme.Radius.badge, style: .continuous)
+                            .fill(Theme.surfaceRaised)
+                            .frame(width: MagnetFreshCard.width * 0.42, height: 10)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("最新出种正在加载")
     }
 }
 
@@ -411,12 +791,9 @@ struct MagnetListRow: View {
                     Spacer(minLength: 0)
 
                     HStack(spacing: 8) {
-                        if let star = movie.stars.first {
-                            Text(star.name)
-                                .font(.scaled(12, weight: .semibold))
-                                .foregroundStyle(Theme.accent)
-                                .lineLimit(1)
-                        }
+                        // 女优在左、日期在右（和海报卡一样）；还没查到女优时左边是空的，日期位置不变
+                        MagnetStarNamesText(movie: movie, font: .scaled(12, weight: .semibold), color: Theme.accent)
+                        Spacer(minLength: 0)
                         if let date = movie.releaseDate {
                             Text(date)
                                 .font(.scaled(12))

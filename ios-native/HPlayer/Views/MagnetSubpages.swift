@@ -150,6 +150,8 @@ struct StarMoviesView: View {
                     retry: { Task { await loadFirstPage() } },
                     loadMore: { Task { await loadMore() } }
                 )
+                // 这一页的作品全是她：卡片上不再逐张写女优名，也不去查
+                .environment(\.magnetShowsStarNames, false)
                 .padding(.horizontal, Theme.contentInset)
                 .padding(.top, 16)
                 .padding(.bottom, 40)
@@ -726,6 +728,12 @@ struct MagnetDetailView: View {
             magnets = torrents
             hasLoadedDetails = true
             isLoading = false
+            // 记下参演女优：回到列表时这张卡片直接有名字，不用再查一次
+            if !actresses.isEmpty {
+                let names = actresses.map(\.name)
+                let movie = item
+                Task { await MagnetStarNames.shared.record(names, for: movie) }
+            }
         } catch {
             // 页面被关闭时任务会被取消，不用再更新界面。
             if error is CancellationError { return }
