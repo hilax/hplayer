@@ -116,6 +116,42 @@ final class MagnetStarNamesTests: XCTestCase {
         XCTAssertTrue(calls.all.isEmpty, "Names seen on the detail page are reused by the list cards")
     }
 
+    private func waitUntil(_ condition: () -> Bool) async {
+        for _ in 0 ..< 200 where !condition() {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+    }
+
+    func testPrefetchFillsTheCacheWithoutAWaitingCard() async {
+        let calls = Calls()
+        let store = MagnetStarNames(startInterval: 0, lookup: { item in
+            calls.add(item.code)
+            return .found(["名字 \(item.code)"])
+        })
+        await store.prefetch([movie("PRE-001"), movie("PRE-002")])
+        await waitUntil { calls.all.count == 2 }
+        await waitUntil { store.cachedNames(for: movie("PRE-002")) != nil }
+        XCTAssertEqual(Set(calls.all), ["PRE-001", "PRE-002"])
+        XCTAssertEqual(store.cachedNames(for: movie("PRE-001")), ["名字 PRE-001"],
+                       "A card scrolled into view later reads the name on its first frame")
+    }
+
+    func testIdlePrefetchKeepsOnlyTheMostRecentBatch() async {
+        let calls = Calls()
+        let store = MagnetStarNames(startInterval: 0, lookup: { item in
+            calls.add(item.code)
+            return .none
+        })
+        let items = (0 ..< 20).map { movie(String(format: "IDL-%03d", $0)) }
+        await store.prefetch(items)
+        await waitUntil { calls.all.count >= MagnetStarNames.maxIdlePrefetch }
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(calls.all.count, MagnetStarNames.maxIdlePrefetch,
+                       "Prefetches nobody waits for are capped so a fast fling does not flood the site")
+        XCTAssertFalse(calls.all.contains("IDL-000"), "The oldest prefetches (already scrolled past) are dropped")
+        XCTAssertTrue(calls.all.contains("IDL-019"))
+    }
+
     func testDiskCachePersistsAcrossInstances() async throws {
         let file = FileManager.default.temporaryDirectory
             .appendingPathComponent("star-names-\(UUID().uuidString).json")

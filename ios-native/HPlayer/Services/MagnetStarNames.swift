@@ -3,13 +3,13 @@ import Foundation
 /// 磁力卡片上的女优名。
 ///
 /// JavBus 的列表页（最新、片商、搜索）和 Sukebei RSS 都不带演员，只有影片详情页里有。
-/// 卡片在屏幕上停一会儿后，按番号取一次详情页（只取页面，不取磁力）解析出参演女优；
+/// 卡片一出现就按番号取一次详情页（只取页面，不取磁力）解析出参演女优，并顺手预取后面几张；
 /// JavBus 还没收录（404，刚出种的新片常见）时再问 r18.dev。
 ///
 /// - 结果按番号缓存在内存和磁盘：查到的长期保存（演员不会变）；确认没有演员的（素人、合集、刚登记还没补）
 ///   记一天；网络出错只记两分钟。
-/// - 同时最多两个请求，两次开始之间至少隔一小段；后进先出，先查刚滑到屏幕上的卡片。
-///   卡片滑走（任务取消）且还没轮到的，直接从队列里拿掉。
+/// - 同时最多三个请求，两次开始之间隔一小段。屏幕上正在等的卡片先查（按出现顺序，从上往下），
+///   再查预取的；卡片滑走后它的等待撤掉，预取只留最近的一批，滑过去的旧预取没轮到就丢掉。
 /// - JavBus 回 Cloudflare 拦截时整体停几分钟，不连累页面本身的浏览。
 actor MagnetStarNames {
     static let shared = MagnetStarNames(cacheFile: defaultCacheFile)
@@ -27,8 +27,10 @@ actor MagnetStarNames {
 
     typealias Lookup = @Sendable (MagnetSearchItem) async -> Outcome
 
-    static let maxConcurrent = 2
-    static let defaultStartInterval: TimeInterval = 0.6
+    static let maxConcurrent = 3
+    static let defaultStartInterval: TimeInterval = 0.25
+    /// 没有卡片在等的预取最多排这么多个，多了先丢最早排进来的（多半已经滑过去了）
+    static let maxIdlePrefetch = 12
     static let noneLifetime: TimeInterval = 24 * 60 * 60
     static let failureLifetime: TimeInterval = 2 * 60
     static let blockedPause: TimeInterval = 3 * 60
@@ -106,9 +108,11 @@ actor MagnetStarNames {
     private var failed: [String: Date] = [:]
     private var pausedUntil = Date.distantPast
 
-    /// 等着查的番号，后进先出
+    /// 等着查的番号，按排进来的先后；有卡片在等的优先
     private var pending: [String] = []
     private var running: Set<String> = []
+    /// 预取排进来的：没有卡片在等也照查
+    private var prefetchKeys: Set<String> = []
     private var queuedItems: [String: MagnetSearchItem] = [:]
     private var waiters: [String: [UUID: CheckedContinuation<[String]?, Never>]] = [:]
     private var workers = 0
@@ -172,15 +176,21 @@ actor MagnetStarNames {
         return syncStore.names(for: key)
     }
 
+    /// 已经有答案（或者刚失败过、正被拦着）就直接给出，不用排队；外层 nil 表示要去查。
+    private func settled(_ key: String) -> [String]?? {
+        if let hit = found[key] { return .some(hit) }
+        let current = now()
+        if let time = empty[key], current.timeIntervalSince(time) < Self.noneLifetime { return .some([]) }
+        if let time = failed[key], current.timeIntervalSince(time) < Self.failureLifetime { return .some(nil) }
+        if current < pausedUntil { return .some(nil) }
+        return nil
+    }
+
     /// 查一部片的女优名：查到返回名字，确认没有返回空数组，查不了（出错、被拦、任务取消）返回 nil。
     func names(for item: MagnetSearchItem) async -> [String]? {
         let key = Self.key(for: item)
         guard !key.isEmpty, !Task.isCancelled else { return nil }
-        if let hit = found[key] { return hit }
-        let current = now()
-        if let time = empty[key], current.timeIntervalSince(time) < Self.noneLifetime { return [] }
-        if let time = failed[key], current.timeIntervalSince(time) < Self.failureLifetime { return nil }
-        if current < pausedUntil { return nil }
+        if let answer = settled(key) { return answer }
 
         let id = UUID()
         return await withTaskCancellationHandler {
@@ -202,7 +212,24 @@ actor MagnetStarNames {
         if !running.contains(key) {
             pending.removeAll { $0 == key }
             queuedItems[key] = nil
+            prefetchKeys.remove(key)
         }
+    }
+
+    /// 预取：卡片一出现（或者快要滑到）就排上，不等有卡片来要。按传进来的顺序查，
+    /// 排在屏幕上正在等的卡片后面；没人等的预取最多留 maxIdlePrefetch 个，多了丢最早的。
+    func prefetch(_ items: [MagnetSearchItem]) {
+        for item in items {
+            let key = Self.key(for: item)
+            guard !key.isEmpty, settled(key) == nil, !running.contains(key) else { continue }
+            prefetchKeys.insert(key)
+            queuedItems[key] = item
+            if !pending.contains(key) {
+                pending.append(key)
+            }
+        }
+        trimIdlePrefetch()
+        startWorkers()
     }
 
     /// 立刻把缓存写到磁盘（平时是攒一下再写）。
@@ -228,8 +255,10 @@ actor MagnetStarNames {
         }
         waiters[key, default: [:]][id] = continuation
         guard !running.contains(key) else { return }
-        pending.removeAll { $0 == key }
-        pending.append(key)
+        // 已经在排的（预取排进来的）保持原来的位置：先出现的卡片先查
+        if !pending.contains(key) {
+            pending.append(key)
+        }
         queuedItems[key] = item
         startWorkers()
     }
@@ -239,10 +268,30 @@ actor MagnetStarNames {
         continuation.resume(returning: nil)
         guard waiters[key]?.isEmpty ?? true else { return }
         waiters[key] = nil
-        // 还没轮到就没人要了：从队列里拿掉，不发请求
-        if !running.contains(key) {
+        guard !running.contains(key) else { return }
+        if prefetchKeys.contains(key) {
+            // 卡片滑走了，但这是预取的：留着当预取，太多时丢最早的
+            trimIdlePrefetch()
+        } else {
+            // 还没轮到就没人要了：从队列里拿掉，不发请求
             pending.removeAll { $0 == key }
             queuedItems[key] = nil
+        }
+    }
+
+    private func hasWaiters(_ key: String) -> Bool {
+        !(waiters[key]?.isEmpty ?? true)
+    }
+
+    /// 没有卡片在等的预取超过上限时，丢掉最早排进来的（已经在查的不动）。
+    private func trimIdlePrefetch() {
+        let idle = pending.filter { !hasWaiters($0) }
+        guard idle.count > Self.maxIdlePrefetch else { return }
+        let dropped = Set(idle.prefix(idle.count - Self.maxIdlePrefetch))
+        pending.removeAll { dropped.contains($0) }
+        for key in dropped {
+            queuedItems[key] = nil
+            prefetchKeys.remove(key)
         }
     }
 
@@ -253,8 +302,11 @@ actor MagnetStarNames {
         }
     }
 
+    /// 下一个要查的：屏幕上有卡片在等的里面最早排进来的；都没人等就按预取的先后。
     private func takeNext() -> String? {
-        guard let key = pending.popLast() else { return nil }
+        guard !pending.isEmpty else { return nil }
+        let index = pending.firstIndex { hasWaiters($0) } ?? 0
+        let key = pending.remove(at: index)
         running.insert(key)
         return key
     }
@@ -273,16 +325,18 @@ actor MagnetStarNames {
             if delay > 0 {
                 try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             }
-            // 等的这一会儿里卡片滑走了：不查了
-            guard let item = queuedItems[key], !(waiters[key]?.isEmpty ?? true) else {
+            // 等的这一会儿里卡片滑走了、又不是预取的：不查了
+            guard let item = queuedItems[key], hasWaiters(key) || prefetchKeys.contains(key) else {
                 running.remove(key)
                 queuedItems[key] = nil
+                prefetchKeys.remove(key)
                 resume(key, with: nil)
                 continue
             }
             if now() < pausedUntil {
                 running.remove(key)
                 queuedItems[key] = nil
+                prefetchKeys.remove(key)
                 resume(key, with: nil)
                 continue
             }
@@ -295,6 +349,7 @@ actor MagnetStarNames {
     private func finish(_ key: String, _ outcome: Outcome) {
         running.remove(key)
         queuedItems[key] = nil
+        prefetchKeys.remove(key)
         let result: [String]?
         switch outcome {
         case .found(let raw):
@@ -334,6 +389,7 @@ actor MagnetStarNames {
     private func dropPending() {
         let keys = pending
         pending.removeAll()
+        prefetchKeys.removeAll()
         for key in keys {
             queuedItems[key] = nil
             resume(key, with: nil)

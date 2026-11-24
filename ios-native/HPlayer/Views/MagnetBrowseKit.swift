@@ -389,7 +389,8 @@ extension EnvironmentValues {
 }
 
 /// 卡片上的女优名（「A、B 等」）。列表页本身不带演员：已经查过的从缓存直接出（首帧就有，不跳），
-/// 没查过的等卡片在屏幕上停一会儿再去查（MagnetStarNames），快速滑过的卡片不发请求。
+/// 没查过的卡片一出现就排队去查（MagnetStarNames），列表还会提前预取后面几张（prefetchStarNames）；
+/// 卡片滑走时它的等待撤掉，还没轮到的不发请求。
 /// 没有名字时显示 fallback（灰一档），fallback 也没有就是一段空文字（占住这一行的高度）。
 struct MagnetStarNamesText: View {
     let movie: MagnetSearchItem
@@ -400,9 +401,6 @@ struct MagnetStarNamesText: View {
 
     @Environment(\.magnetShowsStarNames) private var enabled
     @State private var names: [String]?
-
-    /// 卡片停留多久才去查
-    static let settleDelay: UInt64 = 450_000_000
 
     init(movie: MagnetSearchItem, font: Font = .scaled(11, weight: .semibold),
          color: Color = Theme.textSecondary, fallback: String? = nil, limit: Int = 2) {
@@ -449,11 +447,36 @@ struct MagnetStarNamesText: View {
         }
         names = nil
         guard enabled, !movie.code.isEmpty || !movie.detailPath.isEmpty else { return }
-        try? await Task.sleep(nanoseconds: Self.settleDelay)
-        guard !Task.isCancelled else { return }
         let found = await MagnetStarNames.shared.names(for: movie)
         guard !Task.isCancelled, let found else { return }
-        withAnimation(.easeOut(duration: 0.2)) { names = found }
+        withAnimation(.easeOut(duration: 0.18)) { names = found }
+    }
+}
+
+/// 列表里第 index 张卡片出现时，把后面 count 张的女优名也排上预取：滑到时名字多半已经在缓存里，首帧就有。
+private struct StarNamesPrefetch: ViewModifier {
+    let index: Int
+    let movies: [MagnetSearchItem]
+    let count: Int
+    @Environment(\.magnetShowsStarNames) private var enabled
+
+    func body(content: Content) -> some View {
+        content.onAppear {
+            guard enabled, !InterfacePreview.active else { return }
+            let start = index + 1
+            guard start < movies.count else { return }
+            let next = movies[start ..< min(movies.count, start + count)].filter {
+                $0.stars.isEmpty && MagnetStarNames.shared.cachedNames(for: $0) == nil
+            }
+            guard !next.isEmpty else { return }
+            Task { await MagnetStarNames.shared.prefetch(next) }
+        }
+    }
+}
+
+extension View {
+    func prefetchStarNames(after index: Int, in movies: [MagnetSearchItem], count: Int = 6) -> some View {
+        modifier(StarNamesPrefetch(index: index, movies: movies, count: count))
     }
 }
 
@@ -534,6 +557,7 @@ struct MagnetPosterGrid: View {
                     .prefetchArtwork(after: index, in: movies, count: 9, maxPixel: 800) {
                         MagnetCover.highResURL(for: $0.coverURL)?.absoluteString ?? ""
                     }
+                    .prefetchStarNames(after: index, in: movies, count: 6)
                     .gridCardEntrance()
                     .onAppear {
                         if movie.id == movies.last?.id { loadMore() }
@@ -709,6 +733,7 @@ struct MagnetFreshShelf: View {
                             .prefetchArtwork(after: index, in: shown, count: 3, maxPixel: 800) {
                                 MagnetCover.highResURL(for: $0.coverURL)?.absoluteString ?? ""
                             }
+                            .prefetchStarNames(after: index, in: shown, count: 2)
                     }
                 }
                 .shelfContent()

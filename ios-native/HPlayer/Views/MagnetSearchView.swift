@@ -301,8 +301,9 @@ struct MagnetSearchView: View {
                     )
 
                     LazyVStack(spacing: 14) {
-                        ForEach(searchMovies) { movie in
+                        ForEach(Array(searchMovies.enumerated()), id: \.element.id) { index, movie in
                             MagnetListRow(movie: movie)
+                                .prefetchStarNames(after: index, in: searchMovies, count: 4)
                                 .onAppear {
                                     if movie.id == searchMovies.last?.id {
                                         loadMoreSearch()

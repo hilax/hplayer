@@ -283,8 +283,7 @@ struct HomeSlideCaption: View {
 
     private func resolveMagnetStars(_ movie: MagnetSearchItem) async {
         guard MagnetStarNamesText.known(movie) == nil, resolvedMagnetStars[movie.id] == nil else { return }
-        try? await Task.sleep(nanoseconds: MagnetStarNamesText.settleDelay)
-        guard !Task.isCancelled, let found = await MagnetStarNames.shared.names(for: movie),
+        guard let found = await MagnetStarNames.shared.names(for: movie),
               !Task.isCancelled else { return }
         resolvedMagnetStars[movie.id] = found
     }
