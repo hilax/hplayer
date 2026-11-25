@@ -13,6 +13,23 @@ struct Direct115Stream: Identifiable {
     }
 }
 
+/// 解析后的 115 原画直链，附带签发该地址时绑定的 User-Agent 与合并后的 Cookie。
+struct Direct115ResolvedStream: Equatable, Sendable {
+    let url: URL
+    let userAgent: String
+    let cookie: String
+
+    var headers: [String: String] {
+        var result = [
+            "User-Agent": userAgent,
+            "Referer": "https://115.com/",
+        ]
+        let cleaned = Direct115Client.cleanedCookieHeader(cookie)
+        if !cleaned.isEmpty { result["Cookie"] = cleaned }
+        return result
+    }
+}
+
 /// A single directory page. A nil offset means the directory was fully enumerated.
 struct Direct115FilePage {
     let files: [P115File]
@@ -25,11 +42,113 @@ struct Direct115HTTPError: LocalizedError {
 }
 
 /// 115 网页会话直连，Cookie 仅保存在本机 Keychain。
-struct Direct115Client {
+struct Direct115Client: @unchecked Sendable {
     let cookie: String
     /// 测试用：换成假网络。正常使用时保持 nil。
     var protocolClasses: [AnyClass]? = nil
     static let userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15"
+    static let androidDownloadUserAgent = "Mozilla/5.0 115disk/30.1.0"
+
+    /// 允许随 302 重定向继续携带 115 Cookie 的官方域名与自有 CDN 域名。
+    static func is115CookieHost(_ host: String) -> Bool {
+        let lower = host.lowercased()
+        let allowed = ["115.com", "115cdn.net", "115cdn.com", "115rc.com"]
+        return allowed.contains { lower == $0 || lower.hasSuffix(".\($0)") }
+    }
+
+    /// 过滤掉 Path / Domain / Expires 等 Cookie 属性，只保留可放进请求头的 `name=value` 对。
+    static func cleanedCookieHeader(_ raw: String) -> String {
+        raw.split(separator: ";")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { pair in
+                guard let equals = pair.firstIndex(of: "=") else { return false }
+                let name = String(pair[..<equals]).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                return !name.isEmpty && !["path", "domain", "expires", "max-age", "samesite", "secure", "httponly", "priority"].contains(name)
+            }
+            .joined(separator: "; ")
+    }
+
+    /// 把 115 接口响应中的 `Set-Cookie` 合并回当前 Cookie（如 CDN 节点颁发的短时访问令牌），
+    /// 同名键覆盖为最新值，不丢弃原有登录凭证。
+    static func mergeCookies(base: String, response: HTTPURLResponse) -> String {
+        var order: [String] = []
+        var values: [String: String] = [:]
+
+        func upsert(name rawName: String, value rawValue: String) {
+            let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+            let value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            let lower = name.lowercased()
+            guard !name.isEmpty,
+                  !["path", "domain", "expires", "max-age", "samesite", "secure", "httponly", "priority"].contains(lower) else {
+                return
+            }
+            if values[name] == nil {
+                order.append(name)
+            }
+            values[name] = value
+        }
+
+        for part in base.split(separator: ";") {
+            let pair = part.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let eq = pair.firstIndex(of: "=") else { continue }
+            upsert(name: String(pair[..<eq]), value: String(pair[pair.index(after: eq)...]))
+        }
+
+        var headerMap: [String: String] = [:]
+        var rawSetCookies: [String] = []
+        for (rawKey, rawVal) in response.allHeaderFields {
+            guard let key = rawKey as? String, let val = rawVal as? String else { continue }
+            headerMap[key] = val
+            if key.caseInsensitiveCompare("Set-Cookie") == .orderedSame {
+                rawSetCookies.append(val)
+            }
+        }
+
+        if let url = response.url {
+            for item in HTTPCookie.cookies(withResponseHeaderFields: headerMap, for: url) {
+                upsert(name: item.name, value: item.value)
+            }
+        }
+        // 兜底解析（兼容自定义 Set-Cookie 或域名略异的 CDN 凭证）
+        for header in rawSetCookies {
+            for candidate in splitSetCookieHeader(header) {
+                let firstPart = candidate.split(separator: ";", maxSplits: 1).first.map(String.init) ?? candidate
+                guard let eq = firstPart.firstIndex(of: "=") else { continue }
+                upsert(name: String(firstPart[..<eq]), value: String(firstPart[firstPart.index(after: eq)...]))
+            }
+        }
+
+        return order.compactMap { key in values[key].map { "\(key)=\($0)" } }.joined(separator: "; ")
+    }
+
+    private static func splitSetCookieHeader(_ header: String) -> [String] {
+        // Set-Cookie 中只有 Expires=Wed, 01 Jan ... 含逗号，其余逗号分隔多条 Cookie
+        var results: [String] = []
+        var current = ""
+        var inExpires = false
+        let chars = Array(header)
+        var i = 0
+        while i < chars.count {
+            let c = chars[i]
+            if c == ";" {
+                inExpires = false
+                current.append(c)
+            } else if c == "," && !inExpires {
+                let trimmed = current.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { results.append(trimmed) }
+                current = ""
+            } else {
+                current.append(c)
+                if current.lowercased().hasSuffix("expires=") {
+                    inExpires = true
+                }
+            }
+            i += 1
+        }
+        let tail = current.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !tail.isEmpty { results.append(tail) }
+        return results
+    }
 
     func user() async throws -> P115Status {
         let json = try await jsonRequest("https://my.115.com/", query: ["ct": "ajax", "ac": "nav"])
@@ -265,22 +384,22 @@ struct Direct115Client {
     }
 }
 
-/// 重定向至 CDN 时不发送 115 登录 Cookie。
+/// 重定向至外部 CDN 时剥离 115 登录 Cookie；跳往 115 官方及自有 CDN 域名时保留 Cookie。
 private final class RedirectGuard: NSObject, URLSessionTaskDelegate {
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
         guard let url = request.url, url.scheme?.lowercased() == "https", let host = url.host?.lowercased() else { completionHandler(nil); return }
         var next = request
-        if host != "115.com" && !host.hasSuffix(".115.com") { next.setValue(nil, forHTTPHeaderField: "Cookie") }
+        if !Direct115Client.is115CookieHost(host) { next.setValue(nil, forHTTPHeaderField: "Cookie") }
         completionHandler(next)
     }
 }
 
-/// 进程内按登录 Cookie 隔离的 115 短时会话缓存（userID 与最近预取的原画直链）。
+/// 进程内按登录 Cookie 隔离的 115 短时会话缓存（userID 与最近预取的原画直链）及并发解析合并器。
 final class Direct115SessionCache: @unchecked Sendable {
     static let shared = Direct115SessionCache()
 
-    private struct CachedURL {
-        let url: URL
+    private struct CachedStream {
+        let stream: Direct115ResolvedStream
         let expiresAt: Date
     }
 
@@ -289,8 +408,9 @@ final class Direct115SessionCache: @unchecked Sendable {
     private let lock = NSLock()
     private var userIDs: [String: Int] = [:]
     private var userOrder: [String] = []
-    private var originalURLs: [String: CachedURL] = [:]
+    private var originalStreams: [String: CachedStream] = [:]
     private var urlOrder: [String] = []
+    private var inFlightOriginal: [String: Task<Direct115ResolvedStream, Error>] = [:]
     private let originalURLTTL: TimeInterval
 
     init(originalURLTTL: TimeInterval = Direct115SessionCache.defaultOriginalURLTTL) {
@@ -317,29 +437,42 @@ final class Direct115SessionCache: @unchecked Sendable {
     }
 
     func originalURL(cookie: String, pickCode: String, now: Date = Date()) -> URL? {
+        originalStream(cookie: cookie, pickCode: pickCode, now: now)?.url
+    }
+
+    func originalStream(cookie: String, pickCode: String, now: Date = Date()) -> Direct115ResolvedStream? {
         let key = "\(cookie)|\(pickCode)"
         lock.lock()
         defer { lock.unlock() }
-        guard let entry = originalURLs[key] else { return nil }
+        guard let entry = originalStreams[key] else { return nil }
         if entry.expiresAt <= now {
-            originalURLs.removeValue(forKey: key)
+            originalStreams.removeValue(forKey: key)
             urlOrder.removeAll { $0 == key }
             return nil
         }
-        return entry.url
+        return entry.stream
     }
 
     func storeOriginalURL(_ url: URL, cookie: String, pickCode: String, now: Date = Date()) {
+        storeOriginalStream(
+            Direct115ResolvedStream(url: url, userAgent: Direct115Client.userAgent, cookie: cookie),
+            cookie: cookie,
+            pickCode: pickCode,
+            now: now
+        )
+    }
+
+    func storeOriginalStream(_ stream: Direct115ResolvedStream, cookie: String, pickCode: String, now: Date = Date()) {
         guard !cookie.isEmpty, !pickCode.isEmpty else { return }
         let key = "\(cookie)|\(pickCode)"
         lock.lock()
         defer { lock.unlock() }
-        originalURLs[key] = CachedURL(url: url, expiresAt: now.addingTimeInterval(originalURLTTL))
+        originalStreams[key] = CachedStream(stream: stream, expiresAt: now.addingTimeInterval(originalURLTTL))
         urlOrder.removeAll { $0 == key }
         urlOrder.append(key)
         if urlOrder.count > 64, let evicted = urlOrder.first {
             urlOrder.removeFirst()
-            originalURLs.removeValue(forKey: evicted)
+            originalStreams.removeValue(forKey: evicted)
         }
     }
 
@@ -347,8 +480,68 @@ final class Direct115SessionCache: @unchecked Sendable {
         let key = "\(cookie)|\(pickCode)"
         lock.lock()
         defer { lock.unlock() }
-        originalURLs.removeValue(forKey: key)
+        originalStreams.removeValue(forKey: key)
         urlOrder.removeAll { $0 == key }
+    }
+
+    /// 合并同一 `(cookie, pickCode)` 并发发起的原画地址解析，避免详情页预解析、起播和续链重复打 115 接口触发风控。
+    func resolveOriginalStream(
+        cookie: String,
+        pickCode: String,
+        useCache: Bool,
+        now: Date = Date(),
+        fetch: @escaping @Sendable () async throws -> Direct115ResolvedStream
+    ) async throws -> Direct115ResolvedStream {
+        let key = "\(cookie)|\(pickCode)"
+        lock.lock()
+        if useCache, let entry = originalStreams[key] {
+            if entry.expiresAt > now {
+                lock.unlock()
+                return entry.stream
+            }
+            originalStreams.removeValue(forKey: key)
+            urlOrder.removeAll { $0 == key }
+        } else if !useCache {
+            originalStreams.removeValue(forKey: key)
+            urlOrder.removeAll { $0 == key }
+        }
+        if useCache, let existing = inFlightOriginal[key] {
+            lock.unlock()
+            return try await existing.value
+        }
+        let task = Task<Direct115ResolvedStream, Error> {
+            try await fetch()
+        }
+        if useCache {
+            inFlightOriginal[key] = task
+        }
+        lock.unlock()
+
+        do {
+            let resolved = try await task.value
+            lock.lock()
+            if inFlightOriginal[key] == task {
+                inFlightOriginal.removeValue(forKey: key)
+            }
+            if !cookie.isEmpty, !pickCode.isEmpty {
+                originalStreams[key] = CachedStream(stream: resolved, expiresAt: Date().addingTimeInterval(originalURLTTL))
+                urlOrder.removeAll { $0 == key }
+                urlOrder.append(key)
+                if urlOrder.count > 64, let evicted = urlOrder.first {
+                    urlOrder.removeFirst()
+                    originalStreams.removeValue(forKey: evicted)
+                }
+            }
+            lock.unlock()
+            return resolved
+        } catch {
+            lock.lock()
+            if inFlightOriginal[key] == task {
+                inFlightOriginal.removeValue(forKey: key)
+            }
+            lock.unlock()
+            throw error
+        }
     }
 
     func reset() {
@@ -356,7 +549,8 @@ final class Direct115SessionCache: @unchecked Sendable {
         defer { lock.unlock() }
         userIDs.removeAll()
         userOrder.removeAll()
-        originalURLs.removeAll()
+        originalStreams.removeAll()
         urlOrder.removeAll()
+        inFlightOriginal.removeAll()
     }
 }

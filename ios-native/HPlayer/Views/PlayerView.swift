@@ -13,8 +13,10 @@ struct PlayerView: View {
     @State private var directQualities: [Direct115Stream] = []
     @State private var directQualitiesFetchedAt: TimeInterval?
     @State private var directQualityListTask: Task<Void, Never>?
+    @State private var delayedDirectQualityTask: Task<Void, Never>?
     @State private var directQualityListError: String?
     @State private var directQualityListID = UUID()
+    @State private var prefetchedNextPickCode: String?
     /// 动漫这一集解析出的画质档位和请求头。current 始终保持集数引用不变，
     /// 换画质只重开流，不改 current——改了 id 就变，选集会认不出当前集，还会再触发一次加载。
     @State private var animeQualities: [PlaybackQualityItem] = []
@@ -71,10 +73,11 @@ struct PlayerView: View {
         .onChange(of: playback.currentTime) { time in
             saveProgress(force: false)
             if animeRef != nil { danmaku.update(time: time) }
+            maybePrefetchNextEpisode(at: time)
         }
         .onChange(of: playback.hasPlayed) { started in
             if started, !loading, selectedQuality == "原画", directQualitiesFetchedAt == nil {
-                loadDirectQualities()
+                scheduleDelayedDirectQualities()
             }
         }
         .onChange(of: appState.sessionID) { _ in
@@ -163,11 +166,52 @@ struct PlayerView: View {
 
     private func resetDirectQualities() {
         directQualityListID = UUID()
+        delayedDirectQualityTask?.cancel()
+        delayedDirectQualityTask = nil
         directQualityListTask?.cancel()
         directQualityListTask = nil
         directQualityListError = nil
         directQualitiesFetchedAt = nil
         directQualities = []
+        prefetchedNextPickCode = nil
+    }
+
+    /// 首帧出画后延迟 4 秒再悄悄拉取 115 转码画质列表，避免与起播阶段的 115 并发/带宽争抢；
+    /// 用户主动点开画质菜单时仍会立即拉取。
+    private func scheduleDelayedDirectQualities() {
+        delayedDirectQualityTask?.cancel()
+        let request = directQualityListID
+        let source = current
+        let session = appState.sessionID
+        delayedDirectQualityTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            guard visible, !Task.isCancelled, directQualityListID == request,
+                  current == source, appState.sessionID == session,
+                  selectedQuality == "原画", directQualitiesFetchedAt == nil else { return }
+            delayedDirectQualityTask = nil
+            loadDirectQualities()
+        }
+    }
+
+    /// 播放到片尾前 60 秒时提前预解析下一集的 115 原画直链（只缓存直链不抢占当前播放带宽），实现连播零解析等待。
+    private func maybePrefetchNextEpisode(at time: Double) {
+        guard visible, playback.hasPlayed, !playback.buffering,
+              playback.duration > 120, playback.duration - time <= 60,
+              let index = playlist.firstIndex(of: current),
+              index + 1 < playlist.count,
+              case .p115(_, let nextPickCode) = playlist[index + 1],
+              !nextPickCode.isEmpty,
+              prefetchedNextPickCode != nextPickCode,
+              let client = appState.directClient() else { return }
+        prefetchedNextPickCode = nextPickCode
+        Task.detached(priority: .utility) {
+            await Direct115Prewarmer.prewarm(
+                client: client,
+                pickCode: nextPickCode,
+                resume: false,
+                prefetchBytes: false
+            )
+        }
     }
 
     @discardableResult
@@ -283,25 +327,27 @@ struct PlayerView: View {
                 guard let client = appState.directClient() else { throw APIError.server("请先登录 115") }
                 selectedQuality = "原画"
                 do {
-                    let original = try await client.originalURL(pickCode: pickCode)
+                    let resolved = try await client.originalStream(pickCode: pickCode)
                     PlayerWindowController.shared.note("拿到原画地址")
                     guard isCurrentRequest(request, source: source, session: session), !Task.isCancelled else { return }
                     let streamID = "p115:\(pickCode)"
-                    let refresher = Self.originalRefresher(client, pickCode: pickCode)
-                    // 拿到直链后立刻在后台预热 115 CDN 连接、片头字节与尾部 moov，并与转屏动画并行交给内核解头解码首帧
-                    LocalStreamProxy.shared.prewarm(
-                        url: original,
-                        headers: PlaybackController.direct115Headers(cookie: client.cookie),
+                    let streamRefresher = Self.originalStreamRefresher(client, pickCode: pickCode)
+                    let urlRefresher: () async throws -> URL = { try await streamRefresher().url }
+                    // 拿到直链后立刻在后台预热 115 CDN 连接、片头字节与尾部索引（MP4 moov / MKV Cues），并与转屏动画并行交给内核解头解码首帧
+                    Direct115StreamStore.shared.prewarm(
+                        stream: resolved,
                         streamID: streamID,
                         resume: resume != nil,
-                        renew: refresher
+                        renew: streamRefresher
                     )
                     await openAndReleaseWhenRevealed(request, source: source, session: session) { hold in
-                        playback.open(original, direct115: true, directCookie: client.cookie, startTime: resume,
-                                      refreshURL: refresher, streamID: streamID, title: title,
+                        playback.open(resolved.url, direct115: true, directCookie: resolved.cookie,
+                                      customHeaders: resolved.headers, startTime: resume,
+                                      refreshURL: urlRefresher, refreshStream: streamRefresher,
+                                      streamID: streamID, title: title,
                                       subtitleIdentifier: pickCode, deferAutoPlay: hold)
                     }
-                    // 转码列表由首次播放事件或用户打开菜单触发。
+                    // 转码列表由首次播放事件延迟 4 秒或用户主动打开画质菜单触发。
                 } catch {
                     guard isCurrentRequest(request, source: source, session: session), !Task.isCancelled else { return }
                     loadDirectQualities()
@@ -368,6 +414,11 @@ struct PlayerView: View {
             headers: proxyURL == nil ? headers : [:],
             qualityNotice: "原画格式不支持隔空播放，已自动切换为 \(chosen.title)"
         )
+    }
+
+    /// 自动重连时换新的 115 原画直链及其绑定的 User-Agent 与 Cookie
+    private static func originalStreamRefresher(_ client: Direct115Client, pickCode: String) -> () async throws -> Direct115ResolvedStream {
+        { try await client.originalStream(pickCode: pickCode, useCache: false) }
     }
 
     /// 自动重连时换新的 115 原画地址：旧地址可能已过期，或者连接被 115 限制
@@ -459,11 +510,14 @@ struct PlayerView: View {
                               refreshURL: refresher, streamID: "p115:\(pickCode):hls:\(requestedStream.title)", playlistRenew: refresher,
                               title: title, subtitleIdentifier: pickCode)
             } else {
-                let original = try await client.originalURL(pickCode: pickCode)
+                let resolved = try await client.originalStream(pickCode: pickCode)
                 guard isCurrentRequest(request, source: source, session: session), !Task.isCancelled else { return nil }
                 selectedQuality = "原画"
-                playback.open(original, direct115: true, directCookie: client.cookie, preservingPosition: preservePosition, startTime: savedPosition,
-                              refreshURL: Self.originalRefresher(client, pickCode: pickCode),
+                let streamRefresher = Self.originalStreamRefresher(client, pickCode: pickCode)
+                let urlRefresher: () async throws -> URL = { try await streamRefresher().url }
+                playback.open(resolved.url, direct115: true, directCookie: resolved.cookie,
+                              customHeaders: resolved.headers, preservingPosition: preservePosition,
+                              startTime: savedPosition, refreshURL: urlRefresher, refreshStream: streamRefresher,
                               streamID: "p115:\(pickCode)", title: title, subtitleIdentifier: pickCode)
             }
             return request

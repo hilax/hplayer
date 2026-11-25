@@ -152,4 +152,59 @@ final class PlaybackRefreshTests: XCTestCase {
         player.releaseRevealHold()
         XCTAssertFalse(player.playing)
     }
+
+    func testSmartSeekUsesKeyframesForRemoteScrubAndExactForSkipOrTail() throws {
+        let player = try playingController()
+        defer { player.stop() }
+
+        // 远程流拖动进度条（即使只跳 25 秒）走关键帧对齐
+        player.seek(to: 35)
+        XCTAssertTrue(player.seekUsesKeyframesForTesting)
+
+        // 短步进（±10s / exact: true）走精确跳转
+        player.skip(10)
+        XCTAssertFalse(player.seekUsesKeyframesForTesting)
+
+        // 接近片尾 30 秒内走精确跳转，避免越过关键帧误触发 EOF
+        player.seek(to: 580)
+        XCTAssertFalse(player.seekUsesKeyframesForTesting)
+    }
+
+    func testMemoryCacheBudgetAdaptsToRAMAndCellularNetwork() {
+        let highRAM = PlaybackController.memoryCacheBudgetMiB(expensiveNetwork: false, physicalMemoryBytes: 8 * 1024 * 1024 * 1024)
+        XCTAssertEqual(highRAM.forward, 192)
+        XCTAssertEqual(highRAM.back, 48)
+
+        let lowRAM = PlaybackController.memoryCacheBudgetMiB(expensiveNetwork: false, physicalMemoryBytes: 4 * 1024 * 1024 * 1024)
+        XCTAssertEqual(lowRAM.forward, 128)
+        XCTAssertEqual(lowRAM.back, 32)
+
+        let cellular = PlaybackController.memoryCacheBudgetMiB(expensiveNetwork: true, physicalMemoryBytes: 8 * 1024 * 1024 * 1024)
+        XCTAssertEqual(cellular.forward, 64)
+        XCTAssertEqual(cellular.back, 16)
+    }
+
+    func testHealthyPlaybackResetsPreferLargerPauseWaitAfter25Seconds() throws {
+        let player = PlaybackController()
+        defer { player.stop() }
+        player.open(try XCTUnwrap(URL(string: "https://example.com/original.mkv")), direct115: true, autoRecover: true)
+        player.receiveEventForTesting(.fileLoaded)
+        player.receiveEventForTesting(.property("duration", .double(600)))
+        player.receiveEventForTesting(.property("seekable", .flag(true)))
+        player.receiveEventForTesting(.playbackRestart)
+        player.receiveEventForTesting(.property("time-pos", .double(30)))
+
+        // 触发一次恢复后 preferLargerPauseWait 置为 true
+        player.retry()
+        XCTAssertTrue(player.preferLargerPauseWaitForTesting)
+
+        // 恢复后连续稳定播放 25 秒应自动重置回轻量 1s 起播门槛
+        player.receiveEventForTesting(.fileLoaded)
+        player.receiveEventForTesting(.playbackRestart)
+        for _ in 0..<25 {
+            player.receiveEventForTesting(.property("cache-speed", .int(100_000)))
+            player.checkHealthForTesting()
+        }
+        XCTAssertFalse(player.preferLargerPauseWaitForTesting)
+    }
 }

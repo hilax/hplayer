@@ -308,6 +308,7 @@ struct PlaybackSettingsView: View {
     @ObservedObject private var gestureStore = PlaybackGestureStore.shared
     @State private var decoding = VideoDecoding.saved
     @State private var readahead = ReadaheadLevel.saved
+    @State private var cacheStorageMode = CacheStorageMode.saved
     @State private var subtitleStyle = SubtitleStyle.saved
     @State private var autoPictureInPicture = PictureInPictureSettings.automatic
     @State private var autoOnlineSubtitle = OnlineSubtitlePrefs.autoMatchEnabled
@@ -363,6 +364,10 @@ struct PlaybackSettingsView: View {
                 SettingsMenuPicker(label: "边播边存", selection: $readahead, options: ReadaheadLevel.allCases,
                                    title: \.title, identifier: "mine.playback.readahead")
             }
+            SettingRow(icon: .readahead, title: "缓存位置") {
+                SettingsMenuPicker(label: "缓存位置", selection: $cacheStorageMode, options: CacheStorageMode.allCases,
+                                   title: \.title, identifier: "mine.playback.cacheStorage")
+            }
             SettingRow(icon: .decoder, title: "解码方式") {
                 SettingsMenuPicker(label: "解码方式", selection: $decoding, options: VideoDecoding.allCases,
                                    title: \.title, identifier: "mine.playback.decoding")
@@ -384,6 +389,7 @@ struct PlaybackSettingsView: View {
         .onAppear {
             decoding = VideoDecoding.saved
             readahead = ReadaheadLevel.saved
+            cacheStorageMode = CacheStorageMode.saved
             subtitleStyle = SubtitleStyle.saved
             autoPictureInPicture = PictureInPictureSettings.automatic
             autoOnlineSubtitle = OnlineSubtitlePrefs.autoMatchEnabled
@@ -391,6 +397,7 @@ struct PlaybackSettingsView: View {
         }
         .onChange(of: decoding) { VideoDecoding.saved = $0 }
         .onChange(of: readahead) { ReadaheadLevel.saved = $0 }
+        .onChange(of: cacheStorageMode) { CacheStorageMode.saved = $0 }
         .onChange(of: subtitleStyle) { SubtitleStyle.saved = $0 }
         .onChange(of: autoPictureInPicture) { PictureInPictureSettings.automatic = $0 }
         .onChange(of: autoOnlineSubtitle) { OnlineSubtitlePrefs.autoMatchEnabled = $0 }

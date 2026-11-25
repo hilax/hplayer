@@ -1474,7 +1474,23 @@ struct PlaybackControlsView: View {
                     openMoreSection(nil)
                 }
             }
-            popoverNote("边播边往后存，最多 2GB，退出播放后自动清掉；用流量时最多存 1 分钟。", width: 208)
+            Divider()
+                .overlay(Color.white.opacity(0.12))
+                .padding(.vertical, 4)
+            popoverHeader("缓存位置", leading: 14)
+            ForEach(CacheStorageMode.allCases) { mode in
+                popoverRow(title: mode.title, selected: playback.cacheStorageMode == mode) {
+                    playback.setCacheStorageMode(mode)
+                    openMoreSection(nil)
+                }
+                .accessibilityIdentifier("playback.more.cacheStorage.\(mode.rawValue)")
+            }
+            popoverNote(
+                playback.cacheStorageMode == .memory
+                    ? "优先缓存在内存中，避免高码率 4K 频繁写闪存，拖动和起播更流畅；流量下自动缩减缓存。"
+                    : "边播边存到手机存储，最多 2GB，退出播放后自动清掉；流量下最多存 1 分钟。",
+                width: 218
+            )
         case .sleep:
             ForEach(SleepTimer.options) { option in
                 popoverRow(title: option.title, selected: sleepTimer == option) {
@@ -3540,7 +3556,7 @@ struct PlaybackControlsView: View {
                 let delta = region == .right ? step : -step
                 let ceiling = max(playback.currentTime, playback.duration - 2)
                 let target = min(max(playback.currentTime + delta, 0), max(0, ceiling))
-                playback.seek(to: target)
+                playback.seek(to: target, exact: true)
                 Haptics.tap()
 
                 let nextAccumulated = (doubleTapRegion == region ? doubleTapSeconds : 0) + delta

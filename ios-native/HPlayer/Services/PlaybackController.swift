@@ -47,6 +47,27 @@ enum ReadaheadLevel: Int, CaseIterable, Identifiable {
     }
 }
 
+/// 播放缓存位置：内存优先（避免高码率 4K 频繁写闪存，起播与拖动更轻快）或磁盘缓存（容量更大，最高 2GB）。
+enum CacheStorageMode: String, CaseIterable, Identifiable {
+    case memory
+    case disk
+
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .memory: return "内存优先"
+        case .disk: return "磁盘缓存"
+        }
+    }
+
+    private static let key = "player.cacheStorageMode"
+
+    static var saved: CacheStorageMode {
+        get { CacheStorageMode(rawValue: UserDefaults.standard.string(forKey: key) ?? "") ?? .memory }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: key) }
+    }
+}
+
 /// 字幕样式：经典（半透明黑底）、大字（黑底放大）、描边（默认，和以前一样）、透明底（只有柔和阴影）。
 /// SRT 这类纯文字字幕完全按样式显示；ASS 特效字幕保留自带的样式，只跟着「大字」放大。
 enum SubtitleStyle: String, CaseIterable, Identifiable {
@@ -157,6 +178,7 @@ final class PlaybackController: ObservableObject {
     private(set) var boostAVSyncPeak: Double?
     @Published private(set) var decoding = VideoDecoding.saved
     @Published private(set) var readahead = ReadaheadLevel.saved
+    @Published private(set) var cacheStorageMode = CacheStorageMode.saved
     @Published private(set) var subtitleStyle = SubtitleStyle.saved
     /// 内核刚建好时字幕选项的默认值，切回「描边」或某项没被样式改到时用它还原
     private var subtitleDefaults: [String: String] = [:]
@@ -269,6 +291,7 @@ final class PlaybackController: ObservableObject {
     private var preferLargerPauseWait = false
     private static let minHealthyCacheSpeedBytes = 32 * 1024
     private var urlRefresher: (() async throws -> URL)?
+    private var streamRefresher: (() async throws -> Direct115ResolvedStream)?
     private var watchdogEnabled = true
     private var openTimeoutSeconds: UInt64 = 45
     /// 这次 open 之后有没有真正播出来过（自动重连不清零）
@@ -388,9 +411,16 @@ final class PlaybackController: ObservableObject {
         if let engine {
             engine.attach(layer: layer)
             runPendingOpen()
-        } else {
-            createEngineInBackground(layer: layer)
+            return
         }
+        if let pooled = MPVEnginePool.shared.take() {
+            pooled.attach(layer: layer)
+            pooled.set("hwdec", hwdecOption)
+            applyCacheOptions(pooled)
+            engineDidCreate(pooled, layer: layer, began: Date(), fromPool: true)
+            return
+        }
+        createEngineInBackground(layer: layer)
     }
 
     private func runPendingOpen() {
@@ -413,12 +443,12 @@ final class PlaybackController: ObservableObject {
             }
             let created = MPVEngine(options: options, layer: layer)
             Task { @MainActor [weak self] in
-                self?.engineDidCreate(created, layer: layer, began: began)
+                self?.engineDidCreate(created, layer: layer, began: began, fromPool: false)
             }
         }
     }
 
-    private func engineDidCreate(_ created: MPVEngine?, layer: CAMetalLayer, began: Date) {
+    private func engineDidCreate(_ created: MPVEngine?, layer: CAMetalLayer, began: Date, fromPool: Bool) {
         creatingEngine = false
         guard let created else {
             error = "播放内核启动失败"
@@ -430,7 +460,7 @@ final class PlaybackController: ObservableObject {
         }
         engine = created
         applySubtitleStyle(created)
-        logEvent("播放内核就绪（创建用了 \(Self.milliseconds(since: began)) 毫秒，距播放页创建 \(Self.milliseconds(since: createdAt)) 毫秒）")
+        logEvent("播放内核就绪（\(fromPool ? "命中预热池" : "创建用了 \(Self.milliseconds(since: began)) 毫秒")，距播放页创建 \(Self.milliseconds(since: createdAt)) 毫秒）")
         // 创建期间页面换了图层（很少见）：把现在的图层交给内核
         if let current = self.layer, current !== layer { created.attach(layer: current) }
         runPendingOpen()
@@ -442,6 +472,18 @@ final class PlaybackController: ObservableObject {
 
     /// 创建内核时的选项（要在主线程读屏幕信息，所以在这里先备好，再交给后台线程）
     private func engineOptions() -> [(String, String)] {
+        Self.defaultEngineOptions(
+            decoding: decoding,
+            cacheStorageMode: cacheStorageMode,
+            preferLargerPauseWait: preferLargerPauseWait
+        )
+    }
+
+    static func defaultEngineOptions(
+        decoding: VideoDecoding = VideoDecoding.saved,
+        cacheStorageMode: CacheStorageMode = CacheStorageMode.saved,
+        preferLargerPauseWait: Bool = false
+    ) -> [(String, String)] {
         var options: [(String, String)] = [
             ("config", "no"),
             ("load-scripts", "no"),
@@ -487,9 +529,9 @@ final class PlaybackController: ObservableObject {
             ("demuxer-lavf-probesize", "1572864"),
             // 续播和大跨度跳转只落到关键帧，4K 原画不用从关键帧一路解码到目标；小跳转单独要求精确
             ("hr-seek", "no"),
-            ("cache-on-disk", "yes"),
+            ("cache-on-disk", cacheStorageMode == .disk ? "yes" : "no"),
             ("demuxer-cache-dir", PlayerDiskCache.directory.path),
-            ("demuxer-max-back-bytes", "256MiB"),
+            ("demuxer-max-back-bytes", cacheStorageMode == .disk ? "256MiB" : "48MiB"),
         ]
         if UIScreen.main.potentialEDRHeadroom > 1 {
             options.append(("target-colorspace-hint", "yes"))
@@ -532,6 +574,7 @@ final class PlaybackController: ObservableObject {
         preservingPosition: Bool = false,
         startTime: Double? = nil,
         refreshURL: (() async throws -> URL)? = nil,
+        refreshStream: (() async throws -> Direct115ResolvedStream)? = nil,
         autoRecover: Bool = true,
         openTimeoutSeconds: UInt64 = 45,
         streamID: String? = nil,
@@ -589,6 +632,7 @@ final class PlaybackController: ObservableObject {
         recoveryAttempts = []
         statusNote = ""
         urlRefresher = refreshURL
+        streamRefresher = refreshStream
         currentStreamID = streamID
         currentPlaylistRenew = playlistRenew
         pausedAtUptime = nil
@@ -666,7 +710,7 @@ final class PlaybackController: ObservableObject {
             engine.set("referrer", direct115 ? "https://115.com/" : "")
         }
         let cookieHeader = Self.cookieHeader(cookie)
-        engine.set("http-header-fields", direct115 && !cookieHeader.isEmpty ? "Cookie: \(cookieHeader.replacingOccurrences(of: ",", with: "%2C"))" : "")
+        engine.set("http-header-fields", "")
         engine.set("start", position > 0 ? String(format: "%.3f", position) : "none")
         engine.set("pause", !keepPlaying || awaitingReveal)
         engine.set("speed", Double(rate))
@@ -674,19 +718,25 @@ final class PlaybackController: ObservableObject {
         let currentSession = session
         let generation = addressGeneration
         let renew = urlRefresher
+        let renewStream = streamRefresher
         let streamID = currentStreamID
         let playlistRenew = currentPlaylistRenew
         currentEngineURL = nil
         addressTask = Task { @MainActor [weak self, weak engine] in
             let address = await Self.engineAddress(for: url, direct115: direct115, cookieHeader: cookieHeader,
                                                    customHeaders: customHeaders, streamID: streamID,
-                                                   renew: renew, playlistRenew: playlistRenew)
+                                                   renew: renew, renewStream: renewStream, playlistRenew: playlistRenew)
             guard let self, let engine, !Task.isCancelled, !self.closingPlayback,
                   self.session == currentSession, self.addressGeneration == generation,
                   self.engine === engine else { return }
             self.addressTask = nil
             self.currentEngineURL = URL(string: address)
             self.castMediaRevision &+= 1
+            // 仅在未经过 hplayer115:// 或本机中转、直接由 mpv 访问远端 115 URL 时才传 Cookie 头，避免冗余拷贝与日志暴露
+            let handledByRelay = address.hasPrefix("\(Direct115StreamStore.scheme)://") || address.hasPrefix("http://127.0.0.1:")
+            if !handledByRelay && direct115 && !cookieHeader.isEmpty {
+                engine.set("http-header-fields", "Cookie: \(cookieHeader.replacingOccurrences(of: ",", with: "%2C"))")
+            }
             if self.pausedForCasting || self.userPaused {
                 engine.set("pause", true)
             }
@@ -794,13 +844,29 @@ final class PlaybackController: ObservableObject {
             engine.set("demuxer-max-back-bytes", "16MiB")
             return
         }
-        engine.set("cache-on-disk", true)
-        engine.set("demuxer-max-back-bytes", "256MiB")
         // 用手机流量时最多只往前存 1 分钟，免得白白多下
         let seconds = expensiveNetwork ? min(readahead.rawValue, ReadaheadLevel.oneMinute.rawValue) : readahead.rawValue
         engine.set("demuxer-readahead-secs", "\(seconds)")
         engine.set("cache-secs", "\(seconds)")
-        engine.set("demuxer-max-bytes", "\(PlayerDiskCache.limitMiB())MiB")
+        if cacheStorageMode == .memory {
+            engine.set("cache-on-disk", false)
+            let budget = Self.memoryCacheBudgetMiB(expensiveNetwork: expensiveNetwork)
+            engine.set("demuxer-max-bytes", "\(budget.forward)MiB")
+            engine.set("demuxer-max-back-bytes", "\(budget.back)MiB")
+        } else {
+            engine.set("cache-on-disk", true)
+            engine.set("demuxer-max-back-bytes", "256MiB")
+            engine.set("demuxer-max-bytes", "\(PlayerDiskCache.limitMiB())MiB")
+        }
+    }
+
+    static func memoryCacheBudgetMiB(
+        expensiveNetwork: Bool,
+        physicalMemoryBytes: UInt64 = ProcessInfo.processInfo.physicalMemory
+    ) -> (forward: Int, back: Int) {
+        if expensiveNetwork { return (64, 16) }
+        let sixGiB: UInt64 = 6 * 1024 * 1024 * 1024
+        return physicalMemoryBytes >= sixGiB ? (192, 48) : (128, 32)
     }
 
     // MARK: 播放控制
@@ -864,7 +930,7 @@ final class PlaybackController: ObservableObject {
     // MARK: 投屏衔接
 
     var castMediaDescriptor: CastMediaDescriptor? {
-        guard let url = currentURL else { return nil }
+        guard var url = currentURL else { return nil }
         var headers: [String: String] = [:]
         if currentDirect115 {
             headers["User-Agent"] = Direct115Client.userAgent
@@ -876,9 +942,20 @@ final class PlaybackController: ObservableObject {
             headers[key] = value
         }
         let proxyURL: URL?
-        if !url.isFileURL, let engineURL = currentEngineURL,
-           let scheme = engineURL.scheme?.lowercased(), scheme == "http" || scheme == "https" {
-            proxyURL = engineURL
+        if !url.isFileURL, let engineURL = currentEngineURL {
+            let scheme = engineURL.scheme?.lowercased()
+            if scheme == Direct115StreamStore.scheme,
+               let activeStream = Direct115StreamStore.shared.currentUpstream(for: engineURL) {
+                url = activeStream.url
+                for (key, value) in activeStream.headers {
+                    headers[key] = value
+                }
+                proxyURL = nil
+            } else if scheme == "http" || scheme == "https" {
+                proxyURL = engineURL
+            } else {
+                proxyURL = nil
+            }
         } else {
             proxyURL = nil
         }
@@ -976,16 +1053,16 @@ final class PlaybackController: ObservableObject {
                 recover(reason: "")
             } else {
                 engine?.set("pause", false)
-                if pauseElapsed >= 1200, cachedSeconds < 5, urlRefresher != nil, let engineURL = currentEngineURL,
-                   !LocalStreamProxy.shared.isRecovering(for: engineURL) {
-                    LocalStreamProxy.shared.refreshActiveUpstream(for: engineURL)
+                if pauseElapsed >= 1200, cachedSeconds < 5, (urlRefresher != nil || streamRefresher != nil), let engineURL = currentEngineURL,
+                   !Self.isRelayRecovering(for: engineURL) {
+                    Self.refreshRelayUpstream(for: engineURL)
                 }
             }
         }
         updateFlags()
     }
 
-    func seek(to seconds: Double) {
+    func seek(to seconds: Double, exact: Bool = false) {
         guard !closingPlayback, currentURL != nil, seconds.isFinite, seconds >= 0 else { return }
         guard seekable || recoveryTask != nil || (!loaded && !opening) else { return }
         let target = duration > 0 ? min(seconds, max(0, duration - 1)) : seconds
@@ -1019,9 +1096,11 @@ final class PlaybackController: ObservableObject {
         }
         // Keep fast keyframe seeks away from the tail: sparse indexes can snap
         // past the requested position and immediately hit EOF.
-        let far = abs(target - engineTime) > 60 && (duration <= 0 || target < duration - 30)
-        seekUsesKeyframes = far
-        let result = engine?.command(["seek", String(format: "%.3f", target), far ? "absolute+keyframes" : "absolute+exact"])
+        // 进度条拖动/远程流常规跳转优先关键帧对齐（4K 秒出画）；短步进（±10s/±15s）或接近片尾走精确跳转。
+        let nearTail = duration > 0 && target >= duration - 30
+        let useKeyframes = !exact && !nearTail && (!isLocalFile || abs(target - engineTime) > 60)
+        seekUsesKeyframes = useKeyframes
+        let result = engine?.command(["seek", String(format: "%.3f", target), useKeyframes ? "absolute+keyframes" : "absolute+exact"])
         engine?.set("pause", userPaused)
         if let result, result < 0 {
             if watchdogEnabled {
@@ -1062,9 +1141,13 @@ final class PlaybackController: ObservableObject {
     var recoveryCountForTesting: Int { recoveryAttempts.count }
 
     var customHeadersForTesting: [String: String] { currentCustomHeaders }
+
+    var seekUsesKeyframesForTesting: Bool { seekUsesKeyframes }
+
+    var preferLargerPauseWaitForTesting: Bool { preferLargerPauseWait }
     #endif
 
-    func skip(_ seconds: Double) { seek(to: max(0, currentTime + seconds)) }
+    func skip(_ seconds: Double) { seek(to: max(0, currentTime + seconds), exact: true) }
 
     func setRate(_ value: Float) {
         rate = value
@@ -1178,6 +1261,9 @@ final class PlaybackController: ObservableObject {
         userPaused = false
         currentURL = nil
         currentTorrentStream = false
+        if closingPlayback {
+            MPVEnginePool.shared.prewarmIfNeeded()
+        }
     }
 
     // MARK: 设置
@@ -1194,6 +1280,13 @@ final class PlaybackController: ObservableObject {
         readahead = value
         ReadaheadLevel.saved = value
         // 缓存长度不用重新打开，直接生效
+        if let engine { applyCacheOptions(engine) }
+    }
+
+    func setCacheStorageMode(_ value: CacheStorageMode) {
+        guard value != cacheStorageMode else { return }
+        cacheStorageMode = value
+        CacheStorageMode.saved = value
         if let engine { applyCacheOptions(engine) }
     }
 
@@ -1887,7 +1980,7 @@ final class PlaybackController: ObservableObject {
     private func reopenInPlace() {
         guard let url = currentURL else { return }
         open(url, direct115: currentDirect115, directCookie: currentCookie, customHeaders: currentCustomHeaders,
-             preservingPosition: true, refreshURL: urlRefresher, autoRecover: watchdogEnabled,
+             preservingPosition: true, refreshURL: urlRefresher, refreshStream: streamRefresher, autoRecover: watchdogEnabled,
              openTimeoutSeconds: openTimeoutSeconds, streamID: currentStreamID,
              playlistRenew: currentPlaylistRenew, isTorrentStream: currentTorrentStream)
     }
@@ -2418,7 +2511,7 @@ final class PlaybackController: ObservableObject {
         let healthyFloor = stalledPhase ? Self.minHealthyCacheSpeedBytes : 1
         let speedHealthy = rawCacheSpeed >= healthyFloor && (engine != nil || dataSinceTick)
         let cacheGrowing = stalledPhase ? (cacheDelta >= 0.25) : (cacheDelta > 0.01)
-        let proxyHealthy = currentEngineURL.map { LocalStreamProxy.shared.isStreamHealthyOrRecovering(for: $0) } ?? false
+        let proxyHealthy = currentEngineURL.map { Self.isRelayHealthyOrRecovering(for: $0) } ?? false
 
         if dataSinceTick || cacheGrowing || speedHealthy || proxyHealthy {
             noDataSeconds = 0
@@ -2437,6 +2530,10 @@ final class PlaybackController: ObservableObject {
             if healthyPlaybackSeconds >= 25 {
                 if !recoveryAttempts.isEmpty { recoveryAttempts = [] }
                 if torrentRecoveryCount > 0 { torrentRecoveryCount = 0 }
+                if preferLargerPauseWait {
+                    preferLargerPauseWait = false
+                    if !currentTorrentStream { engine?.set("cache-pause-wait", "1") }
+                }
             }
         } else {
             healthyPlaybackSeconds = 0
@@ -2450,8 +2547,8 @@ final class PlaybackController: ObservableObject {
             if !currentDirect115, openingSeconds >= 9, noDataSeconds >= 9, !tier1RefreshAttemptedInStall,
                now - lastTier1RefreshUptime >= 30,
                let engineURL = currentEngineURL,
-               !LocalStreamProxy.shared.isStreamHealthyOrRecovering(for: engineURL),
-               LocalStreamProxy.shared.refreshActiveUpstream(for: engineURL) {
+               !Self.isRelayHealthyOrRecovering(for: engineURL),
+               Self.refreshRelayUpstream(for: engineURL) {
                 tier1RefreshAttemptedInStall = true
                 lastTier1RefreshUptime = now
                 return
@@ -2479,8 +2576,8 @@ final class PlaybackController: ObservableObject {
         if !currentDirect115, hasPlayed, pausedForCache || seeking, noDataSeconds >= 5,
            !tier1RefreshAttemptedInStall, now - lastTier1RefreshUptime >= 30,
            let engineURL = currentEngineURL,
-           !LocalStreamProxy.shared.isStreamHealthyOrRecovering(for: engineURL),
-           LocalStreamProxy.shared.refreshActiveUpstream(for: engineURL) {
+           !Self.isRelayHealthyOrRecovering(for: engineURL),
+           Self.refreshRelayUpstream(for: engineURL) {
             tier1RefreshAttemptedInStall = true
             lastTier1RefreshUptime = now
             engine?.set("cache-pause-wait", "2.5")
@@ -2495,9 +2592,31 @@ final class PlaybackController: ObservableObject {
 
     private func waitForDirect115Recovery() -> Bool {
         guard currentDirect115, let engineURL = currentEngineURL,
-              LocalStreamProxy.shared.isRecovering(for: engineURL) else { return false }
+              Self.isRelayRecovering(for: engineURL) else { return false }
         if statusNote.isEmpty { statusNote = "正在恢复连接…" }
         return true
+    }
+
+    private static func isRelayRecovering(for engineURL: URL) -> Bool {
+        if engineURL.scheme?.lowercased() == Direct115StreamStore.scheme {
+            return Direct115StreamStore.shared.isRecovering(for: engineURL)
+        }
+        return LocalStreamProxy.shared.isRecovering(for: engineURL)
+    }
+
+    private static func isRelayHealthyOrRecovering(for engineURL: URL) -> Bool {
+        if engineURL.scheme?.lowercased() == Direct115StreamStore.scheme {
+            return Direct115StreamStore.shared.isStreamHealthyOrRecovering(for: engineURL)
+        }
+        return LocalStreamProxy.shared.isStreamHealthyOrRecovering(for: engineURL)
+    }
+
+    @discardableResult
+    private static func refreshRelayUpstream(for engineURL: URL) -> Bool {
+        if engineURL.scheme?.lowercased() == Direct115StreamStore.scheme {
+            return Direct115StreamStore.shared.refreshActiveUpstream(for: engineURL)
+        }
+        return LocalStreamProxy.shared.refreshActiveUpstream(for: engineURL)
     }
 
     /// 停掉卡住的连接，换（新）地址从原位置重新打开；连续恢复期间保留已攒下的重连额度（稳定播放 25 秒自动重置）。
@@ -2518,6 +2637,7 @@ final class PlaybackController: ObservableObject {
         let position = pendingSeek ?? resumePoint
         logEvent("重连（\(reason.isEmpty ? "手动" : reason)）第 \(recoveryAttempts.count) 次，从 \(Self.clock(position))")
         let refresher = urlRefresher
+        let resolvedRefresher = streamRefresher
         let direct115 = currentDirect115
         let cookie = currentCookie
         let customHeaders = currentCustomHeaders
@@ -2535,10 +2655,18 @@ final class PlaybackController: ObservableObject {
         recoveryTask = Task { @MainActor [weak self] in
             if wait > 0 { try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000)) }
             var target = url
-            if let refresher, let fresh = try? await refresher() { target = fresh }
+            var nextCookie = cookie
+            var nextHeaders = customHeaders
+            if let resolvedRefresher, let fresh = try? await resolvedRefresher() {
+                target = fresh.url
+                nextCookie = fresh.cookie
+                nextHeaders = fresh.headers
+            } else if let refresher, let fresh = try? await refresher() {
+                target = fresh
+            }
             guard let self, !Task.isCancelled, self.session == currentSession else { return }
             self.recoveryTask = nil
-            self.start(target, direct115: direct115, cookie: cookie, customHeaders: customHeaders,
+            self.start(target, direct115: direct115, cookie: nextCookie, customHeaders: nextHeaders,
                        position: self.pendingSeek ?? position, keepPlaying: !self.userPaused, keepDuration: true)
         }
         updateFlags()
@@ -2553,7 +2681,8 @@ final class PlaybackController: ObservableObject {
         statusNote = ""
         opening = false
         loaded = false
-        let proxyProblem = LocalStreamProxy.shared.problem
+        let useDirectStream = currentEngineURL?.scheme?.lowercased() == Direct115StreamStore.scheme
+        let proxyProblem = useDirectStream ? Direct115StreamStore.shared.problem : LocalStreamProxy.shared.problem
         errorDetail = proxyProblem.isEmpty ? Self.shortReason(from: logLines) : proxyProblem
         error = resumePoint > 1
             ? "\(reason)，自动重连几次都没成功。点「重试」会从 \(Self.clock(resumePoint)) 接着播放。"
@@ -2575,19 +2704,22 @@ final class PlaybackController: ObservableObject {
 
     /// 播放出问题时复制给开发者的诊断信息：地址类型、状态和内核最近的警告错误
     var diagnostics: String {
+        let useDirectStream = currentEngineURL?.scheme?.lowercased() == Direct115StreamStore.scheme
+        let relayStatus = useDirectStream ? Direct115StreamStore.shared.statusText : LocalStreamProxy.shared.statusText
+        let relayProblem = useDirectStream ? Direct115StreamStore.shared.problem : LocalStreamProxy.shared.problem
+        let relayLog = useDirectStream ? Direct115StreamStore.shared.problemHistoryLines : LocalStreamProxy.shared.problemHistoryLines
         var lines = [
             "HPlayer 播放诊断",
             "地址：\(currentURL.map { "\($0.scheme ?? "")://\($0.host ?? "")\($0.path.suffix(40))" } ?? "无")",
-            "115：\(currentDirect115) 解码：\(decoding.rawValue)（实际：\(activeHwdec.isEmpty ? "未知" : activeHwdec)） 缓存：\(readahead.rawValue)s",
+            "115：\(currentDirect115) 解码：\(decoding.rawValue)（实际：\(activeHwdec.isEmpty ? "未知" : activeHwdec)） 缓存：\(readahead.rawValue)s（\(cacheStorageMode.rawValue)）",
             "状态：loaded=\(loaded) opening=\(opening) playedOnce=\(hasPlayed) cache=\(pausedForCache) seeking=\(seeking) speed=\(Int(downloadSpeed)) cached=\(Int(cachedSeconds))s",
             "位置：\(Self.clock(engineTime)) / \(Self.clock(duration)) 可跳转=\(seekable) 播完=\(ended) eof=\(eofReached) 暂停=\(userPaused)",
             "倍速：\(effectiveRate)× 音画偏差：\(avSync.map { String(format: "%.3fs", $0) } ?? "未知") 长按最大偏差：\(boostAVSyncPeak.map { String(format: "%.3fs", $0) } ?? "未知")",
             "错误：\(error)",
-            "中转：\(LocalStreamProxy.shared.statusText)\(LocalStreamProxy.shared.problem.isEmpty ? "" : "；上游出错：" + LocalStreamProxy.shared.problem)",
+            "中转：\(relayStatus)\(relayProblem.isEmpty ? "" : "；上游出错：" + relayProblem)",
             "—— 播放事件 ——",
         ]
         lines += eventLines
-        let relayLog = LocalStreamProxy.shared.problemHistoryLines
         if !relayLog.isEmpty {
             lines.append("—— 中转记录（上游出错与重试）——")
             lines += relayLog
@@ -2630,20 +2762,28 @@ final class PlaybackController: ObservableObject {
         return headers
     }
 
-    /// 网络视频交给本机中转，由系统网络栈去连 115（mpv 自带的 TLS 连 115 会被断开）；本机地址（磁力边下边播）直接给内核
-    /// `renew`：115 地址过期（上游 403）时中转自己换新地址接着下，不打断播放
+    /// 网络视频统一由系统网络栈连上游（mpv 自带 GnuTLS 连 115 会断开）：
+    /// - 115 非播放列表原画直链优先走进程内 `hplayer115://`（`mpv_stream_cb`），跳过本机回环 TCP；
+    /// - HLS 播放列表及其他远程流走 `LocalStreamProxy`；
+    /// - 本机地址（磁力边下边播）直接给内核。
     private static func engineAddress(for url: URL, direct115: Bool, cookieHeader: String, customHeaders: [String: String] = [:],
                                       streamID: String? = nil, renew: (() async throws -> URL)? = nil,
+                                      renewStream: (() async throws -> Direct115ResolvedStream)? = nil,
                                       playlistRenew: (() async throws -> URL)? = nil) async -> String {
         if url.isFileURL { return url.path }
         guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return url.absoluteString }
         let host = url.host?.lowercased() ?? ""
         var loopback = host == "127.0.0.1" || host == "localhost" || host == "::1"
+        var uiTestMode = false
         #if DEBUG
-        // UI 测试的视频在本机测试服务器上，也走中转，好在模拟器上把中转一起测了
-        if ProcessInfo.processInfo.environment["HPLAYER_UI_TEST_URL"] != nil { loopback = false }
+        // UI 测试的视频在本机测试服务器上，也走 LocalStreamProxy，好在模拟器上把中转一起测了
+        if ProcessInfo.processInfo.environment["HPLAYER_UI_TEST_URL"] != nil {
+            loopback = false
+            uiTestMode = true
+        }
         #endif
         guard !loopback else { return url.absoluteString }
+
         var headers = ["User-Agent": direct115 ? Direct115Client.userAgent : "HPlayer"]
         if direct115 {
             headers["Referer"] = "https://115.com/"
@@ -2652,8 +2792,33 @@ final class PlaybackController: ObservableObject {
         for (k, v) in customHeaders {
             headers[k] = v
         }
+
+        let isPlaylist = LocalStreamProxy.looksLikePlaylistURL(url) || playlistRenew != nil
+        if direct115 && !isPlaylist && !uiTestMode {
+            let boundUA = headers["User-Agent"] ?? Direct115Client.userAgent
+            let boundCookie = headers["Cookie"] ?? cookieHeader
+            let resolved = Direct115ResolvedStream(url: url, userAgent: boundUA, cookie: boundCookie)
+            let streamRenewClosure: (() async throws -> Direct115ResolvedStream)?
+            if let renewStream {
+                streamRenewClosure = renewStream
+            } else if let renew {
+                streamRenewClosure = {
+                    let freshURL = try await renew()
+                    return Direct115ResolvedStream(url: freshURL, userAgent: boundUA, cookie: boundCookie)
+                }
+            } else {
+                streamRenewClosure = nil
+            }
+            return Direct115StreamStore.shared.register(
+                stream: resolved,
+                streamID: streamID,
+                renew: streamRenewClosure
+            ).absoluteString
+        }
+
+        let urlRenewClosure: (() async throws -> URL)? = renew ?? renewStream.map { fetch in { try await fetch().url } }
         return await LocalStreamProxy.shared.localURL(for: url, headers: headers, streamID: streamID,
-                                                      renew: renew, playlistRenew: playlistRenew)?.absoluteString ?? url.absoluteString
+                                                      renew: urlRenewClosure, playlistRenew: playlistRenew)?.absoluteString ?? url.absoluteString
     }
 
     static func clock(_ seconds: Double) -> String {
@@ -2828,15 +2993,21 @@ final class MPVMetalLayer: CAMetalLayer {
         }
     }
 
-    // HDR 需要在主线程打开屏幕的 EDR 模式
+    // HDR 需要在主线程打开屏幕的 EDR 模式；异步投递避免与 mpv 渲染/主线程互相等待导致卡死
     override var wantsExtendedDynamicRangeContent: Bool {
         get { super.wantsExtendedDynamicRangeContent }
         set {
             if Thread.isMainThread {
                 super.wantsExtendedDynamicRangeContent = newValue
             } else {
-                DispatchQueue.main.sync { super.wantsExtendedDynamicRangeContent = newValue }
+                DispatchQueue.main.async { [weak self] in
+                    self?.applyEDR(newValue)
+                }
             }
         }
+    }
+
+    private func applyEDR(_ enabled: Bool) {
+        super.wantsExtendedDynamicRangeContent = enabled
     }
 }

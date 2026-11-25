@@ -31,10 +31,97 @@ enum PlayerWarmup {
             _ = session.outputVolume
             _ = MTLCreateSystemDefaultDevice()
         }
-        // 系统音量控件只能在主线程创建；晚一点、等首页稳定下来再做
+        // 系统音量控件只能在主线程创建；晚一点、等首页稳定下来再做，并静默预热 1 个空闲 mpv 内核实例
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 600_000_000)
             _ = MPVolumeView(frame: CGRect(x: 0, y: 0, width: 100, height: 30))
+            MPVEnginePool.shared.prewarmIfNeeded()
+        }
+    }
+}
+
+/// 空闲 `MPVEngine` 预热池（单实例）：
+/// 在后台预先完成 `mpv_create` + `mpv_initialize` + 字体配置 + `hplayer115://` 协议注册（未绑定渲染交换链），
+/// 用户点击播放时 0ms 取出并绑定目标 `CAMetalLayer` 后再 `loadfile`，彻底消除内核冷启动耗时且避免 MoltenVK 复用脏交换链黑屏。
+final class MPVEnginePool: @unchecked Sendable {
+    static let shared = MPVEnginePool()
+
+    private let lock = NSLock()
+    private var idleEngine: MPVEngine?
+    private var warming = false
+
+    private init() {
+        NotificationCenter.default.addObserver(forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: nil) { [weak self] _ in
+            self?.drain()
+        }
+    }
+
+    /// 若当前池为空且未在预热，则在后台内核串行队列上异步准备 1 个干净的空闲 `MPVEngine`。
+    @MainActor
+    func prewarmIfNeeded() {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+            || NSClassFromString("XCTestCase") != nil {
+            return
+        }
+        #endif
+        let options = PlaybackController.defaultEngineOptions()
+        prewarm(with: options)
+    }
+
+    func prewarm(with baseOptions: [(String, String)]) {
+        lock.lock()
+        guard idleEngine == nil, !warming else {
+            lock.unlock()
+            return
+        }
+        warming = true
+        lock.unlock()
+
+        PlayerDiskCache.queue.async { [weak self] in
+            guard let self else { return }
+            var options = baseOptions
+            if let fontDir = SubtitleFontManager.prepareSubtitleFontDirectory() {
+                options.append(("sub-fonts-dir", fontDir.path))
+                options.append(("sub-font", SubtitleFontManager.defaultFontName))
+                options.append(("osd-fonts-dir", fontDir.path))
+                options.append(("osd-font", SubtitleFontManager.defaultFontName))
+            }
+            let created = MPVEngine(options: options, layer: nil)
+            self.lock.lock()
+            self.warming = false
+            if self.idleEngine == nil {
+                self.idleEngine = created
+                self.lock.unlock()
+            } else {
+                self.lock.unlock()
+                created?.destroy()
+            }
+        }
+    }
+
+    /// 同步取出已预热好的空闲 `MPVEngine`；池为空时返回 nil（调用方回退到后台现建）。
+    func take() -> MPVEngine? {
+        lock.lock()
+        let taken = idleEngine
+        idleEngine = nil
+        lock.unlock()
+        return taken
+    }
+
+    var hasIdleEngine: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return idleEngine != nil
+    }
+
+    func drain() {
+        lock.lock()
+        let old = idleEngine
+        idleEngine = nil
+        lock.unlock()
+        if let old {
+            PlayerDiskCache.queue.async { old.destroy() }
         }
     }
 }

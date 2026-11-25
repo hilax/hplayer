@@ -284,14 +284,7 @@ extension Direct115Client {
 
     /// 请求头里用的 Cookie：去掉保存下来的 Cookie 文本里的 path、domain、expires 这类属性，只留名称=值
     var requestCookie: String {
-        cookie.split(separator: ";")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { pair in
-                guard let equals = pair.firstIndex(of: "=") else { return false }
-                let name = String(pair[..<equals]).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                return !name.isEmpty && !["path", "domain", "expires", "max-age", "samesite"].contains(name)
-            }
-            .joined(separator: "; ")
+        Self.cleanedCookieHeader(cookie)
     }
 
     /// 下载原文件的请求：请求头和播放器打开原画时一致（同一个 User-Agent、Referer 和登录 Cookie）
@@ -301,6 +294,15 @@ extension Direct115Client {
         request.setValue("https://115.com/", forHTTPHeaderField: "Referer")
         let header = requestCookie
         if !header.isEmpty { request.setValue(header, forHTTPHeaderField: "Cookie") }
+        return request
+    }
+
+    /// 按解析结果生成下载请求：保证使用签发该直链时对应的 User-Agent 与合并后的 Cookie。
+    func downloadRequest(for resolved: Direct115ResolvedStream) -> URLRequest {
+        var request = URLRequest(url: resolved.url)
+        for (name, value) in resolved.headers {
+            request.setValue(value, forHTTPHeaderField: name)
+        }
         return request
     }
 

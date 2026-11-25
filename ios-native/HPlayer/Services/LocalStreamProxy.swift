@@ -21,6 +21,7 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
     private var port: UInt16 = 0
     private var checkingListener = false
     private var lastPortCheck: Bool?
+    private var usesCustomPortProbe = false
     private var listenerWaiters: [UUID: (UInt16?) -> Void] = [:]
     private var portProbe: (UInt16) -> Bool = LocalStreamProxy.accepts
     private var session: URLSession!
@@ -31,6 +32,9 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
     private var tasks: [Int: UpstreamTaskHandler] = [:]
     private var connections: [ObjectIdentifier: ProxyConnection] = [:]
     private var prewarms: [String: PrewarmTransfer] = [:]
+    /// 某条流的预取如果收到 403/401/410，在冷却窗口内自动降回单连接，避免触碰 115 并发上限
+    private var lookaheadSuppressedUntil: [String: TimeInterval] = [:]
+    fileprivate var lookaheadTriggerRatio: Double = 0.65
     private var serialCounter = 0
     private var lastProblem = ""
     /// 最近几次上游出错的记录（带时间）。自动重试好几次之后，最初的出错原因不会被后面的覆盖掉。
@@ -79,9 +83,12 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
         delegateQueue.underlyingQueue = queue
         session = URLSession(configuration: configuration, delegate: self, delegateQueue: delegateQueue)
         // 手机锁屏或切到别的 App 再回来，系统可能已经收走了监听端口，但监听对象还显示「就绪」。
-        // 回到前台时检查一次，端口连不上就丢掉，下次播放时重建。
+        // 回到前台时失效缓存并检查一次，端口连不上就丢掉，下次播放时重建。
         NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: nil) { [weak self] _ in
-            self?.queue.async { self?.checkListenerIfNeeded() }
+            self?.queue.async {
+                self?.lastPortCheck = nil
+                self?.checkListenerIfNeeded()
+            }
         }
     }
 
@@ -145,9 +152,9 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
             guard !hasActive, self.prewarms[key] == nil else { return }
 
             let targetURL = self.currentUpstream(forKey: key, fallback: upstream)
-            // 如果片头已经在缓存里（刚播过同片），检查是否需要补预热尾部 moov
+            // 如果片头已经在缓存里（刚播过同片），检查是否需要补预热尾部索引（MP4 moov / MKV Cues）
             if let headHit = self.blockCache.lookup(key: key, start: 0, requestedEnd: 65_535) {
-                if case .moovAtTail(let tailStart, let tailEnd) = MP4MoovProbe.inspect(prefix: headHit.data, totalSize: headHit.meta.totalSize),
+                if case .indexAtTail(let tailStart, let tailEnd, _) = ContainerIndexProbe.inspect(prefix: headHit.data, totalSize: headHit.meta.totalSize),
                    let missing = self.missingCacheRange(forKey: key, start: tailStart, end: tailEnd) {
                     self.startPrewarmTransfer(key: key, url: targetURL, headers: headers,
                                               start: missing.start, end: missing.end, resume: resume, followTailMoov: false)
@@ -382,7 +389,19 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
     }
 
     func setPortProbeForTesting(_ probe: @escaping (UInt16) -> Bool) {
-        queue.sync { portProbe = probe }
+        queue.sync {
+            portProbe = probe
+            usesCustomPortProbe = true
+            lastPortCheck = nil
+        }
+    }
+
+    func setLookaheadTriggerRatioForTesting(_ ratio: Double) {
+        queue.sync { lookaheadTriggerRatio = ratio }
+    }
+
+    func isLookaheadSuppressedForTesting(streamKey: String) -> Bool {
+        queue.sync { isLookaheadSuppressed(forKey: streamKey) }
     }
 
     func listenerWaiterCountForTesting() -> Int {
@@ -415,12 +434,17 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
 
     // MARK: 监听
 
-    /// 所有等待者共用一次监听器启动或端口检查。
+    /// 所有等待者共用一次监听器启动或端口检查。正常已就绪时直接复用（零 socket 探测延迟），
+    /// 仅在回到前台或状态失效时重新探测端口。
     private func ensureListener() {
         guard let listener else { startListener(); return }
         switch listener.state {
         case .ready where port != 0:
-            checkListenerIfNeeded()
+            if lastPortCheck == true && !usesCustomPortProbe {
+                finishListenerWaiters(port)
+            } else {
+                checkListenerIfNeeded()
+            }
         case .waiting where port != 0:
             self.listener = nil
             port = 0
@@ -452,13 +476,14 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
             switch state {
             case .ready:
                 self.port = created.port?.rawValue ?? 0
-                self.lastPortCheck = nil
                 guard self.port != 0 else {
+                    self.lastPortCheck = nil
                     self.listener = nil
                     created.cancel()
                     self.finishListenerWaiters(nil)
                     return
                 }
+                self.lastPortCheck = true
                 self.finishListenerWaiters(self.port)
             case .failed, .cancelled:
                 self.listener = nil
@@ -559,7 +584,7 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
         streamID ?? upstream.absoluteString
     }
 
-    fileprivate static func looksLikePlaylistURL(_ url: URL) -> Bool {
+    static func looksLikePlaylistURL(_ url: URL) -> Bool {
         let ext = url.pathExtension.lowercased()
         return ext == "m3u8" || ext == "m3u"
     }
@@ -854,6 +879,19 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
     fileprivate func detach(_ task: URLSessionDataTask) {
         tasks.removeValue(forKey: task.taskIdentifier)
     }
+
+    fileprivate func isLookaheadSuppressed(forKey key: String, now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Bool {
+        guard let until = lookaheadSuppressedUntil[key] else { return false }
+        if until <= now {
+            lookaheadSuppressedUntil.removeValue(forKey: key)
+            return false
+        }
+        return true
+    }
+
+    fileprivate func suppressLookahead(forKey key: String, duration: TimeInterval = 60) {
+        lookaheadSuppressedUntil[key] = ProcessInfo.processInfo.systemUptime + duration
+    }
 }
 
 private struct StreamProfile {
@@ -941,22 +979,16 @@ private final class PlaylistEntry: @unchecked Sendable {
     }
 }
 
-/// 视频头尾和热点字节块内存 LRU 缓存（40 MiB 上限，只在中转串行队列上访问）
-private final class StreamBlockCache {
-    struct Metadata {
+/// 视频头尾和热点字节块内存 LRU 缓存（48 MiB 上限，内部加锁，可同时服务 LocalStreamProxy 与进程内 stream_cb）。
+/// 常规顺序播放的中段大流量字节默认不写入此缓存，避免对整片进行无意义的内存拷贝与淘汰抖动。
+final class StreamBlockCache: @unchecked Sendable {
+    struct Metadata: Sendable {
         let totalSize: Int64
         let supportsRanges: Bool
         let contentType: String?
         let etag: String?
         let lastModified: String?
         let acceptRanges: String?
-    }
-
-    struct Hit {
-        let meta: Metadata
-        let data: Data
-        let resolvedEnd: Int64
-        var isComplete: Bool { false } // Helper unused; callers compare count vs (resolvedEnd - start + 1)
     }
 
     private struct Block {
@@ -972,21 +1004,43 @@ private final class StreamBlockCache {
         var blocks: [Block] = []
     }
 
-    private static let headPinBytes: Int64 = 2 * 1_048_576
-    private static let tailPinBytes: Int64 = 4 * 1_048_576
+    static let headPinBytes: Int64 = 4 * 1_048_576
+    static let tailPinBytes: Int64 = 4 * 1_048_576
     private static let maxSingleBlockBytes = 2 * 1_048_576
-    private let maxTotalBytes = 48 * 1_048_576
+    private let maxTotalBytes: Int
+    private let lock = NSLock()
     private var entries: [String: Entry] = [:]
     private var clock: UInt64 = 0
-    private(set) var totalBytes = 0
+    private var storedBytes = 0
 
-    func record(key: String, meta: Metadata, offset: Int64, data: Data) {
+    init(maxTotalBytes: Int = 48 * 1_048_576) {
+        self.maxTotalBytes = maxTotalBytes
+    }
+
+    var totalBytes: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedBytes
+    }
+
+    /// 仅记录头尾索引区、热点小请求或显式预热/预取字节；大文件中段顺序播放流跳过缓存写入，省去 O(N) 拷贝与淘汰开销。
+    func record(key: String, meta: Metadata, offset: Int64, data: Data, onlyPinRegion: Bool = false) {
         guard meta.totalSize > 0, offset >= 0, !data.isEmpty else { return }
+        if onlyPinRegion {
+            let tailFloor = max(0, meta.totalSize - Self.tailPinBytes)
+            let endOffset = offset + Int64(data.count) - 1
+            if offset >= Self.headPinBytes && endOffset < tailFloor {
+                return
+            }
+        }
+        lock.lock()
+        defer { lock.unlock() }
+
         if var existing = entries[key] {
             let sameTotal = existing.meta.totalSize == meta.totalSize
             let sameETag = existing.meta.etag == nil || meta.etag == nil || existing.meta.etag == meta.etag
             if !sameTotal || !sameETag {
-                removeEntry(key: key)
+                removeEntryLocked(key: key)
                 existing = Entry(meta: meta, blocks: [])
             } else {
                 existing.meta = meta
@@ -1002,80 +1056,122 @@ private final class StreamBlockCache {
             let endCursor = min(data.count, cursor + Self.maxSingleBlockBytes)
             let slice = Data(data[cursor..<endCursor])
             let sliceStart = offset + Int64(cursor)
-            insertSlice(key: key, totalSize: meta.totalSize, start: sliceStart, slice: slice)
+            insertSliceLocked(key: key, totalSize: meta.totalSize, start: sliceStart, slice: slice)
             cursor = endCursor
         }
-        evictIfNeeded()
+        evictIfNeededLocked()
     }
 
-    func lookup(key: String, start: Int64, requestedEnd: Int64?) -> (meta: Metadata, data: Data, resolvedEnd: Int64)? {
+    func metadata(forKey key: String) -> Metadata? {
+        lock.lock()
+        defer { lock.unlock() }
+        return entries[key]?.meta
+    }
+
+    func lookup(key: String, start: Int64, requestedEnd: Int64?, maxReturnBytes: Int = 4 * 1_048_576) -> (meta: Metadata, data: Data, resolvedEnd: Int64)? {
+        lock.lock()
+        defer { lock.unlock() }
         guard var entry = entries[key], entry.meta.supportsRanges, entry.meta.totalSize > 0 else { return nil }
         let resolvedEnd = min(requestedEnd ?? (entry.meta.totalSize - 1), entry.meta.totalSize - 1)
-        guard start >= 0, start <= resolvedEnd else { return nil }
+        guard start >= 0, start <= resolvedEnd, !entry.blocks.isEmpty else { return nil }
+
+        // 二分查找第一个 block.end >= start 的块
+        var lo = 0
+        var hi = entry.blocks.count
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2
+            if entry.blocks[mid].end < start {
+                lo = mid + 1
+            } else {
+                hi = mid
+            }
+        }
+        guard lo < entry.blocks.count, entry.blocks[lo].start <= start else { return nil }
 
         var output = Data()
         var needOffset = start
         clock += 1
-        for i in 0..<entry.blocks.count {
+        var i = lo
+        while i < entry.blocks.count {
             let block = entry.blocks[i]
-            if block.end < needOffset { continue }
             if block.start > needOffset { break }
             let takeStart = Int(needOffset - block.start)
-            let takeLimit = min(block.data.count, takeStart + Int(resolvedEnd - needOffset + 1))
+            let remainingInRequest = Int(min(Int64(maxReturnBytes - output.count), resolvedEnd - needOffset + 1))
+            guard remainingInRequest > 0 else { break }
+            let takeLimit = min(block.data.count, takeStart + remainingInRequest)
             guard takeLimit > takeStart else { break }
             let piece = block.data[takeStart..<takeLimit]
             output.append(piece)
             entry.blocks[i].lastUsed = clock
             needOffset += Int64(piece.count)
-            if output.count >= 4 * 1_048_576 || needOffset > resolvedEnd { break }
+            if output.count >= maxReturnBytes || needOffset > resolvedEnd { break }
+            i += 1
         }
         entries[key] = entry
         guard !output.isEmpty else { return nil }
         return (entry.meta, output, resolvedEnd)
     }
 
-    private func insertSlice(key: String, totalSize: Int64, start: Int64, slice: Data) {
+    private func insertSliceLocked(key: String, totalSize: Int64, start: Int64, slice: Data) {
         guard var entry = entries[key] else { return }
         let end = start + Int64(slice.count) - 1
         let tailFloor = max(0, totalSize - Self.tailPinBytes)
         let pinned = start < Self.headPinBytes || end >= tailFloor
         clock += 1
 
-        // 丢弃完全被覆盖的旧块或与新块区间重叠的旧块（简单清晰，不留碎片）
+        // 常见热路径：单调追加在最后一个块之后且无重叠，O(1) 完成
+        if let last = entry.blocks.last, last.end < start {
+            if last.end + 1 == start && last.data.count + slice.count <= Self.maxSingleBlockBytes {
+                let lastIdx = entry.blocks.count - 1
+                entry.blocks[lastIdx].data.append(slice)
+                entry.blocks[lastIdx].lastUsed = clock
+                entry.blocks[lastIdx].pinned = entry.blocks[lastIdx].pinned || pinned
+                storedBytes += slice.count
+            } else {
+                entry.blocks.append(Block(start: start, data: slice, lastUsed: clock, pinned: pinned))
+                storedBytes += slice.count
+            }
+            entries[key] = entry
+            return
+        }
+
+        // 丢弃与新块区间重叠的旧块
         var removedBytes = 0
         entry.blocks.removeAll { block in
             let overlaps = !(block.end < start || block.start > end)
             if overlaps { removedBytes += block.data.count }
             return overlaps
         }
-        totalBytes -= removedBytes
+        storedBytes -= removedBytes
 
-        // 尽量与相邻且未超限的前一个同类型块合并，减少数组碎片
+        // 尽量与相邻且未超限的前一个块合并，减少数组碎片
         if let prevIdx = entry.blocks.lastIndex(where: { $0.end + 1 == start && $0.data.count + slice.count <= Self.maxSingleBlockBytes }) {
             entry.blocks[prevIdx].data.append(slice)
             entry.blocks[prevIdx].lastUsed = clock
             entry.blocks[prevIdx].pinned = entry.blocks[prevIdx].pinned || pinned
-            totalBytes += slice.count
+            storedBytes += slice.count
         } else {
             let block = Block(start: start, data: slice, lastUsed: clock, pinned: pinned)
             let insertIdx = entry.blocks.firstIndex(where: { $0.start > start }) ?? entry.blocks.count
             entry.blocks.insert(block, at: insertIdx)
-            totalBytes += slice.count
+            storedBytes += slice.count
         }
         entries[key] = entry
     }
 
     func invalidate(key: String) {
-        removeEntry(key: key)
+        lock.lock()
+        defer { lock.unlock() }
+        removeEntryLocked(key: key)
     }
 
-    private func removeEntry(key: String) {
+    private func removeEntryLocked(key: String) {
         guard let existing = entries.removeValue(forKey: key) else { return }
-        for b in existing.blocks { totalBytes -= b.data.count }
+        for b in existing.blocks { storedBytes -= b.data.count }
     }
 
-    private func evictIfNeeded() {
-        while totalBytes > maxTotalBytes {
+    private func evictIfNeededLocked() {
+        while storedBytes > maxTotalBytes {
             var bestKey: String?
             var bestIdx: Int?
             var bestScore: UInt64 = .max
@@ -1099,7 +1195,7 @@ private final class StreamBlockCache {
             }
             guard let victimKey = bestKey, let victimIdx = bestIdx, var entry = entries[victimKey] else { break }
             let evicted = entry.blocks.remove(at: victimIdx)
-            totalBytes -= evicted.data.count
+            storedBytes -= evicted.data.count
             if entry.blocks.isEmpty { entries.removeValue(forKey: victimKey) } else { entries[victimKey] = entry }
         }
     }
@@ -1138,7 +1234,7 @@ extension LocalStreamProxy: URLSessionDataDelegate {
             return
         }
         var next = request
-        if host != "115.com" && !host.hasSuffix(".115.com") {
+        if !Direct115Client.is115CookieHost(host) {
             next.setValue(nil, forHTTPHeaderField: "Cookie")
         }
         if let dataTask = task as? URLSessionDataTask {
@@ -1235,6 +1331,210 @@ enum MP4MoovProbe: Equatable {
     }
 }
 
+/// 探测 MKV / WebM（EBML）文件开头若干字节，定位 `SeekHead → Cues` 索引偏移（或回退到文件尾部 1.5 MiB）。
+enum MKVCuesProbe: Equatable {
+    case undetermined
+    case cuesAtHead
+    case cuesAtTail(start: Int64, end: Int64)
+
+    private static let ebmlHeaderID: UInt32 = 0x1A45_DFA3
+    private static let segmentID: UInt32 = 0x1853_8067
+    private static let seekHeadID: UInt32 = 0x114D_9B74
+    private static let seekEntryID: UInt32 = 0x4DBB
+    private static let seekIDElement: UInt32 = 0x53AB
+    private static let seekPositionElement: UInt32 = 0x53AC
+    private static let cuesID: UInt32 = 0x1C53_BB6B
+    private static let clusterID: UInt32 = 0x1F43_B675
+    private static let fallbackTailBytes: Int64 = 1_572_864
+
+    static func inspect(prefix: Data, totalSize: Int64, maxTailBytes: Int64 = 2 * 1_048_576) -> MKVCuesProbe {
+        guard totalSize > 64, prefix.count >= 16 else { return .undetermined }
+        let bytes = [UInt8](prefix)
+        guard bytes[0] == 0x1A, bytes[1] == 0x45, bytes[2] == 0xDF, bytes[3] == 0xA3 else {
+            return .undetermined
+        }
+
+        var cursor = 0
+        guard let (ebmlID, afterEBMLID) = readElementID(bytes, at: cursor),
+              ebmlID == ebmlHeaderID,
+              let (ebmlSize, afterEBMLSize) = readVintSize(bytes, at: afterEBMLID),
+              let ebmlBodySize = ebmlSize else {
+            return .undetermined
+        }
+        guard ebmlBodySize <= UInt64(bytes.count), afterEBMLSize + Int(ebmlBodySize) <= bytes.count else {
+            return .undetermined
+        }
+        cursor = afterEBMLSize + Int(ebmlBodySize)
+
+        var segmentDataStart: Int64?
+        var topIterations = 0
+        while topIterations < 16, cursor < bytes.count {
+            topIterations += 1
+            guard let (elID, afterID) = readElementID(bytes, at: cursor),
+                  let (elSize, afterSize) = readVintSize(bytes, at: afterID) else {
+                break
+            }
+            if elID == segmentID {
+                segmentDataStart = Int64(afterSize)
+                cursor = afterSize
+                break
+            }
+            guard let bodySize = elSize, bodySize <= UInt64(bytes.count - afterSize) else {
+                break
+            }
+            cursor = afterSize + Int(bodySize)
+        }
+
+        guard let segStart = segmentDataStart else {
+            return .undetermined
+        }
+
+        let fallbackStart = max(0, totalSize - min(maxTailBytes, fallbackTailBytes))
+        var childIterations = 0
+        while childIterations < 64, cursor < bytes.count {
+            childIterations += 1
+            guard let (childID, afterID) = readElementID(bytes, at: cursor),
+                  let (childSize, afterSize) = readVintSize(bytes, at: afterID) else {
+                break
+            }
+            if childID == cuesID {
+                return .cuesAtHead
+            }
+            if childID == clusterID {
+                return fallbackStart < totalSize ? .cuesAtTail(start: fallbackStart, end: totalSize - 1) : .undetermined
+            }
+            if childID == seekHeadID, let bodySize = childSize {
+                let end = min(bytes.count, afterSize + Int(min(bodySize, UInt64(bytes.count))))
+                if let relCuesPos = findCuesPosition(in: bytes, range: afterSize..<end) {
+                    if relCuesPos <= Int64.max - segStart {
+                        let absPos = segStart + relCuesPos
+                        if absPos < 2 * 1_048_576 {
+                            return .cuesAtHead
+                        }
+                        if absPos < totalSize {
+                            let tailEnd = min(totalSize - 1, absPos + maxTailBytes - 1)
+                            return .cuesAtTail(start: absPos, end: tailEnd)
+                        }
+                    }
+                }
+            }
+            guard let bodySize = childSize, bodySize <= UInt64(bytes.count - afterSize) else {
+                break
+            }
+            cursor = afterSize + Int(bodySize)
+        }
+
+        if bytes.count >= 16_384, fallbackStart < totalSize {
+            return .cuesAtTail(start: fallbackStart, end: totalSize - 1)
+        }
+        return .undetermined
+    }
+
+    private static func findCuesPosition(in bytes: [UInt8], range: Range<Int>) -> Int64? {
+        var cursor = range.lowerBound
+        var iterations = 0
+        while iterations < 128, cursor < range.upperBound {
+            iterations += 1
+            guard let (elID, afterID) = readElementID(bytes, at: cursor),
+                  let (elSize, afterSize) = readVintSize(bytes, at: afterID),
+                  let bodySize = elSize else {
+                break
+            }
+            let bodyEnd = afterSize + Int(min(bodySize, UInt64(range.upperBound - afterSize)))
+            if elID == seekEntryID, bodyEnd <= range.upperBound {
+                var sub = afterSize
+                var isCues = false
+                var position: Int64?
+                while sub < bodyEnd {
+                    guard let (subID, afterSubID) = readElementID(bytes, at: sub),
+                          let (subSize, afterSubSize) = readVintSize(bytes, at: afterSubID),
+                          let subLen = subSize,
+                          subLen <= UInt64(bodyEnd - afterSubSize) else {
+                        break
+                    }
+                    let len = Int(subLen)
+                    if subID == seekIDElement, len == 4 {
+                        let targetID = (UInt32(bytes[afterSubSize]) << 24)
+                            | (UInt32(bytes[afterSubSize + 1]) << 16)
+                            | (UInt32(bytes[afterSubSize + 2]) << 8)
+                            | UInt32(bytes[afterSubSize + 3])
+                        if targetID == cuesID { isCues = true }
+                    } else if subID == seekPositionElement, (1...8).contains(len) {
+                        var value: UInt64 = 0
+                        for i in 0..<len {
+                            value = (value << 8) | UInt64(bytes[afterSubSize + i])
+                        }
+                        if value <= UInt64(Int64.max) { position = Int64(value) }
+                    }
+                    sub = afterSubSize + len
+                }
+                if isCues, let position { return position }
+            }
+            guard bodySize <= UInt64(range.upperBound - afterSize) else { break }
+            cursor = afterSize + Int(bodySize)
+        }
+        return nil
+    }
+
+    private static func readElementID(_ bytes: [UInt8], at offset: Int) -> (id: UInt32, nextOffset: Int)? {
+        guard offset < bytes.count else { return nil }
+        let first = bytes[offset]
+        guard first != 0 else { return nil }
+        let length = first.leadingZeroBitCount + 1
+        guard length <= 4, offset + length <= bytes.count else { return nil }
+        var id: UInt32 = 0
+        for i in 0..<length {
+            id = (id << 8) | UInt32(bytes[offset + i])
+        }
+        return (id, offset + length)
+    }
+
+    /// 返回 `(size, nextOffset)`；`size == nil` 表示 EBML 未知长度（全 1 编码，如流式 Segment）。
+    private static func readVintSize(_ bytes: [UInt8], at offset: Int) -> (size: UInt64?, nextOffset: Int)? {
+        guard offset < bytes.count else { return nil }
+        let first = bytes[offset]
+        guard first != 0 else { return nil }
+        let length = first.leadingZeroBitCount + 1
+        guard length <= 8, offset + length <= bytes.count else { return nil }
+        let mask: UInt8 = length == 8 ? 0 : UInt8((1 << (8 - length)) - 1)
+        var value = UInt64(first & mask)
+        var allOnes = (first & mask) == mask
+        for i in 1..<length {
+            let b = bytes[offset + i]
+            value = (value << 8) | UInt64(b)
+            if b != 0xFF { allOnes = false }
+        }
+        return (allOnes ? nil : value, offset + length)
+    }
+}
+
+/// 统一容器索引探测：同时支持 MP4（`moov`）与 MKV/WebM（`SeekHead → Cues` / 尾部回退）。
+enum ContainerIndexProbe: Equatable {
+    case undetermined
+    case indexAtHead
+    /// `headBytesBeforeTailSwitch`：预热阶段读满这么多片头字节后立刻切去拉尾部索引
+    case indexAtTail(start: Int64, end: Int64, headBytesBeforeTailSwitch: Int)
+
+    static func inspect(prefix: Data, totalSize: Int64, maxTailBytes: Int64 = 4 * 1_048_576) -> ContainerIndexProbe {
+        switch MP4MoovProbe.inspect(prefix: prefix, totalSize: totalSize, maxTailBytes: maxTailBytes) {
+        case .moovAtHead:
+            return .indexAtHead
+        case .moovAtTail(let start, let end):
+            return .indexAtTail(start: start, end: end, headBytesBeforeTailSwitch: 65_536)
+        case .undetermined:
+            break
+        }
+        switch MKVCuesProbe.inspect(prefix: prefix, totalSize: totalSize, maxTailBytes: min(maxTailBytes, 2 * 1_048_576)) {
+        case .cuesAtHead:
+            return .indexAtHead
+        case .cuesAtTail(let start, let end):
+            return .indexAtTail(start: start, end: end, headBytesBeforeTailSwitch: 262_144)
+        case .undetermined:
+            return .undetermined
+        }
+    }
+}
+
 private protocol UpstreamTaskHandler: AnyObject {
     func didRedirect(to url: URL)
     func didReceive(_ response: URLResponse, from dataTask: URLSessionDataTask) -> Bool
@@ -1262,6 +1562,7 @@ private final class PrewarmTransfer: UpstreamTaskHandler {
     private(set) var bufferedData = Data()
     private var probedMoov = false
     private var detectedTailRange: (start: Int64, end: Int64)?
+    private var tailSwitchThreshold = 65_536
     private var finished = false
 
     init(
@@ -1352,19 +1653,21 @@ private final class PrewarmTransfer: UpstreamTaskHandler {
         proxy.blockCache.record(key: key, meta: meta, offset: offset, data: data)
 
         if followTailMoov && !probedMoov && actualStart == 0 && bufferedData.count >= 64 {
-            let probe = MP4MoovProbe.inspect(prefix: bufferedData, totalSize: meta.totalSize)
+            let probe = ContainerIndexProbe.inspect(prefix: bufferedData, totalSize: meta.totalSize)
             switch probe {
-            case .moovAtHead:
+            case .indexAtHead:
                 probedMoov = true
-            case .moovAtTail(let tailStart, let tailEnd):
+            case .indexAtTail(let tailStart, let tailEnd, let threshold):
                 probedMoov = true
                 detectedTailRange = (tailStart, tailEnd)
+                tailSwitchThreshold = threshold
             case .undetermined:
-                if bufferedData.count >= 16_384 { probedMoov = true }
+                if bufferedData.count >= 32_768 { probedMoov = true }
             }
         }
-        // 续播场景下片头已有 64 KiB（足以让 mpv 读完 ftyp/mdat 头），立刻停掉剩余片头下载转去拉尾部 moov
-        if resume && followTailMoov && detectedTailRange != nil && bufferedData.count >= 65_536 {
+        // 检测到索引在文件尾部（MP4 moov / MKV Cues）后，无论是否续播，读够头部基础字节即刻切去预取尾部索引，
+        // 避免把预热时间浪费在尚未解析索引前无用的中段 mdat/Cluster 上。
+        if followTailMoov && detectedTailRange != nil && bufferedData.count >= tailSwitchThreshold {
             if let running = task {
                 proxy.detach(running)
                 running.cancel()
@@ -1393,6 +1696,129 @@ private final class PrewarmTransfer: UpstreamTaskHandler {
             self.task = nil
         }
         proxy?.prewarmDidFinish(self, nextTailRange: nextTail)
+    }
+
+    private static func totalLength(of response: HTTPURLResponse) -> Int64? {
+        guard let value = response.value(forHTTPHeaderField: "Content-Range"),
+              let total = value.split(separator: "/").last else { return nil }
+        return Int64(total.trimmingCharacters(in: .whitespaces))
+    }
+
+    private static func contentRange(of response: HTTPURLResponse) -> (start: Int64, end: Int64)? {
+        guard let value = response.value(forHTTPHeaderField: "Content-Range") else { return nil }
+        let parts = value.split(separator: " ")
+        guard parts.count == 2, parts[0].lowercased() == "bytes" else { return nil }
+        guard let span = parts[1].split(separator: "/", maxSplits: 1).first else { return nil }
+        let bounds = span.split(separator: "-")
+        guard bounds.count == 2, let start = Int64(bounds[0]), let end = Int64(bounds[1]), end >= start else { return nil }
+        return (start, end)
+    }
+}
+
+/// 滑动预取传输：在当前分段下载到 65% 时提前拉取下一分段（最多 1 个并发预取），
+/// 消除分段边界 RTT 真空；若遇 403/401/410 自动静默取消并让整条流回退到单连接。
+private final class LookaheadTransfer: UpstreamTaskHandler {
+    let streamKey: String
+    let rangeStart: Int64
+    let rangeEnd: Int64
+    let expectedTotal: Int64?
+    let expectedValidator: String?
+    private let maxBufferBytes: Int
+    private weak var proxy: LocalStreamProxy?
+
+    var url: URL
+    private(set) var task: URLSessionDataTask?
+    private(set) var responseReceived = false
+    private(set) var actualEnd: Int64 = 0
+    private(set) var bufferedData = Data()
+    private(set) var completed = false
+    private(set) var failed = false
+
+    init(
+        streamKey: String,
+        url: URL,
+        rangeStart: Int64,
+        rangeEnd: Int64,
+        expectedTotal: Int64?,
+        expectedValidator: String?,
+        maxBufferBytes: Int,
+        proxy: LocalStreamProxy
+    ) {
+        self.streamKey = streamKey
+        self.url = url
+        self.rangeStart = rangeStart
+        self.rangeEnd = rangeEnd
+        self.expectedTotal = expectedTotal
+        self.expectedValidator = expectedValidator
+        self.maxBufferBytes = maxBufferBytes
+        self.proxy = proxy
+    }
+
+    func start(request: URLRequest) {
+        guard let proxy, !failed else { return }
+        task = proxy.startTask(request, for: self)
+    }
+
+    func detachTaskForAdoption() -> URLSessionDataTask? {
+        let running = task
+        task = nil
+        return running
+    }
+
+    func cancel() {
+        failed = true
+        if let task {
+            proxy?.detach(task)
+            task.cancel()
+            self.task = nil
+        }
+    }
+
+    func didRedirect(to url: URL) {
+        self.url = url
+    }
+
+    func didReceive(_ response: URLResponse, from dataTask: URLSessionDataTask) -> Bool {
+        guard !failed, let http = response as? HTTPURLResponse else { return false }
+        if http.statusCode == 401 || http.statusCode == 403 || http.statusCode == 410 {
+            proxy?.suppressLookahead(forKey: streamKey, duration: 60)
+            proxy?.note("预取分段收到 HTTP \(http.statusCode)，自动降级为单连接")
+            cancel()
+            return false
+        }
+        guard http.statusCode == 206, let range = Self.contentRange(of: http), range.start == rangeStart else {
+            cancel()
+            return false
+        }
+        let newTotal = Self.totalLength(of: http)
+        let newValidator = http.value(forHTTPHeaderField: "ETag")
+        let sameSize = expectedTotal != nil && newTotal == expectedTotal
+        let sameFile = expectedValidator == nil || newValidator == nil || expectedValidator == newValidator || sameSize
+        guard sameFile else {
+            cancel()
+            return false
+        }
+        responseReceived = true
+        actualEnd = range.end
+        return true
+    }
+
+    func didReceive(_ data: Data) {
+        guard !failed, !data.isEmpty else { return }
+        if bufferedData.count + data.count > maxBufferBytes {
+            cancel()
+            return
+        }
+        bufferedData.append(data)
+    }
+
+    func didComplete(_ error: Error?) {
+        task = nil
+        if error != nil {
+            failed = true
+        } else if !failed {
+            completed = true
+        }
     }
 
     private static func totalLength(of response: HTTPURLResponse) -> Int64? {
@@ -1478,8 +1904,11 @@ private final class ProxyConnection: UpstreamTaskHandler {
     private var clientRangeStart: Int64?
     private var clientRangeEnd: Int64?
     private var chunkingActive = false
+    private var currentChunkStart: Int64 = 0
     private var currentChunkActualEnd: Int64?
     private var deferredChunkOffset: Int64?
+    private var lookahead: LookaheadTransfer?
+    private var adoptedFromLookahead = false
     private var fellBackFromBoundedRange = false
     private var stallTimer: DispatchSourceTimer?
     private var lastProgressUptime: TimeInterval = 0
@@ -1577,6 +2006,7 @@ private final class ProxyConnection: UpstreamTaskHandler {
     fileprivate func forceRefreshUpstream() -> Bool {
         guard canRefreshUpstream else { return false }
         beginRecovery()
+        cancelLookahead()
         let resumeAt: Int64? = headersSent ? (bodyStart + deliveredBody) : nil
         retryWork?.cancel()
         retryWork = nil
@@ -1617,6 +2047,7 @@ private final class ProxyConnection: UpstreamTaskHandler {
     fileprivate func yieldUpstream() {
         guard isActiveMediaRequest, !isPlaylist else { return }
         guard headersSent ? bodyEnd != nil : renewalID != nil else { return }
+        cancelLookahead()
         retryWork?.cancel()
         retryWork = nil
         renewalID = nil
@@ -1763,6 +2194,7 @@ private final class ProxyConnection: UpstreamTaskHandler {
                 bodyStart = parsed.start
                 bodyEnd = resolvedEnd
                 bodyTotal = total
+                currentChunkStart = prewarm.actualStart
                 currentChunkActualEnd = prewarm.actualEnd
                 validator = meta.etag
                 cachedContentType = meta.contentType
@@ -1937,6 +2369,19 @@ private final class ProxyConnection: UpstreamTaskHandler {
         if let start = resumeFrom {
             // 续传或下一分段：响应头早就发给 mpv 了，这里只确认上游真的从断开的位置接上，而且还是同一个文件
             resumeFrom = nil
+            let wasLookahead = adoptedFromLookahead
+            adoptedFromLookahead = false
+            if Self.isRefused(status: http.statusCode), wasLookahead {
+                if let key = renewalKey {
+                    proxy.suppressLookahead(forKey: key, duration: 60)
+                }
+                proxy.note("接管的预取分段收到 HTTP \(http.statusCode)，降级为单连接并立即重拉 \(start) 字节")
+                proxy.detach(dataTask)
+                task = nil
+                stopStallTimer()
+                relaunch(resumingAt: start)
+                return false
+            }
             if Self.isRefused(status: http.statusCode),
                renewUpstream("续传时上游返回 HTTP \(http.statusCode)", cancelling: dataTask, resumeAt: start) {
                 return false
@@ -1957,6 +2402,7 @@ private final class ProxyConnection: UpstreamTaskHandler {
                 close()
                 return false
             }
+            currentChunkStart = chunkRange.start
             currentChunkActualEnd = chunkRange.end
             return true
         }
@@ -2008,6 +2454,7 @@ private final class ProxyConnection: UpstreamTaskHandler {
 
         if http.statusCode == 206, let range = Self.contentRange(of: http) {
             bodyStart = range.start
+            currentChunkStart = range.start
             currentChunkActualEnd = range.end
             let total = Self.totalLength(of: http)
             bodyTotal = total
@@ -2065,6 +2512,7 @@ private final class ProxyConnection: UpstreamTaskHandler {
         } else if !isHead {
             let offset = bodyStart + deliveredBody
             if !isPlaylistChildStream, let key = renewalKey, let total = bodyTotal, total > 0 {
+                let isSmallRequest = bodyEnd.map { $0 - bodyStart + 1 <= 2 * 1_048_576 } ?? false
                 let meta = StreamBlockCache.Metadata(
                     totalSize: total,
                     supportsRanges: cachedSupportsRanges,
@@ -2073,7 +2521,7 @@ private final class ProxyConnection: UpstreamTaskHandler {
                     lastModified: cachedLastModified,
                     acceptRanges: cachedAcceptRanges
                 )
-                proxy.blockCache.record(key: key, meta: meta, offset: offset, data: data)
+                proxy.blockCache.record(key: key, meta: meta, offset: offset, data: data, onlyPinRegion: !isSmallRequest)
             }
             deliveredBody += Int64(data.count)
             // 换地址/重试后已经稳定收到至少 64 KiB 实质视频数据，清零本次故障计数以支持多小时长片续命
@@ -2082,6 +2530,7 @@ private final class ProxyConnection: UpstreamTaskHandler {
                 refusalWaits = 0
             }
             write(data)
+            maybeStartLookahead()
         }
     }
 
@@ -2111,17 +2560,12 @@ private final class ProxyConnection: UpstreamTaskHandler {
             finish()
         } else if chunkingActive, headersSent, let targetEnd = bodyEnd, let chunkEnd = currentChunkActualEnd,
                   bodyStart + deliveredBody == chunkEnd + 1, chunkEnd < targetEnd {
-            // 当前分段完整收完且未到文件请求终点：若本地缓冲区还有较多数据等待 mpv 消费，先暂缓下一段，
-            // 等 mpv 消费降到水位线后再平滑发起请求，避免暂停或缓存满时挂起多余 115 连接。
+            // 当前分段完整收完且未到文件请求终点：优先零等待接管已预取的下一分段；
+            // 若本地缓冲区还有较多数据等待 mpv 消费，先暂缓下一段，等水位下降后再继续。
             retryCount = 0
             refusalWaits = 0
             retryProgressMark = deliveredBody
-            let nextOffset = chunkEnd + 1
-            if pending >= Self.resumeBytes {
-                deferredChunkOffset = nextOffset
-            } else {
-                relaunch(resumingAt: nextOffset)
-            }
+            advanceToNextChunk(nextOffset: chunkEnd + 1)
         } else if headersSent, !isHead, bodyEnd != nil, !bodyComplete {
             // 上游未报错却提前断开：按断点续传处理，不直接截断给 mpv 的流
             if scheduleRetry("上游提前结束传输（已转发 \(deliveredBody) 字节）", cancelling: nil) { return }
@@ -2129,6 +2573,135 @@ private final class ProxyConnection: UpstreamTaskHandler {
         } else {
             finish()
         }
+    }
+
+    private func maybeStartLookahead() {
+        guard chunkingActive, headersSent, !isHead, !isPlaylist, !closed, !yielded, !suspended,
+              lookahead == nil, renewalID == nil, retryWork == nil, pending < Self.resumeBytes,
+              let targetEnd = bodyEnd, let chunkEnd = currentChunkActualEnd, chunkEnd < targetEnd,
+              let key = renewalKey, !proxy.isLookaheadSuppressed(forKey: key),
+              proxy.chunkSize > 0, proxy.lookaheadTriggerRatio > 0, proxy.lookaheadTriggerRatio < 1,
+              var request = baseRequest else { return }
+
+        let currentOffset = bodyStart + deliveredBody
+        let chunkLen = max(Int64(1), chunkEnd - currentChunkStart + 1)
+        let consumedInChunk = currentOffset - currentChunkStart
+        guard Double(consumedInChunk) >= Double(chunkLen) * proxy.lookaheadTriggerRatio else { return }
+
+        let nextStart = chunkEnd + 1
+        let nextEnd = min(targetEnd, nextStart + proxy.chunkSize - 1)
+        guard nextEnd >= nextStart else { return }
+
+        let targetURL = originalURL.map { proxy.currentUpstream(forKey: key, fallback: $0) } ?? request.url
+        guard let url = targetURL else { return }
+        request.url = url
+        request.setValue("bytes=\(nextStart)-\(nextEnd)", forHTTPHeaderField: "Range")
+
+        let maxBuffer = Int(min(Int64(24 * 1_048_576), max(proxy.chunkSize + 65_536, 4 * 1_048_576)))
+        let transfer = LookaheadTransfer(
+            streamKey: key,
+            url: url,
+            rangeStart: nextStart,
+            rangeEnd: nextEnd,
+            expectedTotal: bodyTotal,
+            expectedValidator: validator,
+            maxBufferBytes: maxBuffer,
+            proxy: proxy
+        )
+        lookahead = transfer
+        transfer.start(request: request)
+    }
+
+    private func advanceToNextChunk(nextOffset: Int64) {
+        guard !closed, !yielded, let targetEnd = bodyEnd, nextOffset <= targetEnd else {
+            if bodyComplete { finish() }
+            return
+        }
+        if let la = lookahead {
+            lookahead = nil
+            if la.rangeStart == nextOffset && !la.failed {
+                if la.responseReceived {
+                    upstreamURL = la.url
+                    currentChunkStart = nextOffset
+                    currentChunkActualEnd = la.actualEnd
+                    if !la.bufferedData.isEmpty {
+                        let writeOffset = bodyStart + deliveredBody
+                        if !isPlaylistChildStream, let key = renewalKey, let total = bodyTotal, total > 0 {
+                            let meta = StreamBlockCache.Metadata(
+                                totalSize: total,
+                                supportsRanges: cachedSupportsRanges,
+                                contentType: cachedContentType,
+                                etag: validator,
+                                lastModified: cachedLastModified,
+                                acceptRanges: cachedAcceptRanges
+                            )
+                            proxy.blockCache.record(key: key, meta: meta, offset: writeOffset, data: la.bufferedData, onlyPinRegion: true)
+                        }
+                        deliveredBody += Int64(la.bufferedData.count)
+                        let now = ProcessInfo.processInfo.systemUptime
+                        lastProgressUptime = now
+                        lastReceivedBytesUptime = now
+                        write(la.bufferedData)
+                    }
+                    if bodyComplete {
+                        la.cancel()
+                        finish()
+                        return
+                    }
+                    if la.completed {
+                        if la.actualEnd < targetEnd {
+                            if pending >= Self.resumeBytes {
+                                deferredChunkOffset = la.actualEnd + 1
+                            } else {
+                                advanceToNextChunk(nextOffset: la.actualEnd + 1)
+                            }
+                        } else {
+                            finish()
+                        }
+                        return
+                    }
+                    if let runningTask = la.detachTaskForAdoption() {
+                        let now = ProcessInfo.processInfo.systemUptime
+                        lastProgressUptime = now
+                        windowStartUptime = now
+                        windowBytes = 0
+                        task = runningTask
+                        proxy.reassignTask(runningTask, to: self)
+                        if !suspended, pending > Self.pauseBytes {
+                            suspended = true
+                            runningTask.suspend()
+                        }
+                        startStallTimer()
+                        maybeStartLookahead()
+                        return
+                    }
+                } else if let runningTask = la.detachTaskForAdoption() {
+                    resumeFrom = nextOffset
+                    adoptedFromLookahead = true
+                    currentChunkStart = nextOffset
+                    let now = ProcessInfo.processInfo.systemUptime
+                    lastProgressUptime = now
+                    windowStartUptime = now
+                    windowBytes = 0
+                    task = runningTask
+                    proxy.reassignTask(runningTask, to: self)
+                    startStallTimer()
+                    return
+                }
+            }
+            la.cancel()
+        }
+        if pending >= Self.resumeBytes {
+            deferredChunkOffset = nextOffset
+        } else {
+            relaunch(resumingAt: nextOffset)
+        }
+    }
+
+    private func cancelLookahead() {
+        adoptedFromLookahead = false
+        lookahead?.cancel()
+        lookahead = nil
     }
 
     // MARK: 上游出错时重试、续传
@@ -2164,6 +2737,7 @@ private final class ProxyConnection: UpstreamTaskHandler {
         let delay = delays[retryCount]
         retryCount += 1
         beginRecovery()
+        cancelLookahead()
         proxy.note("\(detail)；\(delay) 秒后第 \(retryCount) 次重试" + (resume.map { "，从 \($0) 字节接着下" } ?? ""))
         if let running { proxy.detach(running) }
         task = nil
@@ -2230,6 +2804,7 @@ private final class ProxyConnection: UpstreamTaskHandler {
             return false
         }
         beginRecovery()
+        cancelLookahead()
         if let running { proxy.detach(running) }
         task = nil
         deferredChunkOffset = nil
@@ -2408,7 +2983,7 @@ private final class ProxyConnection: UpstreamTaskHandler {
                     self.task?.resume()
                 } else if let nextOffset = self.deferredChunkOffset, !self.closed, !self.yielded, self.task == nil, self.retryWork == nil {
                     self.deferredChunkOffset = nil
-                    self.relaunch(resumingAt: nextOffset)
+                    self.advanceToNextChunk(nextOffset: nextOffset)
                 }
             }
         })
@@ -2431,6 +3006,7 @@ private final class ProxyConnection: UpstreamTaskHandler {
         connectionReady = false
         renewalID = nil
         deferredChunkOffset = nil
+        cancelLookahead()
         stopStallTimer()
         retryWork?.cancel()
         retryWork = nil

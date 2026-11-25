@@ -466,8 +466,8 @@ private struct HomeLibraryCoordinator: View {
             guard let state, let client = state.directClient() else {
                 throw APIError.server("请先登录 115")
             }
-            let address = try await client.originalURL(pickCode: item.pickCode)
-            return client.downloadRequest(for: address)
+            let resolved = try await client.originalStream(pickCode: item.pickCode)
+            return client.downloadRequest(for: resolved)
         }
     }
 
