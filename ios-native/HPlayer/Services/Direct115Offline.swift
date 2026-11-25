@@ -368,7 +368,7 @@ extension Direct115Client {
         let (json, key, response) = try await encryptedPostWithResponse(
             "https://proapi.115.com/app/chrome/downurl",
             payload: ["pickcode": pickCode],
-            userAgent: Self.userAgent
+            userAgent: Self.originalStreamUserAgent
         )
         if !Self.succeeded(json) {
             let code = Self.errorCode(json)
@@ -388,7 +388,7 @@ extension Direct115Client {
         }
         if let url = Self.extractOriginalURL(from: object) {
             let mergedCookie = Self.mergeCookies(base: cookie, response: response)
-            return Direct115ResolvedStream(url: url, userAgent: Self.userAgent, cookie: mergedCookie)
+            return Direct115ResolvedStream(url: url, userAgent: Self.originalStreamUserAgent, cookie: mergedCookie)
         }
         throw APIError.server("115 没有返回原画地址，文件可能已经被删除")
     }

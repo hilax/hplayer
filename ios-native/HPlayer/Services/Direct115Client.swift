@@ -47,6 +47,8 @@ struct Direct115Client: @unchecked Sendable {
     /// 测试用：换成假网络。正常使用时保持 nil。
     var protocolClasses: [AnyClass]? = nil
     static let userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15"
+    /// 115 原画下载接口（`/app/chrome/downurl`）与其颁发的直链绑定的客户端 UA，降低高频 Range 跳转触发边缘节点静默限流。
+    static let originalStreamUserAgent = "Mozilla/5.0 115Browser/27.0.5.7"
 
     /// 允许随 302 重定向继续携带 115 Cookie 的官方域名与自有 CDN 域名。
     static func is115CookieHost(_ host: String) -> Bool {

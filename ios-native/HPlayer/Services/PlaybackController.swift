@@ -307,6 +307,7 @@ final class PlaybackController: ObservableObject {
     private var preferLargerPauseWait = false
     private static let minHealthyCacheSpeedBytes = 32 * 1024
     private var urlRefresher: (() async throws -> URL)?
+    private var streamRefresher: (() async throws -> LocalStreamProxy.RenewedUpstream)?
     private var watchdogEnabled = true
     private var openTimeoutSeconds: UInt64 = 45
     /// 这次 open 之后有没有真正播出来过（自动重连不清零）
@@ -528,11 +529,12 @@ final class PlaybackController: ObservableObject {
             // 网络：115 偶发卡顿时 15 秒触发一次底层重试，更早切换或重连
             ("network-timeout", "15"),
             ("stream-lavf-o", "reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=4"),
-            // 边播边存：开头不等缓存，攒到一点就播；卡住重连后适度多攒 2.5 秒防抖动
+            // 边播边存：开头不等缓存，攒到一点就播；冷 seek 攒满 0.5 秒即出画，卡住重连后适度多攒 2.5 秒防抖动
             ("cache", "yes"),
+            ("demuxer-seekable-cache", "yes"),
             ("cache-pause", "yes"),
             ("cache-pause-initial", "no"),
-            ("cache-pause-wait", preferLargerPauseWait ? "2.5" : "1"),
+            ("cache-pause-wait", preferLargerPauseWait ? "2.5" : "0.5"),
             // 打开时少探测一点格式信息，网络视频更快出画面
             ("demuxer-lavf-analyzeduration", "0.5"),
             ("demuxer-lavf-probesize", "1572864"),
@@ -583,6 +585,7 @@ final class PlaybackController: ObservableObject {
         preservingPosition: Bool = false,
         startTime: Double? = nil,
         refreshURL: (() async throws -> URL)? = nil,
+        refreshStream: (() async throws -> LocalStreamProxy.RenewedUpstream)? = nil,
         autoRecover: Bool = true,
         openTimeoutSeconds: UInt64 = 45,
         streamID: String? = nil,
@@ -640,6 +643,7 @@ final class PlaybackController: ObservableObject {
         recoveryAttempts = []
         statusNote = ""
         urlRefresher = refreshURL
+        streamRefresher = refreshStream
         currentStreamID = streamID
         currentPlaylistRenew = playlistRenew
         pausedAtUptime = nil
@@ -702,7 +706,7 @@ final class PlaybackController: ObservableObject {
             engine.set("stream-lavf-o", "reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=4")
             engine.set("demuxer-lavf-analyzeduration", "0.5")
             engine.set("demuxer-lavf-probesize", direct115 ? "1572864" : "2097152")
-            engine.set("cache-pause-wait", preferLargerPauseWait ? "2.5" : "1")
+            engine.set("cache-pause-wait", preferLargerPauseWait ? "2.5" : "0.5")
         }
         applyCacheOptions(engine)
         engine.set("hls-bitrate", "max")
@@ -725,13 +729,14 @@ final class PlaybackController: ObservableObject {
         let currentSession = session
         let generation = addressGeneration
         let renew = urlRefresher
+        let renewStream = streamRefresher
         let streamID = currentStreamID
         let playlistRenew = currentPlaylistRenew
         currentEngineURL = nil
         addressTask = Task { @MainActor [weak self, weak engine] in
             let address = await Self.engineAddress(for: url, direct115: direct115, cookieHeader: cookieHeader,
                                                    customHeaders: customHeaders, streamID: streamID,
-                                                   renew: renew, playlistRenew: playlistRenew)
+                                                   renew: renew, renewStream: renewStream, playlistRenew: playlistRenew)
             guard let self, let engine, !Task.isCancelled, !self.closingPlayback,
                   self.session == currentSession, self.addressGeneration == generation,
                   self.engine === engine else { return }
@@ -1401,7 +1406,7 @@ final class PlaybackController: ObservableObject {
         case .ratio16x9: override = "16:9"
         case .ratio4x3: override = "4:3"
         case .ratio235: override = "2.35:1"
-        default: override = "-1"
+        default: override = "no"
         }
         engine.set("video-aspect-override", override)
         engine.set("video-zoom", log2(zoom))
@@ -2598,7 +2603,7 @@ final class PlaybackController: ObservableObject {
                 if preferLargerPauseWait {
                     preferLargerPauseWait = false
                     if !currentTorrentStream {
-                        engine?.setAsync("cache-pause-wait", "1")
+                        engine?.setAsync("cache-pause-wait", "0.5")
                     }
                 }
             }
@@ -2685,6 +2690,7 @@ final class PlaybackController: ObservableObject {
         let position = pendingSeek ?? resumePoint
         logEvent("重连（\(reason.isEmpty ? "手动" : reason)）第 \(recoveryAttempts.count) 次，从 \(Self.clock(position))")
         let refresher = urlRefresher
+        let freshStreamRefresher = streamRefresher
         let direct115 = currentDirect115
         let cookie = currentCookie
         let customHeaders = currentCustomHeaders
@@ -2704,10 +2710,18 @@ final class PlaybackController: ObservableObject {
         recoveryTask = Task { @MainActor [weak self] in
             if wait > 0 { try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000)) }
             var target = url
-            if let refresher, let fresh = try? await refresher() { target = fresh }
+            var updatedHeaders = customHeaders
+            if let freshStreamRefresher, let fresh = try? await freshStreamRefresher() {
+                target = fresh.url
+                if let headers = fresh.headers {
+                    for (k, v) in headers { updatedHeaders[k] = v }
+                }
+            } else if let refresher, let fresh = try? await refresher() {
+                target = fresh
+            }
             guard let self, !Task.isCancelled, self.session == currentSession else { return }
             self.recoveryTask = nil
-            self.start(target, direct115: direct115, cookie: cookie, customHeaders: customHeaders,
+            self.start(target, direct115: direct115, cookie: cookie, customHeaders: updatedHeaders,
                        position: self.pendingSeek ?? position, keepPlaying: !self.userPaused, keepDuration: true)
         }
         updateFlags()
@@ -2796,6 +2810,7 @@ final class PlaybackController: ObservableObject {
     /// `renew`：115 地址过期（上游 403）时中转自己换新地址接着下，不打断播放
     private static func engineAddress(for url: URL, direct115: Bool, cookieHeader: String, customHeaders: [String: String] = [:],
                                       streamID: String? = nil, renew: (() async throws -> URL)? = nil,
+                                      renewStream: (() async throws -> LocalStreamProxy.RenewedUpstream)? = nil,
                                       playlistRenew: (() async throws -> URL)? = nil) async -> String {
         if url.isFileURL { return url.path }
         guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return url.absoluteString }
@@ -2815,7 +2830,8 @@ final class PlaybackController: ObservableObject {
             headers[k] = v
         }
         return await LocalStreamProxy.shared.localURL(for: url, headers: headers, streamID: streamID,
-                                                      renew: renew, playlistRenew: playlistRenew)?.absoluteString ?? url.absoluteString
+                                                      renew: renew, renewStream: renewStream,
+                                                      playlistRenew: playlistRenew)?.absoluteString ?? url.absoluteString
     }
 
     static func clock(_ seconds: Double) -> String {

@@ -877,6 +877,134 @@ final class LocalStreamProxyTests: XCTestCase {
         XCTAssertEqual(ScriptedUpstream.receivedRanges(), ["bytes=0-1999", "bytes=2000-9999"])
     }
 
+    /// 连续 2 次首包无响应时：第 1 次轮换新 URLSession 重试，第 2 次立刻切 115 新直链并透传最新 Cookie。
+    func testRepeatedHeaderTimeoutsRotateSessionAndSwitchUpstreamWithFreshHeaders() async throws {
+        let total = 5_000
+        let full = pattern(total)
+        let original = try XCTUnwrap(URL(string: "https://node1.115cdn.net/video.mp4"))
+        let fresh = try XCTUnwrap(URL(string: "https://node2.115cdn.net/video.mp4"))
+        ScriptedUpstream.install([
+            .hang,
+            .hang,
+            .reply(status: 206, headers: [
+                "Content-Type": "video/mp4",
+                "Content-Range": "bytes 0-\(total - 1)/\(total)",
+                "Content-Length": "\(total)",
+                "Accept-Ranges": "bytes",
+            ], body: full),
+        ])
+        let proxy = LocalStreamProxy(protocolClasses: [ScriptedUpstream.self])
+        proxy.setStallTimeoutForTesting(5.0, minSpeed: 0)
+        proxy.setResponseHeaderTimeoutsForTesting([0.12, 0.15])
+        proxy.setRetryDelaysForTesting([0.05, 0.05, 0.05])
+        let renews = RenewCounter()
+        let relayed = await proxy.localURL(
+            for: original,
+            headers: ["Cookie": "CID=old"],
+            streamID: "p115:rotate-renew",
+            renewStream: {
+                renews.increment()
+                return LocalStreamProxy.RenewedUpstream(url: fresh, headers: ["Cookie": "CID=fresh_token"])
+            }
+        )
+        let local = try XCTUnwrap(relayed)
+        let fetched = try fetch(local, range: "bytes=0-\(total - 1)")
+
+        XCTAssertEqual(fetched.status, 206)
+        XCTAssertEqual(fetched.body, full)
+        XCTAssertEqual(renews.value, 1, "第 2 次首包超时应立即触发换直链切节点")
+        XCTAssertGreaterThanOrEqual(proxy.sessionRotationCountForTesting(), 1, "首包超时应轮换全新 URLSession 隔离卡死连接池")
+        XCTAssertEqual(ScriptedUpstream.receivedURLs(), [original, original, fresh])
+        XCTAssertEqual(ScriptedUpstream.receivedCookies().last ?? nil, "CID=fresh_token")
+    }
+
+    /// `-1005 / networkConnectionLost` 复发时自动轮换连接池并快速切 115 新直链，不反复死磕坏 socket。
+    func testConnectionLostRotatesSessionAndSwitchesNodeOnRepeat() async throws {
+        let total = 4_000
+        let full = pattern(total)
+        let original = try XCTUnwrap(URL(string: "https://node1.115cdn.net/lost.mp4"))
+        let fresh = try XCTUnwrap(URL(string: "https://node2.115cdn.net/lost.mp4"))
+        ScriptedUpstream.install([
+            .fail(.networkConnectionLost),
+            .fail(.networkConnectionLost),
+            .reply(status: 206, headers: [
+                "Content-Type": "video/mp4",
+                "Content-Range": "bytes 0-\(total - 1)/\(total)",
+                "Content-Length": "\(total)",
+                "Accept-Ranges": "bytes",
+            ], body: full),
+        ])
+        let proxy = LocalStreamProxy(protocolClasses: [ScriptedUpstream.self])
+        proxy.setRetryDelaysForTesting([0.05, 0.05, 0.05])
+        let renews = RenewCounter()
+        let relayed = await proxy.localURL(
+            for: original,
+            headers: [:],
+            streamID: "p115:lost-renew",
+            renewStream: {
+                renews.increment()
+                return LocalStreamProxy.RenewedUpstream(url: fresh)
+            }
+        )
+        let local = try XCTUnwrap(relayed)
+        let fetched = try fetch(local, range: "bytes=0-\(total - 1)")
+
+        XCTAssertEqual(fetched.status, 206)
+        XCTAssertEqual(fetched.body, full)
+        XCTAssertEqual(renews.value, 1)
+        XCTAssertGreaterThanOrEqual(proxy.sessionRotationCountForTesting(), 1)
+        XCTAssertEqual(ScriptedUpstream.receivedURLs(), [original, original, fresh])
+    }
+
+    /// 当前连接关闭后 300ms 内若客户端立即重连，延迟唤醒防抖必须取消僵尸旧连接复活，避免双连接撞车。
+    func testDelayedYieldResumePreventsZombieWakeupDuringFastReconnect() async throws {
+        let total = 100_000
+        let full = pattern(total)
+        ScriptedUpstream.install([
+            .hold(status: 206, headers: [
+                "Content-Type": "video/mp4",
+                "Content-Range": "bytes 0-9999/\(total)",
+                "Content-Length": "10000",
+                "Accept-Ranges": "bytes",
+            ], body: Data(full[0..<1_000])),
+            .reply(status: 206, headers: [
+                "Content-Type": "video/mp4",
+                "Content-Range": "bytes 50000-54999/\(total)",
+                "Content-Length": "5000",
+                "Accept-Ranges": "bytes",
+            ], body: Data(full[50_000..<55_000])),
+            .reply(status: 206, headers: [
+                "Content-Type": "video/mp4",
+                "Content-Range": "bytes 80000-84999/\(total)",
+                "Content-Length": "5000",
+                "Accept-Ranges": "bytes",
+            ], body: Data(full[80_000..<85_000])),
+        ])
+        let proxy = LocalStreamProxy(protocolClasses: [ScriptedUpstream.self])
+        proxy.setYieldResumeDelayForTesting(0.25)
+        let upstream = try XCTUnwrap(URL(string: "https://example.com/a/anti-zombie.mp4"))
+        let relayed = await proxy.localURL(for: upstream, headers: [:], streamID: "p115:anti-zombie")
+        let local = try XCTUnwrap(relayed)
+
+        let older = try openStream(local, range: "bytes=0-9999")
+        defer { close(older) }
+        _ = try readUntil(older, bodyBytes: 1_000)
+
+        let middle = try fetch(local, range: "bytes=50000-54999")
+        XCTAssertEqual(middle.status, 206)
+
+        // middle 刚关闭后 40ms（< 250ms 防抖窗）发起新连接：旧连接不得在这段空隙复活撞车
+        try await Task.sleep(nanoseconds: 40_000_000)
+        let newest = try fetch(local, range: "bytes=80000-84999")
+        XCTAssertEqual(newest.status, 206)
+        XCTAssertEqual(newest.body, Data(full[80_000..<85_000]))
+        XCTAssertEqual(
+            ScriptedUpstream.receivedRanges(),
+            ["bytes=0-9999", "bytes=50000-54999", "bytes=80000-84999"],
+            "快速重连间隙内旧连接不得僵尸复活"
+        )
+    }
+
     private func mp4Box(type: String, size: Int64, extended: Bool = false) -> Data {
         var data = Data()
         if extended {
@@ -1079,6 +1207,7 @@ private final class ScriptedUpstream: URLProtocol {
     private static var steps: [Step] = []
     private static var ranges: [String?] = []
     private static var urls: [URL] = []
+    private static var cookies: [String?] = []
     private static var stops = 0
 
     static func install(_ steps: [Step]) {
@@ -1086,6 +1215,7 @@ private final class ScriptedUpstream: URLProtocol {
         self.steps = steps
         ranges = []
         urls = []
+        cookies = []
         stops = 0
     }
 
@@ -1107,12 +1237,18 @@ private final class ScriptedUpstream: URLProtocol {
         return ranges
     }
 
+    static func receivedCookies() -> [String?] {
+        lock.lock(); defer { lock.unlock() }
+        return cookies
+    }
+
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
         Self.lock.lock()
         Self.ranges.append(request.value(forHTTPHeaderField: "Range"))
+        Self.cookies.append(request.value(forHTTPHeaderField: "Cookie"))
         if let url = request.url { Self.urls.append(url) }
         let step: Step? = Self.steps.isEmpty ? nil : Self.steps.removeFirst()
         Self.lock.unlock()

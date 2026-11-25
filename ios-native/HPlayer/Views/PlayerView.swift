@@ -308,18 +308,21 @@ struct PlayerView: View {
                     guard isCurrentRequest(request, source: source, session: session), !Task.isCancelled else { return }
                     let streamID = "p115:\(pickCode)"
                     let refresher = Self.originalRefresher(client, pickCode: pickCode)
+                    let streamRefresher = Self.originalStreamRefresher(client, pickCode: pickCode)
                     // 拿到直链后立刻在后台单连接预热 115 CDN、片头字节与尾部索引（MP4 moov / MKV Cues），并与转屏动画并行交给内核解头解码首帧
                     LocalStreamProxy.shared.prewarm(
                         url: resolved.url,
                         headers: resolved.headers,
                         streamID: streamID,
                         resume: resume != nil,
-                        renew: refresher
+                        renew: refresher,
+                        renewStream: streamRefresher
                     )
                     await openAndReleaseWhenRevealed(request, source: source, session: session) { hold in
                         playback.open(resolved.url, direct115: true, directCookie: resolved.cookie,
                                       customHeaders: resolved.headers, startTime: resume,
-                                      refreshURL: refresher, streamID: streamID, title: title,
+                                      refreshURL: refresher, refreshStream: streamRefresher,
+                                      streamID: streamID, title: title,
                                       subtitleIdentifier: pickCode, deferAutoPlay: hold)
                     }
                     // 转码列表由首次播放事件延迟 4 秒或用户主动打开画质菜单触发。
@@ -394,6 +397,14 @@ struct PlayerView: View {
     /// 自动重连时换新的 115 原画地址：旧地址可能已过期，或者连接被 115 限制
     private static func originalRefresher(_ client: Direct115Client, pickCode: String) -> () async throws -> URL {
         { try await client.originalURL(pickCode: pickCode, useCache: false) }
+    }
+
+    /// 自动重连/中转换链时连同新颁发的 `Set-Cookie` 与绑定 UA 一并刷新，避免旧 Cookie 失效。
+    private static func originalStreamRefresher(_ client: Direct115Client, pickCode: String) -> () async throws -> LocalStreamProxy.RenewedUpstream {
+        {
+            let resolved = try await client.originalStream(pickCode: pickCode, useCache: false)
+            return LocalStreamProxy.RenewedUpstream(url: resolved.url, headers: resolved.headers)
+        }
     }
 
     /// 自动重连时换新的 115 转码地址，按画质名称找回同一档
@@ -486,6 +497,7 @@ struct PlayerView: View {
                 playback.open(resolved.url, direct115: true, directCookie: resolved.cookie,
                               customHeaders: resolved.headers, preservingPosition: preservePosition, startTime: savedPosition,
                               refreshURL: Self.originalRefresher(client, pickCode: pickCode),
+                              refreshStream: Self.originalStreamRefresher(client, pickCode: pickCode),
                               streamID: "p115:\(pickCode)", title: title, subtitleIdentifier: pickCode)
             }
             return request
