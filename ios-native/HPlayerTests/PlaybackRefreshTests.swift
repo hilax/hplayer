@@ -173,4 +173,32 @@ final class PlaybackRefreshTests: XCTestCase {
         XCTAssertLessThanOrEqual(large, 20480)
         XCTAssertGreaterThanOrEqual(large, PlayerDiskCache.limitMiB())
     }
+
+    func testSeekCommandFlagsUseKeyframesForAllNetworkScrubDistances() {
+        // 网络流滑动/拖动：无论 15 秒短滑还是跨度很大的拖动，统一走关键帧
+        let shortScrub = PlaybackController.seekCommandFlags(target: 25, duration: 600, isLocalFile: false, exact: false)
+        XCTAssertEqual(shortScrub.flags, "absolute+keyframes")
+        XCTAssertTrue(shortScrub.usesKeyframes)
+
+        let farScrub = PlaybackController.seekCommandFlags(target: 360, duration: 600, isLocalFile: false, exact: false)
+        XCTAssertEqual(farScrub.flags, "absolute+keyframes")
+        XCTAssertTrue(farScrub.usesKeyframes)
+
+        let unknownDuration = PlaybackController.seekCommandFlags(target: 40, duration: 0, isLocalFile: false, exact: false)
+        XCTAssertEqual(unknownDuration.flags, "absolute+keyframes")
+        XCTAssertTrue(unknownDuration.usesKeyframes)
+
+        // 显式精确跳转（双击快进退、画中画步进）、本地文件、以及紧贴片尾 15 秒内仍保持精确
+        let explicitExact = PlaybackController.seekCommandFlags(target: 25, duration: 600, isLocalFile: false, exact: true)
+        XCTAssertEqual(explicitExact.flags, "absolute+exact")
+        XCTAssertFalse(explicitExact.usesKeyframes)
+
+        let localFile = PlaybackController.seekCommandFlags(target: 300, duration: 600, isLocalFile: true, exact: false)
+        XCTAssertEqual(localFile.flags, "absolute+exact")
+        XCTAssertFalse(localFile.usesKeyframes)
+
+        let nearTail = PlaybackController.seekCommandFlags(target: 590, duration: 600, isLocalFile: false, exact: false)
+        XCTAssertEqual(nearTail.flags, "absolute+exact")
+        XCTAssertFalse(nearTail.usesKeyframes)
+    }
 }

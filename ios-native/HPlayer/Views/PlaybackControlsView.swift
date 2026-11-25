@@ -3554,7 +3554,7 @@ struct PlaybackControlsView: View {
                 let delta = region == .right ? step : -step
                 let ceiling = max(playback.currentTime, playback.duration - 2)
                 let target = min(max(playback.currentTime + delta, 0), max(0, ceiling))
-                playback.seek(to: target)
+                playback.seek(to: target, exact: true)
                 Haptics.tap()
 
                 let nextAccumulated = (doubleTapRegion == region ? doubleTapSeconds : 0) + delta

@@ -523,7 +523,7 @@ final class PlaybackController: ObservableObject {
             // 打开时少探测一点格式信息，网络视频更快出画面
             ("demuxer-lavf-analyzeduration", "0.5"),
             ("demuxer-lavf-probesize", "1572864"),
-            // 续播和大跨度跳转只落到关键帧，4K 原画不用从关键帧一路解码到目标；小跳转单独要求精确
+            // 续播与网络流滑动/拖动全距落到关键帧，4K 原画不用从关键帧一路解码到目标；双击步进/本地文件单独要求精确
             ("hr-seek", "no"),
             ("cache-on-disk", "yes"),
             ("demuxer-cache-dir", PlayerDiskCache.directory.path),
@@ -1026,7 +1026,21 @@ final class PlaybackController: ObservableObject {
         updateFlags()
     }
 
-    func seek(to seconds: Double) {
+    /// 统一跳转模式：
+    /// - 显式要求精确（双击快进/快退、画中画步进）、本地文件、或紧贴片尾 15 秒内（避免稀疏索引跨过尾帧直冲 EOF）走 `absolute+exact`；
+    /// - 其余网络流的滑动快进与进度条拖动，全距走 `absolute+keyframes`，落到最近关键帧即刻出画。
+    static func seekCommandFlags(
+        target: Double,
+        duration: Double,
+        isLocalFile: Bool,
+        exact: Bool
+    ) -> (flags: String, usesKeyframes: Bool) {
+        let nearTail = duration > 0 && target >= duration - 15
+        let useKeyframes = !exact && !isLocalFile && !nearTail
+        return (useKeyframes ? "absolute+keyframes" : "absolute+exact", useKeyframes)
+    }
+
+    func seek(to seconds: Double, exact: Bool = false) {
         guard !closingPlayback, currentURL != nil, seconds.isFinite, seconds >= 0 else { return }
         guard seekable || recoveryTask != nil || (!loaded && !opening) else { return }
         let target = duration > 0 ? min(seconds, max(0, duration - 1)) : seconds
@@ -1058,11 +1072,9 @@ final class PlaybackController: ObservableObject {
             recover(reason: "")
             return
         }
-        // Keep fast keyframe seeks away from the tail: sparse indexes can snap
-        // past the requested position and immediately hit EOF.
-        let far = abs(target - engineTime) > 60 && (duration <= 0 || target < duration - 30)
-        seekUsesKeyframes = far
-        let result = engine?.command(["seek", String(format: "%.3f", target), far ? "absolute+keyframes" : "absolute+exact"])
+        let mode = Self.seekCommandFlags(target: target, duration: duration, isLocalFile: isLocalFile, exact: exact)
+        seekUsesKeyframes = mode.usesKeyframes
+        let result = engine?.command(["seek", String(format: "%.3f", target), mode.flags])
         engine?.set("pause", userPaused)
         if let result, result < 0 {
             if watchdogEnabled {
@@ -1105,7 +1117,7 @@ final class PlaybackController: ObservableObject {
     var customHeadersForTesting: [String: String] { currentCustomHeaders }
     #endif
 
-    func skip(_ seconds: Double) { seek(to: max(0, currentTime + seconds)) }
+    func skip(_ seconds: Double) { seek(to: max(0, currentTime + seconds), exact: true) }
 
     func setRate(_ value: Float) {
         rate = value
