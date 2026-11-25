@@ -339,6 +339,13 @@ final class PlaybackController: ObservableObject {
     private var seekAwaitingRestart = false
     private var seekObservedTime: Double?
     private var seekUsesKeyframes = false
+    /// 跳转前的真实播放位置：用于区分「关键帧真实回落」与「跳前残留的旧时间戳」。
+    private var seekOriginTime: Double = 0
+    /// 关键帧跳转刚结算后的短容差窗：允许 mpv 随后上报真实解码的关键帧 PTS（通常早于目标 2~10 秒），不再误判为异常跳变。
+    private var keyframeSettleGrace: (target: Double, origin: Double, settledAt: TimeInterval)?
+    /// 超过 0.6 秒仍未出画的长跳转才点亮缓冲态（叠加界面 0.8s 防抖，秒跳零闪烁、慢跳有反馈）。
+    private var slowSeekBuffering = false
+    private var seekBusyTask: Task<Void, Never>?
     /// 每次 seek 递增的代际号：只有最新一次异步 seek 失败才会触发恢复，防止旧命令回包误伤新跳转。
     private var seekGeneration: UInt64 = 0
     /// 每次打开/重置/重连递增的周期号：隔离上一轮播放残留的异步 seek 回包，避免扣错新一轮计数。
@@ -764,10 +771,15 @@ final class PlaybackController: ObservableObject {
 
     private func resetState(keepDuration: Bool) {
         openTimeoutTask?.cancel()
+        seekBusyTask?.cancel()
+        seekBusyTask = nil
+        slowSeekBuffering = false
         pendingSeek = nil
         seekAwaitingRestart = false
         seekObservedTime = nil
         seekUsesKeyframes = false
+        seekOriginTime = 0
+        keyframeSettleGrace = nil
         seekGeneration &+= 1
         seekEpoch &+= 1
         inFlightSeekCommands = 0
@@ -1067,6 +1079,11 @@ final class PlaybackController: ObservableObject {
         pendingSeekStarted = Date()
         seekAwaitingRestart = true
         seekObservedTime = nil
+        seekOriginTime = engineTime
+        keyframeSettleGrace = nil
+        slowSeekBuffering = false
+        seekBusyTask?.cancel()
+        seekBusyTask = nil
         noDataSeconds = 0
         cacheDurationAtLastTick = rawCachedSeconds
         if recoveryTask != nil || (!loaded && !opening) {
@@ -1102,6 +1119,7 @@ final class PlaybackController: ObservableObject {
             }
             engine.setAsync("pause", userPaused)
         }
+        scheduleSlowSeekBuffering(session: currentSession, epoch: currentEpoch, generation: currentGeneration)
         #if DEBUG
         if !injectedStaleEOFForUITest,
            ProcessInfo.processInfo.environment["HPLAYER_UI_TEST_STALE_EOF_ON_SEEK"] == "1", duration > 5 {
@@ -1112,6 +1130,31 @@ final class PlaybackController: ObservableObject {
         }
         #endif
         updateFlags()
+    }
+
+    private func scheduleSlowSeekBuffering(session expectedSession: Int, epoch expectedEpoch: UInt64, generation expectedGeneration: UInt64) {
+        seekBusyTask?.cancel()
+        guard !userPaused else {
+            seekBusyTask = nil
+            return
+        }
+        seekBusyTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            guard let self, !Task.isCancelled,
+                  self.session == expectedSession,
+                  self.seekEpoch == expectedEpoch,
+                  self.seekGeneration == expectedGeneration,
+                  !self.userPaused,
+                  self.seeking || self.pendingSeek != nil else { return }
+            self.slowSeekBuffering = true
+            self.updateFlags()
+        }
+    }
+
+    private func clearSlowSeekBuffering() {
+        seekBusyTask?.cancel()
+        seekBusyTask = nil
+        slowSeekBuffering = false
     }
 
     private func handleSeekCommandFailure() {
@@ -2170,13 +2213,27 @@ final class PlaybackController: ObservableObject {
             // A failed read/queued event can jump straight to the file tail after
             // seeking clears. It must not become playback history or an actual EOF.
             if pendingSeek == nil, let confirmedTime, let lastConfirmedUptime {
-                let elapsed = max(0, ProcessInfo.processInfo.systemUptime - lastConfirmedUptime)
-                let nearEnd = duration > 0 && time >= duration - min(1.5, duration * 0.1)
-                let advance = max(nearEnd ? 1.5 : 8, elapsed * Double(effectiveRate) + 0.5)
-                if time - confirmedTime > advance || time < confirmedTime - 2 {
-                    if !discardedPlaybackPosition { logEvent("忽略未播放的位置跳变：\(Self.clock(time))") }
-                    discardedPlaybackPosition = true
-                    return
+                let now = ProcessInfo.processInfo.systemUptime
+                var acceptedKeyframeAdjustment = false
+                if let grace = keyframeSettleGrace {
+                    if now - grace.settledAt > 2.5 {
+                        keyframeSettleGrace = nil
+                    } else if time <= grace.target, time >= max(0, grace.target - 30), abs(time - grace.origin) > 1.5 {
+                        // 关键帧跳转先按目标位置结算，随后 mpv 上报实际解码的最近关键帧 PTS（通常早于目标几秒）：
+                        // 放行此次真实落点回退，避免进度条定住且误报「忽略未播放的位置跳变」。
+                        acceptedKeyframeAdjustment = true
+                        keyframeSettleGrace = nil
+                    }
+                }
+                if !acceptedKeyframeAdjustment {
+                    let elapsed = max(0, now - lastConfirmedUptime)
+                    let nearEnd = duration > 0 && time >= duration - min(1.5, duration * 0.1)
+                    let advance = max(nearEnd ? 1.5 : 8, elapsed * Double(effectiveRate) + 0.5)
+                    if time - confirmedTime > advance || time < confirmedTime - 2 {
+                        if !discardedPlaybackPosition { logEvent("忽略未播放的位置跳变：\(Self.clock(time))") }
+                        discardedPlaybackPosition = true
+                        return
+                    }
                 }
             }
             engineTime = time
@@ -2221,6 +2278,7 @@ final class PlaybackController: ObservableObject {
                     checkFailedSeek(observed)
                     settlePendingSeek(at: observed)
                 }
+                if pendingSeek == nil { clearSlowSeekBuffering() }
                 if !pausedForCache, !opening, recoveryTask == nil, !statusNote.isEmpty { statusNote = "" }
             }
         case ("eof-reached", .flag(let value)):
@@ -2383,8 +2441,14 @@ final class PlaybackController: ObservableObject {
         let nearEnd = duration > 0 && time >= duration - min(1.5, duration * 0.1)
         let reachedTarget = offset > (seekUsesKeyframes ? -30 : -2) && offset < (nearEnd ? 1 : 5)
         guard reachedTarget else { return }
+        if seekUsesKeyframes {
+            keyframeSettleGrace = (target: pending, origin: seekOriginTime, settledAt: ProcessInfo.processInfo.systemUptime)
+        } else {
+            keyframeSettleGrace = nil
+        }
         pendingSeek = nil
         seekObservedTime = nil
+        clearSlowSeekBuffering()
         if eofDuringSeek {
             eofReached = false
             eofDuringSeek = false
@@ -2420,7 +2484,7 @@ final class PlaybackController: ObservableObject {
         // 普通快速关键帧跳转不再强制标记 buffering（避免闪烁加载态与阻止控制栏自动隐藏），
         // 真正发生缓存欠载时由 mpv 的 paused-for-cache 驱动缓冲提示。
         let newBuffering = error.isEmpty && !ended && (recoveryTask != nil || opening || pausedForCache
-            || waitingForFirstFrame)
+            || waitingForFirstFrame || (slowSeekBuffering && !userPaused && (seeking || pendingSeek != nil)))
         if newBuffering != buffering { buffering = newBuffering }
         let newPlaying = !userPaused && error.isEmpty && !ended
             && (loaded || opening || recoveryTask != nil)

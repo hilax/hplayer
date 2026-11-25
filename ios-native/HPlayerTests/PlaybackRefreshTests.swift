@@ -222,6 +222,46 @@ final class PlaybackRefreshTests: XCTestCase {
         XCTAssertFalse(player.preferLargerPauseWaitForTesting, "稳定播放 25 秒后应把 cache-pause-wait 恢复回默认 1 秒")
     }
 
+    func testKeyframeSeekAllowsDecodedKeyframeRollbackWithoutFalseJumpDiscard() throws {
+        let player = try playingController()
+        defer { player.stop() }
+
+        // 复现真机日志场景：从 02:05 关键帧跳转到 04:32，mpv 先按目标 04:32 重启，紧接着上报真实关键帧 04:26
+        player.seek(to: 125)
+        player.receiveEventForTesting(.property("time-pos", .double(125)))
+        player.receiveEventForTesting(.playbackRestart)
+
+        player.seek(to: 272)
+        player.receiveEventForTesting(.property("time-pos", .double(272)))
+        player.receiveEventForTesting(.playbackRestart)
+        XCTAssertEqual(player.confirmedTime ?? -1, 272, accuracy: 0.01)
+
+        player.receiveEventForTesting(.property("time-pos", .double(266)))
+        XCTAssertEqual(player.currentTime, 266, accuracy: 0.01, "真实解码出的关键帧回落不应被误判为异常跳变")
+        XCTAssertEqual(player.confirmedTime ?? -1, 266, accuracy: 0.01)
+        XCTAssertFalse(player.diagnostics.contains("忽略未播放的位置跳变"), player.diagnostics)
+
+        // 紧跟着若出现异常直冲片尾的脏时间，依然必须拦截
+        player.receiveEventForTesting(.property("time-pos", .double(599.5)))
+        XCTAssertEqual(player.confirmedTime ?? -1, 266, accuracy: 0.01)
+    }
+
+    func testSlowSeekShowsBufferingAfterThresholdAndClearsOnSettle() async throws {
+        let player = try playingController()
+        defer { player.stop() }
+
+        player.seek(to: 180)
+        XCTAssertFalse(player.buffering, "刚触发快速跳转时不应立刻闪烁缓冲态")
+
+        // 超过 0.6s 仍未出画时点亮缓冲态，避免像死机一样无反馈
+        try await Task.sleep(nanoseconds: 750_000_000)
+        XCTAssertTrue(player.buffering, "长时间未落地的慢跳转应显示缓冲状态")
+
+        player.receiveEventForTesting(.property("time-pos", .double(180)))
+        player.receiveEventForTesting(.playbackRestart)
+        XCTAssertFalse(player.buffering, "跳转落地后必须立即清除缓冲态")
+    }
+
     func testSeekCommandFlagsUseKeyframesForAllNetworkScrubDistances() {
         // 网络流滑动/拖动：无论 15 秒短滑还是跨度很大的拖动，统一走关键帧
         let shortScrub = PlaybackController.seekCommandFlags(target: 25, duration: 600, isLocalFile: false, exact: false)

@@ -818,6 +818,65 @@ final class LocalStreamProxyTests: XCTestCase {
         await fulfillment(of: [finished], timeout: 0.5)
     }
 
+    /// 115 边缘节点偶发 0 字节无响应（连响应头都没返回）时，应按首包超时提前掐断并几乎零等待重试，而不是干等 10 秒。
+    func testResponseHeaderTimeoutRetriesImmediatelyBeforeFullStallTimeout() async throws {
+        let total = 5_000
+        let full = pattern(total)
+        ScriptedUpstream.install([
+            .hang,
+            .reply(status: 206, headers: [
+                "Content-Type": "video/mp4",
+                "Content-Range": "bytes 0-\(total - 1)/\(total)",
+                "Content-Length": "\(total)",
+                "Accept-Ranges": "bytes",
+            ], body: full),
+        ])
+        let proxy = LocalStreamProxy(protocolClasses: [ScriptedUpstream.self])
+        proxy.setStallTimeoutForTesting(5.0, minSpeed: 0)
+        proxy.setResponseHeaderTimeoutsForTesting([0.15, 0.35])
+        proxy.setRetryDelaysForTesting([0.6, 1.2])
+
+        let local = try await relayURL(proxy)
+        let started = ProcessInfo.processInfo.systemUptime
+        let fetched = try fetch(local, range: "bytes=0-\(total - 1)")
+        let elapsed = ProcessInfo.processInfo.systemUptime - started
+        let history = proxy.problemHistoryLines.joined(separator: "\n")
+
+        XCTAssertEqual(fetched.status, 206, history)
+        XCTAssertEqual(fetched.body, full, history)
+        XCTAssertEqual(ScriptedUpstream.stoppedCount, 1)
+        XCTAssertLessThan(elapsed, 0.7, "首包超时后应立即重试恢复，不应等待完整 stallTimeout 或长退避：实际 \(elapsed)s")
+        XCTAssertTrue(history.contains("首包"), history)
+    }
+
+    /// 新连接首段先用小块快速拿到首包出画，后续分段无缝恢复为完整大块拉取。
+    func testInitialChunkStartsSmallThenRampsUpToFullChunkSize() async throws {
+        let total = 10_000
+        let full = pattern(total)
+        ScriptedUpstream.install([
+            .reply(status: 206, headers: [
+                "Content-Type": "video/mp4",
+                "Content-Range": "bytes 0-1999/\(total)",
+                "Content-Length": "2000",
+                "Accept-Ranges": "bytes",
+            ], body: Data(full[0..<2_000])),
+            .reply(status: 206, headers: [
+                "Content-Type": "video/mp4",
+                "Content-Range": "bytes 2000-9999/\(total)",
+                "Content-Length": "8000",
+                "Accept-Ranges": "bytes",
+            ], body: Data(full[2_000..<10_000])),
+        ])
+        let proxy = LocalStreamProxy(protocolClasses: [ScriptedUpstream.self])
+        proxy.setChunkSizeForTesting(8_000, initial: 2_000)
+
+        let local = try await relayURL(proxy)
+        let fetched = try fetch(local, range: "bytes=0-")
+        XCTAssertEqual(fetched.status, 206)
+        XCTAssertEqual(fetched.body, full)
+        XCTAssertEqual(ScriptedUpstream.receivedRanges(), ["bytes=0-1999", "bytes=2000-9999"])
+    }
+
     private func mp4Box(type: String, size: Int64, extended: Bool = false) -> Data {
         var data = Data()
         if extended {

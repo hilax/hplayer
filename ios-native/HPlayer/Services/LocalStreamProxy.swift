@@ -47,8 +47,17 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
     fileprivate var refusalDelays: [TimeInterval] = [0.6, 1.5, 3.0]
     /// 115 大文件分段拉取大小（16 MiB）：避免单条超长连接被限速，同时大幅降低高码率原画的 Range 请求频次，防止触发 115 QPS 限流。
     fileprivate var chunkSize: Int64 = 16 * 1_048_576
-    /// 单次上游请求停滞（0 字节）超时时间；比 URLSession 默认 30s 更早恢复，同时留出 115 CDN 偶发抖动余量。
+    /// 新连接首个 Range 分段大小（2 MiB）：快速拿到首包出画并降低连续快滑取消大块传输导致 115 边缘节点挂起的概率；后续分段无缝升回 16 MiB。
+    fileprivate var initialChunkSize: Int64 = 2 * 1_048_576
+    fileprivate var effectiveInitialChunkSize: Int64 {
+        guard chunkSize > 0 else { return 0 }
+        return initialChunkSize > 0 ? min(chunkSize, initialChunkSize) : chunkSize
+    }
+    /// 单次上游请求停滞（已收到响应头后的 0 字节停滞）超时时间；比 URLSession 默认 30s 更早恢复，同时留出 115 CDN 偶发抖动余量。
     fileprivate var stallTimeout: TimeInterval = 10.0
+    /// 尚未收到上游 HTTP 响应头（0 字节首包黑洞）时的阶梯超时：
+    /// 首轮 2.5s 快速掐掉 115 边缘节点偶发静默挂起的连接并立即重连，后续放宽至 4.5s → stallTimeout 兼容真实高延迟网络。
+    fileprivate var responseHeaderTimeouts: [TimeInterval] = [2.5, 4.5]
     /// 从本机中转开始续传算起，给当前请求一个恢复窗口。播放器在此期间保留 mpv 的缓冲。
     fileprivate static let recoveryGrace: TimeInterval = 7.0
     /// 停滞检测最低有效速率门槛（8 KB/s）；低于该速率持续较长时间才判定节点卡死。
@@ -438,8 +447,11 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
         queue.sync { refusalDelays = delays }
     }
 
-    func setChunkSizeForTesting(_ bytes: Int64) {
-        queue.sync { chunkSize = bytes }
+    func setChunkSizeForTesting(_ bytes: Int64, initial: Int64? = nil) {
+        queue.sync {
+            chunkSize = bytes
+            if let initial { initialChunkSize = initial }
+        }
     }
 
     func setStallTimeoutForTesting(_ seconds: TimeInterval, minSpeed: Double = 0) {
@@ -447,6 +459,10 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
             stallTimeout = seconds
             minHealthySpeed = minSpeed
         }
+    }
+
+    func setResponseHeaderTimeoutsForTesting(_ timeouts: [TimeInterval]) {
+        queue.sync { responseHeaderTimeouts = timeouts }
     }
 
     func cachedByteCountForTesting() -> Int {
@@ -1856,6 +1872,7 @@ private final class ProxyConnection: UpstreamTaskHandler {
     private var currentChunkActualEnd: Int64?
     private var deferredChunkOffset: Int64?
     private var fellBackFromBoundedRange = false
+    private var awaitingResponseHeader = false
     private var stallTimer: DispatchSourceTimer?
     private var lastProgressUptime: TimeInterval = 0
     private var lastReceivedBytesUptime: TimeInterval = 0
@@ -1979,6 +1996,7 @@ private final class ProxyConnection: UpstreamTaskHandler {
         retryWork?.cancel()
         retryWork = nil
         deferredChunkOffset = nil
+        awaitingResponseHeader = false
         stopStallTimer()
         if let task {
             proxy.detach(task)
@@ -2021,6 +2039,7 @@ private final class ProxyConnection: UpstreamTaskHandler {
         retryWork = nil
         renewalID = nil
         deferredChunkOffset = nil
+        awaitingResponseHeader = false
         stopStallTimer()
         if let task {
             proxy.detach(task)
@@ -2191,6 +2210,7 @@ private final class ProxyConnection: UpstreamTaskHandler {
                 lastProgressUptime = now
                 windowStartUptime = now
                 windowBytes = 0
+                awaitingResponseHeader = false
                 task = runningTask
                 proxy.reassignTask(runningTask, to: self)
                 publishHealth()
@@ -2202,6 +2222,7 @@ private final class ProxyConnection: UpstreamTaskHandler {
                 lastProgressUptime = now
                 windowStartUptime = now
                 windowBytes = 0
+                awaitingResponseHeader = true
                 task = runningTask
                 proxy.reassignTask(runningTask, to: self)
                 publishHealth()
@@ -2250,7 +2271,8 @@ private final class ProxyConnection: UpstreamTaskHandler {
         }
 
         if canChunk, let parsed = parsedRange {
-            let maxEnd = parsed.start + proxy.chunkSize - 1
+            let firstChunk = proxy.effectiveInitialChunkSize
+            let maxEnd = parsed.start + firstChunk - 1
             if let cEnd = parsed.end {
                 if cEnd > maxEnd {
                     request.setValue("bytes=\(parsed.start)-\(maxEnd)", forHTTPHeaderField: "Range")
@@ -2266,11 +2288,21 @@ private final class ProxyConnection: UpstreamTaskHandler {
         startUpstreamTask(request)
     }
 
+    private var effectiveStallTimeout: TimeInterval {
+        let base = proxy.stallTimeout
+        guard base > 0 else { return 0 }
+        guard awaitingResponseHeader else { return base }
+        let headerTimeouts = proxy.responseHeaderTimeouts
+        guard !headerTimeouts.isEmpty, retryCount < headerTimeouts.count else { return base }
+        return min(base, headerTimeouts[retryCount])
+    }
+
     private func startUpstreamTask(_ request: URLRequest) {
         let now = ProcessInfo.processInfo.systemUptime
         lastProgressUptime = now
         windowStartUptime = now
         windowBytes = 0
+        awaitingResponseHeader = true
         task = proxy.startTask(request, for: self)
         publishHealth()
         startStallTimer()
@@ -2278,9 +2310,9 @@ private final class ProxyConnection: UpstreamTaskHandler {
 
     private func startStallTimer() {
         stopStallTimer()
-        let timeout = proxy.stallTimeout
+        let timeout = effectiveStallTimeout
         guard timeout > 0 else { return }
-        let interval = max(0.05, min(1.0, timeout / 2.0))
+        let interval = max(0.05, min(0.5, timeout / 4.0))
         let timer = DispatchSource.makeTimerSource(queue: proxy.queue)
         timer.schedule(deadline: .now() + interval, repeating: interval)
         timer.setEventHandler { [weak self] in self?.checkStall() }
@@ -2304,9 +2336,12 @@ private final class ProxyConnection: UpstreamTaskHandler {
             return
         }
         let silentFor = now - lastProgressUptime
+        let headerWait = awaitingResponseHeader
+        let timeout = effectiveStallTimeout
         var stalledReason: String?
-        if silentFor >= proxy.stallTimeout {
-            stalledReason = "上游节点 \(String(format: "%.1f", silentFor)) 秒无响应（\(upstreamURL?.host ?? "")），已转发 \(deliveredBody) 字节"
+        if timeout > 0, silentFor >= timeout {
+            let phase = headerWait ? "首包" : ""
+            stalledReason = "上游节点\(phase) \(String(format: "%.1f", silentFor)) 秒无响应（\(upstreamURL?.host ?? "")），已转发 \(deliveredBody) 字节"
         } else if proxy.minHealthySpeed > 0, headersSent, windowBytes > 0 {
             let windowElapsed = now - windowStartUptime
             let slowWindow = max(proxy.stallTimeout + 4.0, 16.0)
@@ -2322,6 +2357,7 @@ private final class ProxyConnection: UpstreamTaskHandler {
         }
         guard let reason = stalledReason else { return }
         stopStallTimer()
+        awaitingResponseHeader = false
         proxy.detach(running)
         running.cancel()
         task = nil
@@ -2333,7 +2369,7 @@ private final class ProxyConnection: UpstreamTaskHandler {
            renewUpstream(reason, cancelling: nil, resumeAt: headersSent ? (bodyStart + deliveredBody) : nil, ignoreCooldown: true) {
             return
         }
-        if scheduleRetry(reason, cancelling: nil) { return }
+        if scheduleRetry(reason, cancelling: nil, immediateFirstRetry: headerWait) { return }
         if headersSent { close() } else { respond(status: 502, text: "Bad Gateway") }
     }
 
@@ -2341,9 +2377,11 @@ private final class ProxyConnection: UpstreamTaskHandler {
     func didReceive(_ response: URLResponse, from dataTask: URLSessionDataTask) -> Bool {
         guard !closed else { return false }
         guard let http = response as? HTTPURLResponse else {
+            awaitingResponseHeader = false
             respond(status: 502, text: "Bad Gateway")
             return false
         }
+        awaitingResponseHeader = false
         lastProgressUptime = ProcessInfo.processInfo.systemUptime
         if let start = resumeFrom {
             // 续传或下一分段：响应头早就发给 mpv 了，这里只确认上游真的从断开的位置接上，而且还是同一个文件
@@ -2503,6 +2541,7 @@ private final class ProxyConnection: UpstreamTaskHandler {
 
     func didComplete(_ error: Error?) {
         task = nil
+        awaitingResponseHeader = false
         stopStallTimer()
         publishHealth()
         guard !closed else { return }
@@ -2559,7 +2598,7 @@ private final class ProxyConnection: UpstreamTaskHandler {
 
     /// 等一会儿再向上游发一次请求。响应头已经发给 mpv 的，从断开的位置接着下；还没发的，原样重发。
     /// 返回 false：不能重试，或者重试的次数用完了，由调用方把错误交给 mpv。
-    private func scheduleRetry(_ detail: String, cancelling running: URLSessionDataTask?) -> Bool {
+    private func scheduleRetry(_ detail: String, cancelling running: URLSessionDataTask?, immediateFirstRetry: Bool = false) -> Bool {
         // 上次重试之后又传了实质数据，说明中间连上过：重新计数，长时间播放偶尔断一次不会把次数用光
         if deliveredBody > retryProgressMark {
             retryCount = 0
@@ -2579,7 +2618,7 @@ private final class ProxyConnection: UpstreamTaskHandler {
             proxy.note("\(detail)；重试 \(delays.count) 次都没成功")
             return false
         }
-        let delay = delays[retryCount]
+        let delay = (immediateFirstRetry && retryCount == 0) ? min(0.05, delays[0]) : delays[retryCount]
         retryCount += 1
         beginRecovery()
         proxy.note("\(detail)；\(delay) 秒后第 \(retryCount) 次重试" + (resume.map { "，从 \($0) 字节接着下" } ?? ""))
@@ -2725,8 +2764,8 @@ private final class ProxyConnection: UpstreamTaskHandler {
             request.setValue("bytes=\(start)-" + (endBound.map { String($0) } ?? ""), forHTTPHeaderField: "Range")
             resumeFrom = start
         } else if chunkingActive, proxy.chunkSize > 0, let rangeStart = clientRangeStart {
-            // 尚未收到响应头即被让出/重试时，沿用 16 MiB 分段上限，避免退回开放式 Range 拉满单连接
-            let chunkLimit = rangeStart + proxy.chunkSize - 1
+            // 尚未收到响应头即被让出/重试时，沿用首段小块上限快速出首包，避免退回开放式 Range
+            let chunkLimit = rangeStart + proxy.effectiveInitialChunkSize - 1
             let endBound = clientRangeEnd.map { min($0, chunkLimit) } ?? chunkLimit
             request.setValue("bytes=\(rangeStart)-\(endBound)", forHTTPHeaderField: "Range")
         }
@@ -2865,6 +2904,7 @@ private final class ProxyConnection: UpstreamTaskHandler {
         connectionReady = false
         renewalID = nil
         deferredChunkOffset = nil
+        awaitingResponseHeader = false
         stopStallTimer()
         retryWork?.cancel()
         retryWork = nil
