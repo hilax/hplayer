@@ -726,6 +726,8 @@ private struct PlayerWindowModifier<Root: View>: ViewModifier {
     @Binding var isPresented: Bool
     /// nil = 按全局默认（直接横屏）；短剧竖屏播放器传 false
     var landscape: Bool? = nil
+    /// 弹出播放窗口的那一刻调用（比播放页自己开始加载早），用来提前解析 115 直链、预热片头
+    var onPresent: ((AppState) -> Void)? = nil
     let root: () -> Root
     /// 这个入口弹出的窗口的标记；关闭时只关自己弹出的那个
     @State private var token: UUID?
@@ -746,6 +748,7 @@ private struct PlayerWindowModifier<Root: View>: ViewModifier {
     private func present() {
         // 页面重新出现时自己的窗口还开着，不要重新弹一个（会把正在播的视频从头再开）
         if let token, PlayerWindowController.shared.isShowing(token) { return }
+        onPresent?(appState)
         let binding = $isPresented
         let presentationToken = UUID()
         let view = root()
@@ -777,15 +780,19 @@ extension View {
     /// 代替 `fullScreenCover(item:)`
     func playerWindow<Item: Identifiable, Root: View>(item: Binding<Item?>, landscape: Bool? = nil,
                                                       @ViewBuilder content: @escaping (Item) -> Root) -> some View {
-        playerWindow(
+        modifier(PlayerWindowModifier(
             isPresented: Binding(
                 get: { item.wrappedValue != nil },
                 set: { if !$0 { item.wrappedValue = nil } }
             ),
             landscape: landscape,
-            content: {
-                if let value = item.wrappedValue { content(value) }
-            }
-        )
+            onPresent: { appState in
+                // 点开 115 视频：窗口还在弹出、转屏时就开始解析直链并预热
+                if let queue = item.wrappedValue as? PlaybackQueue {
+                    Direct115Prewarmer.kick(for: queue.source, appState: appState)
+                }
+            },
+            root: { item.wrappedValue.map(content) }
+        ))
     }
 }

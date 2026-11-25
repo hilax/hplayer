@@ -9,6 +9,25 @@ final class MPVDirectStreamTests: XCTestCase {
         Data((0..<count).map { UInt8(($0 * 13 + 7) % 251) })
     }
 
+    /// 与 `pattern` 同一规律、从任意偏移开始的一段字节（大文件只生成用得到的部分）
+    private func patternBytes(from start: Int, count: Int) -> Data {
+        var data = Data(count: count)
+        data.withUnsafeMutableBytes { raw in
+            let bytes = raw.bindMemory(to: UInt8.self)
+            for i in 0..<count {
+                bytes[i] = UInt8(((start + i) * 13 + 7) % 251)
+            }
+        }
+        return data
+    }
+
+    private func waitUntil(timeout: TimeInterval = 3.0, _ condition: () -> Bool) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() && Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        }
+    }
+
     private func readAll(from handle: Direct115StreamHandle, chunkBytes: Int = 4096) -> Data {
         var output = Data()
         var buffer = [CChar](repeating: 0, count: chunkBytes)
@@ -244,6 +263,158 @@ final class MPVDirectStreamTests: XCTestCase {
         let received = readAll(from: handle, chunkBytes: 4096)
         XCTAssertEqual(received, full)
         XCTAssertTrue(store.isLookaheadSuppressedForTesting(streamKey: "p115:direct-la-403"))
+    }
+
+    /// 分块窗口：跨块拷贝正确；读过的数据按整块释放，只留 1 MiB 回看区；越过末尾截断不会打断后续追加的连续性。
+    func testDirectStreamBufferReleasesConsumedChunksAndKeepsBackWindow() {
+        var buffer = DirectStreamBuffer()
+        buffer.reset(at: 1000)
+        let chunk = 64 * 1024
+        for i in 0..<64 {
+            buffer.append(patternBytes(from: 1000 + i * chunk, count: chunk))
+        }
+        XCTAssertEqual(buffer.start, 1000)
+        XCTAssertEqual(buffer.end, Int64(1000 + 64 * chunk))
+
+        var output = [UInt8](repeating: 0, count: 100_000)
+        let offset = Int64(1000 + chunk - 50)
+        let copied = output.withUnsafeMutableBytes { buffer.copy(from: offset, into: $0.baseAddress!, maxBytes: $0.count) }
+        XCTAssertEqual(copied, 100_000)
+        XCTAssertEqual(Data(output), patternBytes(from: Int(offset), count: 100_000))
+
+        // 读到第 60 块：只保留 1 MiB 回看区（第 44～63 块）
+        let cursor = Int64(1000 + 60 * chunk + 10)
+        buffer.trimFront(to: cursor - Direct115StreamHandle.backWindowBytes)
+        XCTAssertEqual(buffer.start, cursor - Direct115StreamHandle.backWindowBytes)
+        XCTAssertEqual(buffer.retainedChunkCount, 20)
+        var head = [UInt8](repeating: 0, count: 4096)
+        _ = head.withUnsafeMutableBytes { buffer.copy(from: buffer.start, into: $0.baseAddress!, maxBytes: $0.count) }
+        XCTAssertEqual(Data(head), patternBytes(from: Int(buffer.start), count: 4096))
+
+        let end = buffer.end
+        buffer.trimFront(to: end + 5000)
+        XCTAssertTrue(buffer.isEmpty)
+        XCTAssertEqual(buffer.start, end)
+        XCTAssertEqual(buffer.retainedChunkCount, 0)
+    }
+
+    /// mpv 打开时常在片头和片尾索引之间来回跳：跳到已缓存的片尾时不取消正在下载的流，
+    /// 跳回来直接从窗口读，整个过程只有一次上游请求。
+    func testSeekToCachedTailKeepsParkedStreamForReturn() throws {
+        let mib = 1_048_576
+        let total = 12 * mib
+        let streamStart = 5 * mib
+        DirectStreamMockProtocol.install([
+            .hold(status: 206, headers: [
+                "Content-Type": "video/mp4",
+                "Content-Range": "bytes \(streamStart)-\(streamStart + 4 * mib - 1)/\(total)",
+                "Content-Length": "\(4 * mib)",
+                "Accept-Ranges": "bytes",
+            ], body: patternBytes(from: streamStart, count: 2 * mib)),
+        ])
+
+        let store = Direct115StreamStore(protocolClasses: [DirectStreamMockProtocol.self])
+        store.setChunkSizeForTesting(Int64(4 * mib))
+        store.setLookaheadTriggerRatioForTesting(0)
+        store.setStallTimeoutForTesting(0)
+        let key = "p115:lazy-seek"
+        // 片尾 1 MiB 已经在块缓存里（相当于预热过的 MP4 moov / MKV Cues）
+        let meta = StreamBlockCache.Metadata(
+            totalSize: Int64(total),
+            supportsRanges: true,
+            contentType: "video/mp4",
+            etag: nil,
+            lastModified: nil,
+            acceptRanges: "bytes"
+        )
+        store.blockCache.record(key: key, meta: meta, offset: Int64(11 * mib), data: patternBytes(from: 11 * mib, count: mib))
+
+        let stream = Direct115ResolvedStream(
+            url: try XCTUnwrap(URL(string: "https://cdn.115cdn.net/lazy.mp4")),
+            userAgent: Direct115Client.userAgent,
+            cookie: ""
+        )
+        let uri = store.register(stream: stream, streamID: key)
+        let handle = try XCTUnwrap(store.openHandle(token: try XCTUnwrap(uri.host)))
+        defer { handle.close() }
+
+        XCTAssertEqual(handle.size(), Int64(total))
+        XCTAssertEqual(handle.seek(to: Int64(streamStart)), Int64(streamStart))
+        XCTAssertEqual(readExact(1000, from: handle), patternBytes(from: streamStart, count: 1000))
+
+        let tailOffset = 11 * mib + 100
+        XCTAssertEqual(handle.seek(to: Int64(tailOffset)), Int64(tailOffset))
+        XCTAssertEqual(readExact(1000, from: handle), patternBytes(from: tailOffset, count: 1000))
+
+        let back = streamStart + 500_000
+        XCTAssertEqual(handle.seek(to: Int64(back)), Int64(back))
+        XCTAssertEqual(readExact(4096, from: handle), patternBytes(from: back, count: 4096))
+        XCTAssertEqual(DirectStreamMockProtocol.receivedRanges(), ["bytes=\(streamStart)-\(streamStart + 4 * mib - 1)"])
+    }
+
+    /// 预热按「片头探测段 → 尾部 moov → 片头续段」依次拉取，每段都完整收完；之后播放连接打开时头尾都直接命中缓存。
+    func testPrewarmFetchesHeadThenTailIndexThenHeadWarmInSequence() throws {
+        let total = 3 * 1_048_576
+        let moovStart = total - 65_536
+        var head = patternBytes(from: 0, count: 256 * 1024)
+        let ftyp: [UInt8] = [0, 0, 0, 24] + Array("ftyp".utf8) + Array("isom".utf8) + [0, 0, 0, 0] + Array("isom".utf8) + Array("mp41".utf8)
+        let mdatSize = UInt32(moovStart - 24)
+        let mdat: [UInt8] = [
+            UInt8(mdatSize >> 24), UInt8((mdatSize >> 16) & 0xFF), UInt8((mdatSize >> 8) & 0xFF), UInt8(mdatSize & 0xFF),
+        ] + Array("mdat".utf8)
+        head.replaceSubrange(0..<32, with: ftyp + mdat)
+        let tail = patternBytes(from: moovStart, count: total - moovStart)
+        let warmStart = 256 * 1024
+        let warmEnd = 2 * 1_048_576 - 1
+        let warm = patternBytes(from: warmStart, count: warmEnd - warmStart + 1)
+        DirectStreamMockProtocol.install([
+            .reply(status: 206, headers: [
+                "Content-Type": "video/mp4",
+                "Content-Range": "bytes 0-\(head.count - 1)/\(total)",
+                "Content-Length": "\(head.count)",
+                "Accept-Ranges": "bytes",
+            ], body: head),
+            .reply(status: 206, headers: [
+                "Content-Type": "video/mp4",
+                "Content-Range": "bytes \(moovStart)-\(total - 1)/\(total)",
+                "Content-Length": "\(tail.count)",
+                "Accept-Ranges": "bytes",
+            ], body: tail),
+            .reply(status: 206, headers: [
+                "Content-Type": "video/mp4",
+                "Content-Range": "bytes \(warmStart)-\(warmEnd)/\(total)",
+                "Content-Length": "\(warm.count)",
+                "Accept-Ranges": "bytes",
+            ], body: warm),
+        ])
+
+        let store = Direct115StreamStore(protocolClasses: [DirectStreamMockProtocol.self])
+        let key = "p115:prewarm-sequence"
+        let stream = Direct115ResolvedStream(
+            url: try XCTUnwrap(URL(string: "https://cdn.115cdn.net/seq.mp4")),
+            userAgent: Direct115Client.userAgent,
+            cookie: ""
+        )
+        store.prewarm(stream: stream, streamID: key, resume: false)
+        waitUntil {
+            DirectStreamMockProtocol.receivedRanges().count == 3 && store.activePrewarmRangeForTesting(streamKey: key) == nil
+        }
+        XCTAssertEqual(DirectStreamMockProtocol.receivedRanges(), [
+            "bytes=0-\(head.count - 1)",
+            "bytes=\(moovStart)-\(total - 1)",
+            "bytes=\(warmStart)-\(warmEnd)",
+        ])
+
+        let uri = store.register(stream: stream, streamID: key)
+        let handle = try XCTUnwrap(store.openHandle(token: try XCTUnwrap(uri.host)))
+        defer { handle.close() }
+        XCTAssertEqual(handle.size(), Int64(total))
+        XCTAssertEqual(readExact(1000, from: handle), Data(head[0..<1000]))
+        XCTAssertEqual(handle.seek(to: Int64(moovStart + 10)), Int64(moovStart + 10))
+        XCTAssertEqual(readExact(2000, from: handle), Data(tail[10..<2010]))
+        XCTAssertEqual(handle.seek(to: 300_000), 300_000)
+        XCTAssertEqual(readExact(1000, from: handle), patternBytes(from: 300_000, count: 1000))
+        XCTAssertEqual(DirectStreamMockProtocol.receivedRanges().count, 3, "头尾和片头续段都已预热，播放连接不应再发请求")
     }
 
     /// 真实 `MPVEngine` 可以在无图层状态预初始化（供 `MPVEnginePool` 预热）并成功注册 `hplayer115://` 协议，随后绑定 Metal 图层。

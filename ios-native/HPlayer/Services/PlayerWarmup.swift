@@ -168,23 +168,26 @@ enum PlayerDiskCache {
         }
     }
 
-    /// 缓存最多用多少 MiB：用最近一次量到的结果；后台还没量完就现量一次
-    static func limitMiB() -> Int {
+    /// 缓存最多用多少 MiB：不超过所选档位（默认 2GB，可选 20GB），也不超过手机剩余空间的一半。
+    /// 剩余空间用最近一次量到的结果；后台还没量完就现量一次
+    static func limitMiB(capMiB: Int = 2048) -> Int {
         lock.lock()
-        defer { lock.unlock() }
-        if let measuredLimit { return measuredLimit }
-        let value = measure()
-        measuredLimit = value
-        return value
+        let halfFree: Int
+        if let measuredLimit {
+            halfFree = measuredLimit
+        } else {
+            halfFree = measure()
+            measuredLimit = halfFree
+        }
+        lock.unlock()
+        return max(64, min(capMiB, halfFree))
     }
 
-    /// 最多 2GB；手机剩余空间不多时只用剩余空间的一半
+    /// 剩余空间的一半（MiB）；量不到时按不限处理，由档位上限兜底
     private static func measure() -> Int {
-        let limit = 2048
         let values = try? directory.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
-        guard let free = values?.volumeAvailableCapacityForImportantUsage, free > 0 else { return limit }
-        let half = Int(free / 2 / 1_048_576)
-        return max(64, min(limit, half))
+        guard let free = values?.volumeAvailableCapacityForImportantUsage, free > 0 else { return Int.max }
+        return Int(free / 2 / 1_048_576)
     }
 }
 

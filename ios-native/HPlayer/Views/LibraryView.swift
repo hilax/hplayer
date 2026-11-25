@@ -148,7 +148,11 @@ struct DirectoryView: View {
             }
             .task(id: "\(cid)|\(appState.sessionID.uuidString)") {
                 // 已经加载过这个账号的目录（切标签、从子目录返回）时静默刷新，不再整页转圈
-                if !InterfacePreview.active { await load(silent: loadedSessionID == appState.sessionID) }
+                if !InterfacePreview.active {
+                    // 顺手和解析原画直链的接口建好连接：点开视频时少一次 TLS 握手
+                    Direct115Client.warmUpPlaybackAPIConnection()
+                    await load(silent: loadedSessionID == appState.sessionID)
+                }
             }
             .toolbar { toolbarItems }
             .onChange(of: sortKey) { _ in applySort() }

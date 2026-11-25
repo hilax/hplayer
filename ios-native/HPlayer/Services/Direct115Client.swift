@@ -310,6 +310,27 @@ struct Direct115Client: @unchecked Sendable {
         try await send(url)
     }
 
+    private static let warmUpLock = NSLock()
+    private static var lastWarmUp = Date.distantPast
+
+    /// 提前和 proapi.115.com（解析原画直链的接口）建好 TLS 连接，点开视频时少一次握手。
+    /// 不带 Cookie 的 HEAD 请求，结果不关心；45 秒内只做一次（连接空闲一会儿会被服务器断开）。
+    static func warmUpPlaybackAPIConnection(now: Date = Date()) {
+        warmUpLock.lock()
+        guard now.timeIntervalSince(lastWarmUp) >= 45 else {
+            warmUpLock.unlock()
+            return
+        }
+        lastWarmUp = now
+        warmUpLock.unlock()
+        guard let url = URL(string: "https://proapi.115.com/") else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "HEAD"
+        request.timeoutInterval = 8
+        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        sharedSession.dataTask(with: request) { _, _, _ in }.resume()
+    }
+
     private static let redirectGuard = RedirectGuard()
     private static let sharedSession: URLSession = {
         let configuration = URLSessionConfiguration.default

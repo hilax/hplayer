@@ -17,6 +17,7 @@ struct PlayerView: View {
     @State private var directQualityListError: String?
     @State private var directQualityListID = UUID()
     @State private var prefetchedNextPickCode: String?
+    @State private var prefetchedNextBytesPickCode: String?
     /// 动漫这一集解析出的画质档位和请求头。current 始终保持集数引用不变，
     /// 换画质只重开流，不改 current——改了 id 就变，选集会认不出当前集，还会再触发一次加载。
     @State private var animeQualities: [PlaybackQualityItem] = []
@@ -174,6 +175,7 @@ struct PlayerView: View {
         directQualitiesFetchedAt = nil
         directQualities = []
         prefetchedNextPickCode = nil
+        prefetchedNextBytesPickCode = nil
     }
 
     /// 首帧出画后延迟 4 秒再悄悄拉取 115 转码画质列表，避免与起播阶段的 115 并发/带宽争抢；
@@ -193,7 +195,8 @@ struct PlayerView: View {
         }
     }
 
-    /// 播放到片尾前 60 秒时提前预解析下一集的 115 原画直链（只缓存直链不抢占当前播放带宽），实现连播零解析等待。
+    /// 播放到片尾前 60 秒时提前预解析下一集的 115 原画直链，实现连播零解析等待；
+    /// 当前这集已经全部缓冲完（不再占下载带宽）时，再把下一集的片头和索引也预热进内存，连播直接出画。
     private func maybePrefetchNextEpisode(at time: Double) {
         guard visible, playback.hasPlayed, !playback.buffering,
               playback.duration > 120, playback.duration - time <= 60,
@@ -201,15 +204,19 @@ struct PlayerView: View {
               index + 1 < playlist.count,
               case .p115(_, let nextPickCode) = playlist[index + 1],
               !nextPickCode.isEmpty,
-              prefetchedNextPickCode != nextPickCode,
+              prefetchedNextBytesPickCode != nextPickCode,
               let client = appState.directClient() else { return }
+        let fullyBuffered = playback.bufferedUntil >= playback.duration - 2
+        guard prefetchedNextPickCode != nextPickCode || fullyBuffered else { return }
         prefetchedNextPickCode = nextPickCode
+        if fullyBuffered { prefetchedNextBytesPickCode = nextPickCode }
+        let resume = RecentStore.shared.position(for: playlist[index + 1]) != nil
         Task.detached(priority: .utility) {
             await Direct115Prewarmer.prewarm(
                 client: client,
                 pickCode: nextPickCode,
-                resume: false,
-                prefetchBytes: false
+                resume: resume,
+                prefetchBytes: fullyBuffered
             )
         }
     }

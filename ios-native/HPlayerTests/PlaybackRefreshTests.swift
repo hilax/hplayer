@@ -182,6 +182,29 @@ final class PlaybackRefreshTests: XCTestCase {
         let cellular = PlaybackController.memoryCacheBudgetMiB(expensiveNetwork: true, physicalMemoryBytes: 8 * 1024 * 1024 * 1024)
         XCTAssertEqual(cellular.forward, 64)
         XCTAssertEqual(cellular.back, 16)
+
+        // 标称 6GB 的机型系统只报 5.5～5.9 GiB，也要用大档
+        let sixGBDevice = PlaybackController.memoryCacheBudgetMiB(expensiveNetwork: false, physicalMemoryBytes: 5_900_000_000)
+        XCTAssertEqual(sixGBDevice.forward, 192)
+    }
+
+    func testCacheStorageDefaultsToDiskAndOffersTwentyGBTier() {
+        let key = "player.cacheStorageMode"
+        let previous = UserDefaults.standard.string(forKey: key)
+        defer {
+            if let previous { UserDefaults.standard.set(previous, forKey: key) } else { UserDefaults.standard.removeObject(forKey: key) }
+        }
+        UserDefaults.standard.removeObject(forKey: key)
+        XCTAssertEqual(CacheStorageMode.saved, .disk)
+        XCTAssertTrue(CacheStorageMode.disk.usesDisk)
+        XCTAssertEqual(CacheStorageMode.disk.diskCapMiB, 2048)
+        XCTAssertEqual(CacheStorageMode.diskLarge.diskCapMiB, 20480)
+        XCTAssertFalse(CacheStorageMode.memory.usesDisk)
+
+        let large = PlayerDiskCache.limitMiB(capMiB: CacheStorageMode.diskLarge.diskCapMiB)
+        XCTAssertGreaterThanOrEqual(large, 64)
+        XCTAssertLessThanOrEqual(large, 20480)
+        XCTAssertGreaterThanOrEqual(large, PlayerDiskCache.limitMiB())
     }
 
     func testHealthyPlaybackResetsPreferLargerPauseWaitAfter25Seconds() throws {

@@ -24,7 +24,7 @@ enum VideoDecoding: String, CaseIterable, Identifiable {
 }
 
 /// 边播边存：打开后攒够一点点就开播，播放过程中在后台往前多下载这么长时间的视频。
-/// 存在手机存储里（不占内存），最多 2GB；退出播放器或换集时自动清掉。
+/// 默认存在手机存储里（不占内存），上限看「缓存位置」选的档位；退出播放器或换集时自动清掉。
 enum ReadaheadLevel: Int, CaseIterable, Identifiable {
     case oneMinute = 60
     case fiveMinutes = 300
@@ -47,23 +47,45 @@ enum ReadaheadLevel: Int, CaseIterable, Identifiable {
     }
 }
 
-/// 播放缓存位置：内存优先（避免高码率 4K 频繁写闪存，起播与拖动更轻快）或磁盘缓存（容量更大，最高 2GB）。
+/// 播放缓存位置：默认磁盘缓存（最多 2GB，可选 20GB 档，4K 原画「边播边存」的时长才存得下），
+/// 也可选内存优先（不写闪存，但只能存一两百 MB，4K 只够二十秒左右）。
 enum CacheStorageMode: String, CaseIterable, Identifiable {
-    case memory
     case disk
+    case diskLarge
+    case memory
 
     var id: String { rawValue }
     var title: String {
         switch self {
+        case .disk: return "磁盘 2GB"
+        case .diskLarge: return "磁盘 20GB"
         case .memory: return "内存优先"
-        case .disk: return "磁盘缓存"
+        }
+    }
+
+    var usesDisk: Bool { self != .memory }
+
+    /// 磁盘缓存上限（MiB）；实际还会受手机剩余空间限制
+    var diskCapMiB: Int {
+        switch self {
+        case .disk: return 2048
+        case .diskLarge: return 20480
+        case .memory: return 0
+        }
+    }
+
+    /// 往回保留的缓存（MiB）：往回拖动时直接从缓存出
+    var diskBackMiB: Int {
+        switch self {
+        case .diskLarge: return 1024
+        default: return 256
         }
     }
 
     private static let key = "player.cacheStorageMode"
 
     static var saved: CacheStorageMode {
-        get { CacheStorageMode(rawValue: UserDefaults.standard.string(forKey: key) ?? "") ?? .memory }
+        get { CacheStorageMode(rawValue: UserDefaults.standard.string(forKey: key) ?? "") ?? .disk }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: key) }
     }
 }
@@ -529,9 +551,9 @@ final class PlaybackController: ObservableObject {
             ("demuxer-lavf-probesize", "1572864"),
             // 续播和大跨度跳转只落到关键帧，4K 原画不用从关键帧一路解码到目标；小跳转单独要求精确
             ("hr-seek", "no"),
-            ("cache-on-disk", cacheStorageMode == .disk ? "yes" : "no"),
+            ("cache-on-disk", cacheStorageMode.usesDisk ? "yes" : "no"),
             ("demuxer-cache-dir", PlayerDiskCache.directory.path),
-            ("demuxer-max-back-bytes", cacheStorageMode == .disk ? "256MiB" : "48MiB"),
+            ("demuxer-max-back-bytes", cacheStorageMode.usesDisk ? "\(cacheStorageMode.diskBackMiB)MiB" : "48MiB"),
         ]
         if UIScreen.main.potentialEDRHeadroom > 1 {
             options.append(("target-colorspace-hint", "yes"))
@@ -855,8 +877,11 @@ final class PlaybackController: ObservableObject {
             engine.set("demuxer-max-back-bytes", "\(budget.back)MiB")
         } else {
             engine.set("cache-on-disk", true)
-            engine.set("demuxer-max-back-bytes", "256MiB")
-            engine.set("demuxer-max-bytes", "\(PlayerDiskCache.limitMiB())MiB")
+            let limit = PlayerDiskCache.limitMiB(capMiB: cacheStorageMode.diskCapMiB)
+            // 往回保留的部分也占磁盘，剩余空间紧张时按比例收小
+            let back = max(64, min(cacheStorageMode.diskBackMiB, limit / 4))
+            engine.set("demuxer-max-back-bytes", "\(back)MiB")
+            engine.set("demuxer-max-bytes", "\(limit)MiB")
         }
     }
 
@@ -865,8 +890,10 @@ final class PlaybackController: ObservableObject {
         physicalMemoryBytes: UInt64 = ProcessInfo.processInfo.physicalMemory
     ) -> (forward: Int, back: Int) {
         if expensiveNetwork { return (64, 16) }
-        let sixGiB: UInt64 = 6 * 1024 * 1024 * 1024
-        return physicalMemoryBytes >= sixGiB ? (192, 48) : (128, 32)
+        // 系统报出的物理内存比标称值少一截（标称 6GB 的机型通常只报 5.5～5.9 GiB），
+        // 按 5 GiB 分档：4GB 机型（报约 3.7 GiB）用小档，6GB 及以上用大档
+        let fiveGiB: UInt64 = 5 * 1024 * 1024 * 1024
+        return physicalMemoryBytes >= fiveGiB ? (192, 48) : (128, 32)
     }
 
     // MARK: 播放控制
@@ -968,6 +995,38 @@ final class PlaybackController: ObservableObject {
             duration: duration,
             subtitleFileURL: activeOnlineSubtitleID != nil ? mountedOnlineSubtitleFileURL : nil,
             isTorrentStream: currentTorrentStream
+        )
+    }
+
+    /// 真正投屏时用的媒体描述：115 原画在本机走的是进程内直连（`hplayer115://`），电视那边没法用，
+    /// 这里给它单独开一条本机中转地址，保留 403 自动换链、断点续传和卡住重连，长片投到一半地址过期也能接着放。
+    func resolvedCastMediaDescriptor() async -> CastMediaDescriptor? {
+        guard let base = castMediaDescriptor else { return nil }
+        guard base.localProxyURL == nil, !base.url.isFileURL, !base.isTorrentStream,
+              let engineURL = currentEngineURL,
+              engineURL.scheme?.lowercased() == Direct115StreamStore.scheme else { return base }
+        let renew: (() async throws -> URL)?
+        if let streamRefresher {
+            renew = { try await streamRefresher().url }
+        } else {
+            renew = urlRefresher
+        }
+        let relay = await LocalStreamProxy.shared.localURL(
+            for: base.url,
+            headers: base.headers,
+            streamID: currentStreamID.map { "\($0):cast" },
+            renew: renew
+        )
+        guard let relay else { return base }
+        return CastMediaDescriptor(
+            url: base.url,
+            localProxyURL: relay,
+            title: base.title,
+            headers: base.headers,
+            position: base.position,
+            duration: base.duration,
+            subtitleFileURL: base.subtitleFileURL,
+            isTorrentStream: base.isTorrentStream
         )
     }
 

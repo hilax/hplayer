@@ -412,11 +412,13 @@ struct PlaybackControlsView: View {
                             mediaTitle: title,
                             isMKVOrUnsupportedAirPlay: airplayUnsupported,
                             onSelectDLNA: { device in
-                                guard let media = playback.castMediaDescriptor else { return }
-                                Task { await castManager.castToDLNA(device, media: media) }
+                                Task {
+                                    guard let media = await playback.resolvedCastMediaDescriptor() else { return }
+                                    await castManager.castToDLNA(device, media: media)
+                                }
                             },
                             onPrepareAirPlay: {
-                                guard let media = playback.castMediaDescriptor else { return false }
+                                guard let media = await playback.resolvedCastMediaDescriptor() else { return false }
                                 return await castManager.prepareAirPlay(media: media, fallbackResolver: onResolveAirPlayStream)
                             },
                             onClose: {
@@ -504,9 +506,12 @@ struct PlaybackControlsView: View {
             if brightnessAdjusted, let originalBrightness { ScreenBrightness.screen.brightness = originalBrightness }
         }
         .onChange(of: playback.castMediaRevision) { _ in
-            guard castManager.isCasting, let media = playback.castMediaDescriptor else { return }
+            guard castManager.isCasting, playback.castMediaDescriptor != nil else { return }
             playback.pauseForCasting()
-            Task { await castManager.updateMedia(media, fallbackResolver: onResolveAirPlayStream) }
+            Task {
+                guard let media = await playback.resolvedCastMediaDescriptor() else { return }
+                await castManager.updateMedia(media, fallbackResolver: onResolveAirPlayStream)
+            }
         }
         .onChange(of: castManager.ended) { didEnd in
             guard didEnd, autoPlayNext || Self.testAutoNext, !Self.isUITest || Self.testAutoNext, let id = nextID else { return }
@@ -1487,8 +1492,8 @@ struct PlaybackControlsView: View {
             }
             popoverNote(
                 playback.cacheStorageMode == .memory
-                    ? "优先缓存在内存中，避免高码率 4K 频繁写闪存，拖动和起播更流畅；流量下自动缩减缓存。"
-                    : "边播边存到手机存储，最多 2GB，退出播放后自动清掉；流量下最多存 1 分钟。",
+                    ? "只存在内存里，不写手机存储；容量小，4K 原画只能往前存二十秒左右。流量下自动缩减。"
+                    : "边播边存到手机存储，最多 \(playback.cacheStorageMode == .diskLarge ? "20GB" : "2GB")（不超过剩余空间的一半），退出播放后自动清掉；流量下最多存 1 分钟。",
                 width: 218
             )
         case .sleep:

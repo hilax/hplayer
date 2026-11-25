@@ -77,6 +77,14 @@ enum Direct115StreamBridge {
 final class Direct115StreamStore: NSObject, @unchecked Sendable {
     static let shared = Direct115StreamStore()
     static let scheme = Direct115StreamBridge.scheme
+    /// 预热第一步拉的片头：足够判断 MP4 moov / MKV Cues 在哪。整段收完再走下一步，不中途取消，连接能复用
+    static let headProbeBytes: Int64 = 256 * 1024
+    /// 非续播时预热的片头总量：起播的第一批画面直接从内存出
+    static let headWarmBytes: Int64 = 2 * 1_048_576
+    /// 读位置落在预热传输已收到位置之后这么近时，直接等它下过来（或接管它），不另起请求
+    static let prewarmFollowGapBytes: Int64 = 2 * 1_048_576
+    /// 播放连接在等某段预热数据时，预热这么久没有任何进展就不等了，改由播放连接自己拉
+    static let prewarmStallSeconds: TimeInterval = 6.0
 
     fileprivate struct RegisteredStream {
         let token: String
@@ -139,7 +147,8 @@ final class Direct115StreamStore: NSObject, @unchecked Sendable {
 
     // MARK: 对外注册与预热
 
-    /// 拿到 115 原画直链后立即在后台预热：建立 TLS 连接、拉取片头字节并自动探测 MP4 `moov` 或 MKV `Cues` 尾部索引写入内存缓存。
+    /// 拿到 115 原画直链后立即在后台预热，分三步依次进行（每步都是完整收完的小范围请求，连接可复用）：
+    /// 1. 片头探测段（256 KiB）；2. 尾部索引（MP4 `moov` / MKV `Cues`，在片尾时才拉）；3. 片头续段到 2 MiB（仅非续播）。
     func prewarm(
         stream: Direct115ResolvedStream,
         streamID: String? = nil,
@@ -151,36 +160,16 @@ final class Direct115StreamStore: NSObject, @unchecked Sendable {
             let key = streamID ?? stream.url.absoluteString
             if let renew { self.registerRenewal(forKey: key, renew) }
             for (otherKey, other) in self.prewarms where otherKey != key {
-                other.cancel()
                 self.prewarms.removeValue(forKey: otherKey)
+                other.cancel()
             }
             let hasActive = self.handles.values.contains { $0.streamKey == key && $0.isActiveOnStoreQueue }
             guard !hasActive, self.prewarms[key] == nil else { return }
-
-            let activeStream = self.currentStream(forKey: key, fallback: stream)
-            if let headHit = self.blockCache.lookup(key: key, start: 0, requestedEnd: 65_535) {
-                if case .indexAtTail(let tailStart, let tailEnd, _) = ContainerIndexProbe.inspect(prefix: headHit.data, totalSize: headHit.meta.totalSize),
-                   let missing = self.missingCacheRange(forKey: key, start: tailStart, end: tailEnd) {
-                    self.startPrewarmTransfer(
-                        key: key,
-                        stream: activeStream,
-                        start: missing.start,
-                        end: missing.end,
-                        resume: resume,
-                        followTailIndex: false
-                    )
-                }
-                return
-            }
-
-            let headEnd: Int64 = resume ? (256 * 1024 - 1) : (2 * 1_048_576 - 1)
-            self.startPrewarmTransfer(
+            self.startNextPrewarmStep(
                 key: key,
-                stream: activeStream,
-                start: 0,
-                end: headEnd,
+                stream: self.currentStream(forKey: key, fallback: stream),
                 resume: resume,
-                followTailIndex: true
+                indexOnly: false
             )
         }
     }
@@ -330,6 +319,10 @@ final class Direct115StreamStore: NSObject, @unchecked Sendable {
     func cachedByteCountForTesting() -> Int {
         blockCache.totalBytes
     }
+
+    func activePrewarmRangeForTesting(streamKey: String) -> (start: Int64, end: Int64)? {
+        queue.sync { prewarms[streamKey].map { ($0.rangeStart, $0.rangeEnd) } }
+    }
     #endif
 
     // MARK: 内部调度（仅在 queue 上调用）
@@ -407,9 +400,14 @@ final class Direct115StreamStore: NSObject, @unchecked Sendable {
         }
     }
 
+    /// 播放连接开始自己拉数据：停掉同一条流的片头类预热（会抢带宽），
+    /// 尾部索引预热保留——mpv 打开时马上就要读它。
     fileprivate func claimUpstream(for handle: Direct115StreamHandle) {
         let key = handle.streamKey
-        cancelPrewarm(forKey: key)
+        if let transfer = prewarms[key], transfer.kind != .tailIndex {
+            prewarms.removeValue(forKey: key)
+            transfer.cancel()
+        }
         for other in Array(handles.values) where other !== handle && other.streamKey == key {
             if handle.hasExplicitStreamID && other.generation < handle.generation {
                 other.preemptClosedOnStoreQueue()
@@ -433,32 +431,52 @@ final class Direct115StreamStore: NSObject, @unchecked Sendable {
         waiting.resumeAfterYieldOnStoreQueue()
     }
 
-    fileprivate func takeAdoptablePrewarm(forKey key: String, start: Int64) -> Direct115PrewarmTransfer? {
-        guard let transfer = prewarms[key], transfer.canBeAdopted(forStart: start) else { return nil }
+    /// 正在拉、并且很快就能拉到 `offset` 的预热传输
+    fileprivate func prewarmCovering(forKey key: String, offset: Int64) -> Direct115PrewarmTransfer? {
+        guard let transfer = prewarms[key], transfer.covers(offset) else { return nil }
+        return transfer
+    }
+
+    fileprivate func takeAdoptablePrewarm(forKey key: String, offset: Int64) -> Direct115PrewarmTransfer? {
+        guard let transfer = prewarmCovering(forKey: key, offset: offset) else { return nil }
         prewarms.removeValue(forKey: key)
         return transfer
     }
 
-    fileprivate func cancelPrewarm(forKey key: String) {
-        prewarms.removeValue(forKey: key)?.cancel()
+    fileprivate func cancelPrewarm(_ transfer: Direct115PrewarmTransfer) {
+        if prewarms[transfer.key] === transfer {
+            prewarms.removeValue(forKey: transfer.key)
+        }
+        transfer.cancel()
     }
 
-    fileprivate func prewarmDidFinish(_ transfer: Direct115PrewarmTransfer, nextTailRange: (start: Int64, end: Int64)?) {
+    fileprivate func prewarmDidFinish(_ transfer: Direct115PrewarmTransfer, completed: Bool) {
         guard prewarms[transfer.key] === transfer else { return }
         prewarms.removeValue(forKey: transfer.key)
-        guard let tail = nextTailRange else { return }
+        guard completed else { return }
+        // 播放连接已经在拉数据时只补尾部索引，片头由它自己读
         let hasActive = handles.values.contains { $0.streamKey == transfer.key && $0.isActiveOnStoreQueue }
-        guard !hasActive else { return }
-        guard let missing = missingCacheRange(forKey: transfer.key, start: tail.start, end: tail.end) else { return }
-        let activeStream = currentStream(forKey: transfer.key, fallback: transfer.stream)
-        startPrewarmTransfer(
+        startNextPrewarmStep(
             key: transfer.key,
-            stream: activeStream,
-            start: missing.start,
-            end: missing.end,
+            stream: currentStream(forKey: transfer.key, fallback: transfer.stream),
             resume: transfer.resume,
-            followTailIndex: false
+            indexOnly: hasActive
         )
+    }
+
+    /// 播放连接收到片头后调用：索引在片尾时，并行把尾部索引拉进块缓存（mpv 读完头部马上就要跳过去）。
+    /// 返回 false 表示片头数据还不够判断，之后再试。
+    fileprivate func ensureIndexPrefetch(forKey key: String, fallback: Direct115ResolvedStream) -> Bool {
+        guard let head = blockCache.lookup(
+            key: key,
+            start: 0,
+            requestedEnd: Self.headProbeBytes - 1,
+            maxReturnBytes: Int(Self.headProbeBytes)
+        ) else { return false }
+        guard head.data.count >= 65_536 || Int64(head.data.count) >= head.meta.totalSize else { return false }
+        guard prewarms[key] == nil else { return true }
+        startNextPrewarmStep(key: key, stream: currentStream(forKey: key, fallback: fallback), resume: true, indexOnly: true)
+        return true
     }
 
     fileprivate func isLookaheadSuppressed(forKey key: String, now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Bool {
@@ -484,13 +502,49 @@ final class Direct115StreamStore: NSObject, @unchecked Sendable {
         }
     }
 
+    /// 按「片头探测段 → 尾部索引 → 片头续段」的顺序找出下一段还没缓存的数据并开始预热。
+    /// `indexOnly`：播放连接正在拉数据，只允许补尾部索引（另一条连接），不和它抢片头。
+    private func startNextPrewarmStep(key: String, stream: Direct115ResolvedStream, resume: Bool, indexOnly: Bool) {
+        guard prewarms[key] == nil else { return }
+        let headEnd = Self.headProbeBytes - 1
+        if !indexOnly, let missing = missingCacheRange(forKey: key, start: 0, end: headEnd) {
+            startPrewarmTransfer(key: key, stream: stream, kind: .head, start: missing.start, end: missing.end, resume: resume)
+            return
+        }
+        if indexOnly && isLookaheadSuppressed(forKey: key) { return }
+        if let tail = tailIndexRange(forKey: key),
+           let missing = missingCacheRange(forKey: key, start: tail.start, end: tail.end) {
+            startPrewarmTransfer(key: key, stream: stream, kind: .tailIndex, start: missing.start, end: missing.end, resume: resume)
+            return
+        }
+        guard !indexOnly, !resume, let meta = blockCache.metadata(forKey: key), meta.totalSize > 0 else { return }
+        let warmEnd = min(meta.totalSize - 1, Self.headWarmBytes - 1)
+        if warmEnd > headEnd, let missing = missingCacheRange(forKey: key, start: headEnd + 1, end: warmEnd) {
+            startPrewarmTransfer(key: key, stream: stream, kind: .headWarm, start: missing.start, end: missing.end, resume: resume)
+        }
+    }
+
+    /// 用已缓存的片头判断容器索引是否在片尾，返回要预取的尾部区间
+    private func tailIndexRange(forKey key: String) -> (start: Int64, end: Int64)? {
+        guard let head = blockCache.lookup(
+            key: key,
+            start: 0,
+            requestedEnd: Self.headProbeBytes - 1,
+            maxReturnBytes: Int(Self.headProbeBytes)
+        ) else { return nil }
+        if case .indexAtTail(let start, let end, _) = ContainerIndexProbe.inspect(prefix: head.data, totalSize: head.meta.totalSize) {
+            return (start, end)
+        }
+        return nil
+    }
+
     private func startPrewarmTransfer(
         key: String,
         stream: Direct115ResolvedStream,
+        kind: Direct115PrewarmTransfer.Kind,
         start: Int64,
         end: Int64,
-        resume: Bool,
-        followTailIndex: Bool
+        resume: Bool
     ) {
         guard end >= start else { return }
         prewarms[key]?.cancel()
@@ -504,10 +558,10 @@ final class Direct115StreamStore: NSObject, @unchecked Sendable {
         let transfer = Direct115PrewarmTransfer(
             key: key,
             stream: stream,
+            kind: kind,
             rangeStart: start,
             rangeEnd: end,
             resume: resume,
-            followTailIndex: followTailIndex,
             store: self
         )
         prewarms[key] = transfer
@@ -516,7 +570,7 @@ final class Direct115StreamStore: NSObject, @unchecked Sendable {
 
     private func missingCacheRange(forKey key: String, start: Int64, end: Int64) -> (start: Int64, end: Int64)? {
         guard end >= start else { return nil }
-        guard let hit = blockCache.lookup(key: key, start: start, requestedEnd: end) else {
+        guard let hit = blockCache.lookup(key: key, start: start, requestedEnd: end, maxReturnBytes: Int(end - start + 1)) else {
             return (start, end)
         }
         let coveredEnd = start + Int64(hit.data.count) - 1
@@ -566,6 +620,97 @@ extension Direct115StreamStore: URLSessionDataDelegate {
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         tasks.removeValue(forKey: task.taskIdentifier)?.didComplete(error)
+    }
+}
+
+// MARK: - 分块字节窗口
+
+/// 进程内直连的分块字节窗口：保存 `[start, end)` 这段连续字节（含少量已读回看区）。
+/// 追加时不拷贝，已读数据按整块释放，内存只和窗口里的字节数有关。
+/// 不能用 `Data.removeFirst` 做 FIFO：它只是切片，被"移除"的前缀仍占着底层存储，
+/// 之后的追加还会接着往同一块存储后面长，一条流读多久就攒多久。
+struct DirectStreamBuffer {
+    private var chunks: [Data] = []
+    private var head = 0
+    private var headSkip = 0
+    private(set) var start: Int64 = 0
+    private(set) var count = 0
+
+    var end: Int64 { start + Int64(count) }
+    var isEmpty: Bool { count == 0 }
+    /// 仍被窗口持有的数据块个数（测试用：确认已读数据确实释放了）
+    var retainedChunkCount: Int { chunks.count - head }
+
+    func contains(_ offset: Int64) -> Bool {
+        offset >= start && offset < end
+    }
+
+    mutating func reset(at offset: Int64) {
+        chunks.removeAll(keepingCapacity: true)
+        head = 0
+        headSkip = 0
+        count = 0
+        start = offset
+    }
+
+    mutating func append(_ data: Data) {
+        guard !data.isEmpty else { return }
+        chunks.append(data)
+        count += data.count
+    }
+
+    /// 从绝对偏移 `offset` 起最多拷贝 `maxBytes` 字节，可跨多个数据块；不改变窗口
+    func copy(from offset: Int64, into destination: UnsafeMutableRawPointer, maxBytes: Int) -> Int {
+        guard maxBytes > 0, contains(offset) else { return 0 }
+        var skip = headSkip + Int(offset - start)
+        var written = 0
+        var index = head
+        while index < chunks.count, written < maxBytes {
+            let chunk = chunks[index]
+            index += 1
+            if skip >= chunk.count {
+                skip -= chunk.count
+                continue
+            }
+            let take = min(chunk.count - skip, maxBytes - written)
+            let from = skip
+            chunk.withUnsafeBytes { raw in
+                guard let base = raw.baseAddress else { return }
+                memcpy(destination.advanced(by: written), base.advanced(by: from), take)
+            }
+            written += take
+            skip = 0
+        }
+        return written
+    }
+
+    /// 丢掉 `offset` 之前的数据（不会越过窗口末尾，保证后续追加仍然连续）
+    mutating func trimFront(to offset: Int64) {
+        let target = min(offset, end)
+        guard target > start else { return }
+        if target == end {
+            reset(at: end)
+            return
+        }
+        var drop = Int(target - start)
+        start = target
+        count -= drop
+        while drop > 0 {
+            let available = chunks[head].count - headSkip
+            if drop >= available {
+                drop -= available
+                chunks[head] = Data()
+                head += 1
+                headSkip = 0
+            } else {
+                headSkip += drop
+                drop = 0
+            }
+        }
+        if head >= 64, head * 2 >= chunks.count {
+            chunks.removeFirst(head)
+            head = 0
+        }
     }
 }
 
@@ -627,15 +772,29 @@ private enum Direct115HTTPHelper {
     }
 }
 
-/// 进程内直连预热传输：预取片头字节并自动探测 MP4 `moov` 或 MKV `Cues` 尾部索引写入共享块缓存。
+private struct WeakStreamHandle {
+    weak var handle: Direct115StreamHandle?
+}
+
+/// 进程内直连预热传输：拉一段固定范围写入共享块缓存。
+/// 播放连接需要的位置正好在这段里时，可以直接接管它的连接，或者等它把数据下进缓存。
 private final class Direct115PrewarmTransfer: Direct115TaskHandler {
+    enum Kind {
+        /// 片头探测段
+        case head
+        /// 尾部索引（MP4 moov / MKV Cues）
+        case tailIndex
+        /// 片头续段（非续播起播用）
+        case headWarm
+    }
+
     let key: String
     let stream: Direct115ResolvedStream
+    let kind: Kind
     var url: URL
     let rangeStart: Int64
     let rangeEnd: Int64
     let resume: Bool
-    let followTailIndex: Bool
     private weak var store: Direct115StreamStore?
 
     private(set) var task: URLSessionDataTask?
@@ -644,47 +803,60 @@ private final class Direct115PrewarmTransfer: Direct115TaskHandler {
     private(set) var actualStart: Int64 = 0
     private(set) var actualEnd: Int64 = 0
     private(set) var bufferedData = Data()
-    private var probedIndex = false
-    private var detectedTailRange: (start: Int64, end: Int64)?
-    private var tailSwitchThreshold = 65_536
+    private(set) var lastActivityUptime = ProcessInfo.processInfo.systemUptime
     private var finished = false
+    private var waiters: [ObjectIdentifier: WeakStreamHandle] = [:]
 
     init(
         key: String,
         stream: Direct115ResolvedStream,
+        kind: Kind,
         rangeStart: Int64,
         rangeEnd: Int64,
         resume: Bool,
-        followTailIndex: Bool,
         store: Direct115StreamStore
     ) {
         self.key = key
         self.stream = stream
+        self.kind = kind
         self.url = stream.url
         self.rangeStart = rangeStart
         self.rangeEnd = rangeEnd
         self.resume = resume
-        self.followTailIndex = followTailIndex
         self.store = store
+    }
+
+    /// 已经连续收到哪里（还没收到响应时就是起点）
+    var receivedEnd: Int64 {
+        responseReceived ? actualStart + Int64(bufferedData.count) : rangeStart
+    }
+
+    /// `offset` 在这段范围内，并且离已收到的位置不远：等它或接管它都比另起请求快
+    func covers(_ offset: Int64) -> Bool {
+        guard !finished, task != nil, offset >= rangeStart, offset <= rangeEnd else { return false }
+        if responseReceived && (meta == nil || actualStart != rangeStart) { return false }
+        return offset <= receivedEnd + Direct115StreamStore.prewarmFollowGapBytes
     }
 
     func start(request: URLRequest) {
         guard let store, !finished else { return }
+        lastActivityUptime = ProcessInfo.processInfo.systemUptime
         task = store.startTask(request, for: self)
     }
 
-    func canBeAdopted(forStart start: Int64) -> Bool {
-        guard !finished, task != nil, start == rangeStart else { return false }
-        if responseReceived {
-            return meta != nil && actualStart == start
-        }
-        return true
+    func addWaiter(_ handle: Direct115StreamHandle) {
+        waiters[ObjectIdentifier(handle)] = WeakStreamHandle(handle: handle)
+    }
+
+    func removeWaiter(_ handle: Direct115StreamHandle) {
+        waiters.removeValue(forKey: ObjectIdentifier(handle))
     }
 
     func detachTaskForAdoption() -> URLSessionDataTask? {
         finished = true
         let running = task
         task = nil
+        endWaiters()
         return running
     }
 
@@ -696,6 +868,7 @@ private final class Direct115PrewarmTransfer: Direct115TaskHandler {
             task.cancel()
         }
         task = nil
+        endWaiters()
     }
 
     func didRedirect(to url: URL) {
@@ -703,12 +876,20 @@ private final class Direct115PrewarmTransfer: Direct115TaskHandler {
     }
 
     func didReceive(_ response: URLResponse, from dataTask: URLSessionDataTask) -> Bool {
-        guard !finished, let http = response as? HTTPURLResponse,
-              http.statusCode == 206,
+        lastActivityUptime = ProcessInfo.processInfo.systemUptime
+        guard !finished, let http = response as? HTTPURLResponse else {
+            finish(completed: false)
+            return false
+        }
+        if Direct115HTTPHelper.isRefused(status: http.statusCode) {
+            // 115 不让多开连接时，播放期间不再另开连接补索引
+            store?.suppressLookahead(forKey: key, duration: 60)
+        }
+        guard http.statusCode == 206,
               let range = Direct115HTTPHelper.contentRange(of: http),
               range.start == rangeStart,
               let total = Direct115HTTPHelper.totalLength(of: http), total > 0 else {
-            finish(nextTail: nil)
+            finish(completed: false)
             return false
         }
         responseReceived = true
@@ -729,37 +910,20 @@ private final class Direct115PrewarmTransfer: Direct115TaskHandler {
         guard !finished, let meta, let store, !data.isEmpty else { return }
         let offset = actualStart + Int64(bufferedData.count)
         bufferedData.append(data)
+        lastActivityUptime = ProcessInfo.processInfo.systemUptime
         store.blockCache.record(key: key, meta: meta, offset: offset, data: data)
-
-        if followTailIndex && !probedIndex && actualStart == 0 && bufferedData.count >= 64 {
-            switch ContainerIndexProbe.inspect(prefix: bufferedData, totalSize: meta.totalSize) {
-            case .indexAtHead:
-                probedIndex = true
-            case .indexAtTail(let tailStart, let tailEnd, let threshold):
-                probedIndex = true
-                detectedTailRange = (tailStart, tailEnd)
-                tailSwitchThreshold = threshold
-            case .undetermined:
-                if bufferedData.count >= 32_768 { probedIndex = true }
-            }
-        }
-        if followTailIndex && detectedTailRange != nil && bufferedData.count >= tailSwitchThreshold {
-            if let running = task {
-                store.detach(running)
-                running.cancel()
-                task = nil
-            }
-            finish(nextTail: detectedTailRange)
+        for waiter in waiters.values {
+            waiter.handle?.prewarmDataArrivedOnStoreQueue()
         }
     }
 
     func didComplete(_ error: Error?) {
         task = nil
         guard !finished else { return }
-        finish(nextTail: error == nil ? detectedTailRange : nil)
+        finish(completed: error == nil)
     }
 
-    private func finish(nextTail: (start: Int64, end: Int64)?) {
+    private func finish(completed: Bool) {
         guard !finished else { return }
         finished = true
         if let task {
@@ -767,7 +931,14 @@ private final class Direct115PrewarmTransfer: Direct115TaskHandler {
             task.cancel()
             self.task = nil
         }
-        store?.prewarmDidFinish(self, nextTailRange: nextTail)
+        endWaiters()
+        store?.prewarmDidFinish(self, completed: completed)
+    }
+
+    private func endWaiters() {
+        let list = waiters.values.compactMap(\.handle)
+        waiters.removeAll()
+        list.forEach { $0.prewarmWaitEndedOnStoreQueue(self) }
     }
 }
 
@@ -880,10 +1051,21 @@ private final class Direct115LookaheadTransfer: Direct115TaskHandler {
 /// 对应一次 `mpv_stream_cb` 打开实例的句柄：
 /// - `read / seek / size` 由 mpv 的解复用线程调用，通过 `NSCondition` 零忙等阻塞；
 /// - `cancel` 可从任意线程调用且永不阻塞；
-/// - 网络任务与重试/换链/预取全部运行在 `store.queue` 上，严格遵循单向锁顺序杜绝死锁。
+/// - 网络任务与重试/换链/预取全部运行在 `store.queue` 上，严格遵循单向锁顺序（队列 → condition）杜绝死锁。
+///
+/// 跳转是"懒"的：`seek` 只移动读位置，不立刻取消正在下载的上游。mpv 打开文件时常在片头和片尾索引之间
+/// 来回跳（MP4 moov / MKV Tags、Cues），片尾多半已经在块缓存里；等它跳回片头时，原来那条连接还在、
+/// 窗口里的数据也还在，直接接着读，不用重新建连。只有读线程真的需要网络数据、而当前这条流又够不着时，
+/// 队列才在新位置重新起流。
 final class Direct115StreamHandle: Direct115TaskHandler, @unchecked Sendable {
     private static let pauseBytes = 8 * 1_048_576
     private static let resumeBytes = 2 * 1_048_576
+    /// 已读过的数据保留这么多，mpv 小幅回跳直接从内存出
+    static let backWindowBytes: Int64 = 1_048_576
+    /// 读位置在当前流下载位置前方这么近时，直接等这条流下过来，不另起请求
+    static let followGapBytes: Int64 = 1_048_576
+    /// 收到这么多片头字节后检查容器索引位置，必要时另开连接预取尾部索引
+    private static let indexProbeTriggerBytes: Int64 = 65_536
 
     let token: String
     let streamKey: String
@@ -895,27 +1077,36 @@ final class Direct115StreamHandle: Direct115TaskHandler, @unchecked Sendable {
     // MARK: 跨线程共享状态（由 `condition` 保护，只做微秒级内存操作）
     private let condition = NSCondition()
     private var cursor: Int64 = 0
-    private var bufferStart: Int64 = 0
-    private var streamBuffer = Data()
+    private var buffer = DirectStreamBuffer()
     private var totalSize: Int64?
     private var responseHeaderArrived = false
-    private var eofReached = false
-    private var terminalError = false
+    /// 当前上游流在 `buffer.end` 处已到文件尾
+    private var streamEOF = false
+    /// 当前上游流在读线程跟着它读的时候彻底失败了
+    private var streamFailed = false
+    /// 当前上游流还会继续往 `buffer.end` 后面送数据（下载中、暂停待续、重试或换链中）
+    private var upstreamActive = false
+    /// 上游停下、出错、到尾或等待的预热结束时递增；读线程据此重新向队列请求数据
+    private var upstreamEpoch: UInt64 = 0
+    private var lastNeedOffset: Int64 = -1
+    private var lastNeedEpoch: UInt64 = .max
     private var cancelled = false
     private var closed = false
-    private var seekGeneration: UInt64 = 1
-    private var upstreamRequestedGeneration: UInt64 = 0
 
     // MARK: 网络状态（仅在 `store.queue` 上读写）
     private var activeStream: Direct115ResolvedStream
     private var redirectedURL: URL
-    private var activeSeekGeneration: UInt64 = 0
+    /// 每次在新位置重新起流时递增，过期的重试、换链回调据此丢弃
+    private var streamSerial: UInt64 = 0
     private var task: URLSessionDataTask?
     private var lookahead: Direct115LookaheadTransfer?
     private var adoptedFromLookahead = false
     private var suspended = false
     private var yielded = false
     private var closedOnQueue = false
+    private var waitingPrewarm: Direct115PrewarmTransfer?
+    private var indexPrefetchChecked = false
+    private var indexProbeTriedOnNeed = false
     private var expectedChunkStart: Int64 = 0
     private var currentChunkActualEnd: Int64?
     private var nextFetchOffset: Int64 = 0
@@ -939,8 +1130,8 @@ final class Direct115StreamHandle: Direct115TaskHandler, @unchecked Sendable {
     private var lastReceivedBytesUptime: TimeInterval = 0
     private var recentSampleStartUptime: TimeInterval = 0
     private var recentSampleBytes: Int64 = 0
-    private var windowStartUptime: TimeInterval = 0
-    private var windowBytes: Int64 = 0
+    private var speedWindowStartUptime: TimeInterval = 0
+    private var speedWindowBytes: Int64 = 0
 
     fileprivate init(entry: Direct115StreamStore.RegisteredStream, serial: Int, store: Direct115StreamStore) {
         self.token = entry.token
@@ -967,6 +1158,7 @@ final class Direct115StreamHandle: Direct115TaskHandler, @unchecked Sendable {
 
     func read(into destination: UnsafeMutablePointer<CChar>, maxBytes: Int) -> Int64 {
         guard maxBytes > 0 else { return 0 }
+        let target = UnsafeMutableRawPointer(destination)
         condition.lock()
         while true {
             if cancelled || closed {
@@ -978,113 +1170,65 @@ final class Direct115StreamHandle: Direct115TaskHandler, @unchecked Sendable {
                 return 0
             }
 
-            // 路径 1：命中活跃内存流缓冲区（零拷贝之外的最快路径）
-            if cursor >= bufferStart && cursor < bufferStart + Int64(streamBuffer.count) {
-                let offsetInBuffer = Int(cursor - bufferStart)
-                let available = streamBuffer.count - offsetInBuffer
-                let copyCount = min(maxBytes, available)
-                streamBuffer.withUnsafeBytes { raw in
-                    guard let base = raw.baseAddress else { return }
-                    memcpy(destination, base.advanced(by: offsetInBuffer), copyCount)
-                }
-                cursor += Int64(copyCount)
-                let consumeEnd = offsetInBuffer + copyCount
-                if consumeEnd >= streamBuffer.count {
-                    streamBuffer.removeAll(keepingCapacity: true)
-                    bufferStart = cursor
-                } else {
-                    streamBuffer.removeFirst(consumeEnd)
-                    bufferStart = cursor
-                }
-                let remainingBuffered = streamBuffer.count
-                let gen = seekGeneration
+            // 路径 1：命中内存窗口
+            if buffer.contains(cursor) {
+                let copied = buffer.copy(from: cursor, into: target, maxBytes: maxBytes)
+                cursor += Int64(copied)
+                buffer.trimFront(to: cursor - Self.backWindowBytes)
+                let lowWater = aheadBytesLocked < Self.resumeBytes
                 condition.unlock()
-                if remainingBuffered < Self.resumeBytes {
-                    store.queue.async { [weak self] in
-                        self?.resumeIfSuspendedOnStoreQueue(generation: gen)
-                    }
-                }
-                return Int64(copyCount)
+                if lowWater { nudgeUpstream() }
+                return Int64(copied)
             }
 
             // 路径 2：直接命中共享头尾/热点块缓存（MP4 moov / MKV Cues / 刚预热的片头毫秒返回）
-            let cacheQueryOffset = cursor
+            let queryOffset = cursor
             let cacheLimit = min(maxBytes, 1_048_576)
             condition.unlock()
-            if let hit = store.blockCache.lookup(
+            let hit = store.blockCache.lookup(
                 key: streamKey,
-                start: cacheQueryOffset,
-                requestedEnd: cacheQueryOffset + Int64(cacheLimit) - 1,
+                start: queryOffset,
+                requestedEnd: queryOffset + Int64(cacheLimit) - 1,
                 maxReturnBytes: cacheLimit
-            ), !hit.data.isEmpty {
-                condition.lock()
-                if cancelled || closed {
-                    condition.unlock()
-                    return -1
-                }
-                if cursor == cacheQueryOffset {
-                    if totalSize == nil, hit.meta.totalSize > 0 {
-                        totalSize = hit.meta.totalSize
-                    }
-                    let copyCount = min(maxBytes, hit.data.count)
-                    hit.data.withUnsafeBytes { raw in
-                        guard let base = raw.baseAddress else { return }
-                        memcpy(destination, base, copyCount)
-                    }
-                    cursor += Int64(copyCount)
-                    if !streamBuffer.isEmpty {
-                        let bufferEnd = bufferStart + Int64(streamBuffer.count)
-                        if cursor >= bufferEnd {
-                            streamBuffer.removeAll(keepingCapacity: true)
-                            bufferStart = cursor
-                        } else if cursor > bufferStart {
-                            streamBuffer.removeFirst(Int(cursor - bufferStart))
-                            bufferStart = cursor
-                        }
-                    } else {
-                        bufferStart = cursor
-                    }
-                    condition.unlock()
-                    return Int64(copyCount)
-                }
-                // cursor 在查缓存期间被修改，重新循环
-                continue
-            }
-
+            )
             condition.lock()
             if cancelled || closed {
                 condition.unlock()
                 return -1
             }
+            // 查缓存期间读位置被改了：重新来
+            guard cursor == queryOffset else { continue }
+            if let hit, !hit.data.isEmpty {
+                if totalSize == nil, hit.meta.totalSize > 0 {
+                    totalSize = hit.meta.totalSize
+                }
+                let copyCount = min(maxBytes, hit.data.count)
+                hit.data.withUnsafeBytes { raw in
+                    guard let base = raw.baseAddress else { return }
+                    memcpy(target, base, copyCount)
+                }
+                cursor += Int64(copyCount)
+                condition.unlock()
+                return Int64(copyCount)
+            }
+            if buffer.contains(cursor) { continue }
             if let total = totalSize, cursor >= total {
                 condition.unlock()
                 return 0
             }
-            if cursor >= bufferStart && cursor < bufferStart + Int64(streamBuffer.count) {
-                continue
-            }
-            if eofReached {
-                condition.unlock()
-                return 0
-            }
-            if terminalError {
-                condition.unlock()
-                return -1
-            }
 
-            // 路径 3：触发/等待网络分段流式拉取
-            if upstreamRequestedGeneration != seekGeneration {
-                upstreamRequestedGeneration = seekGeneration
-                let targetOffset = cursor
-                let gen = seekGeneration
-                condition.unlock()
-                store.queue.async { [weak self] in
-                    self?.startOrAdoptUpstreamOnStoreQueue(offset: targetOffset, generation: gen)
+            // 路径 3：读位置就在当前流前方时等它下过来；否则请队列在这个位置拉取
+            if !upstreamActive && isAtStreamEdgeLocked {
+                if streamEOF {
+                    condition.unlock()
+                    return 0
                 }
-                condition.lock()
-                continue
+                if streamFailed {
+                    condition.unlock()
+                    return -1
+                }
             }
-
+            requestUpstreamIfNeededLocked()
             condition.wait()
         }
     }
@@ -1100,43 +1244,16 @@ final class Direct115StreamHandle: Direct115TaskHandler, @unchecked Sendable {
             condition.unlock()
             return Int64(MPV_ERROR_GENERIC.rawValue)
         }
-        if offset == cursor {
-            condition.unlock()
-            return offset
-        }
-        // 目标偏移仍在已收到的内存缓冲区内：直接移动游标，零网络中断
-        if offset >= bufferStart && offset < bufferStart + Int64(streamBuffer.count) {
-            let skip = Int(offset - bufferStart)
-            if skip > 0 {
-                streamBuffer.removeFirst(skip)
-                bufferStart = offset
-            }
-            cursor = offset
-            eofReached = false
-            let remaining = streamBuffer.count
-            let gen = seekGeneration
-            condition.unlock()
-            if remaining < Self.resumeBytes {
-                store.queue.async { [weak self] in
-                    self?.resumeIfSuspendedOnStoreQueue(generation: gen)
-                }
-            }
-            return offset
-        }
-
         cursor = offset
-        bufferStart = offset
-        streamBuffer.removeAll(keepingCapacity: true)
-        eofReached = false
-        terminalError = false
-        seekGeneration &+= 1
-        upstreamRequestedGeneration = 0
-        let gen = seekGeneration
-        condition.unlock()
-
-        store.queue.async { [weak self] in
-            self?.handleSeekResetOnStoreQueue(generation: gen)
+        var lowWater = false
+        if offset >= buffer.start && offset <= buffer.end {
+            // 窗口内（含回看区）：直接移动读位置，零网络中断
+            buffer.trimFront(to: offset - Self.backWindowBytes)
+            lowWater = aheadBytesLocked < Self.resumeBytes
         }
+        // 窗口外：先不动上游，真正需要网络数据时再由队列决定接着用还是换位置
+        condition.unlock()
+        if lowWater { nudgeUpstream() }
         return offset
     }
 
@@ -1154,21 +1271,11 @@ final class Direct115StreamHandle: Direct115TaskHandler, @unchecked Sendable {
                 condition.unlock()
                 return total
             }
-            if cancelled || closed || terminalError || responseHeaderArrived {
+            if cancelled || closed || responseHeaderArrived || (streamFailed && !upstreamActive) {
                 condition.unlock()
                 return Int64(MPV_ERROR_UNSUPPORTED.rawValue)
             }
-            if upstreamRequestedGeneration != seekGeneration {
-                upstreamRequestedGeneration = seekGeneration
-                let targetOffset = cursor
-                let gen = seekGeneration
-                condition.unlock()
-                store.queue.async { [weak self] in
-                    self?.startOrAdoptUpstreamOnStoreQueue(offset: targetOffset, generation: gen)
-                }
-                condition.lock()
-                continue
-            }
+            requestUpstreamIfNeededLocked()
             condition.wait()
         }
     }
@@ -1187,12 +1294,57 @@ final class Direct115StreamHandle: Direct115TaskHandler, @unchecked Sendable {
         condition.lock()
         closed = true
         cancelled = true
-        streamBuffer.removeAll(keepingCapacity: false)
+        buffer = DirectStreamBuffer()
         condition.broadcast()
         condition.unlock()
         store.queue.async { [weak self] in
             self?.teardownOnStoreQueue()
         }
+    }
+
+    // MARK: 读线程辅助（需持有 condition）
+
+    /// 读位置前方已经缓冲好的字节；读位置在窗口后面时为 0（不能暂停，流得追上来）
+    private var aheadBytesLocked: Int {
+        if cursor >= buffer.start && cursor <= buffer.end { return Int(buffer.end - cursor) }
+        if cursor > buffer.end { return 0 }
+        return buffer.count
+    }
+
+    /// 读线程正跟着当前这条流读（在窗口里，或就在它前方不远）
+    private var readerFollowsLocked: Bool {
+        cursor >= buffer.start && cursor <= buffer.end + Self.followGapBytes
+    }
+
+    /// 读位置就在流的下载位置上或前方不远：等这条流下过来即可
+    private var isAtStreamEdgeLocked: Bool {
+        cursor >= buffer.end && cursor <= buffer.end + Self.followGapBytes
+    }
+
+    private func requestUpstreamIfNeededLocked() {
+        guard lastNeedOffset != cursor || lastNeedEpoch != upstreamEpoch else { return }
+        lastNeedOffset = cursor
+        lastNeedEpoch = upstreamEpoch
+        let offset = cursor
+        store.queue.async { [weak self] in
+            self?.serveNeedOnStoreQueue(offset: offset)
+        }
+    }
+
+    private func nudgeUpstream() {
+        store.queue.async { [weak self] in
+            self?.resumeIfNeededOnStoreQueue()
+        }
+    }
+
+    /// 把一段上游数据接到窗口末尾；与窗口不连续的部分直接丢弃
+    @discardableResult
+    private func enqueueLocked(_ data: Data, at offset: Int64) -> Bool {
+        let dataEnd = offset + Int64(data.count)
+        guard offset <= buffer.end, dataEnd > buffer.end else { return false }
+        let skip = Int(buffer.end - offset)
+        buffer.append(skip == 0 ? data : data[(data.startIndex + skip)...])
+        return true
     }
 
     // MARK: 队列状态查询与抢占（仅在 store.queue 调用）
@@ -1217,9 +1369,9 @@ final class Direct115StreamHandle: Direct115TaskHandler, @unchecked Sendable {
 
     fileprivate var isActivelyReceivingOrRecoveringOnStoreQueue: Bool {
         guard !closedOnQueue else { return false }
-        if suspended || retryWork != nil { return true }
+        if suspended || retryWork != nil || waitingPrewarm != nil { return true }
         condition.lock()
-        let buffered = streamBuffer.count
+        let buffered = aheadBytesLocked
         condition.unlock()
         if buffered >= Self.resumeBytes { return true }
         guard task != nil, lastReceivedBytesUptime > 0 else { return false }
@@ -1248,18 +1400,18 @@ final class Direct115StreamHandle: Direct115TaskHandler, @unchecked Sendable {
         retryCount = 0
         refusalWaits = 0
         let resumeAt = nextFetchOffset
-        let gen = activeSeekGeneration
+        let serial = streamSerial
 
         if store.canRenew(forKey: streamKey),
            store.needsNewAddress(forKey: streamKey, failed: activeStream.url, ignoreCooldown: true) {
             store.note("进程内直连主动切换 115 下载线路（从 \(resumeAt) 字节续传）")
-            requestRenewalOnStoreQueue(at: resumeAt, generation: gen, allowSameURL: true)
+            requestRenewalOnStoreQueue(at: resumeAt, serial: serial, allowSameURL: true)
             return true
         }
         activeStream = store.currentStream(forKey: streamKey, fallback: activeStream)
         redirectedURL = activeStream.url
         store.note("进程内直连重连上游节点（从 \(resumeAt) 字节续传）")
-        launchChunkOnStoreQueue(from: resumeAt, generation: gen)
+        launchChunkOnStoreQueue(from: resumeAt, serial: serial)
         return true
     }
 
@@ -1283,108 +1435,201 @@ final class Direct115StreamHandle: Direct115TaskHandler, @unchecked Sendable {
     fileprivate func resumeAfterYieldOnStoreQueue() {
         guard yielded, !closedOnQueue else { return }
         yielded = false
-        condition.lock()
-        let isStillAlive = !cancelled && !closed && activeSeekGeneration == seekGeneration
-        condition.unlock()
-        guard isStillAlive else { return }
-        activeStream = store.currentStream(forKey: streamKey, fallback: activeStream)
-        redirectedURL = activeStream.url
-        launchChunkOnStoreQueue(from: nextFetchOffset, generation: activeSeekGeneration)
+        // 读线程按自己当前的读位置重新请求：多半就在原窗口末尾接着拉
+        goIdleOnStoreQueue()
     }
 
     fileprivate func preemptClosedOnStoreQueue() {
         condition.lock()
         cancelled = true
-        terminalError = true
+        streamFailed = true
         condition.broadcast()
         condition.unlock()
         cancelNetworkOnStoreQueue()
     }
 
-    // MARK: 网络调度与分段滑动预取（store.queue）
-
-    private func handleSeekResetOnStoreQueue(generation: UInt64) {
-        guard !closedOnQueue else { return }
-        activeSeekGeneration = generation
-        cancelNetworkOnStoreQueue()
+    /// 等待中的预热传输收到了新数据（已写进块缓存）：叫醒读线程去缓存里取
+    fileprivate func prewarmDataArrivedOnStoreQueue() {
+        condition.lock()
+        condition.broadcast()
+        condition.unlock()
     }
 
-    private func startOrAdoptUpstreamOnStoreQueue(offset: Int64, generation: UInt64) {
+    /// 等待中的预热传输结束（收完、失败或被取消）：读线程按当前位置重新请求
+    fileprivate func prewarmWaitEndedOnStoreQueue(_ transfer: Direct115PrewarmTransfer) {
+        guard waitingPrewarm === transfer else { return }
+        waitingPrewarm = nil
+        bumpEpochOnStoreQueue()
+    }
+
+    // MARK: 网络调度（store.queue）
+
+    /// 读线程在 `offset` 处既没有窗口数据也没有缓存，要网络数据
+    private func serveNeedOnStoreQueue(offset requested: Int64) {
         guard !closedOnQueue else { return }
         condition.lock()
-        let stale = cancelled || closed || generation != seekGeneration
+        let stale = cancelled || closed || cursor != requested
+        let inWindow = buffer.contains(requested)
+        let atEdge = isAtStreamEdgeLocked
+        let windowEnd = buffer.end
+        let windowHasData = !buffer.isEmpty
+        let streamDone = streamEOF || streamFailed
         condition.unlock()
+        // 读位置已经换了：读线程会按新位置重新请求
         guard !stale else { return }
+        if inWindow || store.blockCache.lookup(key: streamKey, start: requested, requestedEnd: requested, maxReturnBytes: 1) != nil {
+            wakeReaderOnStoreQueue()
+            return
+        }
+        // 让出上游期间不抢；恢复时会叫醒读线程重新请求
+        guard !yielded else { return }
+        if !indexPrefetchChecked && !indexProbeTriedOnNeed {
+            // 片头已在缓存里（比如详情页预热过）时这里就能判断；否则等这条流收到片头再判断
+            indexProbeTriedOnNeed = true
+            indexPrefetchChecked = store.ensureIndexPrefetch(forKey: streamKey, fallback: activeStream)
+        }
 
-        activeSeekGeneration = generation
+        // 1. 读位置就在当前流前方：接着用这条流
+        if atEdge && !streamDone {
+            if task != nil || retryWork != nil || renewalID != nil {
+                if suspended { resumeIfNeededOnStoreQueue() }
+                return
+            }
+            if streamSerial > 0, nextFetchOffset == windowEnd {
+                // 分段收完后停在这里（读线程曾离开）：在窗口末尾接着拉，已缓冲的数据都保留。
+                // 刚打开、还没起过流时不走这里，让下面优先接管预热
+                suspended = false
+                launchChunkOnStoreQueue(from: windowEnd, serial: streamSerial)
+                return
+            }
+        }
+
+        // 2. 预热传输正在拉这一段：手里有数据或连接就留着，等预热把数据下进缓存
+        if let prewarm = store.prewarmCovering(forKey: streamKey, offset: requested),
+           windowHasData || task != nil || retryWork != nil || renewalID != nil {
+            beginPrewarmWaitOnStoreQueue(prewarm)
+            return
+        }
+
+        // 3. 其他位置：在这里重新起流（能接管预热就接管）
+        restartOnStoreQueue(at: requested)
+    }
+
+    private func beginPrewarmWaitOnStoreQueue(_ prewarm: Direct115PrewarmTransfer) {
+        if waitingPrewarm !== prewarm {
+            waitingPrewarm?.removeWaiter(self)
+            waitingPrewarm = prewarm
+            prewarm.addWaiter(self)
+            schedulePrewarmWaitCheckOnStoreQueue(prewarm)
+        }
+        // 把带宽让给正在拉的这一段；读线程回到这条流时再续上
+        cancelLookaheadOnStoreQueue()
+        if let running = task, !suspended {
+            suspended = true
+            running.suspend()
+        }
+    }
+
+    private func schedulePrewarmWaitCheckOnStoreQueue(_ prewarm: Direct115PrewarmTransfer) {
+        store.queue.asyncAfter(deadline: .now() + 1.0) { [weak self, weak prewarm] in
+            guard let self, let prewarm, self.waitingPrewarm === prewarm, !self.closedOnQueue else { return }
+            let idle = ProcessInfo.processInfo.systemUptime - prewarm.lastActivityUptime
+            if idle >= Direct115StreamStore.prewarmStallSeconds {
+                self.store.note("预热传输 \(Int(idle)) 秒没有进展，改由播放连接直接拉取")
+                // 取消会结束等待，读线程重新请求时就不再被这段预热覆盖
+                self.store.cancelPrewarm(prewarm)
+            } else {
+                self.schedulePrewarmWaitCheckOnStoreQueue(prewarm)
+            }
+        }
+    }
+
+    /// 放弃当前流，在 `offset` 处重新起流
+    private func restartOnStoreQueue(at offset: Int64) {
         cancelNetworkOnStoreQueue()
+        streamSerial &+= 1
         yielded = false
         retryCount = 0
         refusalWaits = 0
+        retryProgressMark = deliveredSinceOpen
         nextFetchOffset = offset
         expectedChunkStart = offset
         currentChunkActualEnd = nil
         activeStream = store.currentStream(forKey: streamKey, fallback: activeStream)
         redirectedURL = activeStream.url
 
-        // 优先直接接管同起始偏移的在途预热任务，零重复建连
-        if let prewarm = store.takeAdoptablePrewarm(forKey: streamKey, start: offset),
+        condition.lock()
+        buffer.reset(at: offset)
+        streamEOF = false
+        streamFailed = false
+        upstreamActive = true
+        condition.unlock()
+
+        // 优先接管正在拉这一段的预热任务，零重复建连
+        if let prewarm = store.takeAdoptablePrewarm(forKey: streamKey, offset: offset),
            let runningTask = prewarm.detachTaskForAdoption() {
-            store.claimUpstream(for: self)
-            redirectedURL = prewarm.url
-            if prewarm.responseReceived, let meta = prewarm.meta {
-                knownTotalOnQueue = meta.totalSize
-                validator = meta.etag
-                cachedContentType = meta.contentType
-                cachedAcceptRanges = meta.acceptRanges
-                cachedLastModified = meta.lastModified
-                cachedSupportsRanges = meta.supportsRanges
-                expectedChunkStart = prewarm.actualStart
-                currentChunkActualEnd = prewarm.actualEnd
-                nextFetchOffset = prewarm.actualStart + Int64(prewarm.bufferedData.count)
-                deliveredSinceOpen += Int64(prewarm.bufferedData.count)
-
-                condition.lock()
-                if !cancelled && !closed && generation == seekGeneration {
-                    totalSize = meta.totalSize
-                    responseHeaderArrived = true
-                    if !prewarm.bufferedData.isEmpty {
-                        if streamBuffer.isEmpty { bufferStart = prewarm.actualStart }
-                        streamBuffer.append(prewarm.bufferedData)
-                    }
-                    condition.broadcast()
-                }
-                condition.unlock()
-
-                if nextFetchOffset > prewarm.actualEnd {
-                    store.detach(runningTask)
-                    runningTask.cancel()
-                    advanceOrFinishAfterChunkOnStoreQueue(chunkEnd: prewarm.actualEnd, generation: generation)
-                    return
-                }
-            }
-            let now = ProcessInfo.processInfo.systemUptime
-            lastProgressUptime = now
-            windowStartUptime = now
-            windowBytes = 0
-            task = runningTask
-            store.reassignTask(runningTask, to: self)
-            startStallTimerOnStoreQueue()
+            adoptPrewarmOnStoreQueue(prewarm, task: runningTask)
             return
         }
-
-        launchChunkOnStoreQueue(from: offset, generation: generation)
+        launchChunkOnStoreQueue(from: offset, serial: streamSerial)
     }
 
-    private func launchChunkOnStoreQueue(from start: Int64, generation: UInt64) {
-        guard !closedOnQueue, !yielded else { return }
+    private func adoptPrewarmOnStoreQueue(_ prewarm: Direct115PrewarmTransfer, task runningTask: URLSessionDataTask) {
+        store.claimUpstream(for: self)
+        redirectedURL = prewarm.url
+        expectedChunkStart = prewarm.rangeStart
+        nextFetchOffset = prewarm.rangeStart
+        currentChunkActualEnd = nil
+        let serial = streamSerial
+        if prewarm.responseReceived, let meta = prewarm.meta {
+            knownTotalOnQueue = meta.totalSize
+            validator = meta.etag
+            cachedContentType = meta.contentType
+            cachedAcceptRanges = meta.acceptRanges
+            cachedLastModified = meta.lastModified
+            cachedSupportsRanges = meta.supportsRanges
+            expectedChunkStart = prewarm.actualStart
+            currentChunkActualEnd = prewarm.actualEnd
+            nextFetchOffset = prewarm.actualStart + Int64(prewarm.bufferedData.count)
+            deliveredSinceOpen += Int64(prewarm.bufferedData.count)
+
+            condition.lock()
+            if !cancelled && !closed {
+                totalSize = meta.totalSize
+                responseHeaderArrived = true
+                if !prewarm.bufferedData.isEmpty {
+                    enqueueLocked(prewarm.bufferedData, at: prewarm.actualStart)
+                }
+                condition.broadcast()
+            }
+            condition.unlock()
+
+            if nextFetchOffset > prewarm.actualEnd {
+                store.detach(runningTask)
+                runningTask.cancel()
+                advanceOrFinishAfterChunkOnStoreQueue(chunkEnd: prewarm.actualEnd, serial: serial)
+                return
+            }
+        }
+        let now = ProcessInfo.processInfo.systemUptime
+        lastProgressUptime = now
+        speedWindowStartUptime = now
+        speedWindowBytes = 0
+        task = runningTask
+        store.reassignTask(runningTask, to: self)
+        startStallTimerOnStoreQueue()
+        setUpstreamActiveOnStoreQueue()
+    }
+
+    private func launchChunkOnStoreQueue(from start: Int64, serial: UInt64) {
+        guard !closedOnQueue, !yielded, serial == streamSerial else { return }
         condition.lock()
-        let stale = cancelled || closed || generation != seekGeneration
+        let stale = cancelled || closed
         condition.unlock()
         guard !stale else { return }
 
         if let total = knownTotalOnQueue, start >= total {
-            markEOFOnStoreQueue(generation: generation)
+            markEOFOnStoreQueue()
             return
         }
 
@@ -1419,15 +1664,15 @@ final class Direct115StreamHandle: Direct115TaskHandler, @unchecked Sendable {
         store.claimUpstream(for: self)
         let now = ProcessInfo.processInfo.systemUptime
         lastProgressUptime = now
-        windowStartUptime = now
-        windowBytes = 0
+        speedWindowStartUptime = now
+        speedWindowBytes = 0
         task = store.startTask(request, for: self)
         startStallTimerOnStoreQueue()
+        setUpstreamActiveOnStoreQueue()
     }
 
-    private func maybeStartLookaheadOnStoreQueue(generation: UInt64) {
+    private func maybeStartLookaheadOnStoreQueue() {
         guard !closedOnQueue, !yielded, !suspended,
-              generation == activeSeekGeneration,
               lookahead == nil, renewalID == nil, retryWork == nil,
               let total = knownTotalOnQueue, total > 0,
               let chunkEnd = currentChunkActualEnd, chunkEnd < total - 1,
@@ -1436,9 +1681,10 @@ final class Direct115StreamHandle: Direct115TaskHandler, @unchecked Sendable {
             return
         }
         condition.lock()
-        let buffered = streamBuffer.count
+        let follows = readerFollowsLocked
+        let buffered = aheadBytesLocked
         condition.unlock()
-        guard buffered < Self.resumeBytes else { return }
+        guard follows, buffered < Self.resumeBytes else { return }
 
         let chunkLen = max(Int64(1), chunkEnd - expectedChunkStart + 1)
         let consumed = nextFetchOffset - expectedChunkStart
@@ -1472,13 +1718,23 @@ final class Direct115StreamHandle: Direct115TaskHandler, @unchecked Sendable {
         transfer.start(request: request)
     }
 
-    private func advanceOrFinishAfterChunkOnStoreQueue(chunkEnd: Int64, generation: UInt64) {
-        guard !closedOnQueue, !yielded, generation == activeSeekGeneration else { return }
+    private func advanceOrFinishAfterChunkOnStoreQueue(chunkEnd: Int64, serial: UInt64) {
+        guard !closedOnQueue, !yielded, serial == streamSerial else { return }
         if let total = knownTotalOnQueue, chunkEnd >= total - 1 {
-            markEOFOnStoreQueue(generation: generation)
+            markEOFOnStoreQueue()
             return
         }
         let nextOffset = chunkEnd + 1
+
+        condition.lock()
+        let follows = readerFollowsLocked
+        condition.unlock()
+        guard follows else {
+            // 读线程去了别处（比如片尾索引）：这条流先停在分段边界，窗口里的数据留着等它回来
+            cancelLookaheadOnStoreQueue()
+            goIdleOnStoreQueue()
+            return
+        }
 
         if let la = lookahead {
             lookahead = nil
@@ -1488,27 +1744,27 @@ final class Direct115StreamHandle: Direct115TaskHandler, @unchecked Sendable {
                     expectedChunkStart = nextOffset
                     currentChunkActualEnd = la.actualEnd
                     if !la.bufferedData.isEmpty {
-                        appendReceivedBytesOnStoreQueue(la.bufferedData, offset: nextOffset, generation: generation)
+                        appendReceivedBytesOnStoreQueue(la.bufferedData, offset: nextOffset)
                     }
                     if let total = knownTotalOnQueue, nextFetchOffset >= total {
                         la.cancel()
-                        markEOFOnStoreQueue(generation: generation)
+                        markEOFOnStoreQueue()
                         return
                     }
                     if la.completed {
-                        advanceOrFinishAfterChunkOnStoreQueue(chunkEnd: la.actualEnd, generation: generation)
+                        advanceOrFinishAfterChunkOnStoreQueue(chunkEnd: la.actualEnd, serial: serial)
                         return
                     }
                     if let runningTask = la.detachTaskForAdoption() {
                         let now = ProcessInfo.processInfo.systemUptime
                         lastProgressUptime = now
-                        windowStartUptime = now
-                        windowBytes = 0
+                        speedWindowStartUptime = now
+                        speedWindowBytes = 0
                         task = runningTask
                         store.reassignTask(runningTask, to: self)
                         applyBackpressureIfNeededOnStoreQueue()
                         startStallTimerOnStoreQueue()
-                        maybeStartLookaheadOnStoreQueue(generation: generation)
+                        maybeStartLookaheadOnStoreQueue()
                         return
                     }
                 } else if let runningTask = la.detachTaskForAdoption() {
@@ -1518,8 +1774,8 @@ final class Direct115StreamHandle: Direct115TaskHandler, @unchecked Sendable {
                     adoptedFromLookahead = true
                     let now = ProcessInfo.processInfo.systemUptime
                     lastProgressUptime = now
-                    windowStartUptime = now
-                    windowBytes = 0
+                    speedWindowStartUptime = now
+                    speedWindowBytes = 0
                     task = runningTask
                     store.reassignTask(runningTask, to: self)
                     startStallTimerOnStoreQueue()
@@ -1530,38 +1786,50 @@ final class Direct115StreamHandle: Direct115TaskHandler, @unchecked Sendable {
         }
 
         condition.lock()
-        let buffered = streamBuffer.count
+        let buffered = aheadBytesLocked
         condition.unlock()
         if buffered >= Self.pauseBytes {
             // 已有充足内存缓冲时先暂缓发起下一分段，待 mpv 消费回落再拉
             suspended = true
             return
         }
-        launchChunkOnStoreQueue(from: nextOffset, generation: generation)
+        launchChunkOnStoreQueue(from: nextOffset, serial: serial)
     }
 
-    private func resumeIfSuspendedOnStoreQueue(generation: UInt64) {
-        guard !closedOnQueue, !yielded, generation == activeSeekGeneration else { return }
+    private func resumeIfNeededOnStoreQueue() {
+        guard !closedOnQueue, !yielded else { return }
+        condition.lock()
+        let follows = readerFollowsLocked
+        let buffered = aheadBytesLocked
+        condition.unlock()
+        // 读线程不在这条流上（比如在读片尾索引）：暂停着的流先别续
+        guard follows else { return }
+        if let prewarm = waitingPrewarm {
+            // 读线程已经回到这条流，不用再等那段预热
+            waitingPrewarm = nil
+            prewarm.removeWaiter(self)
+        }
         if suspended {
+            guard buffered < Self.resumeBytes else { return }
             suspended = false
             let now = ProcessInfo.processInfo.systemUptime
             lastProgressUptime = now
-            windowStartUptime = now
-            windowBytes = 0
+            speedWindowStartUptime = now
+            speedWindowBytes = 0
             if let running = task {
                 running.resume()
-                maybeStartLookaheadOnStoreQueue(generation: generation)
+                maybeStartLookaheadOnStoreQueue()
             } else if retryWork == nil, renewalID == nil {
-                launchChunkOnStoreQueue(from: nextFetchOffset, generation: generation)
+                launchChunkOnStoreQueue(from: nextFetchOffset, serial: streamSerial)
             }
         } else {
-            maybeStartLookaheadOnStoreQueue(generation: generation)
+            maybeStartLookaheadOnStoreQueue()
         }
     }
 
     private func applyBackpressureIfNeededOnStoreQueue() {
         condition.lock()
-        let buffered = streamBuffer.count
+        let buffered = aheadBytesLocked
         condition.unlock()
         if !suspended, buffered > Self.pauseBytes, let running = task {
             suspended = true
@@ -1569,7 +1837,7 @@ final class Direct115StreamHandle: Direct115TaskHandler, @unchecked Sendable {
         }
     }
 
-    private func appendReceivedBytesOnStoreQueue(_ data: Data, offset: Int64, generation: UInt64) {
+    private func appendReceivedBytesOnStoreQueue(_ data: Data, offset: Int64) {
         guard !data.isEmpty else { return }
         if let total = knownTotalOnQueue, total > 0 {
             let meta = StreamBlockCache.Metadata(
@@ -1590,24 +1858,43 @@ final class Direct115StreamHandle: Direct115TaskHandler, @unchecked Sendable {
         }
 
         condition.lock()
-        if !cancelled && !closed && generation == seekGeneration {
-            let dataEnd = offset + Int64(data.count)
-            if dataEnd > cursor {
-                let trimLeading = max(0, Int(cursor - offset))
-                let effectiveStart = offset + Int64(trimLeading)
-                let slice = trimLeading > 0 ? data.subdata(in: trimLeading..<data.count) : data
-                if streamBuffer.isEmpty {
-                    bufferStart = effectiveStart
-                    streamBuffer.append(slice)
-                } else if effectiveStart == bufferStart + Int64(streamBuffer.count) {
-                    streamBuffer.append(slice)
-                } else if effectiveStart == cursor {
-                    bufferStart = effectiveStart
-                    streamBuffer = Data(slice)
-                }
-                condition.broadcast()
-            }
+        if !cancelled && !closed, enqueueLocked(data, at: offset) {
+            condition.broadcast()
         }
+        condition.unlock()
+
+        // 片头够判断容器索引位置了：索引在片尾时另开连接把它预取进缓存
+        if !indexPrefetchChecked, offset < Direct115StreamStore.headProbeBytes,
+           nextFetchOffset >= min(Self.indexProbeTriggerBytes, knownTotalOnQueue ?? Self.indexProbeTriggerBytes) {
+            indexPrefetchChecked = store.ensureIndexPrefetch(forKey: streamKey, fallback: activeStream)
+        }
+    }
+
+    private func wakeReaderOnStoreQueue() {
+        condition.lock()
+        condition.broadcast()
+        condition.unlock()
+    }
+
+    private func bumpEpochOnStoreQueue() {
+        condition.lock()
+        upstreamEpoch &+= 1
+        condition.broadcast()
+        condition.unlock()
+    }
+
+    private func setUpstreamActiveOnStoreQueue() {
+        condition.lock()
+        upstreamActive = true
+        condition.unlock()
+    }
+
+    /// 这条流不会再自己往后送数据了（读线程回来时会重新请求）
+    private func goIdleOnStoreQueue() {
+        condition.lock()
+        upstreamActive = false
+        upstreamEpoch &+= 1
+        condition.broadcast()
         condition.unlock()
     }
 
@@ -1620,11 +1907,11 @@ final class Direct115StreamHandle: Direct115TaskHandler, @unchecked Sendable {
     fileprivate func didReceive(_ response: URLResponse, from dataTask: URLSessionDataTask) -> Bool {
         guard !closedOnQueue, task === dataTask else { return false }
         guard let http = response as? HTTPURLResponse else {
-            failTerminalOnStoreQueue("上游响应无效", generation: activeSeekGeneration)
+            failTerminalOnStoreQueue("上游响应无效")
             return false
         }
         lastProgressUptime = ProcessInfo.processInfo.systemUptime
-        let gen = activeSeekGeneration
+        let serial = streamSerial
         let wasLookahead = adoptedFromLookahead
         adoptedFromLookahead = false
 
@@ -1634,18 +1921,18 @@ final class Direct115StreamHandle: Direct115TaskHandler, @unchecked Sendable {
             store.detach(dataTask)
             task = nil
             stopStallTimerOnStoreQueue()
-            launchChunkOnStoreQueue(from: nextFetchOffset, generation: gen)
+            launchChunkOnStoreQueue(from: nextFetchOffset, serial: serial)
             return false
         }
 
         if Direct115HTTPHelper.isRefused(status: http.statusCode),
            renewUpstreamOnStoreQueue("上游返回 HTTP \(http.statusCode)（\(http.url?.host ?? "")）",
-                                     cancelling: dataTask, resumeAt: nextFetchOffset, generation: gen) {
+                                     cancelling: dataTask, resumeAt: nextFetchOffset, serial: serial) {
             return false
         }
         if Direct115HTTPHelper.isTransient(status: http.statusCode),
            scheduleRetryOnStoreQueue("上游返回 HTTP \(http.statusCode)（\(http.url?.host ?? "")）",
-                                     cancelling: dataTask, resumeAt: nextFetchOffset, generation: gen) {
+                                     cancelling: dataTask, resumeAt: nextFetchOffset, serial: serial) {
             return false
         }
 
@@ -1657,7 +1944,7 @@ final class Direct115StreamHandle: Direct115TaskHandler, @unchecked Sendable {
             let sameFile = validator == nil || newValidator == nil || validator == newValidator || sameSize
             guard sameFile else {
                 store.blockCache.invalidate(key: streamKey)
-                failTerminalOnStoreQueue("上游文件已变化（HTTP 206）", generation: gen)
+                failTerminalOnStoreQueue("上游文件已变化（HTTP 206）")
                 return false
             }
             if let newTotal, newTotal > 0 { knownTotalOnQueue = newTotal }
@@ -1669,7 +1956,7 @@ final class Direct115StreamHandle: Direct115TaskHandler, @unchecked Sendable {
             currentChunkActualEnd = range.end
 
             condition.lock()
-            if !cancelled && !closed && gen == seekGeneration {
+            if !cancelled && !closed {
                 if let total = knownTotalOnQueue { totalSize = total }
                 responseHeaderArrived = true
                 condition.broadcast()
@@ -1691,7 +1978,7 @@ final class Direct115StreamHandle: Direct115TaskHandler, @unchecked Sendable {
             cachedSupportsRanges = (cachedAcceptRanges ?? "").lowercased().contains("bytes")
 
             condition.lock()
-            if !cancelled && !closed && gen == seekGeneration {
+            if !cancelled && !closed {
                 if let total = knownTotalOnQueue { totalSize = total }
                 responseHeaderArrived = true
                 condition.broadcast()
@@ -1701,7 +1988,7 @@ final class Direct115StreamHandle: Direct115TaskHandler, @unchecked Sendable {
         }
 
         store.note("进程内直连收到 HTTP \(http.statusCode)（\(http.url?.host ?? "")）")
-        failTerminalOnStoreQueue("HTTP \(http.statusCode)", generation: gen)
+        failTerminalOnStoreQueue("HTTP \(http.statusCode)")
         return false
     }
 
@@ -1710,7 +1997,7 @@ final class Direct115StreamHandle: Direct115TaskHandler, @unchecked Sendable {
         let now = ProcessInfo.processInfo.systemUptime
         lastProgressUptime = now
         lastReceivedBytesUptime = now
-        windowBytes += Int64(data.count)
+        speedWindowBytes += Int64(data.count)
         if recentSampleStartUptime == 0 || now - recentSampleStartUptime >= 4.0 {
             recentSampleStartUptime = now
             recentSampleBytes = Int64(data.count)
@@ -1718,52 +2005,50 @@ final class Direct115StreamHandle: Direct115TaskHandler, @unchecked Sendable {
             recentSampleBytes += Int64(data.count)
         }
 
-        let gen = activeSeekGeneration
-        let offset = nextFetchOffset
-        appendReceivedBytesOnStoreQueue(data, offset: offset, generation: gen)
+        appendReceivedBytesOnStoreQueue(data, offset: nextFetchOffset)
         applyBackpressureIfNeededOnStoreQueue()
-        maybeStartLookaheadOnStoreQueue(generation: gen)
+        maybeStartLookaheadOnStoreQueue()
     }
 
     fileprivate func didComplete(_ error: Error?) {
         task = nil
         stopStallTimerOnStoreQueue()
         guard !closedOnQueue else { return }
-        let gen = activeSeekGeneration
+        let serial = streamSerial
 
         if let error {
             if let total = knownTotalOnQueue, nextFetchOffset >= total {
-                markEOFOnStoreQueue(generation: gen)
+                markEOFOnStoreQueue()
                 return
             }
             let detail = "进程内直连上游失败：\(LocalStreamProxy.summary(of: error))（\(redirectedURL.host ?? "")），已收 \(deliveredSinceOpen) 字节"
             if Direct115HTTPHelper.isTransient(error),
-               scheduleRetryOnStoreQueue(detail, cancelling: nil, resumeAt: nextFetchOffset, generation: gen) {
+               scheduleRetryOnStoreQueue(detail, cancelling: nil, resumeAt: nextFetchOffset, serial: serial) {
                 return
             }
-            failTerminalOnStoreQueue(detail, generation: gen)
+            failTerminalOnStoreQueue(detail)
             return
         }
 
         if let total = knownTotalOnQueue, nextFetchOffset >= total {
-            markEOFOnStoreQueue(generation: gen)
+            markEOFOnStoreQueue()
             return
         }
         if let chunkEnd = currentChunkActualEnd, nextFetchOffset == chunkEnd + 1 {
             retryCount = 0
             refusalWaits = 0
             retryProgressMark = deliveredSinceOpen
-            advanceOrFinishAfterChunkOnStoreQueue(chunkEnd: chunkEnd, generation: gen)
+            advanceOrFinishAfterChunkOnStoreQueue(chunkEnd: chunkEnd, serial: serial)
             return
         }
         if knownTotalOnQueue == nil {
-            markEOFOnStoreQueue(generation: gen)
+            markEOFOnStoreQueue()
             return
         }
-        if scheduleRetryOnStoreQueue("进程内直连上游提前结束（停在 \(nextFetchOffset) 字节）", cancelling: nil, resumeAt: nextFetchOffset, generation: gen) {
+        if scheduleRetryOnStoreQueue("进程内直连上游提前结束（停在 \(nextFetchOffset) 字节）", cancelling: nil, resumeAt: nextFetchOffset, serial: serial) {
             return
         }
-        failTerminalOnStoreQueue("上游提前结束传输", generation: gen)
+        failTerminalOnStoreQueue("上游提前结束传输")
     }
 
     // MARK: 停滞、重试、换链（store.queue）
@@ -1789,28 +2074,30 @@ final class Direct115StreamHandle: Direct115TaskHandler, @unchecked Sendable {
         guard !closedOnQueue, !yielded, !suspended, let running = task else { return }
         let now = ProcessInfo.processInfo.systemUptime
         condition.lock()
-        let buffered = streamBuffer.count
+        let follows = readerFollowsLocked
+        let buffered = aheadBytesLocked
         condition.unlock()
-        if buffered >= Self.resumeBytes {
+        // 读线程不在这条流上，或者缓冲充足：慢一点没关系
+        if !follows || buffered >= Self.resumeBytes {
             lastProgressUptime = now
-            windowStartUptime = now
-            windowBytes = 0
+            speedWindowStartUptime = now
+            speedWindowBytes = 0
             return
         }
         let silentFor = now - lastProgressUptime
         var stalledReason: String?
         if silentFor >= store.stallTimeout {
             stalledReason = "进程内直连上游 \(String(format: "%.1f", silentFor)) 秒无响应（\(redirectedURL.host ?? "")）"
-        } else if store.minHealthySpeed > 0, windowBytes > 0 {
-            let elapsed = now - windowStartUptime
+        } else if store.minHealthySpeed > 0, speedWindowBytes > 0 {
+            let elapsed = now - speedWindowStartUptime
             let slowWindow = max(store.stallTimeout + 4.0, 16.0)
             if elapsed >= slowWindow {
-                let speed = Double(windowBytes) / elapsed
+                let speed = Double(speedWindowBytes) / elapsed
                 if speed < store.minHealthySpeed {
                     stalledReason = "进程内直连上游过慢（\(Int(speed / 1024)) KB/s）"
                 } else {
-                    windowStartUptime = now
-                    windowBytes = 0
+                    speedWindowStartUptime = now
+                    speedWindowBytes = 0
                 }
             }
         }
@@ -1819,15 +2106,15 @@ final class Direct115StreamHandle: Direct115TaskHandler, @unchecked Sendable {
         store.detach(running)
         running.cancel()
         task = nil
-        let gen = activeSeekGeneration
+        let serial = streamSerial
 
         if retryCount >= 2, store.canRenew(forKey: streamKey),
            store.needsNewAddress(forKey: streamKey, failed: activeStream.url, ignoreCooldown: true),
-           renewUpstreamOnStoreQueue(reason, cancelling: nil, resumeAt: nextFetchOffset, generation: gen, ignoreCooldown: true) {
+           renewUpstreamOnStoreQueue(reason, cancelling: nil, resumeAt: nextFetchOffset, serial: serial, ignoreCooldown: true) {
             return
         }
-        if scheduleRetryOnStoreQueue(reason, cancelling: nil, resumeAt: nextFetchOffset, generation: gen) { return }
-        failTerminalOnStoreQueue(reason, generation: gen)
+        if scheduleRetryOnStoreQueue(reason, cancelling: nil, resumeAt: nextFetchOffset, serial: serial) { return }
+        failTerminalOnStoreQueue(reason)
     }
 
     private func beginRecoveryOnStoreQueue() {
@@ -1835,7 +2122,7 @@ final class Direct115StreamHandle: Direct115TaskHandler, @unchecked Sendable {
         recoveryWindow = (ProcessInfo.processInfo.systemUptime + Direct115StreamStore.recoveryGrace, deliveredSinceOpen)
     }
 
-    private func scheduleRetryOnStoreQueue(_ detail: String, cancelling running: URLSessionDataTask?, resumeAt: Int64, generation: UInt64) -> Bool {
+    private func scheduleRetryOnStoreQueue(_ detail: String, cancelling running: URLSessionDataTask?, resumeAt: Int64, serial: UInt64) -> Bool {
         if deliveredSinceOpen > retryProgressMark {
             retryCount = 0
             retryProgressMark = deliveredSinceOpen
@@ -1854,7 +2141,7 @@ final class Direct115StreamHandle: Direct115TaskHandler, @unchecked Sendable {
         task = nil
         stopStallTimerOnStoreQueue()
         let work = DispatchWorkItem { [weak self] in
-            self?.launchChunkOnStoreQueue(from: resumeAt, generation: generation)
+            self?.launchChunkOnStoreQueue(from: resumeAt, serial: serial)
         }
         retryWork = work
         store.queue.asyncAfter(deadline: .now() + delay, execute: work)
@@ -1865,7 +2152,7 @@ final class Direct115StreamHandle: Direct115TaskHandler, @unchecked Sendable {
         _ detail: String,
         cancelling running: URLSessionDataTask?,
         resumeAt: Int64,
-        generation: UInt64,
+        serial: UInt64,
         ignoreCooldown: Bool = false
     ) -> Bool {
         guard store.canRenew(forKey: streamKey) else { return false }
@@ -1886,14 +2173,14 @@ final class Direct115StreamHandle: Direct115TaskHandler, @unchecked Sendable {
             renewCount += 1
             renewProgressMark = deliveredSinceOpen
             store.note("\(detail)，换新地址后从 \(resumeAt) 字节接着下")
-            requestRenewalOnStoreQueue(at: resumeAt, generation: generation, allowSameURL: false)
+            requestRenewalOnStoreQueue(at: resumeAt, serial: serial, allowSameURL: false)
         } else {
             let delay = waits[refusalWaits]
             refusalWaits += 1
             store.note("\(detail)；新地址仍被拒，\(delay) 秒后从 \(resumeAt) 字节重试")
             let work = DispatchWorkItem { [weak self] in
                 guard let self, !self.closedOnQueue else { return }
-                self.launchChunkOnStoreQueue(from: resumeAt, generation: generation)
+                self.launchChunkOnStoreQueue(from: resumeAt, serial: serial)
             }
             retryWork = work
             store.queue.asyncAfter(deadline: .now() + delay, execute: work)
@@ -1901,40 +2188,41 @@ final class Direct115StreamHandle: Direct115TaskHandler, @unchecked Sendable {
         return true
     }
 
-    private func requestRenewalOnStoreQueue(at offset: Int64, generation: UInt64, allowSameURL: Bool) {
+    private func requestRenewalOnStoreQueue(at offset: Int64, serial: UInt64, allowSameURL: Bool) {
         let id = UUID()
         renewalID = id
         store.renew(forKey: streamKey, failed: activeStream.url) { [weak self] fresh in
-            guard let self, !self.closedOnQueue, self.renewalID == id, generation == self.activeSeekGeneration else { return }
+            guard let self, !self.closedOnQueue, self.renewalID == id, serial == self.streamSerial else { return }
             self.renewalID = nil
             if let fresh {
                 self.activeStream = fresh
                 self.redirectedURL = fresh.url
             } else if !allowSameURL {
-                self.failTerminalOnStoreQueue("115 换链失败", generation: generation)
+                self.failTerminalOnStoreQueue("115 换链失败")
                 return
             }
-            self.launchChunkOnStoreQueue(from: offset, generation: generation)
+            self.launchChunkOnStoreQueue(from: offset, serial: serial)
         }
     }
 
-    private func markEOFOnStoreQueue(generation: UInt64) {
+    private func markEOFOnStoreQueue() {
         condition.lock()
-        if generation == seekGeneration {
-            eofReached = true
-            responseHeaderArrived = true
-            condition.broadcast()
-        }
+        streamEOF = true
+        responseHeaderArrived = true
+        upstreamActive = false
+        upstreamEpoch &+= 1
+        condition.broadcast()
         condition.unlock()
     }
 
-    private func failTerminalOnStoreQueue(_ reason: String, generation: UInt64) {
+    private func failTerminalOnStoreQueue(_ reason: String) {
         store.note(reason)
         condition.lock()
-        if generation == seekGeneration {
-            terminalError = true
-            condition.broadcast()
-        }
+        // 读线程跟着这条流时才算读失败；它在别处时只是这条（停放着的）流没了，回来时重新拉
+        if readerFollowsLocked { streamFailed = true }
+        upstreamActive = false
+        upstreamEpoch &+= 1
+        condition.broadcast()
         condition.unlock()
     }
 
@@ -1956,6 +2244,10 @@ final class Direct115StreamHandle: Direct115TaskHandler, @unchecked Sendable {
             running.cancel()
             task = nil
         }
+        if let prewarm = waitingPrewarm {
+            waitingPrewarm = nil
+            prewarm.removeWaiter(self)
+        }
     }
 
     private func teardownOnStoreQueue() {
@@ -1967,7 +2259,7 @@ final class Direct115StreamHandle: Direct115TaskHandler, @unchecked Sendable {
     }
 }
 
-/// 剧集详情页与自动连播提前预解析 / 预热 115 原画直链的统一入口。
+/// 剧集详情页、点开播放与自动连播提前预解析 / 预热 115 原画直链的统一入口。
 enum Direct115Prewarmer {
     /// 提前解析 115 原画直链（进入 15 分钟会话缓存）；`prefetchBytes` 为 true 时同时后台预热片头与尾部索引。
     static func prewarm(
@@ -1988,6 +2280,18 @@ enum Direct115Prewarmer {
             )
         } catch {
             // 预热静默失败，不影响真正点击播放时的正常解析与报错
+        }
+    }
+
+    /// 点开 115 视频的那一刻（播放窗口还在弹出、转屏）就开始解析直链并预热，
+    /// 播放页自己的解析会合并到这次进行中的请求上，不会重复打 115 接口。
+    @MainActor
+    static func kick(for source: PlaybackSource, appState: AppState) {
+        guard case .p115(_, let pickCode) = source, !pickCode.isEmpty,
+              let client = appState.directClient() else { return }
+        let resume = RecentStore.shared.position(for: source) != nil
+        Task.detached(priority: .userInitiated) {
+            await prewarm(client: client, pickCode: pickCode, resume: resume, prefetchBytes: true)
         }
     }
 }
