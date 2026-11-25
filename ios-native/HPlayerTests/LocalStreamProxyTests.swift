@@ -646,19 +646,29 @@ final class LocalStreamProxyTests: XCTestCase {
         XCTAssertNil(acceptedOffDomain?.value(forHTTPHeaderField: "Cookie"))
         XCTAssertEqual(acceptedOffDomain?.value(forHTTPHeaderField: "Range"), "bytes=0-100")
 
-        // 跳转到 *.115.com 与 115 自有 CDN 域名（115cdn.net / 115cdn.com / 115rc.com）：保留 Cookie
-        for trustedHost in ["vip.115.com", "cdnfhnfile.115cdn.net", "node1.115cdn.com", "edge.115rc.com"] {
-            var in115Req = URLRequest(url: URL(string: "https://\(trustedHost)/video.mp4")!)
-            in115Req.setValue("UID=secret", forHTTPHeaderField: "Cookie")
-            var acceptedIn115: URLRequest?
-            let exp2 = expectation(description: "in-115 redirect \(trustedHost)")
-            proxy.urlSession(dummySession, task: task, willPerformHTTPRedirection: redirectReply, newRequest: in115Req) { req in
-                acceptedIn115 = req
-                exp2.fulfill()
-            }
-            wait(for: [exp2], timeout: 1)
-            XCTAssertEqual(acceptedIn115?.value(forHTTPHeaderField: "Cookie"), "UID=secret", trustedHost)
+        // 跳转到 *.115.com：保留 Cookie
+        var in115Req = URLRequest(url: URL(string: "https://vip.115.com/video.mp4")!)
+        in115Req.setValue("UID=secret", forHTTPHeaderField: "Cookie")
+        var acceptedIn115: URLRequest?
+        let exp2 = expectation(description: "in-115 redirect")
+        proxy.urlSession(dummySession, task: task, willPerformHTTPRedirection: redirectReply, newRequest: in115Req) { req in
+            acceptedIn115 = req
+            exp2.fulfill()
         }
+        wait(for: [exp2], timeout: 1)
+        XCTAssertEqual(acceptedIn115?.value(forHTTPHeaderField: "Cookie"), "UID=secret")
+
+        // 跳转到 *.115cdn.net：保留 Cookie
+        var cdn115Req = URLRequest(url: URL(string: "https://node01.115cdn.net/video.mp4")!)
+        cdn115Req.setValue("UID=secret", forHTTPHeaderField: "Cookie")
+        var acceptedCDN115: URLRequest?
+        let expCDN = expectation(description: "115cdn redirect")
+        proxy.urlSession(dummySession, task: task, willPerformHTTPRedirection: redirectReply, newRequest: cdn115Req) { req in
+            acceptedCDN115 = req
+            expCDN.fulfill()
+        }
+        wait(for: [expCDN], timeout: 1)
+        XCTAssertEqual(acceptedCDN115?.value(forHTTPHeaderField: "Cookie"), "UID=secret")
 
         // HTTPS -> HTTP 降级跳转：拒绝
         let downgradeReq = URLRequest(url: URL(string: "http://cdn.115.com/video.mp4")!)
@@ -865,162 +875,52 @@ final class LocalStreamProxyTests: XCTestCase {
         XCTAssertEqual(server.receivedRanges().count, 2, "Adopted prewarm must not duplicate the initial 0- range: \(server.receivedRanges())")
     }
 
-    private func ebmlVint(_ value: UInt64) -> Data {
-        if value < 0x7F {
-            return Data([UInt8(value) | 0x80])
-        } else if value < 0x3FFF {
-            return Data([UInt8((value >> 8) & 0x3F) | 0x40, UInt8(value & 0xFF)])
-        } else {
-            return Data([
-                UInt8((value >> 24) & 0x0F) | 0x10,
-                UInt8((value >> 16) & 0xFF),
-                UInt8((value >> 8) & 0xFF),
-                UInt8(value & 0xFF),
-            ])
+    func testMKVCuesProbeDetectsSeekHeadCuesAndContainerIndexProbe() {
+        // 构造一个最小合法 EBML Header + Segment + SeekHead（指向 Cues 相对偏移 50_000_000）
+        func vint(_ value: UInt64) -> [UInt8] {
+            if value < 0x7F { return [UInt8(0x80 | value)] }
+            if value < 0x3FFF { return [UInt8(0x40 | (value >> 8)), UInt8(value & 0xFF)] }
+            return [UInt8(0x20 | (value >> 16)), UInt8((value >> 8) & 0xFF), UInt8(value & 0xFF)]
         }
-    }
-
-    private func ebmlElement(id: [UInt8], payload: Data) -> Data {
-        var out = Data(id)
-        out.append(ebmlVint(UInt64(payload.count)))
-        out.append(payload)
-        return out
-    }
-
-    private func mkvHeaderWithCuesAt(relativeCuesOffset: UInt64) -> (header: Data, segmentDataStart: Int64) {
-        let ebmlHeader = ebmlElement(id: [0x1A, 0x45, 0xDF, 0xA3], payload: Data([0x42, 0x86, 0x81, 0x01]))
-        var posBytes = Data()
-        var shift = 56
-        while shift >= 0 {
-            let byte = UInt8((relativeCuesOffset >> shift) & 0xFF)
-            if !posBytes.isEmpty || byte != 0 || shift == 0 {
-                posBytes.append(byte)
-            }
-            shift -= 8
+        func element(_ id: [UInt8], _ payload: [UInt8]) -> [UInt8] {
+            id + vint(UInt64(payload.count)) + payload
         }
-        let seekID = ebmlElement(id: [0x53, 0xAB], payload: Data([0x1C, 0x53, 0xBB, 0x6B]))
-        let seekPos = ebmlElement(id: [0x53, 0xAC], payload: posBytes)
-        let seekEntry = ebmlElement(id: [0x4D, 0xBB], payload: seekID + seekPos)
-        let seekHead = ebmlElement(id: [0x11, 0x4D, 0x9B, 0x74], payload: seekEntry)
+        let cuesPos: UInt32 = 50_000_000
+        let posBytes: [UInt8] = [
+            UInt8((cuesPos >> 24) & 0xFF),
+            UInt8((cuesPos >> 16) & 0xFF),
+            UInt8((cuesPos >> 8) & 0xFF),
+            UInt8(cuesPos & 0xFF),
+        ]
+        let seekEntry = element([0x4D, 0xBB],
+                                element([0x53, 0xAB], [0x1C, 0x53, 0xBB, 0x6B])
+                                + element([0x53, 0xAC], posBytes))
+        let seekHead = element([0x11, 0x4D, 0x9B, 0x74], seekEntry)
+        let ebmlHeader = element([0x1A, 0x45, 0xDF, 0xA3], [0x42, 0x86, 0x81, 0x01])
+        // Segment 未知长度（0x01FFFFFFFFFFFFFF）
+        let segmentHeader: [UInt8] = [0x18, 0x53, 0x80, 0x67, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]
+        let prefix = Data(ebmlHeader + segmentHeader + seekHead)
+        let segDataStart = Int64(ebmlHeader.count + segmentHeader.count)
+        let expectedStart = segDataStart + Int64(cuesPos)
+        let totalSize: Int64 = expectedStart + 500_000
 
-        var data = Data()
-        data.append(ebmlHeader)
-        // Segment ID + unknown size VINT (8 bytes)
-        data.append(contentsOf: [0x18, 0x53, 0x80, 0x67, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF])
-        let segmentDataStart = Int64(data.count)
-        data.append(seekHead)
-        return (data, segmentDataStart)
-    }
-
-    func testMKVCuesProbeDetectsSeekHeadCuesAndClusterFallback() {
-        let total: Int64 = 10_000_000
-        let built = mkvHeaderWithCuesAt(relativeCuesOffset: 9_000_000)
-        let expectedStart = built.segmentDataStart + 9_000_000
         XCTAssertEqual(
-            MKVCuesProbe.inspect(prefix: built.header, totalSize: total),
-            .cuesAtTail(start: expectedStart, end: total - 1)
+            MKVCuesProbe.inspect(prefix: prefix, totalSize: totalSize),
+            .cuesAtTail(start: expectedStart, end: totalSize - 1)
+        )
+        XCTAssertEqual(
+            ContainerIndexProbe.inspect(prefix: prefix, totalSize: totalSize),
+            .indexAtTail(start: expectedStart, end: totalSize - 1, headBytesBeforeTailSwitch: 262_144)
         )
 
-        let headBuilt = mkvHeaderWithCuesAt(relativeCuesOffset: 4_096)
-        XCTAssertEqual(MKVCuesProbe.inspect(prefix: headBuilt.header, totalSize: total), .cuesAtHead)
-
-        // 没有 SeekHead 时遇到 Cluster，自动回退到文件尾部 1.5 MiB
-        var clusterFirst = ebmlElement(id: [0x1A, 0x45, 0xDF, 0xA3], payload: Data([0x42, 0x86, 0x81, 0x01]))
-        clusterFirst.append(contentsOf: [0x18, 0x53, 0x80, 0x67, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF])
-        clusterFirst.append(ebmlElement(id: [0x1F, 0x43, 0xB6, 0x75], payload: Data(repeating: 0x22, count: 32)))
+        // 没有 SeekHead 直接见到 Cluster 时回退到文件尾部 1.5 MiB
+        let clusterHeader: [UInt8] = [0x1F, 0x43, 0xB6, 0x75, 0x81, 0x00]
+        let noSeekHead = Data(ebmlHeader + segmentHeader + clusterHeader)
+        let largeTotal: Int64 = 100_000_000
         XCTAssertEqual(
-            MKVCuesProbe.inspect(prefix: clusterFirst, totalSize: total),
-            .cuesAtTail(start: total - 1_572_864, end: total - 1)
+            MKVCuesProbe.inspect(prefix: noSeekHead, totalSize: largeTotal),
+            .cuesAtTail(start: largeTotal - 1_572_864, end: largeTotal - 1)
         )
-    }
-
-    /// MKV 预热检测到 SeekHead → Cues 在尾部时，会自动拉取片头和尾部 Cues 写入缓存，mpv 后续读取全部零上游请求命中。
-    func testPrewarmPopulatesMKVHeadAndTailCuesForInstantCacheHits() async throws {
-        let total = 3_000_000
-        let relCuesOffset: UInt64 = 2_900_000
-        let built = mkvHeaderWithCuesAt(relativeCuesOffset: relCuesOffset)
-        let cuesStart = Int(built.segmentDataStart + Int64(relCuesOffset))
-        let cuesSize = total - cuesStart
-        var headPayload = built.header
-        headPayload.append(Data(repeating: 0x33, count: 256 * 1024 - built.header.count))
-        let cuesPayload = pattern(cuesSize)
-
-        ScriptedUpstream.install([
-            .reply(status: 206, headers: [
-                "Content-Type": "video/x-matroska",
-                "Content-Range": "bytes 0-\(headPayload.count - 1)/\(total)",
-                "Content-Length": "\(headPayload.count)",
-                "Accept-Ranges": "bytes",
-            ], body: headPayload),
-            .reply(status: 206, headers: [
-                "Content-Type": "video/x-matroska",
-                "Content-Range": "bytes \(cuesStart)-\(total - 1)/\(total)",
-                "Content-Length": "\(cuesSize)",
-                "Accept-Ranges": "bytes",
-            ], body: cuesPayload),
-        ])
-        let proxy = LocalStreamProxy(protocolClasses: [ScriptedUpstream.self])
-        let upstream = try XCTUnwrap(URL(string: "https://cdn.115cdn.net/movie.mkv"))
-        proxy.prewarm(url: upstream, headers: [:], streamID: "p115:prewarm-mkv", resume: false)
-
-        for _ in 0..<100 {
-            if ScriptedUpstream.receivedRanges().count >= 2 && proxy.cachedByteCountForTesting() >= headPayload.count + cuesSize {
-                break
-            }
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
-        XCTAssertEqual(ScriptedUpstream.receivedRanges().count, 2)
-        XCTAssertEqual(ScriptedUpstream.receivedRanges().last, "bytes=\(cuesStart)-\(total - 1)")
-
-        let relayed = await proxy.localURL(for: upstream, headers: [:], streamID: "p115:prewarm-mkv")
-        let local = try XCTUnwrap(relayed)
-        let cuesResp = try fetch(local, range: "bytes=\(cuesStart)-\(total - 1)")
-        XCTAssertEqual(cuesResp.status, 206)
-        XCTAssertEqual(cuesResp.body, cuesPayload)
-        XCTAssertEqual(ScriptedUpstream.receivedRanges().count, 2)
-    }
-
-    /// 滑动 1 段预取在收到 403 时静默取消并降级为单连接，不中断正在播放的主分段。
-    func testLookaheadDowngradesToSingleConnectionOn403WithoutBreakingPlayback() async throws {
-        let total = 12_000
-        let full = pattern(total)
-        ScriptedUpstream.install([
-            // 主请求 chunk 0
-            .reply(status: 206, headers: [
-                "Content-Type": "video/mp4",
-                "Content-Range": "bytes 0-3999/\(total)",
-                "Content-Length": "4000",
-                "Accept-Ranges": "bytes",
-            ], body: Data(full[0..<4000])),
-            // chunk 0 触发的 chunk 1 预取 -> 403，应自动静默降级为单连接
-            .reply(status: 403, headers: [:], body: Data()),
-            // 主连接正常发起 chunk 1（单连接）
-            .reply(status: 206, headers: [
-                "Content-Type": "video/mp4",
-                "Content-Range": "bytes 4000-7999/\(total)",
-                "Content-Length": "4000",
-                "Accept-Ranges": "bytes",
-            ], body: Data(full[4000..<8000])),
-            // 降级期间 chunk 2 不再触发并发预取，直接单连接拉取
-            .reply(status: 206, headers: [
-                "Content-Type": "video/mp4",
-                "Content-Range": "bytes 8000-11999/\(total)",
-                "Content-Length": "4000",
-                "Accept-Ranges": "bytes",
-            ], body: Data(full[8000..<12000])),
-        ])
-        let proxy = LocalStreamProxy(protocolClasses: [ScriptedUpstream.self])
-        proxy.setChunkSizeForTesting(4_000)
-        proxy.setLookaheadTriggerRatioForTesting(0.5)
-
-        let upstream = try XCTUnwrap(URL(string: "https://cdn.115cdn.net/downgrade.mp4"))
-        let relayed = await proxy.localURL(for: upstream, headers: [:], streamID: "p115:downgrade")
-        let local = try XCTUnwrap(relayed)
-        let fetched = try fetch(local, range: "bytes=0-")
-        XCTAssertEqual(fetched.status, 206)
-        XCTAssertEqual(fetched.body, full)
-        XCTAssertTrue(proxy.isLookaheadSuppressedForTesting(streamKey: "p115:downgrade"))
-        XCTAssertEqual(ScriptedUpstream.receivedRanges(), ["bytes=0-3999", "bytes=4000-7999", "bytes=4000-7999", "bytes=8000-11999"])
     }
 }
 

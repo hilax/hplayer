@@ -412,13 +412,11 @@ struct PlaybackControlsView: View {
                             mediaTitle: title,
                             isMKVOrUnsupportedAirPlay: airplayUnsupported,
                             onSelectDLNA: { device in
-                                Task {
-                                    guard let media = await playback.resolvedCastMediaDescriptor() else { return }
-                                    await castManager.castToDLNA(device, media: media)
-                                }
+                                guard let media = playback.castMediaDescriptor else { return }
+                                Task { await castManager.castToDLNA(device, media: media) }
                             },
                             onPrepareAirPlay: {
-                                guard let media = await playback.resolvedCastMediaDescriptor() else { return false }
+                                guard let media = playback.castMediaDescriptor else { return false }
                                 return await castManager.prepareAirPlay(media: media, fallbackResolver: onResolveAirPlayStream)
                             },
                             onClose: {
@@ -506,12 +504,9 @@ struct PlaybackControlsView: View {
             if brightnessAdjusted, let originalBrightness { ScreenBrightness.screen.brightness = originalBrightness }
         }
         .onChange(of: playback.castMediaRevision) { _ in
-            guard castManager.isCasting, playback.castMediaDescriptor != nil else { return }
+            guard castManager.isCasting, let media = playback.castMediaDescriptor else { return }
             playback.pauseForCasting()
-            Task {
-                guard let media = await playback.resolvedCastMediaDescriptor() else { return }
-                await castManager.updateMedia(media, fallbackResolver: onResolveAirPlayStream)
-            }
+            Task { await castManager.updateMedia(media, fallbackResolver: onResolveAirPlayStream) }
         }
         .onChange(of: castManager.ended) { didEnd in
             guard didEnd, autoPlayNext || Self.testAutoNext, !Self.isUITest || Self.testAutoNext, let id = nextID else { return }
@@ -1482,7 +1477,7 @@ struct PlaybackControlsView: View {
             Divider()
                 .overlay(Color.white.opacity(0.12))
                 .padding(.vertical, 4)
-            popoverHeader("缓存位置", leading: 14)
+            popoverHeader("缓存上限", leading: 14)
             ForEach(CacheStorageMode.allCases) { mode in
                 popoverRow(title: mode.title, selected: playback.cacheStorageMode == mode) {
                     playback.setCacheStorageMode(mode)
@@ -1491,9 +1486,7 @@ struct PlaybackControlsView: View {
                 .accessibilityIdentifier("playback.more.cacheStorage.\(mode.rawValue)")
             }
             popoverNote(
-                playback.cacheStorageMode == .memory
-                    ? "只存在内存里，不写手机存储；容量小，4K 原画只能往前存二十秒左右。流量下自动缩减。"
-                    : "边播边存到手机存储，最多 \(playback.cacheStorageMode == .diskLarge ? "20GB" : "2GB")（不超过剩余空间的一半），退出播放后自动清掉；流量下最多存 1 分钟。",
+                "边播边存到手机存储，最多 \(playback.cacheStorageMode == .diskLarge ? "20GB" : "2GB")（不超过剩余空间的一半），退出播放后自动清掉；用流量时最多存 1 分钟。",
                 width: 218
             )
         case .sleep:
@@ -3561,7 +3554,7 @@ struct PlaybackControlsView: View {
                 let delta = region == .right ? step : -step
                 let ceiling = max(playback.currentTime, playback.duration - 2)
                 let target = min(max(playback.currentTime + delta, 0), max(0, ceiling))
-                playback.seek(to: target, exact: true)
+                playback.seek(to: target)
                 Haptics.tap()
 
                 let nextAccumulated = (doubleTapRegion == region ? doubleTapSeconds : 0) + delta

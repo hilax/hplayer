@@ -39,15 +39,13 @@ final class MPVEngine {
     /// 在主线程调用
     var onEvent: ((Event) -> Void)?
 
-    init?(options: [(String, String)], layer: CAMetalLayer? = nil, directStreamStore: Direct115StreamStore? = nil) {
+    init?(options: [(String, String)], layer: CAMetalLayer) {
         queue.setSpecific(key: queueIdentity, value: true)
         guard let mpv = mpv_create() else { return nil }
         handle = mpv
         // 警告和错误留着，播放出问题时可以复制给开发者看
         mpv_request_log_messages(mpv, "warn")
-        if let layer {
-            attach(layer: layer, beforeInitialize: true)
-        }
+        attach(layer: layer, beforeInitialize: true)
         for (name, value) in options {
             mpv_set_option_string(mpv, name, value)
         }
@@ -56,7 +54,6 @@ final class MPVEngine {
             handle = nil
             return nil
         }
-        _ = Direct115StreamBridge.register(on: mpv, store: directStreamStore)
         let context = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
         mpv_set_wakeup_callback(mpv, { context in
             guard let context else { return }

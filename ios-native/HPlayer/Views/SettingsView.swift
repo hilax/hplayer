@@ -364,8 +364,8 @@ struct PlaybackSettingsView: View {
                 SettingsMenuPicker(label: "边播边存", selection: $readahead, options: ReadaheadLevel.allCases,
                                    title: \.title, identifier: "mine.playback.readahead")
             }
-            SettingRow(icon: .readahead, title: "缓存位置") {
-                SettingsMenuPicker(label: "缓存位置", selection: $cacheStorageMode, options: CacheStorageMode.allCases,
+            SettingRow(icon: .readahead, title: "缓存上限") {
+                SettingsMenuPicker(label: "缓存上限", selection: $cacheStorageMode, options: CacheStorageMode.allCases,
                                    title: \.title, identifier: "mine.playback.cacheStorage")
             }
             SettingRow(icon: .decoder, title: "解码方式") {

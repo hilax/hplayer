@@ -342,8 +342,8 @@ extension Direct115Client {
         try await originalStream(pickCode: pickCode, useCache: useCache).url
     }
 
-    /// 解析原画直链并返回绑定的 User-Agent 与合并 `Set-Cookie` 后的请求 Cookie。
-    /// 支持并发解析去重，以及 Chrome 主接口受限时自动降级到 Android 下载接口。
+    /// 解析原画直链并返回绑定的 User-Agent 与合并 `Set-Cookie` 后的请求 Cookie；
+    /// 自动合并并发重复解析请求。
     func originalStream(
         pickCode: String,
         useCache: Bool = true,
@@ -351,7 +351,7 @@ extension Direct115Client {
     ) async throws -> Direct115ResolvedStream {
         let activeCache = sessionCache ?? (protocolClasses == nil ? Direct115SessionCache.shared : nil)
         let fetch: @Sendable () async throws -> Direct115ResolvedStream = {
-            try await self.fetchOriginalStreamMultiTier(pickCode: pickCode)
+            try await self.fetchOriginalStream(pickCode: pickCode)
         }
         if let activeCache {
             return try await activeCache.resolveOriginalStream(
@@ -364,49 +364,33 @@ extension Direct115Client {
         return try await fetch()
     }
 
-    private func fetchOriginalStreamMultiTier(pickCode: String) async throws -> Direct115ResolvedStream {
-        let tiers: [(endpoint: String, payload: [String: String], userAgent: String)] = [
-            ("https://proapi.115.com/app/chrome/downurl", ["pickcode": pickCode], Self.userAgent),
-            ("https://proapi.115.com/android/2.0/ufile/download", ["pick_code": pickCode], Self.androidDownloadUserAgent),
-        ]
-        var primaryError: Error?
-        for tier in tiers {
-            do {
-                let (json, key, response) = try await encryptedPostWithResponse(
-                    tier.endpoint,
-                    payload: tier.payload,
-                    userAgent: tier.userAgent
-                )
-                if !Self.succeeded(json) {
-                    let code = Self.errorCode(json)
-                    if code == 99 || code == 990001 {
-                        throw Direct115FileError.notLoggedIn
-                    }
-                    let message = Self.errorMessage(json)
-                    throw APIError.server(message.isEmpty ? "115 没有返回原画地址" : message)
-                }
-                guard let text = json["data"] as? String, !text.isEmpty else {
-                    let message = Self.errorMessage(json)
-                    throw APIError.server(message.isEmpty ? "115 没有返回原画地址" : message)
-                }
-                let decoded = try M115Cipher.decode(text, key: key)
-                guard let object = try JSONSerialization.jsonObject(with: Data(decoded)) as? [String: Any] else {
-                    throw APIError.server("115 返回的原画地址无法识别")
-                }
-                if let url = Self.extractOriginalURL(from: object) {
-                    let mergedCookie = Self.mergeCookies(base: cookie, response: response)
-                    return Direct115ResolvedStream(url: url, userAgent: tier.userAgent, cookie: mergedCookie)
-                }
-                throw APIError.server("115 没有返回原画地址，文件可能已经被删除")
-            } catch let error as Direct115FileError {
-                throw error
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                if primaryError == nil { primaryError = error }
+    private func fetchOriginalStream(pickCode: String) async throws -> Direct115ResolvedStream {
+        let (json, key, response) = try await encryptedPostWithResponse(
+            "https://proapi.115.com/app/chrome/downurl",
+            payload: ["pickcode": pickCode],
+            userAgent: Self.userAgent
+        )
+        if !Self.succeeded(json) {
+            let code = Self.errorCode(json)
+            if code == 99 || code == 990001 {
+                throw Direct115FileError.notLoggedIn
             }
+            let message = Self.errorMessage(json)
+            throw APIError.server(message.isEmpty ? "115 没有返回原画地址" : message)
         }
-        throw primaryError ?? APIError.server("115 没有返回原画地址")
+        guard let text = json["data"] as? String, !text.isEmpty else {
+            let message = Self.errorMessage(json)
+            throw APIError.server(message.isEmpty ? "115 没有返回原画地址" : message)
+        }
+        let decoded = try M115Cipher.decode(text, key: key)
+        guard let object = try JSONSerialization.jsonObject(with: Data(decoded)) as? [String: Any] else {
+            throw APIError.server("115 返回的原画地址无法识别")
+        }
+        if let url = Self.extractOriginalURL(from: object) {
+            let mergedCookie = Self.mergeCookies(base: cookie, response: response)
+            return Direct115ResolvedStream(url: url, userAgent: Self.userAgent, cookie: mergedCookie)
+        }
+        throw APIError.server("115 没有返回原画地址，文件可能已经被删除")
     }
 
     static func extractOriginalURL(from object: [String: Any]) -> URL? {

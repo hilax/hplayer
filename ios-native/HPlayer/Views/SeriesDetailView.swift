@@ -68,23 +68,6 @@ struct SeriesDetailView: View {
             PlayerView(source: queue.source, playlist: queue.items)
                 .environmentObject(appState)
         }
-        // 进入剧集详情页时静默预解析并预热最可能点击的那一集（片头 + MP4 moov / MKV Cues 尾部索引），
-        // 真正点击播放时免去直链接口与索引定位往返，直接出画。
-        .task(id: prewarmTaskKey(for: group)) {
-            guard playing == nil, let group,
-                  let target = resumeTarget(group)?.item,
-                  target.isCloud, !target.media.pickCode.isEmpty,
-                  let client = appState.directClient() else { return }
-            try? await Task.sleep(nanoseconds: 150_000_000)
-            guard !Task.isCancelled, playing == nil else { return }
-            let isResuming = recentEntry(for: target)?.position != nil
-            await Direct115Prewarmer.prewarm(
-                client: client,
-                pickCode: target.media.pickCode,
-                resume: isResuming,
-                prefetchBytes: true
-            )
-        }
         // 本地文件删了就找不回来，网盘的这集也会从首页消失：都先确认，措辞和影片选项面板一致
         .confirmationDialog(
             pendingRemoval?.isCloud == true ? "从首页移除这一集？" : "删除这个本机文件？",
@@ -367,13 +350,6 @@ struct SeriesDetailView: View {
     }
 
     // MARK: 播放
-
-    private func prewarmTaskKey(for group: SeriesGroup?) -> String {
-        guard let group, let target = resumeTarget(group)?.item, target.isCloud else {
-            return "none"
-        }
-        return "\(seriesID)|\(appState.sessionID)|\(target.media.pickCode)|\(playing == nil)"
-    }
 
     private func play(_ episode: HomeMediaItem, in group: SeriesGroup) {
         playing = PlaybackQueue(source: episode.media.source, items: group.episodes.map { $0.media.source })

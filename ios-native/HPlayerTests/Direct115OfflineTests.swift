@@ -277,125 +277,63 @@ final class Direct115OfflineTests: XCTestCase {
         XCTAssertNil(cache.originalURL(cookie: "UID=101_a", pickCode: "pc2", now: now))
     }
 
-    func testMergeCookiesUpdatesSetCookieAndPreservesLoginCredentials() throws {
+    func testCookieHelpersMergeSetCookieAndAllow115CDNHosts() throws {
+        XCTAssertTrue(Direct115Client.is115CookieHost("115.com"))
+        XCTAssertTrue(Direct115Client.is115CookieHost("vip.115.com"))
+        XCTAssertTrue(Direct115Client.is115CookieHost("cdnfhnfile.115cdn.net"))
+        XCTAssertTrue(Direct115Client.is115CookieHost("node.115cdn.com"))
+        XCTAssertTrue(Direct115Client.is115CookieHost("edge.115rc.com"))
+        XCTAssertFalse(Direct115Client.is115CookieHost("evil115cdn.net"))
+        XCTAssertFalse(Direct115Client.is115CookieHost("oss.example.com"))
+
         let url = try XCTUnwrap(URL(string: "https://proapi.115.com/app/chrome/downurl"))
         let response = try XCTUnwrap(HTTPURLResponse(
             url: url,
             statusCode: 200,
             httpVersion: "HTTP/1.1",
             headerFields: [
-                "Set-Cookie": "acw_tc=new_token; Path=/; Domain=.115.com; HttpOnly, CID=refreshed_cid; Expires=Wed, 21 Oct 2035 07:28:00 GMT; Path=/",
+                "Set-Cookie": "acw_tc=fresh_token; Path=/; Expires=Wed, 21 Oct 2037 07:28:00 GMT; HttpOnly, CID=updated; Domain=.115.com; Secure"
             ]
         ))
-        let merged = Direct115Client.mergeCookies(base: "UID=1_test; CID=old_cid; SEID=keep_me; path=/", response: response)
-        XCTAssertTrue(merged.contains("UID=1_test"), merged)
-        XCTAssertTrue(merged.contains("CID=refreshed_cid"), merged)
-        XCTAssertTrue(merged.contains("SEID=keep_me"), merged)
-        XCTAssertTrue(merged.contains("acw_tc=new_token"), merged)
-        XCTAssertFalse(merged.contains("old_cid"), merged)
-        XCTAssertFalse(merged.lowercased().contains("path="), merged)
+        let merged = Direct115Client.mergeCookies(base: "UID=1_test; CID=old; Path=/", response: response)
+        XCTAssertTrue(merged.contains("UID=1_test"))
+        XCTAssertTrue(merged.contains("CID=updated"))
+        XCTAssertFalse(merged.contains("CID=old"))
+        XCTAssertTrue(merged.contains("acw_tc=fresh_token"))
+        XCTAssertFalse(merged.lowercased().contains("path="))
+        XCTAssertFalse(merged.lowercased().contains("httponly"))
     }
 
-    func testTrusted115CookieHostWhitelist() {
-        XCTAssertTrue(Direct115Client.is115CookieHost("115.com"))
-        XCTAssertTrue(Direct115Client.is115CookieHost("vip.115.com"))
-        XCTAssertTrue(Direct115Client.is115CookieHost("cdnfhnfile.115cdn.net"))
-        XCTAssertTrue(Direct115Client.is115CookieHost("node1.115cdn.com"))
-        XCTAssertTrue(Direct115Client.is115CookieHost("edge.115rc.com"))
-        XCTAssertFalse(Direct115Client.is115CookieHost("evil115.com"))
-        XCTAssertFalse(Direct115Client.is115CookieHost("oss-cdn.example.com"))
-    }
-
-    func testExtractOriginalURLSupportsChromeAndAndroidShapes() {
-        let chromePayload: [String: Any] = [
-            "12345": ["url": ["url": "https://cdnfhnfile.115cdn.net/video.mkv?k=1"]],
-        ]
-        XCTAssertEqual(
-            Direct115Client.extractOriginalURL(from: chromePayload)?.absoluteString,
-            "https://cdnfhnfile.115cdn.net/video.mkv?k=1"
-        )
-
-        let androidFlatPayload: [String: Any] = [
-            "url": "https://cdnfhnfile.115cdn.net/android.mp4?k=2",
-        ]
-        XCTAssertEqual(
-            Direct115Client.extractOriginalURL(from: androidFlatPayload)?.absoluteString,
-            "https://cdnfhnfile.115cdn.net/android.mp4?k=2"
-        )
-
-        let androidNestedPayload: [String: Any] = [
-            "url": ["url": "https://cdnfhnfile.115cdn.net/nested.mp4?k=3"],
-        ]
-        XCTAssertEqual(
-            Direct115Client.extractOriginalURL(from: androidNestedPayload)?.absoluteString,
-            "https://cdnfhnfile.115cdn.net/nested.mp4?k=3"
-        )
-    }
-
-    func testOriginalStreamFallsBackToAndroidEndpointExceptOnAuthFailure() async {
-        // 1. Chrome 接口 502 时自动降级尝试 Android 下载接口并切换 androidDownloadUserAgent
-        RoutedURLProtocol.install { request in
-            if request.url?.path.contains("/app/chrome/downurl") == true {
-                return .init(status: 502)
-            }
-            return .json(["state": false, "msg": "android-tried"])
-        }
-        do {
-            _ = try await client().originalStream(pickCode: "pc_fallback", useCache: false)
-            XCTFail("应该失败")
-        } catch {
-            let paths = RoutedURLProtocol.requests().compactMap { $0.url?.path }
-            let userAgents = RoutedURLProtocol.requests().compactMap { $0.value(forHTTPHeaderField: "User-Agent") }
-            XCTAssertEqual(paths, ["/app/chrome/downurl", "/android/2.0/ufile/download"])
-            XCTAssertEqual(userAgents, [Direct115Client.userAgent, Direct115Client.androidDownloadUserAgent])
+    func testSessionCacheDeduplicatesConcurrentOriginalStreamResolves() async throws {
+        final class CallCounter: @unchecked Sendable {
+            private let lock = NSLock()
+            private var count = 0
+            var value: Int { lock.lock(); defer { lock.unlock() }; return count }
+            func increment() { lock.lock(); count += 1; lock.unlock() }
         }
 
-        // 2. 登录失效（errno=99）直接抛出 notLoggedIn，绝不降级重复打接口
-        RoutedURLProtocol.install { _ in .json(["state": false, "errno": 99]) }
-        do {
-            _ = try await client().originalStream(pickCode: "pc_logged_out", useCache: false)
-            XCTFail("应该失败")
-        } catch {
-            XCTAssertEqual(error as? Direct115FileError, .notLoggedIn)
-            XCTAssertEqual(RoutedURLProtocol.requests().count, 1)
-        }
-    }
-
-    func testSessionCacheCoalescesConcurrentOriginalStreamResolutions() async throws {
         let cache = Direct115SessionCache()
-        let url = try XCTUnwrap(URL(string: "https://cdn.115cdn.net/shared.mkv"))
+        let fetchCalls = CallCounter()
         let expected = Direct115ResolvedStream(
-            url: url,
-            userAgent: Direct115Client.androidDownloadUserAgent,
-            cookie: "UID=1_test; acw_tc=xyz"
+            url: try XCTUnwrap(URL(string: "https://cdn.115cdn.net/video.mkv")),
+            userAgent: Direct115Client.userAgent,
+            cookie: "UID=1_test; acw_tc=abc"
         )
-        let counterLock = NSLock()
-        var fetchCalls = 0
 
-        let results = try await withThrowingTaskGroup(of: Direct115ResolvedStream.self) { group in
-            for _ in 0..<5 {
-                group.addTask {
-                    try await cache.resolveOriginalStream(cookie: "UID=1_test", pickCode: "pc_same", useCache: true) {
-                        counterLock.lock()
-                        fetchCalls += 1
-                        counterLock.unlock()
-                        try await Task.sleep(nanoseconds: 80_000_000)
-                        return expected
-                    }
-                }
-            }
-            var collected: [Direct115ResolvedStream] = []
-            for try await item in group { collected.append(item) }
-            return collected
+        async let first = cache.resolveOriginalStream(cookie: "UID=1_test", pickCode: "pc_dedup", useCache: true) {
+            fetchCalls.increment()
+            try await Task.sleep(nanoseconds: 60_000_000)
+            return expected
+        }
+        async let second = cache.resolveOriginalStream(cookie: "UID=1_test", pickCode: "pc_dedup", useCache: true) {
+            fetchCalls.increment()
+            try await Task.sleep(nanoseconds: 60_000_000)
+            return expected
         }
 
-        XCTAssertEqual(fetchCalls, 1, "并发解析同一个 pickCode 必须合并为 1 次上游请求")
-        XCTAssertEqual(results.count, 5)
-        XCTAssertTrue(results.allSatisfy { $0 == expected })
-
-        let downloadReq = client().downloadRequest(for: expected)
-        XCTAssertEqual(downloadReq.value(forHTTPHeaderField: "User-Agent"), Direct115Client.androidDownloadUserAgent)
-        XCTAssertEqual(downloadReq.value(forHTTPHeaderField: "Cookie"), "UID=1_test; acw_tc=xyz")
+        let results = try await [first, second]
+        XCTAssertEqual(results, [expected, expected])
+        XCTAssertEqual(fetchCalls.value, 1)
     }
 
     func testMagnetCloudVideoCacheIsolatesAccountsAndExpires() {

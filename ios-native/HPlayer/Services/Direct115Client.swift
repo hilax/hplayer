@@ -47,7 +47,6 @@ struct Direct115Client: @unchecked Sendable {
     /// 测试用：换成假网络。正常使用时保持 nil。
     var protocolClasses: [AnyClass]? = nil
     static let userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15"
-    static let androidDownloadUserAgent = "Mozilla/5.0 115disk/30.1.0"
 
     /// 允许随 302 重定向继续携带 115 Cookie 的官方域名与自有 CDN 域名。
     static func is115CookieHost(_ host: String) -> Bool {
@@ -310,27 +309,6 @@ struct Direct115Client: @unchecked Sendable {
         try await send(url)
     }
 
-    private static let warmUpLock = NSLock()
-    private static var lastWarmUp = Date.distantPast
-
-    /// 提前和 proapi.115.com（解析原画直链的接口）建好 TLS 连接，点开视频时少一次握手。
-    /// 不带 Cookie 的 HEAD 请求，结果不关心；45 秒内只做一次（连接空闲一会儿会被服务器断开）。
-    static func warmUpPlaybackAPIConnection(now: Date = Date()) {
-        warmUpLock.lock()
-        guard now.timeIntervalSince(lastWarmUp) >= 45 else {
-            warmUpLock.unlock()
-            return
-        }
-        lastWarmUp = now
-        warmUpLock.unlock()
-        guard let url = URL(string: "https://proapi.115.com/") else { return }
-        var request = URLRequest(url: url)
-        request.httpMethod = "HEAD"
-        request.timeoutInterval = 8
-        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
-        sharedSession.dataTask(with: request) { _, _, _ in }.resume()
-    }
-
     private static let redirectGuard = RedirectGuard()
     private static let sharedSession: URLSession = {
         let configuration = URLSessionConfiguration.default
@@ -505,7 +483,7 @@ final class Direct115SessionCache: @unchecked Sendable {
         urlOrder.removeAll { $0 == key }
     }
 
-    /// 合并同一 `(cookie, pickCode)` 并发发起的原画地址解析，避免详情页预解析、起播和续链重复打 115 接口触发风控。
+    /// 合并同一 `(cookie, pickCode)` 并发发起的原画地址解析，避免重复打 115 接口触发风控。
     func resolveOriginalStream(
         cookie: String,
         pickCode: String,
