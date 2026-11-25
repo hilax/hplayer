@@ -18,7 +18,11 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
     /// 端口自检可能等待 socket，不能占用转发队列或主线程。
     private let probeQueue = DispatchQueue(label: "app.hplayer.stream-proxy.probe", qos: .utility)
     private var listener: NWListener?
-    private var port: UInt16 = 0
+    private var port: UInt16 = 0 {
+        didSet { updateHealth { $0.port = port } }
+    }
+    private let healthLock = NSLock()
+    private var healthState = HealthState()
     private var checkingListener = false
     private var lastPortCheck: Bool?
     private var usesCustomPortProbe = false
@@ -48,7 +52,9 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
     /// 从本机中转开始续传算起，给当前请求一个恢复窗口。播放器在此期间保留 mpv 的缓冲。
     fileprivate static let recoveryGrace: TimeInterval = 7.0
     /// 停滞检测最低有效速率门槛（8 KB/s）；低于该速率持续较长时间才判定节点卡死。
-    fileprivate var minHealthySpeed: Double = 8 * 1024
+    fileprivate var minHealthySpeed: Double = 8 * 1024 {
+        didSet { updateHealth { $0.minHealthySpeed = minHealthySpeed } }
+    }
     /// 115 的下载地址有时效，过期（或被 115 收回）后上游回 403。登记了换地址办法的视频，
     /// 中转自己去换新地址、从原来的字节位置接着下，mpv 那边不会断，也不用整个重开。
     /// 键优先使用调用方指定的 streamID（同一个 pickCode 换地址后仍共用），否则回退到原始 URL。
@@ -74,7 +80,7 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
         configuration.httpShouldSetCookies = false
         configuration.urlCache = nil
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
-        configuration.httpMaximumConnectionsPerHost = 8
+        configuration.httpMaximumConnectionsPerHost = 12
         let delegateQueue = OperationQueue()
         delegateQueue.maxConcurrentOperationCount = 1
         delegateQueue.underlyingQueue = queue
@@ -304,13 +310,15 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
     }
 
     /// 查询当前播放会话的中转请求。原画只看最新的 Range，HLS 则可能有多个分片在读。
+    /// 只读取轻量锁保护的健康快照，不经由 `proxy.queue.sync`，避免高码率传输时阻塞主线程看门狗。
     func isRecovering(for localURL: URL, at uptime: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Bool {
-        queue.sync {
-            guard localURL.host == "127.0.0.1", localURL.port == Int(port),
-                  let target = resolve(path: localURL.path) else { return false }
-            let key = target.streamID ?? target.url.absoluteString
-            let active = connections.values.filter { $0.matchesProfile(target.profile) && $0.isActiveMediaRequest }
-            if playlistEntries[key] != nil {
+        guard localURL.host == "127.0.0.1", let parsed = Self.parsePath(localURL.path) else { return false }
+        return readHealth { state in
+            guard localURL.port == Int(state.port) else { return false }
+            let streamID = state.profileStreamIDs[parsed.profile] ?? nil
+            let key = streamID ?? parsed.url.absoluteString
+            let active = state.connections.values.filter { $0.profile == parsed.profile && $0.isActiveMediaRequest }
+            if state.playlistKeys.contains(key) {
                 return active.contains { $0.isRecovering(at: uptime) }
             }
             return active.filter { $0.matchesStreamKey(key) }.max { $0.serial < $1.serial }?.isRecovering(at: uptime) == true
@@ -318,20 +326,45 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
     }
 
     /// 代理层是否正在稳定接收上游数据、等待 mpv 消费本地缓存，或已在内部执行重连/换链。
-    /// 上层看门狗据此判断无需打断当前流或反复切换节点。
+    /// 上层看门狗据此判断无需打断当前流或反复切换节点；纯锁查询，绝不阻塞在串行转发队列上。
     func isStreamHealthyOrRecovering(for localURL: URL) -> Bool {
-        queue.sync {
-            guard let target = resolve(path: localURL.path) else { return false }
-            let key = target.streamID ?? target.url.absoluteString
-            if renewals[key]?.refreshing == true || playlistEntries[key]?.refreshing == true {
+        guard let parsed = Self.parsePath(localURL.path) else { return false }
+        let now = ProcessInfo.processInfo.systemUptime
+        return readHealth { state in
+            let streamID = state.profileStreamIDs[parsed.profile] ?? nil
+            let key = streamID ?? parsed.url.absoluteString
+            if state.refreshingRenewalKeys.contains(key) || state.refreshingPlaylistKeys.contains(key) {
                 return true
             }
-            let now = ProcessInfo.processInfo.systemUptime
-            return connections.values.contains {
-                $0.matchesStreamKey(key) && $0.matchesProfile(target.profile)
-                    && ($0.isActivelyReceivingOrRecovering || $0.isRecovering(at: now))
+            return state.connections.values.contains {
+                $0.matchesStreamKey(key) && $0.profile == parsed.profile
+                    && ($0.isActivelyReceivingOrRecovering(at: now, minHealthySpeed: state.minHealthySpeed) || $0.isRecovering(at: now))
             }
         }
+    }
+
+    private func readHealth<T>(_ body: (HealthState) -> T) -> T {
+        healthLock.lock()
+        defer { healthLock.unlock() }
+        return body(healthState)
+    }
+
+    private func updateHealth(_ body: (inout HealthState) -> Void) {
+        healthLock.lock()
+        body(&healthState)
+        healthLock.unlock()
+    }
+
+    fileprivate func updateConnectionHealth(_ id: ObjectIdentifier, _ snapshot: ConnectionHealth) {
+        healthLock.lock()
+        healthState.connections[id] = snapshot
+        healthLock.unlock()
+    }
+
+    fileprivate func removeConnectionHealth(_ id: ObjectIdentifier) {
+        healthLock.lock()
+        healthState.connections.removeValue(forKey: id)
+        healthLock.unlock()
     }
 
     private static func localURL(for upstream: URL, port: UInt16, profile: String) -> URL? {
@@ -532,7 +565,9 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
     }
 
     fileprivate func closed(_ handler: ProxyConnection) {
-        connections.removeValue(forKey: ObjectIdentifier(handler))
+        let id = ObjectIdentifier(handler)
+        connections.removeValue(forKey: id)
+        removeConnectionHealth(id)
         guard let key = handler.streamKey else { return }
         let activeGen = currentGeneration(forKey: key)
         // 先关闭已经属于旧播放会话或连接已断开的挂起请求，绝不唤醒僵尸连接抢占 115 并发数
@@ -602,8 +637,15 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
         let id = String(UUID().uuidString.prefix(8)).lowercased()
         profiles[id] = StreamProfile(headers: headers, streamID: streamID, generation: generation)
         profileOrder.append(id)
+        var evictedProfile: String?
         if profileOrder.count > 32 {
-            profiles.removeValue(forKey: profileOrder.removeFirst())
+            let evicted = profileOrder.removeFirst()
+            profiles.removeValue(forKey: evicted)
+            evictedProfile = evicted
+        }
+        updateHealth {
+            $0.profileStreamIDs[id] = streamID
+            if let evictedProfile { $0.profileStreamIDs.removeValue(forKey: evictedProfile) }
         }
         return id
     }
@@ -612,20 +654,35 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
         renewals[key] = UpstreamRenewal(renew)
         renewalOrder.removeAll { $0 == key }
         renewalOrder.append(key)
+        var evictedKey: String?
         if renewalOrder.count > 16 {
             let evicted = renewalOrder.removeFirst()
             renewals.removeValue(forKey: evicted)
             playlistEntries.removeValue(forKey: evicted)
+            evictedKey = evicted
+        }
+        updateHealth {
+            $0.refreshingRenewalKeys.remove(key)
+            if let evictedKey {
+                $0.refreshingRenewalKeys.remove(evictedKey)
+                $0.refreshingPlaylistKeys.remove(evictedKey)
+                $0.playlistKeys.remove(evictedKey)
+            }
         }
     }
 
     private func registerPlaylistEntry(forKey key: String, rootURL: URL, headers: [String: String], fetchRoot: @escaping () async throws -> URL) {
         playlistEntries[key] = PlaylistEntry(rootURL: rootURL, headers: headers, fetchRoot: fetchRoot)
+        updateHealth {
+            $0.playlistKeys.insert(key)
+            $0.refreshingPlaylistKeys.remove(key)
+        }
     }
 
     fileprivate func ensurePlaylistEntry(forKey key: String, rootURL: URL, headers: [String: String]) {
         guard playlistEntries[key] == nil, let renewal = renewals[key] else { return }
         playlistEntries[key] = PlaylistEntry(rootURL: rootURL, headers: headers, fetchRoot: renewal.fetch)
+        updateHealth { $0.playlistKeys.insert(key) }
     }
 
     fileprivate func isPlaylistChild(url: URL, forKey key: String) -> Bool {
@@ -681,6 +738,7 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
         renewal.waiters.append(completion)
         guard !renewal.refreshing else { return }
         renewal.refreshing = true
+        updateHealth { $0.refreshingRenewalKeys.insert(key) }
         let fetch = renewal.fetch
         Task {
             var fresh: URL?
@@ -688,6 +746,13 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
             do { fresh = try await fetch() } catch { failure = LocalStreamProxy.summary(of: error) }
             self.queue.async {
                 renewal.refreshing = false
+                self.updateHealth {
+                    if self.renewals[key]?.refreshing == true {
+                        $0.refreshingRenewalKeys.insert(key)
+                    } else {
+                        $0.refreshingRenewalKeys.remove(key)
+                    }
+                }
                 if let fresh {
                     renewal.current = fresh
                     renewal.renewedAt = Date()
@@ -717,6 +782,7 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
         }
         guard !entry.refreshing else { return }
         entry.refreshing = true
+        updateHealth { $0.refreshingPlaylistKeys.insert(key) }
         let fetchRoot = entry.fetchRoot
         let headers = entry.headers
         let session = self.session!
@@ -743,6 +809,13 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
             }
             self.queue.async {
                 entry.refreshing = false
+                self.updateHealth {
+                    if self.playlistEntries[key]?.refreshing == true {
+                        $0.refreshingPlaylistKeys.insert(key)
+                    } else {
+                        $0.refreshingPlaylistKeys.remove(key)
+                    }
+                }
                 let success = !updatedSegments.isEmpty
                 if success {
                     entry.renewedAt = Date()
@@ -762,7 +835,7 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
         }
     }
 
-    fileprivate func resolve(path: String) -> (url: URL, headers: [String: String], profile: String, streamID: String?, generation: Int)? {
+    private static func parsePath(_ path: String) -> (url: URL, profile: String)? {
         let pathOnly = path.split(separator: "?", maxSplits: 1).first.map(String.init) ?? path
         let parts = pathOnly.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
         guard parts.count >= 3, parts[0] == "v" else { return nil }
@@ -770,8 +843,13 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
         while encoded.count % 4 != 0 { encoded += "=" }
         guard let data = Data(base64Encoded: encoded), let text = String(data: data, encoding: .utf8),
               let url = URL(string: text) else { return nil }
-        let profile = profiles[parts[1]]
-        return (url, profile?.headers ?? [:], parts[1], profile?.streamID, profile?.generation ?? 0)
+        return (url, parts[1])
+    }
+
+    fileprivate func resolve(path: String) -> (url: URL, headers: [String: String], profile: String, streamID: String?, generation: Int)? {
+        guard let parsed = Self.parsePath(path) else { return nil }
+        let profile = profiles[parsed.profile]
+        return (parsed.url, profile?.headers ?? [:], parsed.profile, profile?.streamID, profile?.generation ?? 0)
     }
 
     /// m3u8 里的一行：分片地址、以及 URI="…"（密钥、字幕、初始化分片）都换成本机中转地址
@@ -868,6 +946,48 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
     fileprivate func detach(_ task: URLSessionDataTask) {
         tasks.removeValue(forKey: task.taskIdentifier)
     }
+}
+
+fileprivate struct ConnectionHealth {
+    let serial: Int
+    let profile: String
+    let explicitStreamID: String?
+    let originalURLString: String?
+    let isActiveMediaRequest: Bool
+    let recoveryDeadline: TimeInterval?
+    let backpressuredOrRetrying: Bool
+    let hasTask: Bool
+    let lastReceivedBytesUptime: TimeInterval
+    let recentSampleStartUptime: TimeInterval
+    let recentSampleBytes: Int64
+
+    func matchesStreamKey(_ key: String) -> Bool {
+        explicitStreamID == key || originalURLString == key
+    }
+
+    func isRecovering(at uptime: TimeInterval) -> Bool {
+        guard let recoveryDeadline else { return false }
+        return uptime < recoveryDeadline
+    }
+
+    func isActivelyReceivingOrRecovering(at now: TimeInterval, minHealthySpeed: Double) -> Bool {
+        if backpressuredOrRetrying { return true }
+        guard hasTask, lastReceivedBytesUptime > 0 else { return false }
+        guard now - lastReceivedBytesUptime <= 4.0 else { return false }
+        let elapsed = max(1.0, now - recentSampleStartUptime)
+        let rate = Double(recentSampleBytes) / elapsed
+        return rate >= max(minHealthySpeed, 16 * 1024)
+    }
+}
+
+private struct HealthState {
+    var port: UInt16 = 0
+    var minHealthySpeed: Double = 8 * 1024
+    var profileStreamIDs: [String: String?] = [:]
+    var playlistKeys: Set<String> = []
+    var refreshingRenewalKeys: Set<String> = []
+    var refreshingPlaylistKeys: Set<String> = []
+    var connections: [ObjectIdentifier: ConnectionHealth] = [:]
 }
 
 private struct StreamProfile {
@@ -1796,6 +1916,29 @@ private final class ProxyConnection: UpstreamTaskHandler {
         // 多次重试共用一次期限。只有实际收到足量文件数据，下一次断流才重新计时。
         if let recoveryWindow, deliveredBody - recoveryWindow.bytes < 65_536 { return }
         recoveryWindow = (ProcessInfo.processInfo.systemUptime + LocalStreamProxy.recoveryGrace, deliveredBody)
+        publishHealth()
+    }
+
+    private func publishHealth() {
+        let id = ObjectIdentifier(self)
+        if closed {
+            proxy.removeConnectionHealth(id)
+            return
+        }
+        let snapshot = ConnectionHealth(
+            serial: serial,
+            profile: profile,
+            explicitStreamID: explicitStreamID,
+            originalURLString: originalURL?.absoluteString,
+            isActiveMediaRequest: isActiveMediaRequest,
+            recoveryDeadline: recoveryWindow?.deadline,
+            backpressuredOrRetrying: suspended || deferredChunkOffset != nil || pending >= Self.resumeBytes || retryWork != nil,
+            hasTask: task != nil,
+            lastReceivedBytesUptime: lastReceivedBytesUptime,
+            recentSampleStartUptime: recentSampleStartUptime,
+            recentSampleBytes: recentSampleBytes
+        )
+        proxy.updateConnectionHealth(id, snapshot)
     }
 
     fileprivate var canRefreshUpstream: Bool {
@@ -1846,6 +1989,7 @@ private final class ProxyConnection: UpstreamTaskHandler {
         suspended = false
         retryCount = 0
         refusalWaits = 0
+        publishHealth()
 
         if let key = renewalKey, let orig = originalURL, let failed = requestUpstreamURL ?? upstreamURL, proxy.canRenew(forKey: key) {
             if isPlaylistChildStream {
@@ -1868,10 +2012,11 @@ private final class ProxyConnection: UpstreamTaskHandler {
         return true
     }
 
-    /// 把能续传的下载或正在换地址的请求挂起，给同一个视频的新连接腾位置。
+    /// 把能续传的下载、尚未收到响应头的在途请求或正在换地址的请求挂起，给同一个视频的新连接腾位置。
     fileprivate func yieldUpstream() {
-        guard isActiveMediaRequest, !isPlaylist else { return }
-        guard headersSent ? bodyEnd != nil : renewalID != nil else { return }
+        guard isActiveMediaRequest, !isPlaylist,
+              !(originalURL.map(LocalStreamProxy.looksLikePlaylistURL) ?? false) else { return }
+        guard !headersSent || bodyEnd != nil else { return }
         retryWork?.cancel()
         retryWork = nil
         renewalID = nil
@@ -1885,13 +2030,19 @@ private final class ProxyConnection: UpstreamTaskHandler {
         resumeFrom = nil
         suspended = false
         yielded = true
-        proxy.note("同一个视频开了新连接，旧连接先停在 \(bodyStart + deliveredBody) 字节")
+        publishHealth()
+        if headersSent {
+            proxy.note("同一个视频开了新连接，旧连接先停在 \(bodyStart + deliveredBody) 字节")
+        } else {
+            proxy.note("同一个视频开了新连接，旧连接尚未收到响应头，已主动让出通道")
+        }
     }
 
     /// 同一个视频别的下载都结束了，mpv 还连着这条：从停下的位置接着下
     fileprivate func resumeAfterYield() {
         guard yielded, isClientAlive else { return }
         yielded = false
+        publishHealth()
         if bodyComplete {
             finish()
             return
@@ -1911,6 +2062,7 @@ private final class ProxyConnection: UpstreamTaskHandler {
             switch state {
             case .ready:
                 self?.connectionReady = true
+                self?.publishHealth()
             case .failed, .cancelled:
                 self?.connectionReady = false
                 self?.close()
@@ -2041,6 +2193,7 @@ private final class ProxyConnection: UpstreamTaskHandler {
                 windowBytes = 0
                 task = runningTask
                 proxy.reassignTask(runningTask, to: self)
+                publishHealth()
                 startStallTimer()
                 return
             } else {
@@ -2051,6 +2204,7 @@ private final class ProxyConnection: UpstreamTaskHandler {
                 windowBytes = 0
                 task = runningTask
                 proxy.reassignTask(runningTask, to: self)
+                publishHealth()
                 startStallTimer()
                 return
             }
@@ -2118,6 +2272,7 @@ private final class ProxyConnection: UpstreamTaskHandler {
         windowStartUptime = now
         windowBytes = 0
         task = proxy.startTask(request, for: self)
+        publishHealth()
         startStallTimer()
     }
 
@@ -2170,6 +2325,7 @@ private final class ProxyConnection: UpstreamTaskHandler {
         proxy.detach(running)
         running.cancel()
         task = nil
+        publishHealth()
 
         // 连续至少 2 次停滞且允许换新地址时，才向 115 申请新直链（受冷却保护，防止频繁切换）
         if retryCount >= 2, !isPlaylistChildStream, let key = renewalKey, let failed = requestUpstreamURL ?? upstreamURL,
@@ -2246,6 +2402,7 @@ private final class ProxyConnection: UpstreamTaskHandler {
             isPlaylist = true
             chunkingActive = false
             playlistStatus = http.statusCode
+            publishHealth()
             return true
         }
 
@@ -2297,6 +2454,7 @@ private final class ProxyConnection: UpstreamTaskHandler {
         if let etagHeader { head += "ETag: \(etagHeader)\r\n" }
         head += "Connection: close\r\n\r\n"
         headersSent = true
+        publishHealth()
         write(Data(head.utf8))
         return true
     }
@@ -2337,6 +2495,8 @@ private final class ProxyConnection: UpstreamTaskHandler {
                 renewCount = 0
                 refusalWaits = 0
             }
+            // 在把数据写入回环 socket 之前先发布健康快照，确保消费方读到字节后立刻能看到最新健康状态
+            publishHealth()
             write(data)
         }
     }
@@ -2344,6 +2504,7 @@ private final class ProxyConnection: UpstreamTaskHandler {
     func didComplete(_ error: Error?) {
         task = nil
         stopStallTimer()
+        publishHealth()
         guard !closed else { return }
         if let error {
             let detail = "上游连接失败：\(LocalStreamProxy.summary(of: error))（\(upstreamURL?.host ?? "")），已转发 \(deliveredBody) 字节"
@@ -2375,6 +2536,7 @@ private final class ProxyConnection: UpstreamTaskHandler {
             let nextOffset = chunkEnd + 1
             if pending >= Self.resumeBytes {
                 deferredChunkOffset = nextOffset
+                publishHealth()
             } else {
                 relaunch(resumingAt: nextOffset)
             }
@@ -2432,6 +2594,7 @@ private final class ProxyConnection: UpstreamTaskHandler {
         let resumePoint = resume
         let work = DispatchWorkItem { [weak self] in self?.relaunch(resumingAt: resumePoint) }
         retryWork = work
+        publishHealth()
         proxy.queue.asyncAfter(deadline: .now() + delay, execute: work)
         return true
     }
@@ -2474,6 +2637,7 @@ private final class ProxyConnection: UpstreamTaskHandler {
                     self.relaunch(resumingAt: resumeAt)
                 }
                 retryWork = work
+                publishHealth()
                 proxy.queue.asyncAfter(deadline: .now() + delay, execute: work)
             }
             return true
@@ -2515,6 +2679,7 @@ private final class ProxyConnection: UpstreamTaskHandler {
                 self.relaunch(resumingAt: resumeAt)
             }
             retryWork = work
+            publishHealth()
             proxy.queue.asyncAfter(deadline: .now() + delay, execute: work)
         }
         return true
@@ -2523,10 +2688,12 @@ private final class ProxyConnection: UpstreamTaskHandler {
     private func resumeAfterRenewal(at offset: Int64?, allowSameURL: Bool = false) -> (URL?) -> Void {
         let id = UUID()
         renewalID = id
+        publishHealth()
         return { [weak self] fresh in
             // A newer Range can take over while the address API is in flight.
             guard let self, !self.closed, self.renewalID == id else { return }
             self.renewalID = nil
+            self.publishHealth()
             if let fresh {
                 self.requestUpstreamURL = fresh
                 self.upstreamURL = fresh
@@ -2557,6 +2724,11 @@ private final class ProxyConnection: UpstreamTaskHandler {
             }
             request.setValue("bytes=\(start)-" + (endBound.map { String($0) } ?? ""), forHTTPHeaderField: "Range")
             resumeFrom = start
+        } else if chunkingActive, proxy.chunkSize > 0, let rangeStart = clientRangeStart {
+            // 尚未收到响应头即被让出/重试时，沿用 16 MiB 分段上限，避免退回开放式 Range 拉满单连接
+            let chunkLimit = rangeStart + proxy.chunkSize - 1
+            let endBound = clientRangeEnd.map { min($0, chunkLimit) } ?? chunkLimit
+            request.setValue("bytes=\(rangeStart)-\(endBound)", forHTTPHeaderField: "Range")
         }
         // 旧的下载已经没了，积压的数据发完之后别去恢复它
         suspended = false
@@ -2646,10 +2818,12 @@ private final class ProxyConnection: UpstreamTaskHandler {
 
     private func write(_ data: Data) {
         guard !closed, !data.isEmpty else { return }
+        let wasBackpressured = suspended || pending >= Self.resumeBytes
         pending += data.count
         let count = data.count
         connection.send(content: data, completion: .contentProcessed { [weak self] error in
             guard let self else { return }
+            let before = self.suspended || self.pending >= Self.resumeBytes
             self.pending -= count
             if error != nil {
                 self.close()
@@ -2667,11 +2841,15 @@ private final class ProxyConnection: UpstreamTaskHandler {
                     self.relaunch(resumingAt: nextOffset)
                 }
             }
+            let after = self.suspended || self.pending >= Self.resumeBytes
+            if after != before { self.publishHealth() }
         })
         if !suspended, pending > Self.pauseBytes, let task {
             suspended = true
             task.suspend()
         }
+        let nowBackpressured = suspended || pending >= Self.resumeBytes
+        if nowBackpressured != wasBackpressured { publishHealth() }
     }
 
     private func finish() {
@@ -2695,6 +2873,7 @@ private final class ProxyConnection: UpstreamTaskHandler {
             task.cancel()
         }
         task = nil
+        publishHealth()
         connection.cancel()
         proxy.closed(self)
     }

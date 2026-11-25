@@ -35,6 +35,7 @@ final class MPVEngine {
     private let queueIdentity = DispatchSpecificKey<Bool>()
     private let commandLock = NSLock()
     private var commandContinuations: [UInt64: CheckedContinuation<Int32, Never>] = [:]
+    private var commandCallbacks: [UInt64: @MainActor @Sendable (Int32) -> Void] = [:]
     private var nextCommandID: UInt64 = 1
     /// 在主线程调用
     var onEvent: ((Event) -> Void)?
@@ -128,6 +129,27 @@ final class MPVEngine {
         mpv_set_property(handle, name, MPV_FORMAT_DOUBLE, &number)
     }
 
+    /// 异步设置属性：立即入队返回，不在主线程同步等待 mpv 内核锁，避免 seek / 看门狗期间阻塞 UI 与手势。
+    func setAsync(_ name: String, _ value: String) {
+        guard let handle else { return }
+        value.withCString { cString in
+            var pointer: UnsafePointer<CChar>? = cString
+            mpv_set_property_async(handle, 0, name, MPV_FORMAT_STRING, &pointer)
+        }
+    }
+
+    func setAsync(_ name: String, _ value: Bool) {
+        guard let handle else { return }
+        var flag: Int32 = value ? 1 : 0
+        mpv_set_property_async(handle, 0, name, MPV_FORMAT_FLAG, &flag)
+    }
+
+    func setAsync(_ name: String, _ value: Double) {
+        guard let handle else { return }
+        var number = value
+        mpv_set_property_async(handle, 0, name, MPV_FORMAT_DOUBLE, &number)
+    }
+
     func string(_ name: String) -> String? {
         guard let handle, let raw = mpv_get_property_string(handle, name) else { return nil }
         defer { mpv_free(raw) }
@@ -167,6 +189,40 @@ final class MPVEngine {
         }
     }
 
+    /// 立即异步入队命令（不在调用线程同步等待 mpv 执行，也不额外经过 Swift Task 调度延迟），
+    /// 避免滑动/拖动 seek 时阻塞主线程渲染与手势响应；完成后按内核事件 FIFO 顺序回到主线程回调。
+    @discardableResult
+    func postCommand(_ args: [String], completion: (@MainActor @Sendable (Int32) -> Void)? = nil) -> Int32 {
+        var pointers: [UnsafeMutablePointer<CChar>?] = args.map { strdup($0) }
+        pointers.append(nil)
+        defer { pointers.forEach { free($0) } }
+
+        commandLock.lock()
+        guard let handle = self.handle else {
+            commandLock.unlock()
+            return -1
+        }
+        let commandID: UInt64
+        if let completion {
+            commandID = nextCommandID
+            nextCommandID &+= 1
+            if nextCommandID == 0 { nextCommandID = 1 }
+            commandCallbacks[commandID] = completion
+        } else {
+            commandID = 0
+        }
+        let status = pointers.withUnsafeMutableBufferPointer { buffer -> Int32 in
+            buffer.baseAddress!.withMemoryRebound(to: UnsafePointer<CChar>?.self, capacity: buffer.count) {
+                mpv_command_async(handle, commandID, $0)
+            }
+        }
+        if status < 0, commandID != 0 {
+            commandCallbacks.removeValue(forKey: commandID)
+        }
+        commandLock.unlock()
+        return status
+    }
+
     /// 异步入队命令（不在调用线程同步等待 mpv 解析执行），避免 sub-add 等操作阻塞主线程渲染与 UI。
     @discardableResult
     func commandAsync(_ args: [String]) async -> Int32 {
@@ -200,17 +256,21 @@ final class MPVEngine {
         }
     }
 
-    private func completeCommand(id: UInt64, status: Int32) {
+    private func completeCommand(id: UInt64, status: Int32) -> (@MainActor @Sendable (Int32) -> Void)? {
+        guard id != 0 else { return nil }
         commandLock.lock()
         let continuation = commandContinuations.removeValue(forKey: id)
+        let callback = commandCallbacks.removeValue(forKey: id)
         commandLock.unlock()
         continuation?.resume(returning: status)
+        return callback
     }
 
     private func cancelAllCommandContinuations() {
         commandLock.lock()
         let pending = Array(commandContinuations.values)
         commandContinuations.removeAll()
+        commandCallbacks.removeAll()
         commandLock.unlock()
         for continuation in pending {
             continuation.resume(returning: -1)
@@ -345,19 +405,27 @@ final class MPVEngine {
 
     // MARK: 事件
 
+    private enum PendingDispatch {
+        case event(Event)
+        case commandReply(@MainActor @Sendable (Int32) -> Void, Int32)
+    }
+
     private func drainEvents() {
         queue.async { [weak self] in
             guard let self else { return }
-            var collected: [Event] = []
+            var collected: [PendingDispatch] = []
             while let handle = self.handle {
                 guard let event = mpv_wait_event(handle, 0) else { break }
                 let id = event.pointee.event_id
                 if id == MPV_EVENT_NONE { break }
                 if id == MPV_EVENT_COMMAND_REPLY {
-                    completeCommand(id: event.pointee.reply_userdata, status: event.pointee.error)
+                    let status = event.pointee.error
+                    if let callback = completeCommand(id: event.pointee.reply_userdata, status: status) {
+                        collected.append(.commandReply(callback, status))
+                    }
                     continue
                 }
-                if let converted = Self.convert(event.pointee) { collected.append(converted) }
+                if let converted = Self.convert(event.pointee) { collected.append(.event(converted)) }
                 if id == MPV_EVENT_SHUTDOWN {
                     cancelAllCommandContinuations()
                     break
@@ -365,8 +433,16 @@ final class MPVEngine {
             }
             guard !collected.isEmpty else { return }
             DispatchQueue.main.async { [weak self] in
-                guard let self, let onEvent = self.onEvent else { return }
-                collected.forEach(onEvent)
+                guard let self else { return }
+                let onEvent = self.onEvent
+                for item in collected {
+                    switch item {
+                    case .event(let event):
+                        onEvent?(event)
+                    case .commandReply(let callback, let status):
+                        MainActor.assumeIsolated { callback(status) }
+                    }
+                }
             }
         }
     }

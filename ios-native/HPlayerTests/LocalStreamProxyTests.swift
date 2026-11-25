@@ -744,6 +744,80 @@ final class LocalStreamProxyTests: XCTestCase {
         XCTAssertTrue(proxy.isStreamHealthyOrRecovering(for: local), "刚收到 64 KiB 有效数据时代理层应报告为健康")
     }
 
+    /// 连续快速 seek 时，旧连接即使尚未收到上游响应头也必须立即取消让出通道，且后续若回退恢复仍保持分段 Range 上限。
+    func testRapidDoubleSeekYieldsOlderConnectionBeforeResponseHeaders() async throws {
+        let total = 120_000
+        let chunk = 10_000
+        let full = pattern(total)
+        ScriptedUpstream.install([
+            .hang,
+            .reply(status: 206, headers: [
+                "Content-Type": "video/mp4",
+                "Content-Range": "bytes 50000-59999/\(total)",
+                "Content-Length": "\(chunk)",
+                "Accept-Ranges": "bytes",
+            ], body: Data(full[50_000..<60_000])),
+            .reply(status: 206, headers: [
+                "Content-Type": "video/mp4",
+                "Content-Range": "bytes 0-9999/\(total)",
+                "Content-Length": "\(chunk)",
+                "Accept-Ranges": "bytes",
+            ], body: Data(full[0..<10_000])),
+        ])
+        let proxy = LocalStreamProxy(protocolClasses: [ScriptedUpstream.self])
+        proxy.setChunkSizeForTesting(Int64(chunk))
+        let upstream = try XCTUnwrap(URL(string: "https://example.com/a/rapid-seek.mp4"))
+        let relayed = await proxy.localURL(for: upstream, headers: [:], streamID: "p115:rapid-seek")
+        let local = try XCTUnwrap(relayed)
+
+        let older = try openStream(local, range: "bytes=0-")
+        defer { close(older) }
+        for _ in 0..<100 {
+            if ScriptedUpstream.receivedRanges().count >= 1 { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertEqual(ScriptedUpstream.receivedRanges().first ?? nil, "bytes=0-9999")
+
+        // 旧连接尚在等待上游响应头时发起新的 seek Range：旧上游任务必须立刻被取消，不并发撞 115
+        let newer = try fetch(local, range: "bytes=50000-59999")
+        XCTAssertEqual(newer.status, 206)
+        XCTAssertEqual(newer.body, Data(full[50_000..<60_000]))
+        XCTAssertEqual(ScriptedUpstream.stoppedCount, 1, "未收到响应头的旧连接也必须主动取消让出上游通道")
+
+        // 新连接关闭后，若客户端仍保持旧连接，旧连接应按分段 Range 上限平稳恢复
+        let rawResumed = try readUntil(older, bodyBytes: chunk)
+        let headerEnd = try XCTUnwrap(rawResumed.range(of: Data("\r\n\r\n".utf8)))
+        XCTAssertEqual(Data(rawResumed[headerEnd.upperBound...].prefix(chunk)), Data(full[0..<chunk]))
+        let ranges = ScriptedUpstream.receivedRanges()
+        XCTAssertGreaterThanOrEqual(ranges.count, 3)
+        XCTAssertEqual(ranges[2], "bytes=0-9999", "未回响应头让出后的恢复请求仍应保持分段 Range 上限")
+    }
+
+    /// 代理健康与恢复状态查询必须走轻量锁快照，即使串行转发队列繁忙也不能阻塞调用线程。
+    func testHealthQueriesDoNotBlockOnProxyQueue() async throws {
+        let proxy = LocalStreamProxy(protocolClasses: [ScriptedUpstream.self])
+        let upstream = try XCTUnwrap(URL(string: "https://example.com/a/nonblocking.mp4"))
+        let relayed = await proxy.localURL(for: upstream, headers: [:], streamID: "p115:nonblocking")
+        let local = try XCTUnwrap(relayed)
+
+        let enteredQueue = DispatchSemaphore(value: 0)
+        let releaseQueue = DispatchSemaphore(value: 0)
+        proxy.queue.async {
+            enteredQueue.signal()
+            releaseQueue.wait()
+        }
+        defer { releaseQueue.signal() }
+        XCTAssertEqual(enteredQueue.wait(timeout: .now() + 2), .success)
+
+        let finished = expectation(description: "health queries completed without waiting on proxy.queue")
+        DispatchQueue.global(qos: .userInitiated).async {
+            XCTAssertFalse(proxy.isRecovering(for: local))
+            XCTAssertFalse(proxy.isStreamHealthyOrRecovering(for: local))
+            finished.fulfill()
+        }
+        await fulfillment(of: [finished], timeout: 0.5)
+    }
+
     private func mp4Box(type: String, size: Int64, extended: Bool = false) -> Data {
         var data = Data()
         if extended {
@@ -938,6 +1012,8 @@ private final class ScriptedUpstream: URLProtocol {
         case reply(status: Int, headers: [String: String], body: Data)
         /// 发出响应头和一部分内容，之后一直不结束（像一条还在下载的连接），直到被取消
         case hold(status: Int, headers: [String: String], body: Data)
+        /// 既不发响应头也不结束（模拟正在等 115 上游响应头），直到被取消
+        case hang
     }
 
     private static let lock = NSLock()
@@ -998,6 +1074,8 @@ private final class ScriptedUpstream: URLProtocol {
             let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers)!
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
             if !body.isEmpty { client?.urlProtocol(self, didLoad: body) }
+        case .hang:
+            holding = true
         }
     }
 

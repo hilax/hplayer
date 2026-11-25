@@ -153,25 +153,73 @@ final class PlaybackRefreshTests: XCTestCase {
         XCTAssertFalse(player.playing)
     }
 
-    func testDiskCacheTierDefaultsToTwoGBAndSupportsTwentyGB() {
+    func testDiskCacheTierDefaultsToTwentyGBAndSupportsTwoGB() {
         let key = "player.cacheStorageMode"
         let previous = UserDefaults.standard.string(forKey: key)
         defer {
             if let previous { UserDefaults.standard.set(previous, forKey: key) } else { UserDefaults.standard.removeObject(forKey: key) }
         }
         UserDefaults.standard.removeObject(forKey: key)
-        XCTAssertEqual(CacheStorageMode.saved, .disk)
-        XCTAssertEqual(CacheStorageMode.disk.diskCapMiB, 2048)
+        XCTAssertEqual(CacheStorageMode.saved, .diskLarge)
         XCTAssertEqual(CacheStorageMode.diskLarge.diskCapMiB, 20480)
+        XCTAssertEqual(CacheStorageMode.diskLarge.diskBackMiB, 1024)
+        XCTAssertEqual(CacheStorageMode.disk.diskCapMiB, 2048)
+        XCTAssertEqual(CacheStorageMode.disk.diskBackMiB, 256)
 
-        // 旧版本若曾保存过 "memory"，回退后自动安全回落到默认磁盘 2GB
+        // 旧版本若曾保存过 "memory"，回退后自动安全回落到默认磁盘 20GB（仍受设备剩余空间限制）
         UserDefaults.standard.set("memory", forKey: key)
-        XCTAssertEqual(CacheStorageMode.saved, .disk)
+        XCTAssertEqual(CacheStorageMode.saved, .diskLarge)
 
         let large = PlayerDiskCache.limitMiB(capMiB: CacheStorageMode.diskLarge.diskCapMiB)
         XCTAssertGreaterThanOrEqual(large, 64)
         XCTAssertLessThanOrEqual(large, 20480)
         XCTAssertGreaterThanOrEqual(large, PlayerDiskCache.limitMiB())
+    }
+
+    func testRapidSeekIgnoresStaleRestartWhileCommandInFlightAndAvoidsTransientBuffering() throws {
+        let player = try playingController()
+        defer { player.stop() }
+
+        player.seek(to: 180)
+        XCTAssertFalse(player.buffering, "普通快速关键帧跳转未欠载时不应强制置 buffering，避免闪烁和阻止控件隐藏")
+
+        // 模拟更新一次异步 seek 仍在 mpv 命令队列中未回包：旧的 playbackRestart 不得提前结算
+        player.setInFlightSeekCommandsForTesting(1)
+        player.receiveEventForTesting(.property("time-pos", .double(180)))
+        player.receiveEventForTesting(.playbackRestart)
+        XCTAssertEqual(player.confirmedTime ?? -1, 10, accuracy: 0.01, "在途 seek 命令未完成前不得误结算旧 playbackRestart")
+
+        // 在途命令回包归零后，新的 playbackRestart 才正式确认落地位置
+        player.setInFlightSeekCommandsForTesting(0)
+        player.receiveEventForTesting(.property("time-pos", .double(180)))
+        player.receiveEventForTesting(.playbackRestart)
+        XCTAssertEqual(player.confirmedTime ?? -1, 180, accuracy: 0.01)
+    }
+
+    func testHealthyPlaybackResetsLargerPauseWaitAfter25Seconds() async throws {
+        let player = PlaybackController()
+        defer { player.stop() }
+        player.open(try XCTUnwrap(URL(string: "https://example.com/video.mkv")), autoRecover: true)
+        player.receiveEventForTesting(.fileLoaded)
+        player.receiveEventForTesting(.property("duration", .double(300)))
+        player.receiveEventForTesting(.property("seekable", .flag(true)))
+        player.receiveEventForTesting(.playbackRestart)
+        player.receiveEventForTesting(.property("time-pos", .double(25)))
+        player.receiveEventForTesting(.property("paused-for-cache", .flag(true)))
+
+        // 触发一次恢复，开启保守的 2.5s cache-pause-wait
+        for _ in 0..<8 { player.checkHealthForTesting() }
+        XCTAssertTrue(player.preferLargerPauseWaitForTesting)
+        try await Task.sleep(nanoseconds: 80_000_000)
+
+        // 重开并稳定播放满 25 秒后，应自动恢复为轻快 1s 档位
+        player.receiveEventForTesting(.fileLoaded)
+        player.receiveEventForTesting(.playbackRestart)
+        player.receiveEventForTesting(.property("paused-for-cache", .flag(false)))
+        player.receiveEventForTesting(.property("time-pos", .double(26)))
+        for _ in 0..<25 { player.checkHealthForTesting() }
+
+        XCTAssertFalse(player.preferLargerPauseWaitForTesting, "稳定播放 25 秒后应把 cache-pause-wait 恢复回默认 1 秒")
     }
 
     func testSeekCommandFlagsUseKeyframesForAllNetworkScrubDistances() {

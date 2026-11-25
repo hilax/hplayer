@@ -47,7 +47,7 @@ enum ReadaheadLevel: Int, CaseIterable, Identifiable {
     }
 }
 
-/// 磁盘缓存上限：默认 2GB，可选 20GB 档（高码率 4K 原画「边播边存」更从容），实际还会受手机剩余空间限制。
+/// 磁盘缓存上限：默认 20GB（高码率 4K 原画「边播边存」与回拖命中缓存更从容，实际上限会自动受手机剩余空间一半限制），也可切回 2GB 档。
 enum CacheStorageMode: String, CaseIterable, Identifiable {
     case disk
     case diskLarge
@@ -55,8 +55,8 @@ enum CacheStorageMode: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .disk: return "2GB（默认）"
-        case .diskLarge: return "20GB"
+        case .disk: return "2GB"
+        case .diskLarge: return "20GB（默认）"
         }
     }
 
@@ -79,7 +79,7 @@ enum CacheStorageMode: String, CaseIterable, Identifiable {
     private static let key = "player.cacheStorageMode"
 
     static var saved: CacheStorageMode {
-        get { CacheStorageMode(rawValue: UserDefaults.standard.string(forKey: key) ?? "") ?? .disk }
+        get { CacheStorageMode(rawValue: UserDefaults.standard.string(forKey: key) ?? "") ?? .diskLarge }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: key) }
     }
 }
@@ -339,6 +339,12 @@ final class PlaybackController: ObservableObject {
     private var seekAwaitingRestart = false
     private var seekObservedTime: Double?
     private var seekUsesKeyframes = false
+    /// 每次 seek 递增的代际号：只有最新一次异步 seek 失败才会触发恢复，防止旧命令回包误伤新跳转。
+    private var seekGeneration: UInt64 = 0
+    /// 每次打开/重置/重连递增的周期号：隔离上一轮播放残留的异步 seek 回包，避免扣错新一轮计数。
+    private var seekEpoch: UInt64 = 0
+    /// 已异步发给 mpv、尚未收到 COMMAND_REPLY 的 seek 命令个数；非零时忽略旧的 playbackRestart。
+    private var inFlightSeekCommands = 0
     /// An EOF reported while seeking can belong to the previous position.
     private var eofDuringSeek = false
     private var resumePoint: Double = 0
@@ -762,6 +768,9 @@ final class PlaybackController: ObservableObject {
         seekAwaitingRestart = false
         seekObservedTime = nil
         seekUsesKeyframes = false
+        seekGeneration &+= 1
+        seekEpoch &+= 1
+        inFlightSeekCommands = 0
         eofDuringSeek = false
         boosted = false
         boostDesyncSince = nil
@@ -1074,18 +1083,24 @@ final class PlaybackController: ObservableObject {
         }
         let mode = Self.seekCommandFlags(target: target, duration: duration, isLocalFile: isLocalFile, exact: exact)
         seekUsesKeyframes = mode.usesKeyframes
-        let result = engine?.command(["seek", String(format: "%.3f", target), mode.flags])
-        engine?.set("pause", userPaused)
-        if let result, result < 0 {
-            if watchdogEnabled {
-                recover(reason: "跳转没有成功")
-            } else if currentTorrentStream, torrentRecoveryCount < 2 {
-                torrentRecoveryCount += 1
-                recover(reason: "跳转重新缓冲")
-            } else {
-                giveUp("跳转没有成功，请重试")
+        seekGeneration &+= 1
+        let currentSession = session
+        let currentEpoch = seekEpoch
+        let currentGeneration = seekGeneration
+        if let engine {
+            inFlightSeekCommands += 1
+            let enqueueStatus = engine.postCommand(["seek", String(format: "%.3f", target), mode.flags]) { [weak self] status in
+                guard let self, self.session == currentSession, self.seekEpoch == currentEpoch else { return }
+                self.inFlightSeekCommands = max(0, self.inFlightSeekCommands - 1)
+                guard status < 0, self.seekGeneration == currentGeneration else { return }
+                self.handleSeekCommandFailure()
             }
-            return
+            if enqueueStatus < 0 {
+                inFlightSeekCommands = max(0, inFlightSeekCommands - 1)
+                handleSeekCommandFailure()
+                return
+            }
+            engine.setAsync("pause", userPaused)
         }
         #if DEBUG
         if !injectedStaleEOFForUITest,
@@ -1097,6 +1112,18 @@ final class PlaybackController: ObservableObject {
         }
         #endif
         updateFlags()
+    }
+
+    private func handleSeekCommandFailure() {
+        guard !closingPlayback, currentURL != nil, recoveryTask == nil else { return }
+        if watchdogEnabled {
+            recover(reason: "跳转没有成功")
+        } else if currentTorrentStream, torrentRecoveryCount < 2 {
+            torrentRecoveryCount += 1
+            recover(reason: "跳转重新缓冲")
+        } else {
+            giveUp("跳转没有成功，请重试")
+        }
     }
 
     #if DEBUG
@@ -1111,6 +1138,10 @@ final class PlaybackController: ObservableObject {
     func checkHealthForTesting() { checkHealth() }
 
     func setEngineURLForTesting(_ url: URL?) { currentEngineURL = url }
+
+    func setInFlightSeekCommandsForTesting(_ count: Int) { inFlightSeekCommands = max(0, count) }
+
+    var preferLargerPauseWaitForTesting: Bool { preferLargerPauseWait }
 
     var recoveryCountForTesting: Int { recoveryAttempts.count }
 
@@ -1222,6 +1253,8 @@ final class PlaybackController: ObservableObject {
         subtitleDelayHydratedSession = -1
         pendingOpen = nil
         statusNote = ""
+        seekEpoch &+= 1
+        inFlightSeekCommands = 0
         engine?.command(["stop"])
         resetState(keepDuration: false)
         playing = false
@@ -2103,15 +2136,17 @@ final class PlaybackController: ObservableObject {
                 : "开始播放 \(Self.clock(engineTime))（出画面，距播放页创建 \(Self.milliseconds(since: createdAt)) 毫秒）")
             if !hasPlayed { hasPlayed = true }
             playedThisSession = true
-            seekAwaitingRestart = false
-            if let observed = seekObservedTime {
-                checkFailedSeek(observed)
-                settlePendingSeek(at: observed)
-            }
-            if pendingSeek == nil, eofDuringSeek {
-                // Discard an EOF observed for the position we just left.
-                eofReached = false
-                eofDuringSeek = false
+            if inFlightSeekCommands == 0 {
+                seekAwaitingRestart = false
+                if let observed = seekObservedTime {
+                    checkFailedSeek(observed)
+                    settlePendingSeek(at: observed)
+                }
+                if pendingSeek == nil, eofDuringSeek {
+                    // Discard an EOF observed for the position we just left.
+                    eofReached = false
+                    eofDuringSeek = false
+                }
             }
             if !statusNote.isEmpty, recoveryTask == nil { statusNote = "" }
             if !pictureInPictureStillReady, !pictureInPictureActive {
@@ -2340,17 +2375,14 @@ final class PlaybackController: ObservableObject {
     }
 
     private func settlePendingSeek(at time: Double) {
-        guard let pending = pendingSeek, recoveryTask == nil, !seekAwaitingRestart, !seeking, !pausedForCache, !eofReached,
-              time.isFinite, time >= 0 else { return }
+        guard let pending = pendingSeek, recoveryTask == nil, inFlightSeekCommands == 0, !seekAwaitingRestart,
+              !seeking, !pausedForCache, !eofReached, time.isFinite, time >= 0 else { return }
         let offset = time - pending
         // A fast keyframe seek can land before its target. A later old position
         // must not confirm a new seek, especially when it is near the end.
         let nearEnd = duration > 0 && time >= duration - min(1.5, duration * 0.1)
         let reachedTarget = offset > (seekUsesKeyframes ? -30 : -2) && offset < (nearEnd ? 1 : 5)
         guard reachedTarget else { return }
-        // The notification batch can lag behind a newer seek/cache transition.
-        guard engine?.flag("seeking") != true, engine?.flag("paused-for-cache") != true,
-              engine?.flag("eof-reached") != true else { return }
         pendingSeek = nil
         seekObservedTime = nil
         if eofDuringSeek {
@@ -2385,8 +2417,10 @@ final class PlaybackController: ObservableObject {
 
     private func updateFlags() {
         let waitingForFirstFrame = currentDirect115 && loaded && !hasPlayed && !userPaused
+        // 普通快速关键帧跳转不再强制标记 buffering（避免闪烁加载态与阻止控制栏自动隐藏），
+        // 真正发生缓存欠载时由 mpv 的 paused-for-cache 驱动缓冲提示。
         let newBuffering = error.isEmpty && !ended && (recoveryTask != nil || opening || pausedForCache
-            || waitingForFirstFrame || ((seeking || pendingSeek != nil) && !userPaused))
+            || waitingForFirstFrame)
         if newBuffering != buffering { buffering = newBuffering }
         let newPlaying = !userPaused && error.isEmpty && !ended
             && (loaded || opening || recoveryTask != nil)
@@ -2497,6 +2531,12 @@ final class PlaybackController: ObservableObject {
             if healthyPlaybackSeconds >= 25 {
                 if !recoveryAttempts.isEmpty { recoveryAttempts = [] }
                 if torrentRecoveryCount > 0 { torrentRecoveryCount = 0 }
+                if preferLargerPauseWait {
+                    preferLargerPauseWait = false
+                    if !currentTorrentStream {
+                        engine?.setAsync("cache-pause-wait", "1")
+                    }
+                }
             }
         } else {
             healthyPlaybackSeconds = 0
@@ -2543,7 +2583,8 @@ final class PlaybackController: ObservableObject {
            LocalStreamProxy.shared.refreshActiveUpstream(for: engineURL) {
             tier1RefreshAttemptedInStall = true
             lastTier1RefreshUptime = now
-            engine?.set("cache-pause-wait", "2.5")
+            preferLargerPauseWait = true
+            engine?.setAsync("cache-pause-wait", "2.5")
             return
         }
         // Tier-2 兜底重开：中转静默刷新仍未恢复，且 115 不处于恢复窗口内，才停掉重连
@@ -2569,6 +2610,8 @@ final class PlaybackController: ObservableObject {
             recoveryAttempts = recoveryAttempts.filter { now.timeIntervalSince($0) < 120 }
         }
         guard recoveryAttempts.count < 5 else {
+            seekEpoch &+= 1
+            inFlightSeekCommands = 0
             engine?.command(["stop"])
             giveUp(reason.isEmpty ? "网络连接中断" : reason)
             return
@@ -2589,6 +2632,8 @@ final class PlaybackController: ObservableObject {
         } else {
             statusNote = reason.isEmpty ? "正在重新连接…" : "\(reason)，正在重新连接…"
         }
+        seekEpoch &+= 1
+        inFlightSeekCommands = 0
         engine?.command(["stop"])
         let backoff: [Double] = [0, 1, 2, 4, 6]
         let wait = backoff[min(recoveryAttempts.count - 1, backoff.count - 1)]
