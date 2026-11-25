@@ -349,7 +349,8 @@ final class MPVDirectStreamTests: XCTestCase {
         let back = streamStart + 500_000
         XCTAssertEqual(handle.seek(to: Int64(back)), Int64(back))
         XCTAssertEqual(readExact(4096, from: handle), patternBytes(from: back, count: 4096))
-        XCTAssertEqual(DirectStreamMockProtocol.receivedRanges(), ["bytes=\(streamStart)-\(streamStart + 4 * mib - 1)"])
+        let onlyRange: String? = "bytes=\(streamStart)-\(streamStart + 4 * mib - 1)"
+        XCTAssertEqual(DirectStreamMockProtocol.receivedRanges(), [onlyRange])
     }
 
     /// 预热按「片头探测段 → 尾部 moov → 片头续段」依次拉取，每段都完整收完；之后播放连接打开时头尾都直接命中缓存。
@@ -357,12 +358,21 @@ final class MPVDirectStreamTests: XCTestCase {
         let total = 3 * 1_048_576
         let moovStart = total - 65_536
         var head = patternBytes(from: 0, count: 256 * 1024)
-        let ftyp: [UInt8] = [0, 0, 0, 24] + Array("ftyp".utf8) + Array("isom".utf8) + [0, 0, 0, 0] + Array("isom".utf8) + Array("mp41".utf8)
+        // ftyp（24 字节）+ mdat 盒头（8 字节），mdat 一直延伸到 moovStart，moov 在片尾
+        var boxes: [UInt8] = [0, 0, 0, 24]
+        boxes.append(contentsOf: Array("ftypisom".utf8))
+        boxes.append(contentsOf: [0, 0, 0, 0])
+        boxes.append(contentsOf: Array("isommp41".utf8))
         let mdatSize = UInt32(moovStart - 24)
-        let mdat: [UInt8] = [
-            UInt8(mdatSize >> 24), UInt8((mdatSize >> 16) & 0xFF), UInt8((mdatSize >> 8) & 0xFF), UInt8(mdatSize & 0xFF),
-        ] + Array("mdat".utf8)
-        head.replaceSubrange(0..<32, with: ftyp + mdat)
+        let sizeBytes: [UInt8] = [
+            UInt8(truncatingIfNeeded: mdatSize >> 24),
+            UInt8(truncatingIfNeeded: mdatSize >> 16),
+            UInt8(truncatingIfNeeded: mdatSize >> 8),
+            UInt8(truncatingIfNeeded: mdatSize),
+        ]
+        boxes.append(contentsOf: sizeBytes)
+        boxes.append(contentsOf: Array("mdat".utf8))
+        head.replaceSubrange(0..<boxes.count, with: boxes)
         let tail = patternBytes(from: moovStart, count: total - moovStart)
         let warmStart = 256 * 1024
         let warmEnd = 2 * 1_048_576 - 1
@@ -399,11 +409,11 @@ final class MPVDirectStreamTests: XCTestCase {
         waitUntil {
             DirectStreamMockProtocol.receivedRanges().count == 3 && store.activePrewarmRangeForTesting(streamKey: key) == nil
         }
-        XCTAssertEqual(DirectStreamMockProtocol.receivedRanges(), [
-            "bytes=0-\(head.count - 1)",
-            "bytes=\(moovStart)-\(total - 1)",
-            "bytes=\(warmStart)-\(warmEnd)",
-        ])
+        let headRange = "bytes=0-\(head.count - 1)"
+        let tailRange = "bytes=\(moovStart)-\(total - 1)"
+        let warmRange = "bytes=\(warmStart)-\(warmEnd)"
+        let expectedRanges: [String?] = [headRange, tailRange, warmRange]
+        XCTAssertEqual(DirectStreamMockProtocol.receivedRanges(), expectedRanges)
 
         let uri = store.register(stream: stream, streamID: key)
         let handle = try XCTUnwrap(store.openHandle(token: try XCTUnwrap(uri.host)))
