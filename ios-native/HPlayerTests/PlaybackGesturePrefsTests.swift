@@ -102,45 +102,100 @@ final class PlaybackGesturePrefsTests: XCTestCase {
         XCTAssertEqual(loaded, .default)
     }
 
-    func testSeekHapticTrackerMatchesVidHubCadenceEdgesAndThrottle() {
+    func testSeekHapticTrackerSpatialHysteresisVelocityMajorOriginAndBoundaries() {
+        var pan = SeekHapticTracker(mode: .pan)
+        XCTAssertEqual(pan.begin(at: 100, duration: 3600, positionPt: 0, now: 10.0), .begin)
+
+        // Small jitter below pan step (10pt) -> no tick
+        XCTAssertNil(pan.update(target: 105, duration: 3600, positionPt: 5.0, now: 10.05))
+
+        // Slow drag (12pt in 0.2s = 60 pt/s < 140) -> .tick(.slow)
+        XCTAssertEqual(pan.update(target: 112, duration: 3600, positionPt: 12.0, now: 10.25), .tick(speed: .slow))
+        // Tremor immediately after firing -> hysteresis prevents double fire
+        XCTAssertNil(pan.update(target: 111, duration: 3600, positionPt: 11.2, now: 10.28))
+
+        // Faster drag (15pt in 0.05s = 300 pt/s) -> .tick(.normal)
+        XCTAssertEqual(pan.update(target: 125, duration: 3600, positionPt: 27.0, now: 10.30), .tick(speed: .normal))
+
+        // Ultra-fast drag within < 24ms -> throttled AND anchor does NOT advance
+        XCTAssertNil(pan.update(target: 140, duration: 3600, positionPt: 38.0, now: 10.31))
+        // Once >= 24ms passes, even 0.5pt more (>= 10pt from anchor 27.0) fires immediately
+        XCTAssertEqual(pan.update(target: 141, duration: 3600, positionPt: 38.5, now: 10.33), .tick(speed: .normal))
+
+        // Sustained fast drag (667 pt/s >= 480) -> 4th tick is .tick(.fast), 5th tick becomes .majorTick
+        XCTAssertEqual(pan.update(target: 155, duration: 3600, positionPt: 58.5, now: 10.36), .tick(speed: .fast))
+        XCTAssertEqual(pan.update(target: 170, duration: 3600, positionPt: 78.5, now: 10.39), .majorTick)
+
+        // Return toward origin (0pt) after leaving >= 16pt -> emits .origin once and resets tick stride
+        XCTAssertEqual(pan.update(target: 101, duration: 3600, positionPt: 3.0, now: 10.60), .origin)
+        XCTAssertNil(pan.update(target: 100, duration: 3600, positionPt: 0.0, now: 10.65))
+
+        // Flipping directly across origin (-5pt from positive anchor) also emits .origin
+        XCTAssertEqual(pan.update(target: 120, duration: 3600, positionPt: 20.0, now: 10.75), .tick(speed: .normal))
+        XCTAssertEqual(pan.update(target: 95, duration: 3600, positionPt: -6.0, now: 10.80), .origin)
+
+        // Start & end boundary deduplication
+        XCTAssertEqual(pan.update(target: 0, duration: 3600, positionPt: -200.0, now: 10.90), .boundary)
+        XCTAssertNil(pan.update(target: 0, duration: 3600, positionPt: -220.0, now: 10.95))
+        XCTAssertEqual(pan.update(target: 3595, duration: 3600, upperBound: 3595, positionPt: 200.0, now: 11.05), .boundary)
+        XCTAssertNil(pan.update(target: 3595, duration: 3600, upperBound: 3595, positionPt: 215.0, now: 11.10))
+
+        // End after moving >= 0.5s -> .commit
+        XCTAssertEqual(pan.end(finalTarget: 135), .commit)
+        XCTAssertFalse(pan.isActive)
+
+        // Small jitter (< 0.5s) -> no commit haptic
+        _ = pan.begin(at: 50, duration: 3600, positionPt: 0, now: 20.0)
+        XCTAssertNil(pan.end(finalTarget: 50.3))
+
+        // Scrubber mode uses tighter 8pt step
+        var scrubber = SeekHapticTracker(mode: .scrubber)
+        XCTAssertEqual(scrubber.begin(at: 0, duration: 3600, positionPt: 0, now: 30.0), .begin)
+        XCTAssertNil(scrubber.update(target: 10, duration: 3600, positionPt: 7.5, now: 30.05))
+        XCTAssertEqual(scrubber.update(target: 12, duration: 3600, positionPt: 8.5, now: 30.10), .tick(speed: .slow))
+        scrubber.reset()
+        XCTAssertFalse(scrubber.isActive)
+        XCTAssertNil(scrubber.end(finalTarget: 500))
+    }
+
+    func testSeekHapticTrackerTimeFallbackAndPlayerHapticsLifecycle() {
         XCTAssertEqual(SeekHapticTracker.stepSeconds(for: 0), 10.0)
         XCTAssertEqual(SeekHapticTracker.stepSeconds(for: 20), 1.0)
-        XCTAssertEqual(SeekHapticTracker.stepSeconds(for: 30), 1.0)
-        XCTAssertEqual(SeekHapticTracker.stepSeconds(for: 120), 5.0)
-        XCTAssertEqual(SeekHapticTracker.stepSeconds(for: 180), 5.0)
+        XCTAssertEqual(SeekHapticTracker.stepSeconds(for: 120), 3.0)
+        XCTAssertEqual(SeekHapticTracker.stepSeconds(for: 600), 5.0)
         XCTAssertEqual(SeekHapticTracker.stepSeconds(for: 3600), 10.0)
 
-        var tracker = SeekHapticTracker()
+        var tracker = SeekHapticTracker(mode: .pan)
         XCTAssertEqual(tracker.begin(at: 100, duration: 3600, now: 10.0), .begin)
-        // Same 10s bucket -> no tick
-        XCTAssertNil(tracker.update(target: 108, duration: 3600, now: 10.1))
-        // Cross 110s boundary after >= 35ms -> tick
-        XCTAssertEqual(tracker.update(target: 112, duration: 3600, now: 10.2), .tick)
-        // Ultra-fast swipe within < 35ms -> throttled
-        XCTAssertNil(tracker.update(target: 125, duration: 3600, now: 10.21))
-        // Next bucket after >= 35ms -> tick
-        XCTAssertEqual(tracker.update(target: 135, duration: 3600, now: 10.3), .tick)
-        // Hit start boundary (0s) -> single boundary haptic, no repeat while held at 0
-        XCTAssertEqual(tracker.update(target: 0, duration: 3600, now: 10.4), .boundary)
-        XCTAssertNil(tracker.update(target: 0, duration: 3600, now: 10.5))
-        // Leave boundary, then hit end boundary -> boundary haptic once
-        XCTAssertEqual(tracker.update(target: 15, duration: 3600, now: 10.6), .tick)
-        XCTAssertEqual(tracker.update(target: 3600, duration: 3600, now: 10.7), .boundary)
-        XCTAssertNil(tracker.update(target: 3599.8, duration: 3600, now: 10.8))
-        // End after moving >= 0.8s -> commit
-        XCTAssertEqual(tracker.end(finalTarget: 135), .commit)
-        XCTAssertFalse(tracker.isActive)
+        XCTAssertNil(tracker.update(target: 108, duration: 3600, now: 10.05))
+        XCTAssertEqual(tracker.update(target: 111, duration: 3600, now: 10.10), .tick(speed: .normal))
+        XCTAssertEqual(tracker.update(target: 122, duration: 3600, now: 10.15), .tick(speed: .normal))
+        XCTAssertEqual(tracker.update(target: 133, duration: 3600, now: 10.20), .tick(speed: .normal))
+        XCTAssertEqual(tracker.update(target: 144, duration: 3600, now: 10.25), .tick(speed: .normal))
+        XCTAssertEqual(tracker.update(target: 155, duration: 3600, now: 10.30), .majorTick)
+        XCTAssertEqual(tracker.update(target: 101, duration: 3600, now: 10.40), .origin)
+        XCTAssertEqual(tracker.update(target: 0, duration: 3600, now: 10.50), .boundary)
+        XCTAssertEqual(tracker.end(finalTarget: 101), .commit)
 
-        // Small jitter (< 0.8s) -> no commit haptic
-        _ = tracker.begin(at: 50, duration: 3600, now: 20.0)
-        XCTAssertNil(tracker.end(finalTarget: 50.3))
-
-        // Pan-seek ceiling (duration - 5s) hits end boundary cleanly without repeating
-        _ = tracker.begin(at: 100, duration: 3600, now: 30.0)
-        XCTAssertEqual(tracker.update(target: 3595, duration: 3600, upperBound: 3595, now: 30.1), .boundary)
-        XCTAssertNil(tracker.update(target: 3595, duration: 3600, upperBound: 3595, now: 30.2))
-        tracker.reset()
-        XCTAssertFalse(tracker.isActive)
-        XCTAssertNil(tracker.end(finalTarget: 500))
+        // Smoke test PlayerHaptics lifecycle on Simulator/device without crashes
+        PlayerHaptics.warmUp()
+        PlayerHaptics.prepareForSeek()
+        for event in [
+            SeekHapticEvent.begin,
+            .tick(speed: .slow),
+            .tick(speed: .normal),
+            .tick(speed: .fast),
+            .majorTick,
+            .origin,
+            .boundary,
+            .commit,
+            .cancelToggle(cancelled: true),
+            .cancelToggle(cancelled: false),
+        ] {
+            PlayerHaptics.fire(event)
+        }
+        PlayerHaptics.fire(nil)
+        PlayerHaptics.tap()
+        PlayerHaptics.cooldown()
     }
 }

@@ -54,6 +54,7 @@ targets:
       - sdk: CoreGraphics.framework
       - sdk: VideoToolbox.framework
       - sdk: CoreMedia.framework
+      - sdk: CoreHaptics.framework
       - sdk: libxml2.tbd
       - sdk: libz.tbd
       - sdk: libbz2.tbd

@@ -285,8 +285,8 @@ struct PlaybackControlsView: View {
     /// 选完一项后稍等一下再收起弹出层，让选中的那块玻璃先滑过去
     @State private var popoverCloseTask: Task<Void, Never>?
     @State private var hideTask: Task<Void, Never>?
-    @State private var panSeekHaptics = SeekHapticTracker()
-    @State private var scrubberHaptics = SeekHapticTracker()
+    @State private var panSeekHaptics = SeekHapticTracker(mode: .pan)
+    @State private var scrubberHaptics = SeekHapticTracker(mode: .scrubber)
     /// 正在转回竖屏准备关闭，期间不再响应关闭和手势
     @State private var closing = false
     @State private var adjustment: PlaybackAdjustment?
@@ -475,6 +475,7 @@ struct PlaybackControlsView: View {
             brightnessLevel = Double(ScreenBrightness.screen.brightness)
             systemVolume.start()
             bindCastCallbacks()
+            PlayerHaptics.warmUp()
             #if DEBUG
             switch InterfacePreview.screen {
             case "playback": quickMenu = .speed
@@ -497,6 +498,7 @@ struct PlaybackControlsView: View {
             sleepTask?.cancel()
             panSeekHaptics.reset()
             scrubberHaptics.reset()
+            PlayerHaptics.cooldown()
             boosting = false
             boostLocked = false
             boostLockPrimed = false
@@ -1608,10 +1610,14 @@ struct PlaybackControlsView: View {
     }
 
     /// 拖进度条时，画面中间显示和左右滑动一样的跳转提示
-    private func scrubbed(_ value: Double) {
+    private func scrubbed(_ value: Double, positionPt: Double?) {
         dragTime = value
         guard dragging, playback.duration > 0 else { return }
-        PlayerHaptics.fire(scrubberHaptics.update(target: value, duration: playback.duration))
+        PlayerHaptics.fire(scrubberHaptics.update(
+            target: value,
+            duration: playback.duration,
+            positionPt: positionPt
+        ))
         adjustment = seekAdjustment(target: value, from: scrubStart)
     }
 
@@ -1623,7 +1629,7 @@ struct PlaybackControlsView: View {
             upperBound: max(playback.duration, 1),
             enabled: playback.seekable && playback.duration > 0,
             onScrub: scrubbed,
-            onEditingChanged: { editing in
+            onEditingChanged: { editing, positionPt in
                 if editing {
                     dragging = true
                     scrubStart = playback.currentTime
@@ -1631,7 +1637,11 @@ struct PlaybackControlsView: View {
                     adjustmentHideTask?.cancel()
                     if playback.duration > 0 {
                         PlayerHaptics.prepareForSeek()
-                        PlayerHaptics.fire(scrubberHaptics.begin(at: scrubStart, duration: playback.duration))
+                        PlayerHaptics.fire(scrubberHaptics.begin(
+                            at: scrubStart,
+                            duration: playback.duration,
+                            positionPt: positionPt
+                        ))
                         adjustment = seekAdjustment(target: dragTime, from: scrubStart)
                     }
                 } else if dragging {
@@ -3564,7 +3574,7 @@ struct PlaybackControlsView: View {
                 let ceiling = max(playback.currentTime, playback.duration - 2)
                 let target = min(max(playback.currentTime + delta, 0), max(0, ceiling))
                 playback.seek(to: target, exact: true)
-                Haptics.tap()
+                PlayerHaptics.tap()
 
                 let nextAccumulated = (doubleTapRegion == region ? doubleTapSeconds : 0) + delta
                 withAnimation(reduceMotion ? nil : .easeOut(duration: 0.14)) {
@@ -3727,7 +3737,7 @@ struct PlaybackControlsView: View {
     /// 手指走出这么远（点）才锁定是横滑还是竖滑。
     /// 手势刚识别出来时只走了十个点左右，真人拇指横滑起手常带一点斜向，
     /// 此时就定方向很容易把横滑误判成竖滑，变成调亮度或音量而不是快进快退。
-    private static let panLockDistance: CGFloat = 14
+    private static let panLockDistance: CGFloat = 10
 
     private func handlePan(_ state: UIGestureRecognizer.State, origin: CGPoint, translation: CGPoint, size: CGSize) {
         if state == .cancelled || state == .failed {
@@ -3756,6 +3766,7 @@ struct PlaybackControlsView: View {
             return
         }
         if state == .began {
+            PlayerHaptics.prepareForSeek()
             if !boostLocked { setBoost(false) }
             hideControlsForGesture()
             adjustmentStartTime = playback.currentTime
@@ -3804,7 +3815,11 @@ struct PlaybackControlsView: View {
                 justLockedSeek = true
                 beginPanScrub(at: adjustmentStartTime)
                 PlayerHaptics.prepareForSeek()
-                PlayerHaptics.fire(panSeekHaptics.begin(at: adjustmentStartTime, duration: playback.duration))
+                PlayerHaptics.fire(panSeekHaptics.begin(
+                    at: adjustmentStartTime,
+                    duration: playback.duration,
+                    positionPt: 0
+                ))
             } else {
                 // 从屏幕上下边缘起手的竖滑是系统手势（横屏右上角下拉控制中心、底部上滑回桌面）：
                 // 不调亮度和音量，以前这里会顺手把音量调掉，看起来像音量条自己冒出来
@@ -3838,13 +3853,14 @@ struct PlaybackControlsView: View {
             let shouldCancel = gestureSettings.shouldCancelSeek(translationY: moveY, surfaceHeight: size.height)
             if shouldCancel != seekCancelled {
                 seekCancelled = shouldCancel
-                Haptics.select()
+                PlayerHaptics.fire(.cancelToggle(cancelled: seekCancelled))
             }
             if !seekCancelled && !justLockedSeek {
                 PlayerHaptics.fire(panSeekHaptics.update(
                     target: target,
                     duration: playback.duration,
-                    upperBound: maxTarget
+                    upperBound: maxTarget,
+                    positionPt: Double(moveX)
                 ))
             }
             adjustment = seekAdjustment(target: target, from: adjustmentStartTime, cancelled: seekCancelled)
@@ -4161,8 +4177,8 @@ private struct PlayerScrubber: UIViewRepresentable {
     var buffered: Double
     var upperBound: Double
     var enabled: Bool
-    var onScrub: (Double) -> Void
-    var onEditingChanged: (Bool) -> Void
+    var onScrub: (Double, Double?) -> Void
+    var onEditingChanged: (Bool, Double?) -> Void
     var onCommit: (Double) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -4212,16 +4228,20 @@ private struct PlayerScrubber: UIViewRepresentable {
         @objc func touchDown(_ slider: UISlider) {
             touching = true
             (slider as? ScrubberSlider)?.setExpanded(true)
-            parent.onScrub(Double(slider.value))
-            parent.onEditingChanged(true)
+            let value = Double(slider.value)
+            let posPt = (slider as? ScrubberSlider)?.positionPoints(for: value)
+            parent.onScrub(value, posPt)
+            parent.onEditingChanged(true, posPt)
         }
 
         @objc func valueChanged(_ slider: UISlider) {
+            let value = Double(slider.value)
             if touching {
-                parent.onScrub(Double(slider.value))
+                let posPt = (slider as? ScrubberSlider)?.positionPoints(for: value)
+                parent.onScrub(value, posPt)
             } else {
                 // VoiceOver 上下滑动调节时没有触摸过程，直接跳转
-                parent.onCommit(Double(slider.value))
+                parent.onCommit(value)
             }
         }
 
@@ -4229,8 +4249,10 @@ private struct PlayerScrubber: UIViewRepresentable {
             guard touching else { return }
             touching = false
             (slider as? ScrubberSlider)?.setExpanded(false)
-            parent.onScrub(Double(slider.value))
-            parent.onEditingChanged(false)
+            let value = Double(slider.value)
+            let posPt = (slider as? ScrubberSlider)?.positionPoints(for: value)
+            parent.onScrub(value, posPt)
+            parent.onEditingChanged(false, posPt)
         }
     }
 }
@@ -4255,6 +4277,19 @@ private final class ScrubberSlider: UISlider {
         super.init(coder: coder)
         setUpBufferedView()
         applyTrackImages()
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        PlayerHaptics.prepareForSeek()
+        super.touchesBegan(touches, with: event)
+    }
+
+    func positionPoints(for value: Double) -> Double? {
+        let trackWidth = Double(trackRect(forBounds: bounds).width)
+        let range = Double(maximumValue - minimumValue)
+        guard trackWidth > 0, range > 0 else { return nil }
+        let fraction = min(max((value - Double(minimumValue)) / range, 0), 1)
+        return fraction * trackWidth
     }
 
     private func setUpBufferedView() {

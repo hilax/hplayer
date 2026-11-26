@@ -1,44 +1,105 @@
+import CoreHaptics
 import SwiftUI
 import UIKit
+
+/// 滑动快进 / 进度条拖动速度档位（决定 CoreHaptics 刻度质感）
+enum SeekHapticSpeed: Equatable {
+    case slow
+    case normal
+    case fast
+}
+
+/// 触感轨迹模式：全屏横滑与细进度条采用不同的物理刻度步长
+enum SeekHapticMode: Equatable {
+    case pan
+    case scrubber
+
+    var stepPoints: Double {
+        switch self {
+        case .pan: return 10.0
+        case .scrubber: return 8.0
+        }
+    }
+}
 
 /// 滑动快进 / 进度条拖动震动事件类型
 enum SeekHapticEvent: Equatable {
     case begin
-    case tick
+    case tick(speed: SeekHapticSpeed)
+    case majorTick
+    case origin
     case boundary
     case commit
+    case cancelToggle(cancelled: Bool)
 }
 
-/// 滑动快进 / 进度条拖动震动节奏控制器（与 VidHub 保持一致）：
-/// - 按视频时长自适应步长（<=30s 每 1s，<=180s 每 5s，>180s 每 10s 一格）；
-/// - 35ms 最短节流，大幅快速滑动时手感干脆利落；
-/// - 滑到片头（0）或片尾边界时触发一次稍重的中等触感提示，且停在边界不重复连震；
-/// - 松手落点位移 >= 0.8s 时给一次柔和确认触感。
+/// 滑动快进 / 进度条拖动触感节奏控制器：
+/// - 优先按屏幕物理位移刻度（pan 10pt / scrubber 8pt）与迟滞锚点触发，任何片长和灵敏度下都紧密跟手、不抖动误触；
+/// - 24ms 最短节流且被节流时不提前推进锚点，高速扫过时不会丢段，并按指速切换清脆锐度；
+/// - 每 5 个刻度输出一次大刻度（majorTick），滑回起点输出一次原点凹槽（origin）；
+/// - 滑到片头（0）或片尾边界触发一次厚重边界阻尼（boundary），停在边界不连震；
+/// - 松手落点位移 >= 0.5s 时给一次扎实落定反馈（commit）。
 struct SeekHapticTracker {
     enum Edge: Equatable { case none, start, end }
 
-    static let minTickInterval: TimeInterval = 0.035
+    static let minTickInterval: TimeInterval = 0.024
+    static let majorTickStride = 5
+    static let slowSpeedThreshold: Double = 140.0
+    static let fastSpeedThreshold: Double = 480.0
+    static let commitThresholdSeconds: Double = 0.5
 
-    private(set) var lastTickIndex: Int?
+    let mode: SeekHapticMode
+
+    private(set) var lastTickTime: Double = 0
     private(set) var lastTickUptime: TimeInterval = -.infinity
     private(set) var hitEdge: Edge = .none
     private(set) var startTime: Double = 0
     private(set) var isActive = false
 
+    private(set) var startPositionPt: Double?
+    private(set) var lastAnchorPt: Double?
+    private(set) var lastPositionPt: Double?
+    private(set) var lastSampleUptime: TimeInterval = -.infinity
+    private(set) var smoothedVelocityPtPerSec: Double = 0
+    private(set) var ticksSinceBegin: Int = 0
+    private(set) var leftOrigin: Bool = false
+
+    init(mode: SeekHapticMode = .pan) {
+        self.mode = mode
+    }
+
     static func stepSeconds(for duration: Double) -> Double {
         guard duration.isFinite, duration > 0 else { return 10.0 }
         if duration <= 30 { return 1.0 }
-        if duration <= 180 { return 5.0 }
+        if duration <= 180 { return 3.0 }
+        if duration <= 900 { return 5.0 }
         return 10.0
     }
 
-    mutating func begin(at time: Double, duration: Double, now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> SeekHapticEvent {
-        let step = Self.stepSeconds(for: duration)
+    static func speedClass(for velocityPtPerSec: Double) -> SeekHapticSpeed {
+        if velocityPtPerSec < slowSpeedThreshold { return .slow }
+        if velocityPtPerSec < fastSpeedThreshold { return .normal }
+        return .fast
+    }
+
+    mutating func begin(
+        at time: Double,
+        duration: Double,
+        positionPt: Double? = nil,
+        now: TimeInterval = ProcessInfo.processInfo.systemUptime
+    ) -> SeekHapticEvent {
         startTime = time
-        lastTickIndex = Int(floor(max(0, time) / step))
+        lastTickTime = time
         lastTickUptime = now
         hitEdge = .none
         isActive = true
+        startPositionPt = positionPt
+        lastAnchorPt = positionPt
+        lastPositionPt = positionPt
+        lastSampleUptime = now
+        smoothedVelocityPtPerSec = 0
+        ticksSinceBegin = 0
+        leftOrigin = false
         return .begin
     }
 
@@ -46,13 +107,26 @@ struct SeekHapticTracker {
         target: Double,
         duration: Double,
         upperBound: Double? = nil,
+        positionPt: Double? = nil,
         now: TimeInterval = ProcessInfo.processInfo.systemUptime
     ) -> SeekHapticEvent? {
         guard isActive, duration > 0, target.isFinite else { return nil }
         let maxBound = upperBound.map { min(max($0, 0), duration) } ?? duration
         let clamped = min(max(target, 0), maxBound)
-        let step = Self.stepSeconds(for: duration)
-        let tickIndex = Int(floor(clamped / step))
+
+        if let posPt = positionPt {
+            if let prevPt = lastPositionPt {
+                let dt = now - lastSampleUptime
+                if dt > 0.001 {
+                    let instant = abs(posPt - prevPt) / dt
+                    smoothedVelocityPtPerSec = smoothedVelocityPtPerSec == 0
+                        ? instant
+                        : smoothedVelocityPtPerSec * 0.45 + instant * 0.55
+                }
+            }
+            lastPositionPt = posPt
+            lastSampleUptime = now
+        }
 
         let edge: Edge
         if clamped <= 0.05 {
@@ -64,7 +138,8 @@ struct SeekHapticTracker {
         }
 
         if edge != .none {
-            lastTickIndex = tickIndex
+            lastAnchorPt = positionPt
+            lastTickTime = clamped
             if hitEdge != edge {
                 hitEdge = edge
                 lastTickUptime = now
@@ -74,60 +149,332 @@ struct SeekHapticTracker {
         }
         hitEdge = .none
 
-        guard tickIndex != lastTickIndex else { return nil }
-        lastTickIndex = tickIndex
-        guard now - lastTickUptime >= Self.minTickInterval else { return nil }
-        lastTickUptime = now
-        return .tick
+        if let posPt = positionPt {
+            if lastAnchorPt == nil {
+                startPositionPt = posPt
+                lastAnchorPt = posPt
+            }
+            let anchorPt = lastAnchorPt!
+            let originPt = startPositionPt ?? 0
+            let distFromOrigin = abs(posPt - originPt)
+            if !leftOrigin && distFromOrigin >= mode.stepPoints * 1.6 {
+                leftOrigin = true
+            }
+            if leftOrigin {
+                let prevOffset = anchorPt - originPt
+                let currOffset = posPt - originPt
+                if distFromOrigin <= mode.stepPoints * 0.45 || (prevOffset * currOffset < 0) {
+                    leftOrigin = false
+                    lastAnchorPt = posPt
+                    lastTickTime = clamped
+                    ticksSinceBegin = 0
+                    lastTickUptime = now
+                    return .origin
+                }
+            }
+            guard abs(posPt - anchorPt) >= mode.stepPoints else { return nil }
+            guard now - lastTickUptime >= Self.minTickInterval else { return nil }
+            lastAnchorPt = posPt
+            lastTickTime = clamped
+            lastTickUptime = now
+            ticksSinceBegin += 1
+            return ticksSinceBegin % Self.majorTickStride == 0
+                ? .majorTick
+                : .tick(speed: Self.speedClass(for: smoothedVelocityPtPerSec))
+        } else {
+            let step = Self.stepSeconds(for: duration)
+            if !leftOrigin && abs(clamped - startTime) >= step * 1.6 {
+                leftOrigin = true
+            }
+            if leftOrigin {
+                let prevOff = lastTickTime - startTime
+                let currOff = clamped - startTime
+                if abs(clamped - startTime) <= step * 0.45 || (prevOff * currOff < 0) {
+                    leftOrigin = false
+                    lastTickTime = clamped
+                    ticksSinceBegin = 0
+                    lastTickUptime = now
+                    return .origin
+                }
+            }
+            guard abs(clamped - lastTickTime) >= step else { return nil }
+            guard now - lastTickUptime >= Self.minTickInterval else { return nil }
+            lastTickTime = clamped
+            lastTickUptime = now
+            ticksSinceBegin += 1
+            return ticksSinceBegin % Self.majorTickStride == 0
+                ? .majorTick
+                : .tick(speed: .normal)
+        }
     }
 
     mutating func end(finalTarget: Double?) -> SeekHapticEvent? {
         defer { reset() }
-        guard isActive, let finalTarget, abs(finalTarget - startTime) >= 0.8 else { return nil }
+        guard isActive, let finalTarget, abs(finalTarget - startTime) >= Self.commitThresholdSeconds else { return nil }
         return .commit
     }
 
     mutating func reset() {
         isActive = false
-        lastTickIndex = nil
+        lastTickTime = 0
         hitEdge = .none
+        startPositionPt = nil
+        lastAnchorPt = nil
+        lastPositionPt = nil
+        lastSampleUptime = -.infinity
+        smoothedVelocityPtPerSec = 0
+        ticksSinceBegin = 0
+        leftOrigin = false
     }
 }
 
-/// 播放器滑动 / 进度条拖动触感反馈（复用的预热生成器，与 VidHub 保持一致）
+/// 播放器滑动 / 进度条拖动触感反馈：
+/// 优先使用独立 `CHHapticEngine`（`playsHapticsOnly = true`，不干扰 mpv 音频会话）与预编译 `CHHapticPatternPlayer`；
+/// 在不支持 CoreHaptics 的设备或引擎恢复窗口期自动降级到预热 UIKit 刚性冲击反馈，确保零漏震。
 @MainActor
 enum PlayerHaptics {
-    private static let selectionGenerator = UISelectionFeedbackGenerator()
-    private static let lightImpact = UIImpactFeedbackGenerator(style: .light)
+    private enum PatternKey: CaseIterable, Hashable {
+        case begin
+        case tickSlow
+        case tickNormal
+        case tickFast
+        case majorTick
+        case origin
+        case boundary
+        case commit
+        case cancelEnter
+        case cancelExit
+        case tap
+    }
+
+    private static var engine: CHHapticEngine?
+    private static var engineStarted = false
+    private static var players: [PatternKey: CHHapticPatternPlayer] = [:]
+
+    private static let rigidImpact = UIImpactFeedbackGenerator(style: .rigid)
     private static let mediumImpact = UIImpactFeedbackGenerator(style: .medium)
-    private static let softImpact = UIImpactFeedbackGenerator(style: .soft)
+    private static let heavyImpact = UIImpactFeedbackGenerator(style: .heavy)
+
+    static func warmUp() {
+        prepareFallbackGenerators()
+        guard CHHapticEngine.capabilitiesForHardware().supportsHaptics else { return }
+        ensureEngine()
+        if let engine {
+            buildPlayersIfNeeded(on: engine)
+        }
+    }
 
     static func prepareForSeek() {
-        selectionGenerator.prepare()
-        lightImpact.prepare()
-        mediumImpact.prepare()
-        softImpact.prepare()
+        warmUp()
+        guard CHHapticEngine.capabilitiesForHardware().supportsHaptics, let engine else { return }
+        if !engineStarted {
+            do {
+                try engine.start()
+                engineStarted = true
+            } catch {
+                engineStarted = false
+            }
+        }
+        buildPlayersIfNeeded(on: engine)
+    }
+
+    static func cooldown() {
+        engineStarted = false
+        engine?.stop(completionHandler: nil)
     }
 
     static func fire(_ event: SeekHapticEvent?) {
         guard let event else { return }
-        switch event {
-        case .begin:
-            lightImpact.impactOccurred()
-            selectionGenerator.prepare()
-        case .tick:
-            selectionGenerator.selectionChanged()
-            selectionGenerator.prepare()
-        case .boundary:
-            mediumImpact.impactOccurred()
-            selectionGenerator.prepare()
-        case .commit:
-            softImpact.impactOccurred(intensity: 0.75)
+        let key = patternKey(for: event)
+        if playCoreHaptic(key) {
+            return
         }
+        fireFallback(for: event)
     }
 
     static func tap() {
-        lightImpact.impactOccurred()
+        if playCoreHaptic(.tap) {
+            return
+        }
+        rigidImpact.impactOccurred(intensity: 0.78)
+        rigidImpact.prepare()
+    }
+
+    // MARK: CoreHaptics 管理
+
+    private static func ensureEngine() {
+        guard engine == nil else { return }
+        do {
+            let created = try CHHapticEngine()
+            // 必须在 start() 前设置，避免与 mpv 音频会话争抢或触发闪避
+            created.playsHapticsOnly = true
+            created.isAutoShutdownEnabled = true
+            created.stoppedHandler = { _ in
+                Task { @MainActor in
+                    engineStarted = false
+                }
+            }
+            created.resetHandler = {
+                Task { @MainActor in
+                    engineStarted = false
+                    players.removeAll()
+                    guard let current = engine else { return }
+                    do {
+                        try current.start()
+                        engineStarted = true
+                        buildPlayersIfNeeded(on: current)
+                    } catch {
+                        engineStarted = false
+                    }
+                }
+            }
+            engine = created
+        } catch {
+            engine = nil
+            engineStarted = false
+        }
+    }
+
+    private static func buildPlayersIfNeeded(on engine: CHHapticEngine) {
+        guard players.count < PatternKey.allCases.count else { return }
+        for key in PatternKey.allCases where players[key] == nil {
+            guard let pattern = makePattern(for: key),
+                  let player = try? engine.makePlayer(with: pattern) else { continue }
+            players[key] = player
+        }
+    }
+
+    private static func playCoreHaptic(_ key: PatternKey) -> Bool {
+        guard CHHapticEngine.capabilitiesForHardware().supportsHaptics else { return false }
+        ensureEngine()
+        guard let engine else { return false }
+        if !engineStarted {
+            do {
+                try engine.start()
+                engineStarted = true
+            } catch {
+                engineStarted = false
+                return false
+            }
+        }
+        buildPlayersIfNeeded(on: engine)
+        guard let player = players[key] else { return false }
+        do {
+            try player.start(atTime: CHHapticTimeImmediate)
+            return true
+        } catch {
+            engineStarted = false
+            players.removeAll()
+            return false
+        }
+    }
+
+    private static func patternKey(for event: SeekHapticEvent) -> PatternKey {
+        switch event {
+        case .begin: return .begin
+        case .tick(let speed):
+            switch speed {
+            case .slow: return .tickSlow
+            case .normal: return .tickNormal
+            case .fast: return .tickFast
+            }
+        case .majorTick: return .majorTick
+        case .origin: return .origin
+        case .boundary: return .boundary
+        case .commit: return .commit
+        case .cancelToggle(let cancelled): return cancelled ? .cancelEnter : .cancelExit
+        }
+    }
+
+    private static func makePattern(for key: PatternKey) -> CHHapticPattern? {
+        let events: [CHHapticEvent]
+        switch key {
+        case .begin:
+            events = [transientEvent(intensity: 0.85, sharpness: 0.82)]
+        case .tickSlow:
+            events = [transientEvent(intensity: 0.68, sharpness: 0.84)]
+        case .tickNormal:
+            events = [transientEvent(intensity: 0.82, sharpness: 0.90)]
+        case .tickFast:
+            events = [transientEvent(intensity: 0.76, sharpness: 0.98)]
+        case .majorTick:
+            events = [transientEvent(intensity: 0.96, sharpness: 0.60)]
+        case .origin:
+            events = [transientEvent(intensity: 0.98, sharpness: 0.50)]
+        case .boundary:
+            events = [
+                transientEvent(time: 0, intensity: 1.0, sharpness: 0.42),
+                transientEvent(time: 0.028, intensity: 0.58, sharpness: 0.22),
+            ]
+        case .commit:
+            events = [transientEvent(intensity: 0.90, sharpness: 0.55)]
+        case .cancelEnter:
+            events = [
+                transientEvent(time: 0, intensity: 0.90, sharpness: 0.34),
+                transientEvent(time: 0.048, intensity: 0.68, sharpness: 0.22),
+            ]
+        case .cancelExit:
+            events = [transientEvent(intensity: 0.78, sharpness: 0.86)]
+        case .tap:
+            events = [transientEvent(intensity: 0.78, sharpness: 0.82)]
+        }
+        return try? CHHapticPattern(events: events, parameters: [])
+    }
+
+    private static func transientEvent(time: TimeInterval = 0, intensity: Float, sharpness: Float) -> CHHapticEvent {
+        CHHapticEvent(
+            eventType: .hapticTransient,
+            parameters: [
+                CHHapticEventParameter(parameterID: .hapticIntensity, value: intensity),
+                CHHapticEventParameter(parameterID: .hapticSharpness, value: sharpness),
+            ],
+            relativeTime: time
+        )
+    }
+
+    // MARK: UIKit 降级反馈
+
+    private static func prepareFallbackGenerators() {
+        rigidImpact.prepare()
+        mediumImpact.prepare()
+        heavyImpact.prepare()
+    }
+
+    private static func fireFallback(for event: SeekHapticEvent) {
+        switch event {
+        case .begin:
+            rigidImpact.impactOccurred(intensity: 0.85)
+            rigidImpact.prepare()
+        case .tick(let speed):
+            let intensity: CGFloat
+            switch speed {
+            case .slow: intensity = 0.68
+            case .normal: intensity = 0.82
+            case .fast: intensity = 0.76
+            }
+            rigidImpact.impactOccurred(intensity: intensity)
+            rigidImpact.prepare()
+        case .majorTick:
+            mediumImpact.impactOccurred(intensity: 0.96)
+            mediumImpact.prepare()
+        case .origin:
+            mediumImpact.impactOccurred(intensity: 1.0)
+            mediumImpact.prepare()
+        case .boundary:
+            heavyImpact.impactOccurred(intensity: 1.0)
+            heavyImpact.prepare()
+        case .commit:
+            mediumImpact.impactOccurred(intensity: 0.90)
+            mediumImpact.prepare()
+        case .cancelToggle(let cancelled):
+            if cancelled {
+                mediumImpact.impactOccurred(intensity: 0.92)
+                mediumImpact.prepare()
+            } else {
+                rigidImpact.impactOccurred(intensity: 0.78)
+                rigidImpact.prepare()
+            }
+        }
     }
 }
 
