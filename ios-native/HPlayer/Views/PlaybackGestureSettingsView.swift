@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// 「我的 › 播放 › 播放手势」：四组单项自定义开关与参数。
-/// 与正片播放器、短剧横屏页共用 `PlaybackGestureStore.shared`，修改后即时生效。
+/// 与正片播放器共用 `PlaybackGestureStore.shared`，修改后即时生效。
 struct PlaybackGestureSettingsView: View {
     @ObservedObject private var store = PlaybackGestureStore.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion

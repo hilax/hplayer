@@ -31,7 +31,6 @@ final class JableTests: XCTestCase {
         let item = store.items[0]
         XCTAssertTrue(item.isJable)
         XCTAssertFalse(item.isAnime)
-        XCTAssertFalse(item.isDrama)
 
         let restoredSource = store.source(for: item)
         XCTAssertEqual(restoredSource, source)

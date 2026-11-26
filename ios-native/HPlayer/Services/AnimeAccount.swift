@@ -25,7 +25,7 @@ struct AnimeUser: Codable, Equatable {
         avatarURL = AnimeAccount.usableImageURL(AnimeJSON.string(json, ["pic_url"]) ?? "")
         coin = AnimeJSON.int(json, ["coin"]) ?? 0
         signDays = AnimeJSON.int(json, ["signnum"]) ?? 0
-        isVip = DramaJSON.bool(json["isvip"])
+        isVip = AnimeJSON.bool(json["isvip"])
     }
 
     /// 卡片上显示的名字：没有昵称时用邮箱或手机号
@@ -67,7 +67,7 @@ struct AnimeTask: Identifiable, Equatable {
         }
         let flag = flagKey.flatMap { json[$0] }
         if let flag, !(flag is [Any]), !(flag is [String: Any]) {
-            finished = DramaJSON.bool(flag)
+            finished = AnimeJSON.bool(flag)
         } else if let done, let total, total > 0 {
             finished = done >= total
         } else {
@@ -112,7 +112,7 @@ struct AnimeMessage: Identifiable, Equatable {
         videoID = AnimeJSON.int(json, ["vid", "video_id"])
         videoName = AnimeJSON.string(json, isReply ? ["vname", "video_name"] : ["vname", "video_name", "name"]) ?? ""
         let read = json["isread"] ?? json["is_read"] ?? json["read"] ?? json["state"]
-        unread = read.map { !DramaJSON.bool($0) } ?? false
+        unread = read.map { !AnimeJSON.bool($0) } ?? false
     }
 }
 

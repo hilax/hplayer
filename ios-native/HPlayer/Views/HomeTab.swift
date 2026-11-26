@@ -228,7 +228,7 @@ struct HomeTab: View {
             .buttonStyle(.plain)
             .accessibilityLabel(banner.displayTitle)
             .accessibilityIdentifier("home.slide.anime.\(banner.vid ?? banner.id)")
-        case .magnet, .drama, .jable, .missav:
+        case .magnet, .jable, .missav:
             EmptyView()
         }
     }
@@ -777,7 +777,7 @@ private final class ContinueEntriesCache: ObservableObject {
                 match = nil
             }
             let parsed = MediaNameParser.parse(recent.title).title
-            let sourceLabel = recent.isDrama ? "在线短剧" : recent.isAnime ? "在线动漫" : (recent.isCloud ? "115 网盘" : (recent.isLocalFile ? "本地视频" : "网络地址"))
+            let sourceLabel = recent.isAnime ? "在线动漫" : (recent.isCloud ? "115 网盘" : (recent.isLocalFile ? "本地视频" : "网络地址"))
             var detail: [String] = [sourceLabel]
             if let episode = match?.episodeLabel { detail.append(episode) }
             if let position = recent.position {
@@ -791,7 +791,7 @@ private final class ContinueEntriesCache: ObservableObject {
             } else {
                 artwork = ""
             }
-            let tagLabel = recent.isDrama ? "短剧" : recent.isAnime ? "动漫" : (recent.isCloud ? "115" : (recent.isLocalFile ? "本地" : "网络"))
+            let tagLabel = recent.isAnime ? "动漫" : (recent.isCloud ? "115" : (recent.isLocalFile ? "本地" : "网络"))
             entries.append(ContinueEntry(
                 id: "recent|\(recent.id)",
                 target: .recent(recent),

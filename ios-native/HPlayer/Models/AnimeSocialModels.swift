@@ -123,10 +123,10 @@ struct AnimeComment: Identifiable, Hashable {
         replies = AnimeJSON.int(json, ["children_total", "sub_count", "reply_count", "replies_count", "child_count", "subcount", "reply_num"]) ?? replyList?.count ?? 0
         pinned = kind == .top || (AnimeJSON.int(json, ["istop"]) ?? 0) > 0
         hot = kind == .hot
-        vip = DramaJSON.bool(json["isvip"])
+        vip = AnimeJSON.bool(json["isvip"])
         role = AnimeJSON.string(((json["roles"] as? [[String: Any]]) ?? []).first ?? [:], ["group_name"]) ?? ""
         numericID = AnimeJSON.int(json, ["id", "cid", "comment_id"]) ?? 0
-        liked = DramaJSON.bool(json["islike"])
+        liked = AnimeJSON.bool(json["islike"])
         let parsedLastID = AnimeJSON.int(json, ["last_id"]) ?? 0
         lastID = parsedLastID
         children = ((json["children"] as? [[String: Any]]) ?? []).compactMap { AnimeComment(json: $0, kind: .list) }
@@ -201,5 +201,11 @@ enum AnimeJSON {
         if let number = value as? NSNumber { return number.doubleValue }
         if let text = value as? String { return Double(text) }
         return nil
+    }
+
+    static func bool(_ value: Any?) -> Bool {
+        if let flag = value as? Bool { return flag }
+        if let number = double(value) { return number != 0 }
+        return false
     }
 }

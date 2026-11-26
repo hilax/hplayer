@@ -218,7 +218,7 @@ final class PlayerWindowController {
             // 不再等 80 毫秒以后才藏（那时第一次转屏请求很可能已经按「主窗口可见」被拒绝了）。
             hideMain(in: scene)
         } else {
-            // 竖屏打开（短剧）时主窗口要在下面露着
+            // 竖屏打开时主窗口要在下面露着
             restoreMain()
         }
 
@@ -265,7 +265,7 @@ final class PlayerWindowController {
     /// 播放页里的「横屏 / 竖屏」按钮
     func setLandscape(_ landscape: Bool) {
         guard let window, !closing, let scene = window.windowScene else { return }
-        // 竖屏打开的播放器（短剧竖屏播放）要转横屏时，主窗口还可见；它只支持竖屏，会让系统拒绝横屏请求。
+        // 竖屏打开的播放器要转横屏时，主窗口还可见；它只支持竖屏，会让系统拒绝横屏请求。
         if landscape { hideMain(in: scene) }
         window.allowedOrientations = landscape ? .landscape : .portrait
         requestOrientation(landscape ? Self.preferredLandscape() : .portrait, in: scene)
@@ -724,7 +724,7 @@ extension EnvironmentValues {
 private struct PlayerWindowModifier<Root: View>: ViewModifier {
     @EnvironmentObject private var appState: AppState
     @Binding var isPresented: Bool
-    /// nil = 按全局默认（直接横屏）；短剧竖屏播放器传 false
+    /// nil = 按全局默认（直接横屏）
     var landscape: Bool? = nil
     let root: () -> Root
     /// 这个入口弹出的窗口的标记；关闭时只关自己弹出的那个

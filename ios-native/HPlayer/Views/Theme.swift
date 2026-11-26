@@ -677,7 +677,7 @@ extension Font {
     /// 页面里原来写死的字号统一走这里：默认字号下大小不变，随系统「更大字体」放大，放大比例和同档的系统字号
     /// （.caption / .footnote / .body…）完全一样，不再单独封顶——否则开辅助功能大字体后，
     /// 这里的标题会比旁边的系统字号说明文字还小，层级颠倒。
-    /// 放不下的固定尺寸区域（频道 / 分类头部、播放器控件、短剧全屏页）在容器上用
+    /// 放不下的固定尺寸区域（频道 / 分类头部、播放器控件）在容器上用
     /// `.dynamicTypeSize(...DynamicTypeSize.xxxLarge)` 统一限制，而不是在这里偷偷限。
     /// 最小 11pt。字重最多 bold——传进来的 heavy / black 会降成 bold。
     static func scaled(_ size: CGFloat, weight: Font.Weight = .regular, design: Font.Design = .default) -> Font {

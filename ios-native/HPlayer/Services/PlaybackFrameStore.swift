@@ -1,5 +1,4 @@
 import CoreImage
-import CoreVideo
 import CryptoKit
 import ImageIO
 import UIKit
@@ -7,7 +6,7 @@ import UniformTypeIdentifiers
 
 /// 「继续观看」卡片的封面：停下来时那一刻的播放画面。
 ///
-/// - 什么时候截：暂停、换集、退出播放页、App 退到后台（mpv 播放器在 `PlaybackController`，短剧在 `DramaEpisodePlayer`）。
+/// - 什么时候截：暂停、换集、退出播放页、App 退到后台（mpv 播放器在 `PlaybackController`）。
 /// - 截下来先缩到 720px 宽，在后台判断是不是黑场 / 纯色（转场、片头片尾）；是的话丢掉，保留上一张。
 /// - 存在 Caches/HPlayerResumeFrames，按记录的键（`recent|…`、`magnet|…`）一条一张，最多 40 张，多了删最旧的。
 /// - 卡片上优先显示这张图；没有时回落到片库海报、横图或 `ContinueArtworkStore` 找到的封面。
@@ -96,22 +95,12 @@ final class PlaybackFrameStore: ObservableObject {
         }
     }
 
-    /// AVPlayer（短剧）取到的一帧
     /// mpv 当前画面（`MPVEngine.videoFrameImage`）：后台缩小、判断黑场、存档。
     func ingest(image: CGImage, for key: String) {
         let target = fileURL(for: key)
         Task.detached(priority: .utility) { [weak self] in
             guard let scaled = ResumeFrameImaging.render(CIImage(cgImage: image)) else { return }
             await self?.commit(scaled, to: target, key: key)
-        }
-    }
-
-    func ingest(pixelBuffer: CVPixelBuffer, for key: String) {
-        let target = fileURL(for: key)
-        let image = CIImage(cvPixelBuffer: pixelBuffer)
-        Task.detached(priority: .utility) { [weak self] in
-            guard let cgImage = ResumeFrameImaging.render(image) else { return }
-            await self?.commit(cgImage, to: target, key: key)
         }
     }
 

@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// 不触发 SwiftUI 订阅的共享 Store 引用：供首页、片库等页面在用户点击删除、匹配、导入时调用，
-/// 避免扫描或匹配高频更新底层 Store 时，把整个首页和 6 个频道反复整页重绘。
+/// 避免扫描或匹配高频更新底层 Store 时，把整个首页和 5 个频道反复整页重绘。
 struct LibraryStoreRefs {
     let mediaLibrary: MediaLibraryStore
     let localStore: LocalMediaStore
@@ -69,7 +69,7 @@ struct HomeView: View {
     private let searchInitiallyVisible: Bool
     /// 首页分类入口带过来的筛选；片库读取后会清空。
     @State private var catalogPreset: CatalogPreset?
-    /// 首页当前频道：推荐 / 动漫 / 片库 / 短剧 / Jable / MissAV。
+    /// 首页当前频道：推荐 / 动漫 / 片库 / Jable / MissAV。
     @State private var channel: HomeChannel = .recommend
 
     /// init 会在上层页面每次刷新时被重新调用，这里不做任何读盘或联网，
@@ -136,7 +136,7 @@ struct HomeView: View {
     private var tabs: some View {
         ZStack {
             HomeNavigationShell(navigation: stores.navigation, rootBar: stores.rootBar,
-                                appState: stores.appState, librarySnapshots: stores.librarySnapshots) {
+                                librarySnapshots: stores.librarySnapshots) {
                 tabPages
             }
             .accessibilityHidden(searchOpen)
@@ -222,7 +222,7 @@ struct HomeView: View {
     private func page(for section: HomeSection) -> some View {
         switch section {
         case .home:
-            // 推荐 / 动漫 / 片库 / 短剧 / Jable / MissAV：左右滑动切换，频道条和搜索框是固定头部（见 HomeChannelsView）
+            // 推荐 / 动漫 / 片库 / Jable / MissAV：左右滑动切换，频道条和搜索框是固定头部（见 HomeChannelsView）
             HomeChannelsView(channel: $channel, catalogPreset: $catalogPreset,
                              onSearch: { openSearch() }, onBrowseLibrary: { selection = .cloud })
         case .magnet:
@@ -241,7 +241,6 @@ struct HomeView: View {
 private struct HomeNavigationShell<Content: View>: View {
     @ObservedObject var navigation: HomeNavigation
     let rootBar: RootNavigationBarState
-    let appState: AppState
     let librarySnapshots: LibrarySnapshotStore
     @ViewBuilder var content: () -> Content
 
@@ -267,9 +266,6 @@ private struct HomeNavigationShell<Content: View>: View {
                 .navigationDestination(for: AnimeBrowseRoute.self) { route in
                     AnimeBrowseView(route: route)
                 }
-                .navigationDestination(for: DramaRoute.self) { route in
-                    DramaDetailView(route: route).environmentObject(appState)
-                }
                 .navigationDestination(for: JableRoute.self) { route in
                     JableDetailView(route: route)
                 }
@@ -281,9 +277,6 @@ private struct HomeNavigationShell<Content: View>: View {
                 }
                 .navigationDestination(for: MissAVBrowseRoute.self) { route in
                     MissAVBrowseView(route: route)
-                }
-                .navigationDestination(for: DramaBrowseRoute.self) { route in
-                    DramaBrowseView(route: route)
                 }
                 // 程序化路径的目标注册在整个 TabView 的外层，网盘根页退场后仍可解析。
                 .navigationDestination(for: CloudRoute.self) { route in
@@ -357,7 +350,7 @@ private struct HomeSearchShell: View {
 }
 
 /// 零尺寸后台协调视图：集中订阅扫描、入库、封面匹配、播放记录与场景切换，驱动快照重建和元数据同步。
-/// 因为它的 body 只是 Color.clear，高频状态变化只会局部触发这里，绝不连带重绘 TabView 和首页 6 个频道。
+/// 因为它的 body 只是 Color.clear，高频状态变化只会局部触发这里，绝不连带重绘 TabView 和首页 5 个频道。
 private struct HomeLibraryCoordinator: View {
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage(AdultMetadataSettings.enabledKey) private var adultMatching = false

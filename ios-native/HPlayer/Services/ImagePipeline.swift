@@ -267,14 +267,6 @@ final class ImagePipeline: @unchecked Sendable {
         })
     }
 
-    /// 同上，用于自定义来源的图片（见 image(id:maxPixel:load:)）。
-    func prefetchAhead(ids: [(id: String, load: @Sendable () async throws -> Data)], maxPixel: Int) {
-        enqueueAhead(ids.map { item -> AheadItem in
-            AheadItem(key: "\(maxPixel)|\(item.id)",
-                      make: { self.request(id: item.id, maxPixel: maxPixel, priority: .veryLow, load: item.load) })
-        })
-    }
-
     private struct AheadItem {
         let key: String
         let make: () -> Nuke.ImageRequest
@@ -298,28 +290,6 @@ final class ImagePipeline: @unchecked Sendable {
         lock.unlock()
         if !dropped.isEmpty { aheadPrefetcher.stopPrefetching(with: dropped) }
         if !added.isEmpty { aheadPrefetcher.startPrefetching(with: added) }
-    }
-
-    // MARK: 自定义来源
-
-    /// 不能直接下载的图（例如要先解密的短剧封面）：由 load 取回图片数据，缓存、缩图、后台解码照常交给 Nuke，
-    /// 解好的数据也存盘，下次打开不用再取。id 要能唯一代表这张图。
-    private func request(id: String, maxPixel: Int, priority: Nuke.ImageRequest.Priority = .normal,
-                         load: @escaping @Sendable () async throws -> Data) -> Nuke.ImageRequest {
-        var request = Nuke.ImageRequest(id: id, data: load, priority: priority)
-        request.thumbnail = Nuke.ImageRequest.ThumbnailOptions(maxPixelSize: Float(maxPixel))
-        return request
-    }
-
-    func cached(id: String, maxPixel: Int) -> UIImage? {
-        nuke.cache[self.request(id: id, maxPixel: maxPixel, load: { Data() })]?.image
-    }
-
-    func image(id: String, maxPixel: Int, priority: TaskPriority = .userInitiated,
-               load: @escaping @Sendable () async throws -> Data) async -> UIImage? {
-        let request = self.request(id: id, maxPixel: maxPixel, priority: Self.priority(priority), load: load)
-        guard !Task.isCancelled else { return nil }
-        return try? await nuke.image(for: request)
     }
 
     // MARK: 解码工具

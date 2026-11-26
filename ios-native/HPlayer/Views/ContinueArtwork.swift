@@ -3,9 +3,8 @@ import Combine
 
 // MARK: - 继续观看的封面
 
-/// 「继续观看」里不在片库的记录（在线动漫、在线短剧、磁力）观看记录本身不带封面，这里按记录去找一张：
+/// 「继续观看」里不在片库的记录（在线动漫、磁力）观看记录本身不带封面，这里按记录去找一张：
 /// - 在线动漫：按番剧编号，先看追番、首页在线列表里有没有，没有再拉一次详情取海报；
-/// - 在线短剧：按短剧编号拉详情取封面（密文，显示时本机解密，见 DramaCoverStore）；
 /// - 磁力：从资源名 / 文件名里认出番号，去 DMM 找官方封面（横版封套）。
 /// 找到的地址存在本机，下次直接用；没找到的过一段时间再试。
 @MainActor
@@ -18,8 +17,6 @@ final class ContinueArtworkStore: ObservableObject {
         case wide(String)
         /// 竖海报：铺一层虚化，海报立在中间
         case poster(String)
-        /// 短剧的密文竖封面
-        case drama(String)
     }
 
     @Published private(set) var artworks: [String: Artwork] = [:]
@@ -35,12 +32,11 @@ final class ContinueArtworkStore: ObservableObject {
         }
     }
 
-    /// 这条记录用哪个键查封面；不是这三类（或认不出）返回 nil。
+    /// 这条记录用哪个键查封面；不是这两类（或认不出）返回 nil。
     static func key(for target: ContinueEntry.Target) -> String? {
         switch target {
         case .recent(let recent):
             if let id = recent.animeId { return "anime|\(id)" }
-            if let ref = recent.dramaRef { return "drama|\(ref.videoId)" }
             return nil
         case .magnet(let item):
             return "magnet|\(item.infoHash)"
@@ -70,10 +66,6 @@ final class ContinueArtworkStore: ObservableObject {
         switch target {
         case .recent(let recent):
             if let id = recent.animeId { return await animePoster(id) }
-            if let ref = recent.dramaRef {
-                guard let detail = try? await DramaClient.shared.detail(id: ref.videoId), !detail.cover.isEmpty else { return nil }
-                return .drama(detail.cover)
-            }
             return nil
         case .magnet(let item):
             let code = AVCatalogCode.extract(item.name) ?? item.lastFileTitle.flatMap(AVCatalogCode.extract)
@@ -107,8 +99,8 @@ final class ContinueArtworkStore: ObservableObject {
 
 /// 继续观看卡片 / 观看历史行里的封面：
 /// 1. 优先用停下来那一刻截下的播放画面（`PlaybackFrameStore`）；
-/// 2. 没有截图时，片库影片用自己的图；在线动漫、短剧、磁力用 ContinueArtworkStore 找到的封面。
-/// 横图等比例铺满卡片、居中裁切；竖屏画面（短剧）铺一层虚化，画面立在中间。
+/// 2. 没有截图时，片库影片用自己的图；在线动漫、磁力用 ContinueArtworkStore 找到的封面。
+/// 横图等比例铺满卡片、居中裁切；竖屏画面铺一层虚化，画面立在中间。
 struct ContinueArtworkView: View {
     let entry: ContinueEntry
     let width: CGFloat
@@ -136,10 +128,6 @@ struct ContinueArtworkView: View {
                 case .poster(let url)?:
                     // 竖海报也等比例铺满、居中裁切
                     wide(url)
-                case .drama(let url)?:
-                    Color.clear
-                        .overlay { DramaCover(urlString: url, title: entry.title) }
-                        .clipped()
                 case nil:
                     ArtworkView(urlString: "", title: entry.title)
                         .scaledToFill()

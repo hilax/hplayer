@@ -31,7 +31,6 @@ final class MissAVTests: XCTestCase {
         let item = store.items[0]
         XCTAssertTrue(item.isMissAV)
         XCTAssertFalse(item.isAnime)
-        XCTAssertFalse(item.isDrama)
         XCTAssertFalse(item.isJable)
 
         let restoredSource = store.source(for: item)

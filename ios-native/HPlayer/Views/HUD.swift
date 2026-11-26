@@ -311,7 +311,7 @@ struct PlayerLevelHUD: View {
 }
 
 /// 左右滑快进快退：不加底板；上面是目标时间，下面是跳了多少（琥珀色），可选一条细进度条和总时长。
-/// 正片播放器和短剧共用。正片竖屏时画面很矮，只带进度条、不带总时长，免得挡住画面中间。
+/// 正片竖屏时画面很矮，只带进度条、不带总时长，免得挡住画面中间。
 struct PlayerSeekHUD: View {
     let time: String
     let delta: String

@@ -15,8 +15,6 @@ enum PlaybackSource: Identifiable, Hashable {
     case p115(title: String, pickCode: String)
     /// 在线动漫的一集。地址带时效签名，打开时才现解析，所以播放列表里存的是集数引用而不是 URL。
     case anime(AnimeEpisodeRef)
-    /// 在线短剧的一集，同样是打开时才现取地址。
-    case drama(DramaEpisodeRef)
     /// Jable 视频，打开时现取播放地址与请求头。
     case jable(JableVideoRef)
     /// MissAV 视频，打开时现取播放地址与请求头。
@@ -32,8 +30,6 @@ enum PlaybackSource: Identifiable, Hashable {
             return "p115|\(pickCode)"
         case .anime(let ref):
             return ref.id
-        case .drama(let ref):
-            return ref.id
         case .jable(let ref):
             return ref.id
         case .missav(let ref):
@@ -48,8 +44,6 @@ enum PlaybackSource: Identifiable, Hashable {
         case .p115(let title, _):
             return title
         case .anime(let ref):
-            return ref.episodeTitle
-        case .drama(let ref):
             return ref.episodeTitle
         case .jable(let ref):
             return ref.episodeTitle
@@ -92,10 +86,6 @@ struct RecentItem: Codable, Identifiable, Hashable {
         return AnimeEpisodeRef(animeId: animeId, seriesName: name, play: play,
                                routeIndex: animeRoute ?? 0, part: part)
     }
-
-    /// 短剧记录存的是占位地址（hpdrama://video/编号/集数），打开时还原成集数引用再现取播放地址。
-    var dramaRef: DramaEpisodeRef? { DramaEpisodeRef(recordURL: url, title: title) }
-    var isDrama: Bool { url.hasPrefix(DramaEpisodeRef.scheme + "://") }
 
     /// Jable 记录存的是占位地址（hpjable://video/编号），打开时还原成视频引用再现取播放地址。
     var jableRef: JableVideoRef? { JableVideoRef(recordURL: url, title: title) }

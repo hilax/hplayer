@@ -119,7 +119,6 @@ struct PlayerView: View {
 
     private var loadingText: String {
         if case .anime = current { return "正在解析播放地址…" }
-        if case .drama = current { return "正在获取播放地址…" }
         if case .jable = current { return "正在解析 Jable 视频…" }
         if case .missav = current { return "正在解析 MissAV 视频…" }
         return "正在准备播放…"
@@ -144,7 +143,7 @@ struct PlayerView: View {
             } else {
                 return [PlaybackChoice(id: "online-default", title: "1080P 高清")]
             }
-        case .direct, .drama, .jable, .missav:
+        case .direct, .jable, .missav:
             return []
         }
     }
@@ -273,14 +272,6 @@ struct PlayerView: View {
                 selectedQuality = resolved.qualityTitle
                 await openAndReleaseWhenRevealed(request, source: source, session: session) { hold in
                     playback.open(resolved.url, customHeaders: resolved.headers, startTime: resume,
-                                  title: ref.episodeTitle, deferAutoPlay: hold)
-                }
-            case .drama(let ref):
-                ref.rememberAsLastWatched()
-                let dramaPlayback = try await DramaClient.shared.playback(videoId: ref.videoId, episode: ref.episode)
-                guard isCurrentRequest(request, source: source, session: session), !Task.isCancelled else { return }
-                await openAndReleaseWhenRevealed(request, source: source, session: session) { hold in
-                    playback.open(dramaPlayback.url, customHeaders: dramaPlayback.headers, startTime: resume,
                                   title: ref.episodeTitle, deferAutoPlay: hold)
                 }
             case .jable(let ref):

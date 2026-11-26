@@ -10,19 +10,9 @@ struct HomeSlide: Identifiable {
         case anime(AnimeBanner)
         /// 磁力页「最新上架」：JavBus 的大封面（约 800×538 的横版封套）
         case magnet(MagnetSearchItem)
-        /// 短剧频道：热播榜前几名（竖版封面，密文封面本机解密）
-        case drama(DramaSlide)
         /// Jable / MissAV 频道：热门列表前几部（16:9 预览图）
         case jable(JableVideoCard)
         case missav(MissAVVideoCard)
-    }
-
-    /// 短剧轮播一张需要的信息
-    struct DramaSlide {
-        let id: Int
-        let title: String
-        let cover: String
-        let subtitle: String
     }
 
     let id: String
@@ -46,20 +36,10 @@ struct HomeSlide: Identifiable {
             return .init(key: banner.safePicURLString)
         case .magnet(let movie):
             return .init(key: Self.magnetCover(movie), fallback: movie.coverURL?.absoluteString ?? "")
-        case .drama(let drama):
-            return .init(key: drama.cover, aspect: 2.0 / 3.0, encrypted: true)
         case .jable(let video):
             return .init(key: video.largeCoverURL, fallback: video.coverUrl)
         case .missav(let video):
             return .init(key: video.largeCoverURL, fallback: video.coverUrl)
-        }
-    }
-
-    /// 短剧频道的轮播：热播榜前 limit 名（有封面的）
-    static func drama(_ ranks: [DramaRankItem], limit: Int = 6) -> [HomeSlide] {
-        ranks.filter { !$0.cover.isEmpty }.prefix(limit).map {
-            HomeSlide(id: "drama|\($0.videoId)",
-                      content: .drama(DramaSlide(id: $0.videoId, title: $0.title, cover: $0.cover, subtitle: $0.subtitle)))
         }
     }
 
@@ -129,8 +109,6 @@ struct HomeSlideArtwork: View {
             case .magnet(let movie):
                 HomeSlideImage(urlString: HomeSlide.magnetCover(movie), fallback: movie.coverURL?.absoluteString ?? "",
                                title: movie.code)
-            case .drama(let drama):
-                dramaArtwork(drama)
             case .jable(let video):
                 HomeSlideImage(urlString: video.largeCoverURL, fallback: video.coverUrl, title: video.title)
             case .missav(let video):
@@ -152,39 +130,11 @@ struct HomeSlideArtwork: View {
         case .library: text = "精选"
         case .anime: text = "热播"
         case .magnet: text = "最新"
-        case .drama: text = "热播榜"
         case .jable, .missav: text = "热门"
         }
         // 轮播卡片上的角标：画面本身已经够醒目，用暗底白字，不再压一块琥珀
         return TagBadge(text: text, style: .onArtwork)
             .padding(Theme.Space.md)
-    }
-
-    /// 短剧竖封面：和只有竖海报的片库影片一样，铺一层封面的虚化，封面本身立在右边。
-    /// 封面是密文图，只能走 DramaCover 解密，不能交给 ArtworkView。
-    private func dramaArtwork(_ drama: HomeSlide.DramaSlide) -> some View {
-        GeometryReader { proxy in
-            let height = proxy.size.height
-            let posterHeight = height * 0.66
-            ZStack(alignment: .trailing) {
-                DramaCover(urlString: drama.cover, title: "")
-                    .frame(width: proxy.size.width / 3, height: height / 3)
-                    .clipped()
-                    .blur(radius: 6)
-                    .scaleEffect(3.4)
-                    .frame(width: proxy.size.width, height: height)
-                    .clipped()
-                    .overlay(Color.black.opacity(Theme.Opacity.faint))
-                DramaCover(urlString: drama.cover, title: drama.title)
-                    .frame(width: posterHeight / 1.5, height: posterHeight)
-                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.poster, style: .continuous))
-                    .shadow(color: .black.opacity(Theme.Opacity.medium), radius: 10, y: 4)
-                    .padding(.trailing, 22)
-                    .offset(y: -height * 0.04)
-            }
-            .frame(width: proxy.size.width, height: height)
-        }
-        .background(Theme.surfaceRaised)
     }
 
     /// 只有竖海报：铺一层这张海报的虚化，海报本身立在右边，不硬裁成横图。
@@ -253,8 +203,6 @@ struct HomeSlideCaption: View {
                            subtitle: [magnetStarNames(movie) ?? "", movie.releaseDate ?? ""].filter { !$0.isEmpty }
                                .joined(separator: " · "))
                     .task(id: movie.id) { await resolveMagnetStars(movie) }
-            case .drama(let drama):
-                titleBlock(title: drama.title, subtitle: drama.subtitle)
             case .jable(let video):
                 titleBlock(title: video.id.uppercased(), subtitle: video.title)
             case .missav(let video):
@@ -271,7 +219,6 @@ struct HomeSlideCaption: View {
     /// 右边留给页码点；只有竖海报的片库影片，海报立在右边，文字再让开一些
     private var trailingInset: CGFloat {
         if case .library(let item) = slide.content, !HomeSlide.hasWideArtwork(item) { return 124 }
-        if case .drama = slide.content { return 124 }
         return 64
     }
 

@@ -4,7 +4,7 @@ import Foundation
 /// 从首页「继续观看」打开时把整份列表还原给播放器，选集里就能看到上一集、下一集。
 ///
 /// 以前只记了正在看的那一集：片库里认得出来的剧还能按剧集重新拼，网盘文件夹里没入库的视频、
-/// 在线动漫、短剧打开后选集里都只有一集。
+/// 在线动漫打开后选集里都只有一集。
 ///
 /// 列表存在 Application Support 下的一个 JSON 文件里（不放 UserDefaults，免得撑大）；
 /// 同一份列表的各集共用一份，只留还在观看记录里的那些。
@@ -17,7 +17,6 @@ final class RecentPlaylistStore {
         case direct(title: String, url: URL)
         case p115(title: String, pickCode: String)
         case anime(AnimeEpisodeRef)
-        case drama(videoId: Int, seriesName: String, episode: Int)
         case jable(videoId: String, title: String, coverUrl: String)
         case missav(videoId: String, title: String, coverUrl: String)
 
@@ -26,7 +25,6 @@ final class RecentPlaylistStore {
             case .direct(let title, let url): self = .direct(title: title, url: url)
             case .p115(let title, let pickCode): self = .p115(title: title, pickCode: pickCode)
             case .anime(let ref): self = .anime(ref)
-            case .drama(let ref): self = .drama(videoId: ref.videoId, seriesName: ref.seriesName, episode: ref.episode)
             case .jable(let ref): self = .jable(videoId: ref.videoId, title: ref.title, coverUrl: ref.coverUrl)
             case .missav(let ref): self = .missav(videoId: ref.videoId, title: ref.title, coverUrl: ref.coverUrl)
             case .online: return nil
@@ -38,8 +36,6 @@ final class RecentPlaylistStore {
             case .direct(let title, let url): return .direct(title: title, url: url)
             case .p115(let title, let pickCode): return .p115(title: title, pickCode: pickCode)
             case .anime(let ref): return .anime(ref)
-            case .drama(let videoId, let seriesName, let episode):
-                return .drama(DramaEpisodeRef(videoId: videoId, seriesName: seriesName, episode: episode))
             case .jable(let videoId, let title, let coverUrl):
                 return .jable(JableVideoRef(videoId: videoId, title: title, coverUrl: coverUrl))
             case .missav(let videoId, let title, let coverUrl):

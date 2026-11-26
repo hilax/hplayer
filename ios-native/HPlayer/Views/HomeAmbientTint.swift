@@ -100,8 +100,6 @@ final class HeroPalette: ObservableObject {
         var fallback = ""
         /// 这张图在卡片里露出部分的宽高比
         var aspect: CGFloat = ArtworkTint.heroAspect
-        /// 短剧封面是密文图：要走 DramaCoverStore 解密，不能直接按地址取
-        var encrypted = false
     }
 
     @Published private(set) var tints: [String: ArtworkTint] = [:]
@@ -144,15 +142,8 @@ final class HeroPalette: ObservableObject {
 
     private static func load(_ source: Source) async -> (image: UIImage, average: ArtworkTint, tint: ArtworkTint)? {
         for candidate in [source.key, source.fallback] where !candidate.isEmpty {
-            let loaded: UIImage?
-            if source.encrypted {
-                loaded = await DramaCoverStore.shared.image(for: candidate)
-            } else if let url = URL(string: candidate) {
-                loaded = await ImagePipeline.shared.image(url, maxPixel: ArtworkSize.backdrop, priority: .utility)
-            } else {
-                loaded = nil
-            }
-            guard let image = loaded,
+            guard let url = URL(string: candidate),
+                  let image = await ImagePipeline.shared.image(url, maxPixel: ArtworkSize.backdrop, priority: .utility),
                   let cgImage = image.cgImage,
                   let average = ArtworkTint.averageColor(of: cgImage, aspect: source.aspect) else { continue }
             return (AmbientImaging.softened(cgImage) ?? image,

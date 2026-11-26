@@ -74,9 +74,6 @@ final class RecentStore: ObservableObject {
             updated.animePlay = ref.play
             updated.animeRoute = ref.routeIndex
             updated.animePart = ref.part
-        case .drama(let ref):
-            updated.url = ref.recordURL
-            updated.pickCode = nil
         case .jable(let ref):
             updated.url = ref.recordURL
             updated.pickCode = nil
@@ -144,9 +141,6 @@ final class RecentStore: ObservableObject {
         if let pickCode = item.pickCode, !pickCode.isEmpty {
             return .p115(title: item.title, pickCode: pickCode)
         }
-        if let ref = item.dramaRef {
-            return .drama(ref)
-        }
         if let ref = item.jableRef {
             return .jable(ref)
         }
@@ -198,9 +192,6 @@ final class RecentStore: ObservableObject {
             return "p115|\(pickCode)"
         case .anime(let ref):
             return ref.id
-        case .drama(let ref):
-            // 和 key(of:) 对占位地址算出来的结果一致
-            return "url|\(ref.recordURL)"
         case .jable(let ref):
             return "url|\(ref.recordURL)"
         case .missav(let ref):
@@ -224,7 +215,7 @@ final class RecentStore: ObservableObject {
               let decoded = try? JSONDecoder().decode([RecentItem].self, from: data) else {
             return
         }
-        items = decoded
+        items = decoded.filter { !$0.url.hasPrefix("hpdrama://") }
     }
 
     private func save() {

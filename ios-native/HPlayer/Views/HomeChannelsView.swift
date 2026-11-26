@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 首页标签：推荐 / 动漫 / 片库 / 短剧 / Jable / MissAV 频道左右滑动切换（PagedHeaderContainer）。
+/// 首页标签：推荐 / 动漫 / 片库 / Jable / MissAV 频道左右滑动切换（PagedHeaderContainer）。
 /// 第一行频道栏始终固定在顶端；往上滑时第二行大搜索栏向上收起，右上角渐显紧凑搜索键。
 /// 详情页走 HomeView 的公共导航栈，盖住频道区和底部胶囊栏。
 struct HomeChannelsView: View {
@@ -67,8 +67,6 @@ struct HomeChannelsView: View {
                     AnimeCatalogView()
                 case .library:
                     CatalogTab(onSearch: onSearch, preset: $catalogPreset, filterRequest: filterRequest)
-                case .drama:
-                    DramaTab()
                 case .jable:
                     JableTab()
                 case .missav:
@@ -88,7 +86,6 @@ struct HomeChannelsView: View {
         case .recommend: return "搜索片库、动漫、网盘"
         case .anime: return "搜索动漫"
         case .library: return "搜索片库"
-        case .drama: return "搜索片库、动漫、网盘"
         case .jable: return "搜索片库、动漫、网盘"
         case .missav: return "搜索片库、动漫、网盘"
         }
@@ -100,18 +97,17 @@ struct HomeChannelsView: View {
         case .recommend: return "home.search"
         case .anime: return "anime.search"
         case .library: return "catalog.search"
-        case .drama: return "drama.search"
         case .jable: return "jable.search"
         case .missav: return "missav.search"
         }
     }
 
-    /// 「筛选」：推荐去片库频道，片库滚到筛选区；动漫、短剧不放
+    /// 「筛选」：推荐去片库频道，片库滚到筛选区；动漫、Jable、MissAV 不放
     private var filterAction: (() -> Void)? {
         switch channel {
         case .recommend: return { withAnimation(Motion.smooth) { channel = .library } }
         case .library: return { filterRequest += 1 }
-        case .anime, .drama, .jable, .missav: return nil
+        case .anime, .jable, .missav: return nil
         }
     }
 }
