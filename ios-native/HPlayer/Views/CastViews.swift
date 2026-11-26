@@ -468,6 +468,7 @@ struct CastRemoteOverlayView: View {
     }
 
     @State private var dragging = false
+    @State private var scrubberHaptics = SeekHapticTracker()
     @State private var dragTime: Double = 0
     @State private var subpanel: InlineSubpanel?
 
@@ -786,15 +787,22 @@ struct CastRemoteOverlayView: View {
                     DragGesture(minimumDistance: 0)
                         .onChanged { value in
                             guard total > 0 else { return }
-                            dragging = true
                             let ratio = min(max(value.location.x / width, 0), 1)
-                            dragTime = ratio * total
+                            let nextTime = ratio * total
+                            if !dragging {
+                                dragging = true
+                                PlayerHaptics.prepareForSeek()
+                                PlayerHaptics.fire(scrubberHaptics.begin(at: castManager.currentTime, duration: total))
+                            }
+                            dragTime = nextTime
+                            PlayerHaptics.fire(scrubberHaptics.update(target: nextTime, duration: total))
                         }
                         .onEnded { value in
                             guard total > 0 else { return }
                             let ratio = min(max(value.location.x / width, 0), 1)
                             let target = ratio * total
                             dragging = false
+                            PlayerHaptics.fire(scrubberHaptics.end(finalTarget: target))
                             castManager.seek(to: target)
                         }
                 )

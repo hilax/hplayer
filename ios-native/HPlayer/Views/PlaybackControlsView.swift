@@ -285,7 +285,8 @@ struct PlaybackControlsView: View {
     /// 选完一项后稍等一下再收起弹出层，让选中的那块玻璃先滑过去
     @State private var popoverCloseTask: Task<Void, Never>?
     @State private var hideTask: Task<Void, Never>?
-    @State private var lastSeekTick = 0
+    @State private var panSeekHaptics = SeekHapticTracker()
+    @State private var scrubberHaptics = SeekHapticTracker()
     /// 正在转回竖屏准备关闭，期间不再响应关闭和手势
     @State private var closing = false
     @State private var adjustment: PlaybackAdjustment?
@@ -494,6 +495,8 @@ struct PlaybackControlsView: View {
             adjustmentHideTask?.cancel()
             doubleTapHideTask?.cancel()
             sleepTask?.cancel()
+            panSeekHaptics.reset()
+            scrubberHaptics.reset()
             boosting = false
             boostLocked = false
             boostLockPrimed = false
@@ -1608,6 +1611,7 @@ struct PlaybackControlsView: View {
     private func scrubbed(_ value: Double) {
         dragTime = value
         guard dragging, playback.duration > 0 else { return }
+        PlayerHaptics.fire(scrubberHaptics.update(target: value, duration: playback.duration))
         adjustment = seekAdjustment(target: value, from: scrubStart)
     }
 
@@ -1625,10 +1629,15 @@ struct PlaybackControlsView: View {
                     scrubStart = playback.currentTime
                     hideTask?.cancel()
                     adjustmentHideTask?.cancel()
-                    scrubbed(dragTime)
+                    if playback.duration > 0 {
+                        PlayerHaptics.prepareForSeek()
+                        PlayerHaptics.fire(scrubberHaptics.begin(at: scrubStart, duration: playback.duration))
+                        adjustment = seekAdjustment(target: dragTime, from: scrubStart)
+                    }
                 } else if dragging {
                     dragging = false
                     playback.seek(to: dragTime)
+                    PlayerHaptics.fire(scrubberHaptics.end(finalTarget: dragTime))
                     hideAdjustmentSoon(revealing: true)
                 }
             },
@@ -3760,6 +3769,7 @@ struct PlaybackControlsView: View {
         }
         guard panActive else { return }
 
+        var justLockedSeek = false
         if panKind == nil {
             let dx = abs(translation.x)
             let dy = abs(translation.y)
@@ -3791,10 +3801,10 @@ struct PlaybackControlsView: View {
                     return
                 }
                 panKind = .seek
+                justLockedSeek = true
                 beginPanScrub(at: adjustmentStartTime)
-                lastSeekTick = Int(adjustmentStartTime / Self.seekTickSeconds)
-                Self.seekTicker.prepare()
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                PlayerHaptics.prepareForSeek()
+                PlayerHaptics.fire(panSeekHaptics.begin(at: adjustmentStartTime, duration: playback.duration))
             } else {
                 // 从屏幕上下边缘起手的竖滑是系统手势（横屏右上角下拉控制中心、底部上滑回桌面）：
                 // 不调亮度和音量，以前这里会顺手把音量调掉，看起来像音量条自己冒出来
@@ -3823,14 +3833,19 @@ struct PlaybackControlsView: View {
             let range = gestureSettings.seekSensitivity.seekRange(duration: playback.duration)
             // 滑过头也只停在结尾前 5 秒，不会一下跳到最后、直接播完停住
             let ceiling = max(adjustmentStartTime, playback.duration - 5)
-            let target = min(max(adjustmentStartTime + Double(moveX / size.width) * range, 0), max(0, ceiling))
+            let maxTarget = max(0, ceiling)
+            let target = min(max(adjustmentStartTime + Double(moveX / size.width) * range, 0), maxTarget)
             let shouldCancel = gestureSettings.shouldCancelSeek(translationY: moveY, surfaceHeight: size.height)
             if shouldCancel != seekCancelled {
                 seekCancelled = shouldCancel
                 Haptics.select()
             }
-            if !seekCancelled {
-                seekHaptic(target: target)
+            if !seekCancelled && !justLockedSeek {
+                PlayerHaptics.fire(panSeekHaptics.update(
+                    target: target,
+                    duration: playback.duration,
+                    upperBound: maxTarget
+                ))
             }
             adjustment = seekAdjustment(target: target, from: adjustmentStartTime, cancelled: seekCancelled)
             // 只更新跳转预览，松手才真正跳转；操作栏和进度条保持隐藏。
@@ -3851,8 +3866,13 @@ struct PlaybackControlsView: View {
         if let adjustment { lastAdjustment = "\(adjustment.title) \(adjustment.valueText)" }
         if state == .ended {
             let wasCancelled = seekCancelled
-            if let target = adjustment?.targetTime, !wasCancelled {
-                playback.seek(to: target)
+            if panKind == .seek {
+                if let target = adjustment?.targetTime, !wasCancelled {
+                    playback.seek(to: target)
+                    PlayerHaptics.fire(panSeekHaptics.end(finalTarget: target))
+                } else {
+                    panSeekHaptics.reset()
+                }
             }
             endPanScrub()
             seekCancelled = false
@@ -3876,6 +3896,7 @@ struct PlaybackControlsView: View {
     /// 横滑结束（松手、取消或被打断）：进度条回到跟着播放位置走。
     /// 跳转已经在松手时发出，playback.currentTime 当场就是目标位置，所以不会先弹回旧位置。
     private func endPanScrub() {
+        panSeekHaptics.reset()
         guard panScrubbing else { return }
         panScrubbing = false
         dragging = false
@@ -3892,22 +3913,6 @@ struct PlaybackControlsView: View {
             targetTime: target,
             cancelled: cancelled
         )
-    }
-
-    /// 拖动快进快退时，每跨过 10 秒轻震一下；到头时重一点
-    private static let seekTickSeconds = 10.0
-    private static let seekTicker = UISelectionFeedbackGenerator()
-
-    private func seekHaptic(target: Double) {
-        let tick = Int(target / Self.seekTickSeconds)
-        guard tick != lastSeekTick else { return }
-        lastSeekTick = tick
-        if target <= 0 || target >= playback.duration - 0.5 {
-            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        } else {
-            Self.seekTicker.selectionChanged()
-            Self.seekTicker.prepare()
-        }
     }
 
     /// 横滑用不了时给一句提示，不要什么反应都没有。

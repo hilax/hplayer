@@ -101,4 +101,46 @@ final class PlaybackGesturePrefsTests: XCTestCase {
         let loaded = PlaybackGesturePrefs.load(from: defaults)
         XCTAssertEqual(loaded, .default)
     }
+
+    func testSeekHapticTrackerMatchesVidHubCadenceEdgesAndThrottle() {
+        XCTAssertEqual(SeekHapticTracker.stepSeconds(for: 0), 10.0)
+        XCTAssertEqual(SeekHapticTracker.stepSeconds(for: 20), 1.0)
+        XCTAssertEqual(SeekHapticTracker.stepSeconds(for: 30), 1.0)
+        XCTAssertEqual(SeekHapticTracker.stepSeconds(for: 120), 5.0)
+        XCTAssertEqual(SeekHapticTracker.stepSeconds(for: 180), 5.0)
+        XCTAssertEqual(SeekHapticTracker.stepSeconds(for: 3600), 10.0)
+
+        var tracker = SeekHapticTracker()
+        XCTAssertEqual(tracker.begin(at: 100, duration: 3600, now: 10.0), .begin)
+        // Same 10s bucket -> no tick
+        XCTAssertNil(tracker.update(target: 108, duration: 3600, now: 10.1))
+        // Cross 110s boundary after >= 35ms -> tick
+        XCTAssertEqual(tracker.update(target: 112, duration: 3600, now: 10.2), .tick)
+        // Ultra-fast swipe within < 35ms -> throttled
+        XCTAssertNil(tracker.update(target: 125, duration: 3600, now: 10.21))
+        // Next bucket after >= 35ms -> tick
+        XCTAssertEqual(tracker.update(target: 135, duration: 3600, now: 10.3), .tick)
+        // Hit start boundary (0s) -> single boundary haptic, no repeat while held at 0
+        XCTAssertEqual(tracker.update(target: 0, duration: 3600, now: 10.4), .boundary)
+        XCTAssertNil(tracker.update(target: 0, duration: 3600, now: 10.5))
+        // Leave boundary, then hit end boundary -> boundary haptic once
+        XCTAssertEqual(tracker.update(target: 15, duration: 3600, now: 10.6), .tick)
+        XCTAssertEqual(tracker.update(target: 3600, duration: 3600, now: 10.7), .boundary)
+        XCTAssertNil(tracker.update(target: 3599.8, duration: 3600, now: 10.8))
+        // End after moving >= 0.8s -> commit
+        XCTAssertEqual(tracker.end(finalTarget: 135), .commit)
+        XCTAssertFalse(tracker.isActive)
+
+        // Small jitter (< 0.8s) -> no commit haptic
+        _ = tracker.begin(at: 50, duration: 3600, now: 20.0)
+        XCTAssertNil(tracker.end(finalTarget: 50.3))
+
+        // Pan-seek ceiling (duration - 5s) hits end boundary cleanly without repeating
+        _ = tracker.begin(at: 100, duration: 3600, now: 30.0)
+        XCTAssertEqual(tracker.update(target: 3595, duration: 3600, upperBound: 3595, now: 30.1), .boundary)
+        XCTAssertNil(tracker.update(target: 3595, duration: 3600, upperBound: 3595, now: 30.2))
+        tracker.reset()
+        XCTAssertFalse(tracker.isActive)
+        XCTAssertNil(tracker.end(finalTarget: 500))
+    }
 }

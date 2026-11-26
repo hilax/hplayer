@@ -1,6 +1,136 @@
 import SwiftUI
 import UIKit
 
+/// 滑动快进 / 进度条拖动震动事件类型
+enum SeekHapticEvent: Equatable {
+    case begin
+    case tick
+    case boundary
+    case commit
+}
+
+/// 滑动快进 / 进度条拖动震动节奏控制器（与 VidHub 保持一致）：
+/// - 按视频时长自适应步长（<=30s 每 1s，<=180s 每 5s，>180s 每 10s 一格）；
+/// - 35ms 最短节流，大幅快速滑动时手感干脆利落；
+/// - 滑到片头（0）或片尾边界时触发一次稍重的中等触感提示，且停在边界不重复连震；
+/// - 松手落点位移 >= 0.8s 时给一次柔和确认触感。
+struct SeekHapticTracker {
+    enum Edge: Equatable { case none, start, end }
+
+    static let minTickInterval: TimeInterval = 0.035
+
+    private(set) var lastTickIndex: Int?
+    private(set) var lastTickUptime: TimeInterval = -.infinity
+    private(set) var hitEdge: Edge = .none
+    private(set) var startTime: Double = 0
+    private(set) var isActive = false
+
+    static func stepSeconds(for duration: Double) -> Double {
+        guard duration.isFinite, duration > 0 else { return 10.0 }
+        if duration <= 30 { return 1.0 }
+        if duration <= 180 { return 5.0 }
+        return 10.0
+    }
+
+    mutating func begin(at time: Double, duration: Double, now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> SeekHapticEvent {
+        let step = Self.stepSeconds(for: duration)
+        startTime = time
+        lastTickIndex = Int(floor(max(0, time) / step))
+        lastTickUptime = now
+        hitEdge = .none
+        isActive = true
+        return .begin
+    }
+
+    mutating func update(
+        target: Double,
+        duration: Double,
+        upperBound: Double? = nil,
+        now: TimeInterval = ProcessInfo.processInfo.systemUptime
+    ) -> SeekHapticEvent? {
+        guard isActive, duration > 0, target.isFinite else { return nil }
+        let maxBound = upperBound.map { min(max($0, 0), duration) } ?? duration
+        let clamped = min(max(target, 0), maxBound)
+        let step = Self.stepSeconds(for: duration)
+        let tickIndex = Int(floor(clamped / step))
+
+        let edge: Edge
+        if clamped <= 0.05 {
+            edge = .start
+        } else if clamped >= max(0, maxBound - 0.5) {
+            edge = .end
+        } else {
+            edge = .none
+        }
+
+        if edge != .none {
+            lastTickIndex = tickIndex
+            if hitEdge != edge {
+                hitEdge = edge
+                lastTickUptime = now
+                return .boundary
+            }
+            return nil
+        }
+        hitEdge = .none
+
+        guard tickIndex != lastTickIndex else { return nil }
+        lastTickIndex = tickIndex
+        guard now - lastTickUptime >= Self.minTickInterval else { return nil }
+        lastTickUptime = now
+        return .tick
+    }
+
+    mutating func end(finalTarget: Double?) -> SeekHapticEvent? {
+        defer { reset() }
+        guard isActive, let finalTarget, abs(finalTarget - startTime) >= 0.8 else { return nil }
+        return .commit
+    }
+
+    mutating func reset() {
+        isActive = false
+        lastTickIndex = nil
+        hitEdge = .none
+    }
+}
+
+/// 播放器滑动 / 进度条拖动触感反馈（复用的预热生成器，与 VidHub 保持一致）
+@MainActor
+enum PlayerHaptics {
+    private static let selectionGenerator = UISelectionFeedbackGenerator()
+    private static let lightImpact = UIImpactFeedbackGenerator(style: .light)
+    private static let mediumImpact = UIImpactFeedbackGenerator(style: .medium)
+    private static let softImpact = UIImpactFeedbackGenerator(style: .soft)
+
+    static func prepareForSeek() {
+        selectionGenerator.prepare()
+        lightImpact.prepare()
+        mediumImpact.prepare()
+        softImpact.prepare()
+    }
+
+    static func fire(_ event: SeekHapticEvent?) {
+        guard let event else { return }
+        switch event {
+        case .begin:
+            lightImpact.impactOccurred()
+            selectionGenerator.prepare()
+        case .tick:
+            selectionGenerator.selectionChanged()
+            selectionGenerator.prepare()
+        case .boundary:
+            mediumImpact.impactOccurred()
+            selectionGenerator.prepare()
+        case .commit:
+            softImpact.impactOccurred(intensity: 0.75)
+        }
+    }
+
+    static func tap() {
+        lightImpact.impactOccurred()
+    }
+}
+
 struct PlaybackGestureSurface: UIViewRepresentable {
     var status: String
     /// 是否启用双击识别；关闭时 `doubleTap.isEnabled = false`，单击可零延迟立即响应。

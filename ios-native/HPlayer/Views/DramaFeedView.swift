@@ -258,6 +258,7 @@ private struct DramaFeedPage: View {
     let onFullscreen: () -> Void
 
     @State private var scrubValue: Double?
+    @State private var scrubHaptics = SeekHapticTracker()
     @State private var expanded = false
 
     /// 横屏视频在竖屏里完整显示时画面的高度
@@ -468,12 +469,20 @@ private struct DramaFeedPage: View {
                     DragGesture(minimumDistance: 0)
                         .onChanged { value in
                             guard player.duration > 0 else { return }
-                            if scrubValue == nil { scrubbing = true; Haptics.select() }
                             let x = min(max(value.location.x / max(proxy.size.width, 1), 0), 1)
-                            withAnimation(.easeOut(duration: 0.12)) { scrubValue = x * player.duration }
+                            let target = x * player.duration
+                            if scrubValue == nil {
+                                scrubbing = true
+                                PlayerHaptics.prepareForSeek()
+                                PlayerHaptics.fire(scrubHaptics.begin(at: player.currentTime, duration: player.duration))
+                            }
+                            PlayerHaptics.fire(scrubHaptics.update(target: target, duration: player.duration))
+                            withAnimation(.easeOut(duration: 0.12)) { scrubValue = target }
                         }
                         .onEnded { _ in
-                            if let target = scrubValue { player.seek(to: target) }
+                            let finalTarget = scrubValue
+                            if let target = finalTarget { player.seek(to: target) }
+                            PlayerHaptics.fire(scrubHaptics.end(finalTarget: finalTarget))
                             withAnimation(.easeOut(duration: 0.2)) { scrubValue = nil }
                             scrubbing = false
                         }
@@ -765,6 +774,9 @@ private struct DramaLandscapeView: View {
     @State private var seekStart: Double?
     @State private var seekTarget: Double?
     @State private var seekCancelled = false
+    @State private var panSeekHaptics = SeekHapticTracker()
+    @State private var sliderHaptics = SeekHapticTracker()
+    @State private var sliderLastTarget: Double?
     @State private var panFromSideEdge = false
     @State private var panBase = CGPoint.zero
     /// 这次拖动的方向还没定 / 已定为横滑 / 竖滑（竖滑不做事）
@@ -977,6 +989,7 @@ private struct DramaLandscapeView: View {
             panBase = .zero
             seekCancelled = false
         }
+        var justLockedSeek = false
         if panDirection == nil {
             let dx = abs(translation.x), dy = abs(translation.y)
             guard max(dx, dy) >= Self.panLockDistance else {
@@ -993,6 +1006,9 @@ private struct DramaLandscapeView: View {
                     return
                 }
                 seekStart = player.currentTime
+                justLockedSeek = true
+                PlayerHaptics.prepareForSeek()
+                PlayerHaptics.fire(panSeekHaptics.begin(at: player.currentTime, duration: player.duration))
                 withAnimation(.easeOut(duration: 0.15)) { controlsVisible = false }
             }
         }
@@ -1004,18 +1020,31 @@ private struct DramaLandscapeView: View {
         let moveY = translation.y - panBase.y
         let range = gestureSettings.seekSensitivity.seekRange(duration: player.duration)
         let ceiling = max(start, player.duration - 5)
-        let target = min(max(start + Double(moveX / size.width) * range, 0), max(0, ceiling))
+        let maxTarget = max(0, ceiling)
+        let target = min(max(start + Double(moveX / size.width) * range, 0), maxTarget)
         let shouldCancel = gestureSettings.shouldCancelSeek(translationY: moveY, surfaceHeight: size.height)
         if shouldCancel != seekCancelled {
             seekCancelled = shouldCancel
             Haptics.select()
+        }
+        if !seekCancelled && !justLockedSeek {
+            PlayerHaptics.fire(panSeekHaptics.update(
+                target: target,
+                duration: player.duration,
+                upperBound: maxTarget
+            ))
         }
         seekTarget = target
         if state == .ended { endSeek(commit: !seekCancelled) }
     }
 
     private func endSeek(commit: Bool) {
-        if commit, let seekTarget { player.seek(to: seekTarget) }
+        if commit, let seekTarget {
+            player.seek(to: seekTarget)
+            PlayerHaptics.fire(panSeekHaptics.end(finalTarget: seekTarget))
+        } else {
+            panSeekHaptics.reset()
+        }
         withAnimation(.easeOut(duration: 0.2)) {
             seekTarget = nil
             seekStart = nil
@@ -1063,8 +1092,24 @@ private struct DramaLandscapeView: View {
                     .font(.scaled(12, weight: .medium).monospacedDigit())
                 Slider(value: Binding(
                     get: { player.duration > 0 ? player.currentTime / player.duration : 0 },
-                    set: { player.seek(to: $0 * player.duration); scheduleHide() }
-                ))
+                    set: {
+                        let target = $0 * player.duration
+                        sliderLastTarget = target
+                        PlayerHaptics.fire(sliderHaptics.update(target: target, duration: player.duration))
+                        player.seek(to: target)
+                        scheduleHide()
+                    }
+                ), onEditingChanged: { editing in
+                    guard player.duration > 0 else { return }
+                    if editing {
+                        sliderLastTarget = player.currentTime
+                        PlayerHaptics.prepareForSeek()
+                        PlayerHaptics.fire(sliderHaptics.begin(at: player.currentTime, duration: player.duration))
+                    } else {
+                        PlayerHaptics.fire(sliderHaptics.end(finalTarget: sliderLastTarget ?? player.currentTime))
+                        sliderLastTarget = nil
+                    }
+                })
                 .tint(.white)
                 Text(DramaFeedPage.time(player.duration))
                     .font(.scaled(12, weight: .medium).monospacedDigit())
