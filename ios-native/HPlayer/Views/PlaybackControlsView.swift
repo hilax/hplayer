@@ -297,11 +297,7 @@ struct PlaybackControlsView: View {
     @State private var panKind: PlaybackAdjustment.Kind?
     /// 一次拖动手势是否还在处理中；方向锁定之前 panKind 为空，不能靠它判断。
     @State private var panActive = false
-    /// 这次拖动从屏幕上下边缘起手（系统手势区）
-    @State private var panFromSystemEdge = false
-    /// 这次拖动从屏幕左右边缘起手（侧滑返回 / 握持防误触区）
-    @State private var panFromSideEdge = false
-    /// 方向锁定时手指已经走过的位移，后面的调节量从这里开始算，画面不会突然跳一下。
+    /// 方向锁定时手指已经走过的死区基准偏移，后面的调节量从这里开始算，慢滑起手不跳变、快甩也不丢位移。
     @State private var panBase = CGPoint.zero
     @State private var lastAdjustment = ""
     @State private var originalBrightness: CGFloat?
@@ -590,6 +586,7 @@ struct PlaybackControlsView: View {
                 }
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .allowsHitTesting(false)
             }
             .frame(width: boostShowing ? max(0, leadingWidth) : nil, alignment: .leading)
 
@@ -726,6 +723,7 @@ struct PlaybackControlsView: View {
         }
         .lineLimit(1)
         .fixedSize()
+        .allowsHitTesting(false)
     }
 
     /// 画质、倍速在左，字幕音轨、选集和横竖屏在右，按钮都是不带底色的图标；
@@ -896,6 +894,7 @@ struct PlaybackControlsView: View {
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
         }
+        .allowsHitTesting(popover != nil)
     }
 
     @ViewBuilder
@@ -1724,6 +1723,7 @@ struct PlaybackControlsView: View {
                     status: gestureStatus,
                     doubleTapEnabled: gestureSettings.doubleTapAction != .off,
                     longPressEnabled: gestureSettings.longPressBoostEnabled,
+                    canBeginLongPress: canBeginLongPressGesture,
                     longPressDuration: 0.30,
                     allowSimultaneousPanWithLongPress: gestureSettings.longPressExtra == .slideToSeek,
                     pinchEnabled: gestureSettings.pinchAction != .off,
@@ -1732,9 +1732,7 @@ struct PlaybackControlsView: View {
                     onBoost: setBoost,
                     onLongPressDrag: handleLongPressDrag,
                     onPan: handlePan,
-                    onPinch: handlePinch,
-                    onPanStartsAtSystemEdge: { panFromSystemEdge = $0 },
-                    onPanStartsAtSideEdge: { panFromSideEdge = $0 }
+                    onPinch: handlePinch
                 )
 
                 if controlsVisible && !locked {
@@ -1792,6 +1790,7 @@ struct PlaybackControlsView: View {
         VStack(spacing: 0) {
             // 系统状态栏在横屏时隐藏：时间在正中，网络类型、网速、电量在右上
             PlayerStatusRow(networkSpeed: statusRowNetworkSpeed)
+                .allowsHitTesting(false)
                 .padding(.bottom, 12 + Self.landscapeStatusShift - 6 - PlayerStatusRow.height)
             topBar(landscape: true, insets: insets, width: width)
                 .opacity(topBarYieldingToHUD ? 0 : 1)
@@ -2156,6 +2155,7 @@ struct PlaybackControlsView: View {
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
         }
+        .allowsHitTesting(quickMenu != nil)
     }
 
     private static func quickMenuWidth(_ menu: QuickMenu) -> CGFloat {
@@ -3619,6 +3619,15 @@ struct PlaybackControlsView: View {
         }
     }
 
+    /// 当前是否允许触发长按倍速：暂停且未锁定倍速、或已经进入拖动时禁止长按抢占手势。
+    private var canBeginLongPressGesture: Bool {
+        if locked && gestureSettings.lockDisablesAllGestures { return false }
+        guard gestureSettings.longPressBoostEnabled,
+              !showList, quickMenu == nil, popover == nil, !closing,
+              !panActive, panKind == nil else { return false }
+        return playback.playing || boostLocked
+    }
+
     private func setBoost(_ enabled: Bool) {
         if enabled {
             // 已处于上滑锁定倍速时，再次长按直接解除锁定恢复原速
@@ -3628,7 +3637,7 @@ struct PlaybackControlsView: View {
             }
             if locked && gestureSettings.lockDisablesAllGestures { return }
             guard gestureSettings.longPressBoostEnabled,
-                  !showList, quickMenu == nil, popover == nil, panKind == nil, playback.playing else { return }
+                  !showList, quickMenu == nil, popover == nil, !panActive, panKind == nil, playback.playing else { return }
             hideControlsForGesture()
             boostLockPrimed = false
             boosting = true
@@ -3734,12 +3743,12 @@ struct PlaybackControlsView: View {
 
     // MARK: 手势
 
-    /// 手指走出这么远（点）才锁定是横滑还是竖滑。
-    /// 手势刚识别出来时只走了十个点左右，真人拇指横滑起手常带一点斜向，
-    /// 此时就定方向很容易把横滑误判成竖滑，变成调亮度或音量而不是快进快退。
-    private static let panLockDistance: CGFloat = 10
+    private func handlePan(_ event: PlaybackPanEvent) {
+        let state = event.state
+        let origin = event.origin
+        let translation = event.translation
+        let size = event.size
 
-    private func handlePan(_ state: UIGestureRecognizer.State, origin: CGPoint, translation: CGPoint, size: CGSize) {
         if state == .cancelled || state == .failed {
             // 被系统接走了（下拉控制中心、上滑回桌面等）：已经调了的亮度 / 音量退回到起手前，不留下误调
             switch panKind {
@@ -3768,7 +3777,6 @@ struct PlaybackControlsView: View {
         if state == .began {
             PlayerHaptics.prepareForSeek()
             if !boostLocked { setBoost(false) }
-            hideControlsForGesture()
             adjustmentStartTime = playback.currentTime
             // 每次从屏幕和系统的真实值开始调：自动亮度、音量键、控制中心都可能在两次滑动之间改过它们
             adjustmentStartBrightness = Double(ScreenBrightness.screen.brightness)
@@ -3782,57 +3790,54 @@ struct PlaybackControlsView: View {
 
         var justLockedSeek = false
         if panKind == nil {
-            let dx = abs(translation.x)
-            let dy = abs(translation.y)
-            guard max(dx, dy) >= Self.panLockDistance else {
-                // 还没走够，先不定方向；这次拖动很短就结束了，什么也不做
-                if state == .ended {
-                    panActive = false
-                }
+            let verticalAction = gestureSettings.verticalAction(
+                at: origin.x,
+                width: size.width,
+                isLandscape: isLandscapeWindow
+            )
+            let horizontalAllowed = !event.startsAtSideEdge && gestureSettings.horizontalSeekEnabled
+            let verticalAllowed = !locked && !event.startsAtSystemEdge && verticalAction != .off
+
+            let decision = PlaybackPanResolver.resolve(
+                translation: translation,
+                horizontalAllowed: horizontalAllowed,
+                verticalAllowed: verticalAllowed,
+                isEnded: state == .ended
+            )
+            switch decision {
+            case .undecided:
                 return
-            }
-            panBase = translation
-            // 偏向快进快退：拇指横滑常带一点斜，和水平夹角 50° 以内都算横滑（以前 45° 一刀切，
-            // 斜一点就变成调亮度 / 音量，看起来像「滑了没反应」）
-            let horizontal = dx >= dy * 0.84
-            // 锁定后（未开启全禁时）只留横滑快进快退，竖滑不调亮度和音量，免得躺着看时误碰
-            if locked && !horizontal {
+            case .reject:
                 panActive = false
                 return
-            }
-            if horizontal {
-                // 从屏幕左右边缘 24pt 内起手多为侧滑返回或握持误触，直接忽略
-                if panFromSideEdge || !gestureSettings.horizontalSeekEnabled {
-                    panActive = false
-                    return
-                }
-                guard playback.seekable, playback.duration > 0 else {
-                    panActive = false
-                    showNotice(playback.duration > 0 ? "视频还在加载，暂时不能拖动进度" : "这个视频不支持拖动进度")
-                    return
-                }
-                panKind = .seek
-                justLockedSeek = true
-                beginPanScrub(at: adjustmentStartTime)
-                PlayerHaptics.prepareForSeek()
-                PlayerHaptics.fire(panSeekHaptics.begin(
-                    at: adjustmentStartTime,
-                    duration: playback.duration,
-                    positionPt: 0
-                ))
-            } else {
-                // 从屏幕上下边缘起手的竖滑是系统手势（横屏右上角下拉控制中心、底部上滑回桌面）：
-                // 不调亮度和音量，以前这里会顺手把音量调掉，看起来像音量条自己冒出来
-                if panFromSystemEdge {
-                    panActive = false
-                    return
-                }
-                switch gestureSettings.verticalAction(at: origin.x, width: size.width, isLandscape: isLandscapeWindow) {
-                case .brightness: panKind = .brightness
-                case .volume: panKind = .volume
-                case .off:
-                    panActive = false
-                    return
+            case .lock(let axis, let base):
+                panBase = base
+                switch axis {
+                case .horizontal:
+                    hideControlsForGesture()
+                    guard playback.seekable, playback.duration > 0 else {
+                        panActive = false
+                        showNotice(playback.duration > 0 ? "视频还在加载，暂时不能拖动进度" : "这个视频不支持拖动进度")
+                        return
+                    }
+                    panKind = .seek
+                    justLockedSeek = true
+                    beginPanScrub(at: adjustmentStartTime)
+                    PlayerHaptics.prepareForSeek()
+                    PlayerHaptics.fire(panSeekHaptics.begin(
+                        at: adjustmentStartTime,
+                        duration: playback.duration,
+                        positionPt: 0
+                    ))
+                case .vertical:
+                    hideControlsForGesture()
+                    switch verticalAction {
+                    case .brightness: panKind = .brightness
+                    case .volume: panKind = .volume
+                    case .off:
+                        panActive = false
+                        return
+                    }
                 }
             }
         }
@@ -3883,7 +3888,7 @@ struct PlaybackControlsView: View {
         if state == .ended {
             let wasCancelled = seekCancelled
             if panKind == .seek {
-                if let target = adjustment?.targetTime, !wasCancelled {
+                if let target = adjustment?.targetTime, !wasCancelled, abs(target - adjustmentStartTime) >= 0.05 {
                     playback.seek(to: target)
                     PlayerHaptics.fire(panSeekHaptics.end(finalTarget: target))
                 } else {

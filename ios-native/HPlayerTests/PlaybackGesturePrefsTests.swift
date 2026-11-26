@@ -198,4 +198,139 @@ final class PlaybackGesturePrefsTests: XCTestCase {
         PlayerHaptics.tap()
         PlayerHaptics.cooldown()
     }
+
+    func testPanResolverPreservesFastFlickDisplacementAndAvoidsZeroMove() {
+        // Fast single-frame horizontal flick: previously panBase = translation zeroed moveX out
+        let fastFlick = PlaybackPanResolver.resolve(
+            translation: CGPoint(x: 48, y: 4),
+            horizontalAllowed: true,
+            verticalAllowed: true,
+            isEnded: true
+        )
+        guard case .lock(let axis, let base) = fastFlick else {
+            return XCTFail("Expected fast horizontal flick to lock, got \(fastFlick)")
+        }
+        XCTAssertEqual(axis, .horizontal)
+        XCTAssertEqual(base.x, PlaybackPanResolver.horizontalLockDistance, accuracy: 0.01)
+        XCTAssertEqual(48 - base.x, 40, accuracy: 0.01, "Fast flick must retain displacement beyond deadzone")
+        XCTAssertEqual(base.y, 4, accuracy: 0.01)
+
+        // Leftward fast flick keeps negative sign cleanly
+        let leftFlick = PlaybackPanResolver.resolve(
+            translation: CGPoint(x: -36, y: -2),
+            horizontalAllowed: true,
+            verticalAllowed: true,
+            isEnded: true
+        )
+        XCTAssertEqual(leftFlick, .lock(axis: .horizontal, base: CGPoint(x: -8, y: -2)))
+
+        // Slow drag locking right at threshold starts smoothly at 0 without jump
+        let slowLock = PlaybackPanResolver.resolve(
+            translation: CGPoint(x: 8, y: 1),
+            horizontalAllowed: true,
+            verticalAllowed: true,
+            isEnded: false
+        )
+        XCTAssertEqual(slowLock, .lock(axis: .horizontal, base: CGPoint(x: 8, y: 1)))
+    }
+
+    func testPanResolverToleratesInitialVerticalRollBeforeHorizontalSeek() {
+        // Slight vertical thumb roll (~10pt) with both axes allowed must stay undecided instead of hijacking seek
+        let earlyRoll = PlaybackPanResolver.resolve(
+            translation: CGPoint(x: 6, y: 10),
+            horizontalAllowed: true,
+            verticalAllowed: true,
+            isEnded: false
+        )
+        XCTAssertEqual(earlyRoll, .undecided)
+
+        // Next sample straightens out horizontally -> locks to horizontal seek
+        let horizontalFollowUp = PlaybackPanResolver.resolve(
+            translation: CGPoint(x: 20, y: 11),
+            horizontalAllowed: true,
+            verticalAllowed: true,
+            isEnded: false
+        )
+        XCTAssertEqual(horizontalFollowUp, .lock(axis: .horizontal, base: CGPoint(x: 8, y: 11)))
+
+        // When vertical is disallowed (bottom edge / locked / vertical off), an initial 14pt vertical wobble
+        // must NOT abort the gesture so the subsequent horizontal swipe still recognizes seek.
+        let edgeWobble = PlaybackPanResolver.resolve(
+            translation: CGPoint(x: 7, y: 14),
+            horizontalAllowed: true,
+            verticalAllowed: false,
+            isEnded: false
+        )
+        XCTAssertEqual(edgeWobble, .undecided)
+
+        let edgeFollowUp = PlaybackPanResolver.resolve(
+            translation: CGPoint(x: 24, y: 15),
+            horizontalAllowed: true,
+            verticalAllowed: false,
+            isEnded: false
+        )
+        XCTAssertEqual(edgeFollowUp, .lock(axis: .horizontal, base: CGPoint(x: 8, y: 15)))
+
+        // Genuine steep vertical pull from system edge (>= 36pt) is still rejected
+        let steepSystemPull = PlaybackPanResolver.resolve(
+            translation: CGPoint(x: 5, y: 40),
+            horizontalAllowed: true,
+            verticalAllowed: false,
+            isEnded: false
+        )
+        XCTAssertEqual(steepSystemPull, .reject)
+
+        // Normal vertical swipe still locks cleanly once >= 12pt
+        let normalVertical = PlaybackPanResolver.resolve(
+            translation: CGPoint(x: 3, y: -18),
+            horizontalAllowed: true,
+            verticalAllowed: true,
+            isEnded: false
+        )
+        XCTAssertEqual(normalVertical, .lock(axis: .vertical, base: CGPoint(x: 3, y: -12)))
+    }
+
+    func testBezelEdgeDetectionAndLongPressGating() {
+        let landscapeBounds = CGRect(x: 0, y: 0, width: 852, height: 393)
+        XCTAssertTrue(PlaybackPanGestureRecognizer.isBezelEdge(
+            pointInWindow: CGPoint(x: 10, y: 200),
+            windowBounds: landscapeBounds,
+            sideWidth: PlaybackGestureSurface.sideEdgeZone,
+            verticalHeight: PlaybackGestureSurface.systemEdgeZone
+        ))
+        XCTAssertTrue(PlaybackPanGestureRecognizer.isBezelEdge(
+            pointInWindow: CGPoint(x: 840, y: 200),
+            windowBounds: landscapeBounds,
+            sideWidth: PlaybackGestureSurface.sideEdgeZone,
+            verticalHeight: PlaybackGestureSurface.systemEdgeZone
+        ))
+        XCTAssertFalse(PlaybackPanGestureRecognizer.isBezelEdge(
+            pointInWindow: CGPoint(x: 426, y: 200),
+            windowBounds: landscapeBounds,
+            sideWidth: PlaybackGestureSurface.sideEdgeZone,
+            verticalHeight: PlaybackGestureSurface.systemEdgeZone
+        ))
+
+        // Long press must not hijack pan when playback cannot boost (e.g. paused)
+        let surface = PlaybackGestureSurface(
+            status: "",
+            canBeginLongPress: false,
+            allowSimultaneousPanWithLongPress: false,
+            onTap: {},
+            onBoost: { _ in },
+            onPan: { _ in }
+        )
+        let coordinator = surface.makeCoordinator()
+        let pan = PlaybackPanGestureRecognizer()
+        let longPress = UILongPressGestureRecognizer()
+        coordinator.panRecognizer = pan
+        coordinator.longPressRecognizer = longPress
+        XCTAssertFalse(coordinator.gestureRecognizerShouldBegin(longPress))
+        XCTAssertTrue(coordinator.gestureRecognizerShouldBegin(pan))
+
+        var playableSurface = surface
+        playableSurface.canBeginLongPress = true
+        coordinator.parent = playableSurface
+        XCTAssertTrue(coordinator.gestureRecognizerShouldBegin(longPress))
+    }
 }

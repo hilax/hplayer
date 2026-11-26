@@ -2171,6 +2171,10 @@ final class PlaybackController: ObservableObject {
             if !loaded { logEvent("文件已加载（距播放页创建 \(Self.milliseconds(since: createdAt)) 毫秒）") }
             loaded = true
             opening = false
+            if let engineSeekable = engine?.flag("seekable") { seekable = engineSeekable }
+            if let engineDuration = engine?.double("duration"), engineDuration.isFinite, engineDuration > 0 {
+                duration = engineDuration
+            }
             if !currentDirect115 || userPaused { openTimeoutTask?.cancel() }
             refreshTracks()
             handleFileLoadedForOnlineSubtitles()

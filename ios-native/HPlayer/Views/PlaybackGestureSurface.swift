@@ -1,6 +1,7 @@
 import CoreHaptics
 import SwiftUI
 import UIKit
+import UIKit.UIGestureRecognizerSubclass
 
 /// 滑动快进 / 进度条拖动速度档位（决定 CoreHaptics 刻度质感）
 enum SeekHapticSpeed: Equatable {
@@ -249,6 +250,7 @@ enum PlayerHaptics {
 
     private static var engine: CHHapticEngine?
     private static var engineStarted = false
+    private static var engineStarting = false
     private static var players: [PatternKey: CHHapticPatternPlayer] = [:]
 
     private static let rigidImpact = UIImpactFeedbackGenerator(style: .rigid)
@@ -267,19 +269,27 @@ enum PlayerHaptics {
     static func prepareForSeek() {
         warmUp()
         guard CHHapticEngine.capabilitiesForHardware().supportsHaptics, let engine else { return }
-        if !engineStarted {
-            do {
-                try engine.start()
-                engineStarted = true
-            } catch {
-                engineStarted = false
+        guard !engineStarted && !engineStarting else { return }
+        engineStarting = true
+        // 异步预热 CoreHaptics 引擎，避免自动休眠唤醒时在手势 .began 阻塞主线程
+        engine.start { error in
+            Task { @MainActor in
+                engineStarting = false
+                if error == nil {
+                    engineStarted = true
+                    if let current = Self.engine {
+                        buildPlayersIfNeeded(on: current)
+                    }
+                } else {
+                    engineStarted = false
+                }
             }
         }
-        buildPlayersIfNeeded(on: engine)
     }
 
     static func cooldown() {
         engineStarted = false
+        engineStarting = false
         engine?.stop(completionHandler: nil)
     }
 
@@ -312,26 +322,22 @@ enum PlayerHaptics {
             created.stoppedHandler = { _ in
                 Task { @MainActor in
                     engineStarted = false
+                    engineStarting = false
                 }
             }
             created.resetHandler = {
                 Task { @MainActor in
                     engineStarted = false
+                    engineStarting = false
                     players.removeAll()
-                    guard let current = engine else { return }
-                    do {
-                        try current.start()
-                        engineStarted = true
-                        buildPlayersIfNeeded(on: current)
-                    } catch {
-                        engineStarted = false
-                    }
+                    prepareForSeek()
                 }
             }
             engine = created
         } catch {
             engine = nil
             engineStarted = false
+            engineStarting = false
         }
     }
 
@@ -349,13 +355,8 @@ enum PlayerHaptics {
         ensureEngine()
         guard let engine else { return false }
         if !engineStarted {
-            do {
-                try engine.start()
-                engineStarted = true
-            } catch {
-                engineStarted = false
-                return false
-            }
+            prepareForSeek()
+            return false
         }
         buildPlayersIfNeeded(on: engine)
         guard let player = players[key] else { return false }
@@ -364,6 +365,7 @@ enum PlayerHaptics {
             return true
         } catch {
             engineStarted = false
+            engineStarting = false
             players.removeAll()
             return false
         }
@@ -478,12 +480,269 @@ enum PlayerHaptics {
     }
 }
 
+/// 播放器画布拖动事件的完整快照，避免边缘状态经由 SwiftUI `@State` 异步中转导致竞态。
+struct PlaybackPanEvent: Equatable {
+    let state: UIGestureRecognizer.State
+    let origin: CGPoint
+    let translation: CGPoint
+    let size: CGSize
+    let startsAtSystemEdge: Bool
+    let startsAtSideEdge: Bool
+}
+
+enum PlaybackPanAxis: Equatable {
+    case horizontal
+    case vertical
+}
+
+enum PlaybackPanDecision: Equatable {
+    case undecided
+    case lock(axis: PlaybackPanAxis, base: CGPoint)
+    case reject
+}
+
+/// 播放器画布单指滑动的方向锁定与死区基准计算：
+/// - 横滑阈值 8pt、竖滑阈值 12pt，避免起手瞬间轻微纵向滚动抢走横滑快进；
+/// - 与水平夹角约 50° 以内优先判为横滑（`dx >= dy * 0.84`）；
+/// - 锁定基准偏移按死区上限截断，慢滑起手零跳变，快速轻甩也不会把整段位移吞成 0；
+/// - 当某一方向被禁用或处于系统边缘保护区时，不因轻微抖动立即中止整次手势，仅在明确走入禁用方向（>= 36pt）时放弃。
+enum PlaybackPanResolver {
+    static let horizontalLockDistance: CGFloat = 8
+    static let verticalLockDistance: CGFloat = 12
+    static let horizontalBias: CGFloat = 0.84
+    static let rejectCrossAxisDistance: CGFloat = 36
+
+    static func deadzoneBase(_ delta: CGFloat, cap: CGFloat) -> CGFloat {
+        guard delta != 0 else { return 0 }
+        return copysign(min(abs(delta), cap), delta)
+    }
+
+    static func resolve(
+        translation: CGPoint,
+        horizontalAllowed: Bool,
+        verticalAllowed: Bool,
+        isEnded: Bool
+    ) -> PlaybackPanDecision {
+        guard horizontalAllowed || verticalAllowed else { return .reject }
+        let dx = abs(translation.x)
+        let dy = abs(translation.y)
+
+        let horizontalLeaning = dx >= dy * horizontalBias
+        if horizontalLeaning {
+            guard dx >= horizontalLockDistance else {
+                return isEnded ? .reject : .undecided
+            }
+            if horizontalAllowed {
+                let base = CGPoint(
+                    x: deadzoneBase(translation.x, cap: horizontalLockDistance),
+                    y: translation.y
+                )
+                return .lock(axis: .horizontal, base: base)
+            }
+            // 横滑不可用（例如靠左右边缘起手），仅当明显是纯横滑时才放弃，避免误杀随后的竖滑调节
+            if dx >= rejectCrossAxisDistance && dy < dx * 0.5 {
+                return .reject
+            }
+            return isEnded ? .reject : .undecided
+        } else {
+            guard dy >= verticalLockDistance else {
+                return isEnded ? .reject : .undecided
+            }
+            if verticalAllowed {
+                let base = CGPoint(
+                    x: translation.x,
+                    y: deadzoneBase(translation.y, cap: verticalLockDistance)
+                )
+                return .lock(axis: .vertical, base: base)
+            }
+            // 竖滑不可用（例如底边/顶边系统手势区、锁屏或关闭竖滑），仅当明确是陡峭竖滑时才放弃，
+            // 起手轻微纵向抖动随后拉平为横滑时仍能顺利进入快进/快退
+            if dy >= rejectCrossAxisDistance && dx < dy * 0.5 {
+                return .reject
+            }
+            return isEnded ? .reject : .undecided
+        }
+    }
+}
+
+/// 播放器专用拖动手势识别器：
+/// 1. 在 `touchesBegan` 精确记录落点（视图坐标与窗口坐标），消除 UIKit 滞回导致的起手点偏移与双重死区；
+/// 2. 持续追踪主触点末位置，确保 `.ended` 时总位移精确不归零；
+/// 3. 容忍全面屏横屏握持时的掌心/拇指搭边：当边缘存在静止触点且主画面区落入新触点时自动忽略边缘误触，
+///    同时不影响主画面区内的正常双指捏合手势。
+final class PlaybackPanGestureRecognizer: UIPanGestureRecognizer {
+    var bezelSideWidth: CGFloat = PlaybackGestureSurface.sideEdgeZone
+    var bezelVerticalHeight: CGFloat = PlaybackGestureSurface.systemEdgeZone
+    var onTouchDown: (() -> Void)?
+
+    private(set) var trackedTouch: UITouch?
+    private(set) var touchOriginInView: CGPoint?
+    private(set) var touchOriginInWindow: CGPoint?
+    private(set) var lastTrackedLocationInView: CGPoint?
+
+    static func isBezelEdge(pointInWindow: CGPoint, windowBounds: CGRect, sideWidth: CGFloat, verticalHeight: CGFloat) -> Bool {
+        guard windowBounds.width > 0, windowBounds.height > 0 else { return false }
+        let nearSide = pointInWindow.x < sideWidth || pointInWindow.x > windowBounds.width - sideWidth
+        let nearVertical = pointInWindow.y < verticalHeight || pointInWindow.y > windowBounds.height - verticalHeight
+        return nearSide || nearVertical
+    }
+
+    func totalTranslation(in view: UIView) -> CGPoint {
+        guard let origin = touchOriginInView else {
+            return translation(in: view)
+        }
+        let current: CGPoint
+        if let touch = trackedTouch, numberOfTouches > 0 {
+            current = touch.location(in: view)
+        } else if let last = lastTrackedLocationInView {
+            current = last
+        } else {
+            return translation(in: view)
+        }
+        return CGPoint(x: current.x - origin.x, y: current.y - origin.y)
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        onTouchDown?()
+
+        if state == .began || state == .changed {
+            for touch in touches {
+                ignore(touch, for: event)
+            }
+            return
+        }
+
+        guard let view else {
+            super.touchesBegan(touches, with: event)
+            return
+        }
+
+        let incoming = Array(touches)
+        let nonEdgeIncoming = incoming.filter { !isInBezelEdge($0, in: view) }
+        let edgeIncoming = incoming.filter { isInBezelEdge($0, in: view) }
+
+        if trackedTouch == nil {
+            if !nonEdgeIncoming.isEmpty && !edgeIncoming.isEmpty {
+                for touch in edgeIncoming {
+                    ignore(touch, for: event)
+                }
+                if nonEdgeIncoming.count == 1, let primary = nonEdgeIncoming.first {
+                    recordPrimaryTouch(primary, in: view)
+                }
+                super.touchesBegan(Set(nonEdgeIncoming), with: event)
+                return
+            }
+            if incoming.count == 1, let primary = incoming.first {
+                recordPrimaryTouch(primary, in: view)
+            }
+            super.touchesBegan(touches, with: event)
+            return
+        }
+
+        if let existing = trackedTouch {
+            if isInBezelEdge(existing, in: view),
+               isNearlyStationary(existing, in: view),
+               !nonEdgeIncoming.isEmpty {
+                ignore(existing, for: event)
+                for touch in edgeIncoming {
+                    ignore(touch, for: event)
+                }
+                if nonEdgeIncoming.count == 1, let primary = nonEdgeIncoming.first {
+                    recordPrimaryTouch(primary, in: view)
+                } else {
+                    clearTrackedTouch()
+                }
+                super.touchesBegan(Set(nonEdgeIncoming), with: event)
+                return
+            }
+
+            if !isInBezelEdge(existing, in: view), nonEdgeIncoming.isEmpty {
+                for touch in edgeIncoming {
+                    ignore(touch, for: event)
+                }
+                return
+            }
+        }
+
+        super.touchesBegan(touches, with: event)
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+        if let trackedTouch, let view, touches.contains(trackedTouch) {
+            lastTrackedLocationInView = trackedTouch.location(in: view)
+        }
+        super.touchesMoved(touches, with: event)
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+        if let trackedTouch, let view, touches.contains(trackedTouch) {
+            lastTrackedLocationInView = trackedTouch.location(in: view)
+        }
+        super.touchesEnded(touches, with: event)
+        if let trackedTouch, touches.contains(trackedTouch), state == .possible || state == .failed {
+            clearTrackedTouch()
+        }
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+        if let trackedTouch, let view, touches.contains(trackedTouch) {
+            lastTrackedLocationInView = trackedTouch.location(in: view)
+        }
+        super.touchesCancelled(touches, with: event)
+        if let trackedTouch, touches.contains(trackedTouch), state == .possible || state == .failed {
+            clearTrackedTouch()
+        }
+    }
+
+    override func reset() {
+        super.reset()
+        clearTrackedTouch()
+    }
+
+    private func recordPrimaryTouch(_ touch: UITouch, in view: UIView) {
+        trackedTouch = touch
+        let pointInView = touch.location(in: view)
+        touchOriginInView = pointInView
+        lastTrackedLocationInView = pointInView
+        if let window = view.window {
+            touchOriginInWindow = touch.location(in: window)
+        } else {
+            touchOriginInWindow = nil
+        }
+    }
+
+    private func clearTrackedTouch() {
+        trackedTouch = nil
+        touchOriginInView = nil
+        touchOriginInWindow = nil
+        lastTrackedLocationInView = nil
+    }
+
+    private func isInBezelEdge(_ touch: UITouch, in view: UIView) -> Bool {
+        guard let window = view.window else { return false }
+        return Self.isBezelEdge(
+            pointInWindow: touch.location(in: window),
+            windowBounds: window.bounds,
+            sideWidth: bezelSideWidth,
+            verticalHeight: bezelVerticalHeight
+        )
+    }
+
+    private func isNearlyStationary(_ touch: UITouch, in view: UIView) -> Bool {
+        guard let origin = touchOriginInView else { return true }
+        let current = touch.location(in: view)
+        return hypot(current.x - origin.x, current.y - origin.y) < 10
+    }
+}
+
 struct PlaybackGestureSurface: UIViewRepresentable {
     var status: String
     /// 是否启用双击识别；关闭时 `doubleTap.isEnabled = false`，单击可零延迟立即响应。
     var doubleTapEnabled: Bool = true
     /// 是否启用长按识别
     var longPressEnabled: Bool = true
+    /// 当前播放状态是否允许触发长按倍速（暂停且未锁定倍速时不拦截拖动）
+    var canBeginLongPress: Bool = true
     /// 长按触发时长（秒），0.30s 手感更干脆
     var longPressDuration: TimeInterval = 0.30
     /// 是否允许长按与拖动同时识别（滑动转进度拖动时为 true；上滑锁定倍速/仅按住时为 false）
@@ -498,31 +757,30 @@ struct PlaybackGestureSurface: UIViewRepresentable {
     var onBoost: (Bool) -> Void
     /// 长按期间手指移动回调（用于上滑锁定倍速等附加手势）
     var onLongPressDrag: ((UIGestureRecognizer.State, CGPoint, CGPoint, CGSize) -> Void)? = nil
-    var onPan: (UIGestureRecognizer.State, CGPoint, CGPoint, CGSize) -> Void
+    var onPan: (PlaybackPanEvent) -> Void
     /// 双指捏合回调：(state, scale, velocity)
     var onPinch: ((UIGestureRecognizer.State, CGFloat, CGFloat) -> Void)? = nil
-    /// 这次拖动是从屏幕上下边缘起手的（下拉控制中心 / 通知中心、上滑回桌面的区域）
-    var onPanStartsAtSystemEdge: (Bool) -> Void = { _ in }
-    /// 这次拖动是从屏幕左右边缘起手的（全面屏侧滑返回 / 横屏虎口握持防误触区）
-    var onPanStartsAtSideEdge: (Bool) -> Void = { _ in }
 
     /// 离屏幕上下边缘这么近起手的拖动，多半是系统手势（横屏时右上角下拉控制中心、底部上滑回桌面）
     static let systemEdgeZone: CGFloat = 44
     /// 离屏幕左右边缘这么近起手的横滑，多半是边缘手势或单手握持误触
     static let sideEdgeZone: CGFloat = 24
+    /// 双指捏合忽略左右极窄边框内的掌心搭边误触，避免把单指滑动劫持成捏合
+    static let pinchBezelIgnoreZone: CGFloat = 16
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
         view.backgroundColor = .clear
-        view.isMultipleTouchEnabled = true
+        view.isMultipleTouchEnabled = pinchEnabled
         view.isAccessibilityElement = true
         view.accessibilityIdentifier = "playback.surface"
         view.accessibilityLabel = "播放画面"
 
-        let pan = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.pan(_:)))
+        let pan = PlaybackPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.pan(_:)))
         pan.maximumNumberOfTouches = 1
+        pan.onTouchDown = { PlayerHaptics.prepareForSeek() }
         // 长按倍速和拖动是否同时识别由偏好控制：
         // - 滑动转进度拖动：同时识别，长按后一滑立刻退出倍速并接管拖动；
         // - 上滑锁定倍速 / 仅按住：互斥，避免长按上滑被拖动抢走。
@@ -551,6 +809,7 @@ struct PlaybackGestureSurface: UIViewRepresentable {
         doubleTap.require(toFail: pan)
         doubleTap.require(toFail: pinch)
 
+        context.coordinator.panRecognizer = pan
         context.coordinator.doubleTapRecognizer = doubleTap
         context.coordinator.longPressRecognizer = longPress
         context.coordinator.pinchRecognizer = pinch
@@ -561,15 +820,26 @@ struct PlaybackGestureSurface: UIViewRepresentable {
 
     func updateUIView(_ view: UIView, context: Context) {
         context.coordinator.parent = self
-        view.accessibilityValue = status
-        context.coordinator.doubleTapRecognizer?.isEnabled = doubleTapEnabled
+        if view.accessibilityValue != status {
+            view.accessibilityValue = status
+        }
+        if view.isMultipleTouchEnabled != pinchEnabled {
+            view.isMultipleTouchEnabled = pinchEnabled
+        }
+        if let doubleTap = context.coordinator.doubleTapRecognizer, doubleTap.isEnabled != doubleTapEnabled {
+            doubleTap.isEnabled = doubleTapEnabled
+        }
         if let longPress = context.coordinator.longPressRecognizer {
-            longPress.isEnabled = longPressEnabled
+            if longPress.isEnabled != longPressEnabled {
+                longPress.isEnabled = longPressEnabled
+            }
             if abs(longPress.minimumPressDuration - longPressDuration) > 0.001 {
                 longPress.minimumPressDuration = longPressDuration
             }
         }
-        context.coordinator.pinchRecognizer?.isEnabled = pinchEnabled
+        if let pinch = context.coordinator.pinchRecognizer, pinch.isEnabled != pinchEnabled {
+            pinch.isEnabled = pinchEnabled
+        }
     }
 
     static func dismantleUIView(_ view: UIView, coordinator: Coordinator) {
@@ -579,15 +849,42 @@ struct PlaybackGestureSurface: UIViewRepresentable {
 
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var parent: PlaybackGestureSurface
+        weak var panRecognizer: PlaybackPanGestureRecognizer?
         weak var doubleTapRecognizer: UITapGestureRecognizer?
         weak var longPressRecognizer: UILongPressGestureRecognizer?
         weak var pinchRecognizer: UIPinchGestureRecognizer?
 
         private var boostActive = false
         private var panOrigin = CGPoint.zero
+        private var panStartsAtSystemEdge = false
+        private var panStartsAtSideEdge = false
         private var longPressOrigin = CGPoint.zero
 
         init(_ parent: PlaybackGestureSurface) { self.parent = parent }
+
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            if gestureRecognizer === longPressRecognizer {
+                guard parent.canBeginLongPress else { return false }
+                if let panState = panRecognizer?.state, panState == .began || panState == .changed {
+                    return false
+                }
+            }
+            return true
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+            if gestureRecognizer === pinchRecognizer,
+               let view = gestureRecognizer.view,
+               let window = view.window,
+               window.bounds.width >= 300 {
+                let point = touch.location(in: window)
+                let margin = PlaybackGestureSurface.pinchBezelIgnoreZone
+                if point.x < margin || point.x > window.bounds.width - margin {
+                    return false
+                }
+            }
+            return true
+        }
 
         /// 仅在开启「滑动转进度拖动」时允许拖动和长按倍速同时识别；其余组合保持系统互斥
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
@@ -637,24 +934,47 @@ struct PlaybackGestureSurface: UIViewRepresentable {
 
         @objc func pan(_ recognizer: UIPanGestureRecognizer) {
             guard let view = recognizer.view else { return }
-            let translation = recognizer.translation(in: view)
+            let playbackPan = recognizer as? PlaybackPanGestureRecognizer
+            let translation = playbackPan?.totalTranslation(in: view) ?? recognizer.translation(in: view)
             if recognizer.state == .began {
-                let location = recognizer.location(in: view)
-                panOrigin = CGPoint(x: location.x - translation.x, y: location.y - translation.y)
-                if boostActive { parent.onBoost(false); boostActive = false }
+                if let exactOrigin = playbackPan?.touchOriginInView {
+                    panOrigin = exactOrigin
+                } else {
+                    let location = recognizer.location(in: view)
+                    panOrigin = CGPoint(x: location.x - translation.x, y: location.y - translation.y)
+                }
+                if boostActive {
+                    parent.onBoost(false)
+                    boostActive = false
+                }
                 // 按整块屏幕算起手点离上下 / 左右边缘多远（播放画面不一定占满屏幕）
                 if let window = view.window {
-                    let start = view.convert(panOrigin, to: window)
+                    let start = playbackPan?.touchOriginInWindow ?? view.convert(panOrigin, to: window)
                     let verticalZone = PlaybackGestureSurface.systemEdgeZone
                     let sideZone = PlaybackGestureSurface.sideEdgeZone
-                    parent.onPanStartsAtSystemEdge(start.y < verticalZone || start.y > window.bounds.height - verticalZone)
-                    parent.onPanStartsAtSideEdge(start.x < sideZone || start.x > window.bounds.width - sideZone)
+                    panStartsAtSystemEdge = start.y < verticalZone || start.y > window.bounds.height - verticalZone
+                    panStartsAtSideEdge = start.x < sideZone || start.x > window.bounds.width - sideZone
                 } else {
-                    parent.onPanStartsAtSystemEdge(false)
-                    parent.onPanStartsAtSideEdge(false)
+                    panStartsAtSystemEdge = false
+                    panStartsAtSideEdge = false
                 }
+            } else if recognizer.state == .changed, boostActive {
+                parent.onBoost(false)
+                boostActive = false
             }
-            parent.onPan(recognizer.state, panOrigin, translation, view.bounds.size)
+            let event = PlaybackPanEvent(
+                state: recognizer.state,
+                origin: panOrigin,
+                translation: translation,
+                size: view.bounds.size,
+                startsAtSystemEdge: panStartsAtSystemEdge,
+                startsAtSideEdge: panStartsAtSideEdge
+            )
+            parent.onPan(event)
+            if recognizer.state == .ended || recognizer.state == .cancelled || recognizer.state == .failed {
+                panStartsAtSystemEdge = false
+                panStartsAtSideEdge = false
+            }
         }
 
         @objc func pinch(_ recognizer: UIPinchGestureRecognizer) {
