@@ -51,20 +51,67 @@ final class JavBusSource: MagnetSearchSource, @unchecked Sendable {
 
     let name = "JavBus"
 
-    private let session: URLSession
+    private let sessionLock = NSLock()
+    private var _session: URLSession
+    private let usesManagedSession: Bool
+    private let retryDelaysNanoseconds: [UInt64]
     /// 往会话的 Cookie 存储里写年龄验证 Cookie 要串行：同时搜影片和女优（searchAll）时两个请求会一起写，
     /// 内存里的（ephemeral）Cookie 存储并发写会崩（测试里偶发 segv）。
     private let cookieLock = NSLock()
 
-    init(session: URLSession? = nil) {
+    init(
+        session: URLSession? = nil,
+        retryDelaysNanoseconds: [UInt64] = [200_000_000, 500_000_000]
+    ) {
+        self.retryDelaysNanoseconds = retryDelaysNanoseconds
         if let session {
-            self.session = session
+            self._session = session
+            self.usesManagedSession = false
         } else {
-            let config = URLSessionConfiguration.default
-            config.timeoutIntervalForRequest = 15
-            config.timeoutIntervalForResource = 30
-            self.session = URLSession(configuration: config)
+            self._session = Self.makeManagedSession()
+            self.usesManagedSession = true
         }
+    }
+
+    private static func makeManagedSession(ephemeral: Bool = false) -> URLSession {
+        let config = ephemeral ? URLSessionConfiguration.ephemeral : URLSessionConfiguration.default
+        // HTML 页都是动态页面，禁用 URLCache 与过深连接复用；断连时可整体轮换独立临时连接池避免复用到已失效套接字或 TLS 会话。
+        config.urlCache = nil
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        config.httpMaximumConnectionsPerHost = 4
+        config.timeoutIntervalForRequest = 15
+        config.timeoutIntervalForResource = 30
+        return URLSession(configuration: config)
+    }
+
+    private func activeSession() -> URLSession {
+        sessionLock.lock()
+        defer { sessionLock.unlock() }
+        return _session
+    }
+
+    /// 遇到 -1005 等连接中断错误时轮换托管会话（使用全新 ephemeral 连接池），彻底甩掉被代理或 Cloudflare 断开的旧 HTTP/2 / TLS 连接池。
+    private func rotateManagedSession(for url: URL?) -> URLSession {
+        guard usesManagedSession else { return activeSession() }
+        sessionLock.lock()
+        let previous = _session
+        let replacement = Self.makeManagedSession(ephemeral: true)
+        _session = replacement
+        sessionLock.unlock()
+
+        if let url,
+           let oldStorage = previous.configuration.httpCookieStorage,
+           let newStorage = replacement.configuration.httpCookieStorage {
+            cookieLock.lock()
+            let existing = oldStorage.cookies(for: url) ?? []
+            for cookie in existing {
+                newStorage.setCookie(cookie)
+            }
+            Self.installCookies(in: newStorage, for: url)
+            cookieLock.unlock()
+        }
+        previous.finishTasksAndInvalidate()
+        return replacement
     }
 
     // MARK: - 域名
@@ -126,10 +173,14 @@ final class JavBusSource: MagnetSearchSource, @unchecked Sendable {
     }
 
     private func makeRequest(url: URL, referer: String? = nil, isAJAX: Bool = false) -> URLRequest {
-        var req = URLRequest(url: url)
+        var req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
+        // 代理或运营商环境常丢弃/重置 UDP 443（HTTP/3 QUIC），关闭 HTTP/3 探测防止首包直接 -1005 断连。
+        req.assumesHTTP3Capable = false
         req.setValue(mobileUserAgent, forHTTPHeaderField: "User-Agent")
+        req.setValue(isAJAX ? "*/*" : "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", forHTTPHeaderField: "Accept")
         req.setValue("zh-CN,zh-Hans;q=0.9,ja;q=0.8,en;q=0.7", forHTTPHeaderField: "Accept-Language")
-        if let storage = session.configuration.httpCookieStorage {
+        let currentSession = activeSession()
+        if let storage = currentSession.configuration.httpCookieStorage {
             installCookiesOnce(in: storage, for: url)
         } else {
             let header = Self.requiredCookies.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
@@ -144,18 +195,77 @@ final class JavBusSource: MagnetSearchSource, @unchecked Sendable {
         return req
     }
 
-    /// 发一次请求并检查状态码：404 → `.notFound`，403/503 → Cloudflare 拦截。任务被取消时抛 `CancellationError`。
+    private static func isRetryableConnectionError(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        if nsError.domain == NSURLErrorDomain {
+            switch nsError.code {
+            case NSURLErrorNetworkConnectionLost,
+                 NSURLErrorTimedOut,
+                 NSURLErrorCannotConnectToHost,
+                 NSURLErrorSecureConnectionFailed:
+                return true
+            default:
+                break
+            }
+        }
+        if nsError.domain == NSPOSIXErrorDomain {
+            switch Int32(nsError.code) {
+            case ECONNRESET, EPIPE, ECONNABORTED, ETIMEDOUT:
+                return true
+            default:
+                break
+            }
+        }
+        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError {
+            return isRetryableConnectionError(underlying)
+        }
+        return false
+    }
+
+    /// 发一次请求并检查状态码：404 → `.notFound`，403/503 → Cloudflare 拦截。
+    /// 遇到 -1005 连接中断、超时等瞬时断连时，轮换新连接池自动重试。任务被取消时抛 `CancellationError`。
     private func send(_ req: URLRequest) async throws -> (html: String, finalURL: URL?) {
-        let data: Data
-        let response: URLResponse
-        do {
-            (data, response) = try await session.data(for: req)
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch let urlError as URLError where urlError.code == .cancelled {
-            throw CancellationError()
-        } catch {
-            throw JavBusError.network(error)
+        var currentSession = activeSession()
+        var attemptRequest = req
+        var data = Data()
+        var response: URLResponse?
+
+        for attempt in 0...retryDelaysNanoseconds.count {
+            try Task.checkCancellation()
+            do {
+                let result = try await currentSession.data(for: attemptRequest)
+                data = result.0
+                response = result.1
+                break
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let urlError as URLError where urlError.code == .cancelled {
+                throw CancellationError()
+            } catch {
+                guard attempt < retryDelaysNanoseconds.count, Self.isRetryableConnectionError(error) else {
+                    throw JavBusError.network(error)
+                }
+                let delay = retryDelaysNanoseconds[attempt]
+                if delay > 0 {
+                    try await Task.sleep(nanoseconds: delay)
+                }
+                try Task.checkCancellation()
+                currentSession = rotateManagedSession(for: req.url)
+                attemptRequest = req
+                attemptRequest.assumesHTTP3Capable = false
+                attemptRequest.cachePolicy = .reloadIgnoringLocalCacheData
+                attemptRequest.setValue("close", forHTTPHeaderField: "Connection")
+                if currentSession.configuration.httpCookieStorage == nil {
+                    let header = Self.requiredCookies.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
+                    attemptRequest.setValue(header, forHTTPHeaderField: "Cookie")
+                } else if let url = req.url, let storage = currentSession.configuration.httpCookieStorage {
+                    installCookiesOnce(in: storage, for: url)
+                }
+            }
+        }
+
+        guard let response else {
+            throw JavBusError.network(URLError(.networkConnectionLost))
         }
 
         if let http = response as? HTTPURLResponse {

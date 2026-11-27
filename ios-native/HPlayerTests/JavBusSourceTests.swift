@@ -393,6 +393,25 @@ final class JavBusSourceTests: XCTestCase {
 
         let cookies = session.configuration.httpCookieStorage?.cookies(for: URL(string: "https://www.javbus.com/")!) ?? []
         XCTAssertTrue(Set(cookies.map(\.name)).isSuperset(of: ["existmag", "age", "dv"]))
+        let request = try XCTUnwrap(RoutedURLProtocol.requests().first)
+        XCTAssertFalse(request.assumesHTTP3Capable)
+        XCTAssertNotNil(request.value(forHTTPHeaderField: "Accept"))
+    }
+
+    func testRetriesAutomaticallyOnNetworkConnectionLost() async throws {
+        let counter = CallCounter()
+        RoutedURLProtocol.install { _ in
+            if counter.next() <= 2 {
+                return .fail(URLError(.networkConnectionLost))
+            }
+            return .init(status: 200, body: Data(Self.movieListHTML.utf8))
+        }
+        let source = JavBusSource(session: RoutedURLProtocol.session(), retryDelaysNanoseconds: [0, 0])
+        let items = try await source.fetchCategory(.latest)
+        XCTAssertEqual(items.count, 1)
+        let requests = RoutedURLProtocol.requests()
+        XCTAssertEqual(requests.count, 3)
+        XCTAssertEqual(requests.last?.value(forHTTPHeaderField: "Connection"), "close")
     }
 
     func testAgeVerificationPageIsRetriedAfterSubmittingForm() async throws {

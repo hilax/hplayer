@@ -7,9 +7,14 @@ final class RoutedURLProtocol: URLProtocol {
         var headers: [String: String] = [:]
         var body = Data()
         var delay: TimeInterval = 0
+        var error: Error? = nil
 
         static func json(_ object: Any, status: Int = 200) -> Reply {
             Reply(status: status, headers: ["Content-Type": "application/json"], body: (try? JSONSerialization.data(withJSONObject: object)) ?? Data())
+        }
+
+        static func fail(_ error: Error, delay: TimeInterval = 0) -> Reply {
+            Reply(delay: delay, error: error)
         }
     }
 
@@ -80,6 +85,10 @@ final class RoutedURLProtocol: URLProtocol {
         Self.lock.unlock()
         let reply = route(request)
         if reply.delay <= 0 {
+            if let error = reply.error {
+                client?.urlProtocol(self, didFailWithError: error)
+                return
+            }
             let response = HTTPURLResponse(url: request.url!, statusCode: reply.status, httpVersion: nil, headerFields: reply.headers)!
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
             client?.urlProtocol(self, didLoad: reply.body)
@@ -94,6 +103,10 @@ final class RoutedURLProtocol: URLProtocol {
             self.pendingWork = nil
             self.instanceLock.unlock()
             guard !stopped else { return }
+            if let error = reply.error {
+                self.client?.urlProtocol(self, didFailWithError: error)
+                return
+            }
             let response = HTTPURLResponse(url: request.url!, statusCode: reply.status, httpVersion: nil, headerFields: reply.headers)!
             self.client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
             self.client?.urlProtocol(self, didLoad: reply.body)

@@ -178,15 +178,6 @@ struct MagnetSearchView: View {
                 .buttonStyle(.pressable(scale: 0.88))
                 .accessibilityLabel("磁力播放记录")
                 .accessibilityIdentifier("magnet.history")
-
-                NavigationLink {
-                    MagnetSettingsView()
-                } label: {
-                    topIcon(.settings)
-                }
-                .buttonStyle(.pressable(scale: 0.88))
-                .accessibilityLabel("磁力设置")
-                .accessibilityIdentifier("magnet.settings")
             }
         }
         .padding(.leading, Theme.contentInset)

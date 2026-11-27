@@ -263,6 +263,7 @@ final class SukebeiSource: @unchecked Sendable {
         }
 
         var req = URLRequest(url: url)
+        req.assumesHTTP3Capable = false
         req.httpShouldHandleCookies = false
         req.setValue(JavBusSource.userAgent, forHTTPHeaderField: "User-Agent")
         req.setValue("application/rss+xml, application/xml;q=0.9, */*;q=0.8", forHTTPHeaderField: "Accept")
@@ -275,6 +276,19 @@ final class SukebeiSource: @unchecked Sendable {
             throw CancellationError()
         } catch let urlError as URLError where urlError.code == .cancelled {
             throw CancellationError()
+        } catch let urlError as URLError where urlError.code == .networkConnectionLost {
+            try Task.checkCancellation()
+            var retryReq = req
+            retryReq.setValue("close", forHTTPHeaderField: "Connection")
+            do {
+                (data, response) = try await session.data(for: retryReq)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let retryURLError as URLError where retryURLError.code == .cancelled {
+                throw CancellationError()
+            } catch {
+                throw SukebeiError.network(error)
+            }
         } catch {
             throw SukebeiError.network(error)
         }

@@ -414,7 +414,7 @@ struct PlaybackSettingsView: View {
 
 // MARK: - 磁力设置
 
-/// 「我的 › 磁力」及磁力页右上角共用的磁力聚合来源设置。
+/// 「我的 › 磁力」：磁力聚合来源设置。
 struct MagnetSettingsView: View {
     @AppStorage(SukebeiSettings.enabledKey) private var sukebeiEnabled = false
 
@@ -428,16 +428,11 @@ struct MagnetSettingsView: View {
                     LibraryActionRow(
                         symbol: AppIcon.magnet.name,
                         title: "JavBus",
-                        subtitle: "默认磁力浏览、女优与详情来源",
                         value: "默认使用",
                         showsChevron: false
                     )
-                    SettingRow(
-                        icon: .network,
-                        title: "启用 Sukebei",
-                        subtitle: "接入最新出种货架、新种聚合与做种数"
-                    ) {
-                        Toggle("启用 Sukebei", isOn: $sukebeiEnabled)
+                    SettingRow(icon: .network, title: "Sukebei") {
+                        Toggle("Sukebei", isOn: $sukebeiEnabled)
                             .labelsHidden()
                             .tint(Theme.accentFill)
                             .accessibilityIdentifier("magnet.settings.sukebei")
