@@ -6,14 +6,6 @@ struct HPlayerApp: App {
     @StateObject private var appState = AppState()
     @AppStorage(AppearanceMode.storageKey) private var appearance: AppearanceMode = .system
 
-    init() {
-        #if DEBUG
-        if ProcessInfo.processInfo.environment["HPLAYER_RESET_AUTOMATCH_TEST"] == "1" {
-            UserDefaults.standard.removeObject(forKey: CoverMatchingSettings.automaticKey)
-        }
-        #endif
-    }
-
     var body: some Scene {
         WindowGroup {
             Group {

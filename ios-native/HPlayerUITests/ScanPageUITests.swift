@@ -47,37 +47,17 @@ final class ScanPageUITests: XCTestCase {
             app.terminate()
         }
     }
-    func testAutomaticMatchingDefaultsOffAndRemembersChoice() {
+    func testStreamlinedScanPageExposesDirectUnmatchedAndFolderScanWithoutManualToggle() {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchEnvironment["HPLAYER_SCAN_TEST_STYLE"] = "light"
-        app.launchEnvironment["HPLAYER_RESET_AUTOMATCH_TEST"] = "1"
         app.launch()
-        let toggle = app.switches["scan.automaticMatching"]
-        if !toggle.isHittable { app.swipeUp() }
-        XCTAssertTrue(toggle.waitForExistence(timeout: 10))
-        XCTAssertEqual(toggle.value as? String, "0")
-        tapSwitch(toggle)
-        XCTAssertTrue(waitForSwitch(toggle, value: "1"))
+        XCTAssertTrue(app.buttons["scan.start"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["scan.chooseFolder"].exists)
+        XCTAssertTrue(app.buttons["scan.unmatched"].exists)
+        XCTAssertFalse(app.switches["scan.automaticMatching"].exists,
+                       "Automatic cover and performer matching is built into scanning now")
         app.terminate()
-        app.launchEnvironment.removeValue(forKey: "HPLAYER_RESET_AUTOMATCH_TEST")
-        app.launch()
-        if !toggle.isHittable { app.swipeUp() }
-        XCTAssertTrue(toggle.waitForExistence(timeout: 10))
-        XCTAssertEqual(toggle.value as? String, "1")
-        tapSwitch(toggle)
-        XCTAssertTrue(waitForSwitch(toggle, value: "0"))
-        app.terminate()
-    }
-
-    /// 开关所在的一整行都算在元素范围里，点最右边真正的开关
-    private func tapSwitch(_ control: XCUIElement) {
-        control.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
-    }
-
-    private func waitForSwitch(_ control: XCUIElement, value: String) -> Bool {
-        let predicate = NSPredicate { _, _ in control.value as? String == value }
-        return XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: nil)], timeout: 5) == .completed
     }
 
     private func setSwitch(_ control: XCUIElement, enabled: Bool) {

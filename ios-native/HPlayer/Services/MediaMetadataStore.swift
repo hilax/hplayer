@@ -1,10 +1,6 @@
 import CryptoKit
 import Foundation
 
-enum CoverMatchingSettings {
-    static let automaticKey = "metadata.automaticCoverMatching"
-}
-
 struct MediaMetadata: Codable, Identifiable, Hashable {
     let imdbID: String
     let type: String
@@ -204,7 +200,11 @@ final class MediaMetadataStore: ObservableObject {
         pause()
     }
 
-    func resumeAutomatic() { stoppedByUser = false }
+    func resumeAutomatic() {
+        stoppedByUser = false
+        performerEnrichmentStoppedByUser = false
+        performerFailed = [:]
+    }
 
     func sync(files: [LibraryMedia]) {
         hydrate(files: files)
@@ -379,6 +379,8 @@ final class MediaMetadataStore: ObservableObject {
     /// 用户主动重新扫描时，不沿用上一次失败的 12 小时等待；已手动取消匹配的文件仍然保持取消。
     func retryFailed(files: [LibraryMedia]) {
         stoppedByUser = false
+        performerEnrichmentStoppedByUser = false
+        performerFailed = [:]
         for file in files {
             let key = titleKey(file.name)
             missed.removeValue(forKey: key)

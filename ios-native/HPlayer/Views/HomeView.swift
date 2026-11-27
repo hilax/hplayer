@@ -355,7 +355,6 @@ private struct HomeSearchShell: View {
 private struct HomeLibraryCoordinator: View {
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage(AdultMetadataSettings.enabledKey) private var adultMatching = false
-    @AppStorage(CoverMatchingSettings.automaticKey) private var automaticMatching = false
 
     @ObservedObject var appState: AppState
     @ObservedObject var recents: RecentStore
@@ -404,7 +403,7 @@ private struct HomeLibraryCoordinator: View {
                     scanner.pause()
                     metadataStore.pause()
                     mediaLibrary.flush()
-                } else if automaticMatching || isHomeTest {
+                } else {
                     metadataStore.sync(files: files)
                 }
             }
@@ -427,22 +426,10 @@ private struct HomeLibraryCoordinator: View {
             .task(id: CatalogEntriesKey(revision: librarySnapshots.revision, recents: recents.items.map(\.id))) {
                 await librarySnapshots.rebuildEntries(recents: recents.items)
             }
-            .onChange(of: automaticMatching) { enabled in
-                if enabled && scenePhase != .background {
-                    metadataStore.resumeAutomatic()
-                    Task {
-                        let files = libraryFiles
-                        await metadataStore.prewarmNames(files.map(\.name), priority: .utility)
-                        metadataStore.sync(files: files)
-                    }
-                } else if !enabled {
-                    metadataStore.stopByUser()
-                }
-            }
             .onChange(of: adultMatching) { enabled in
                 metadataStore.pause()
                 let files = libraryFiles
-                guard scenePhase != .background, automaticMatching || isHomeTest else {
+                guard scenePhase != .background else {
                     metadataStore.hydrate(files: files)
                     return
                 }
@@ -491,14 +478,6 @@ private struct HomeLibraryCoordinator: View {
         // 片名解析在后台线程做完再回来恢复封面，主线程不被整个片库的解析拖住。
         let files = HomeLibrary.media(local: localStore, cloud: mediaLibrary, appState: appState)
         Task { await metadataStore.restore(files: files) }
-    }
-
-    private var isHomeTest: Bool {
-        #if DEBUG
-        return ProcessInfo.processInfo.environment["HPLAYER_HOME_TEST"] == "1"
-        #else
-        return false
-        #endif
     }
 
     private func refreshAccountInfo() async {

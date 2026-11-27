@@ -2,9 +2,9 @@ import SwiftUI
 import UIKit
 
 /// 媒体库管理：
-/// 1. 顶部合并后的「片库工作台」：扫描控制、片库概况、封面覆盖率与实时进度统一在一张卡片里；
-/// 2. 「封面与资料」组：自动匹配开关、未匹配影片、资料来源摘要、重新匹配，以及开启番号后的演员补全；
-/// 3. 「整理与清理」组：失效文件清理、隐藏精选恢复、清空继续观看；低频刷新与诊断信息收在右上角「⋯」菜单。
+/// 1. 顶部「片库工作台」：扫描控制、片库概况、封面覆盖率与三阶段实时进度（扫描 → 自动匹配封面 → 自动补全演员）；
+/// 2. 「资料与匹配」组：资料来源、重新匹配未识别封面，以及开启番号后的演员资料概览与手动补全入口（纯标题单行，无副标题）；
+/// 3. 「整理与清理」组：清理已失效文件、恢复隐藏精选、清空继续观看（纯标题单行，无副标题）。
 ///
 /// 性能隔离：只有顶部控制台子视图观察 `CloudLibraryScanner`，扫描文件夹高频更新进度时，
 /// 下方的设置分组与维护项不会跟着整页重绘。
@@ -17,7 +17,6 @@ struct HomeLibraryScanView: View {
     @ObservedObject private var featuredStore = FeaturedStore.shared
     @Environment(\.dismiss) private var dismiss
     @AppStorage(AdultMetadataSettings.enabledKey) private var adultMatching = false
-    @AppStorage(CoverMatchingSettings.automaticKey) private var automaticMatching = false
 
     let onStart: (Bool) -> Void
     let onStartFolders: ([ScanFolderTarget]) -> Void
@@ -163,12 +162,8 @@ struct HomeLibraryScanView: View {
         let files = HomeLibrary.media(local: local, cloud: library, appState: appState)
         Task {
             await metadata.prewarmNames(files.map(\.name), priority: .utility)
-            if automaticMatching {
-                metadata.resumeAutomatic()
-                metadata.sync(files: files)
-            } else {
-                metadata.hydrate(files: files)
-            }
+            metadata.resumeAutomatic()
+            metadata.sync(files: files)
         }
         HUD.show("已刷新片库列表", .success)
     }
@@ -189,40 +184,15 @@ struct HomeLibraryScanView: View {
         HUD.show("已复制匹配诊断信息", .success)
     }
 
-    // MARK: 封面与资料
+    // MARK: 资料与匹配
 
     private func coverSection(counts: LibraryOverviewCounts) -> some View {
         let nothingToMatch = counts.total == 0
-        return SettingsSection(
-            title: "封面与资料",
-            footnote: adultMatching
-                ? "开启番号匹配后可补查缺失的演员资料；同一演员有两部以上影片时，首页会自动生成演员合集。"
-                : "关闭自动匹配后，仅在点击「重新匹配未识别封面」或手动选择封面时联网查找。"
-        ) {
-            SettingRow(icon: .autoMatch, title: "自动匹配封面", subtitle: "入库后自动查找海报与简介") {
-                Toggle("自动匹配封面", isOn: $automaticMatching)
-                    .labelsHidden()
-                    .tint(Theme.accentFill)
-                    .accessibilityIdentifier("scan.automaticMatching")
-            }
-
-            NavigationLink { HomeUnmatchedMediaView() } label: {
-                LibraryActionRow(
-                    symbol: AppIcon.poster.name,
-                    title: "未匹配影片",
-                    subtitle: "查看、播放或手动校正封面",
-                    value: counts.unmatched > 0 ? "\(counts.unmatched)" : "已齐全",
-                    valueHighlighted: counts.unmatched > 0
-                )
-            }
-            .buttonStyle(.pressable(scale: 0.985))
-            .accessibilityIdentifier("scan.unmatched")
-
+        return SettingsSection(title: "资料与匹配") {
             NavigationLink { MetadataSourcesView() } label: {
                 LibraryActionRow(
                     symbol: AppIcon.tune.name,
                     title: "资料来源",
-                    subtitle: "番组计划、IMDb、TMDB 与番号",
                     value: sourcesSummary,
                     valueHighlighted: hasExtraSources
                 )
@@ -237,8 +207,9 @@ struct HomeLibraryScanView: View {
                 LibraryActionRow(
                     symbol: AppIcon.posterSearch.name,
                     title: "重新匹配未识别封面",
-                    subtitle: metadata.isMatching ? "正在匹配中，可在上方工作台停止" : "对还没有封面的影片重新查一次",
-                    showsChevron: false
+                    value: metadata.isMatching ? "匹配中" : "",
+                    showsChevron: false,
+                    valueHighlighted: metadata.isMatching
                 )
             }
             .buttonStyle(.pressable(scale: 0.985))
@@ -253,15 +224,11 @@ struct HomeLibraryScanView: View {
     // MARK: 整理与清理
 
     private var maintenanceSection: some View {
-        SettingsSection(
-            title: "整理与清理",
-            footnote: "只读取网盘文件列表并更新本机片库记录，不下载整部视频，也不会删除网盘里的任何文件。"
-        ) {
+        SettingsSection(title: "整理与清理") {
             Button { showCleanup = true } label: {
                 LibraryActionRow(
                     symbol: AppIcon.checklist.name,
-                    title: "清理已失效文件",
-                    subtitle: "核对网盘中已删视频，从首页和片库移除"
+                    title: "清理已失效文件"
                 )
             }
             .buttonStyle(.pressable(scale: 0.985))
@@ -277,7 +244,6 @@ struct HomeLibraryScanView: View {
                     LibraryActionRow(
                         symbol: AppIcon.hidden.name,
                         title: "恢复隐藏的精选影片",
-                        subtitle: "恢复后将重新参与首页大图展示",
                         value: "\(featuredStore.hidden.count) 部",
                         showsChevron: false
                     )
@@ -290,7 +256,6 @@ struct HomeLibraryScanView: View {
                 LibraryActionRow(
                     symbol: AppIcon.history.name,
                     title: "清空继续观看",
-                    subtitle: "只清除观看进度，不影响影片",
                     showsChevron: false,
                     tone: .danger
                 )
@@ -328,10 +293,19 @@ private struct LibraryConsoleCard: View {
     @EnvironmentObject private var metadata: MediaMetadataStore
     @EnvironmentObject private var library: MediaLibraryStore
     @EnvironmentObject private var appState: AppState
+    @AppStorage(AdultMetadataSettings.enabledKey) private var adultMatching = false
 
     let counts: LibraryOverviewCounts
     let onStart: (Bool) -> Void
     let onPickFolder: () -> Void
+
+    private var showsPerformerActivity: Bool {
+        adultMatching && (
+            metadata.isEnrichingPerformers
+                || metadata.performerEnrichmentState == .waiting
+                || metadata.performerEnrichmentState == .failed
+        )
+    }
 
     private var statusTitle: String {
         switch scanner.phase {
@@ -347,18 +321,20 @@ private struct LibraryConsoleCard: View {
         switch scanner.phase {
         case .idle:
             return appState.isAuthenticated
-                ? "选择全盘或指定文件夹扫描，自动整理电影与剧集"
+                ? "扫描全盘或指定文件夹，自动匹配封面与演员"
                 : "连接 115 网盘后，即可扫描并整理云端影片"
         case .running:
             return scanner.currentFolderName.isEmpty
-                ? "正在发现文件夹与视频，切回首页时也在后台平稳进行"
+                ? "正在发现文件夹与视频，并自动匹配封面"
                 : "正在读取：\(scanner.currentFolderName)"
         case .paused:
             return "扫描进度已保存，可随时继续或更换文件夹"
         case .failed:
             return "已发现的视频和进度都已保留，可稍后继续"
         case .completed:
-            return metadata.isMatching ? "文件扫描已完成，正在自动补充封面" : "所有目录已扫描，可随时重新扫描或增量清理"
+            if metadata.isMatching { return "文件扫描已完成，正在自动匹配封面" }
+            if adultMatching && metadata.isEnrichingPerformers { return "封面已就绪，正在自动补全演员资料" }
+            return "所有目录已扫描，可随时重新扫描或增量清理"
         }
     }
 
@@ -420,8 +396,8 @@ private struct LibraryConsoleCard: View {
             // 中部：合并后的片库概况指标条 + 封面覆盖率进度
             overviewStrip
 
-            // 实时任务信息（仅在扫描非空闲或封面自动匹配中显示）
-            if scanner.phase != .idle || metadata.isMatching || !scanner.lastError.isEmpty {
+            // 实时任务信息（扫描、封面匹配、演员补全三阶段进度）
+            if scanner.phase != .idle || metadata.isMatching || showsPerformerActivity || !scanner.lastError.isEmpty {
                 liveActivitySection
             }
 
@@ -489,6 +465,7 @@ private struct LibraryConsoleCard: View {
                 }
                 .buttonStyle(.pressable(scale: 0.96))
                 .accessibilityLabel("待匹配 \(counts.unmatched) 部，点按查看")
+                .accessibilityIdentifier("scan.unmatched")
             }
 
             ThinProgressBar(fraction: counts.ratio, paused: counts.total == 0)
@@ -586,6 +563,75 @@ private struct LibraryConsoleCard: View {
                 .padding(.vertical, Theme.Space.sm + 2)
                 .background(Theme.tileTint, in: RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous))
             }
+
+            if showsPerformerActivity {
+                if metadata.performerEnrichmentState == .failed {
+                    HStack(spacing: Theme.Space.md) {
+                        Image(icon: .alert)
+                            .font(.scaled(15, weight: Theme.iconWeight))
+                            .foregroundStyle(Theme.warning)
+                        Text("演员资料补全因网络中断")
+                            .font(Theme.Typo.meta.weight(.medium))
+                            .foregroundStyle(Theme.textPrimary)
+                            .lineLimit(1)
+                        Spacer(minLength: Theme.Space.sm)
+                        Button {
+                            Haptics.tap()
+                            metadata.startPerformerEnrichment(force: true)
+                        } label: {
+                            Text("重试")
+                                .font(Theme.Typo.meta.weight(.semibold))
+                                .foregroundStyle(Theme.accent)
+                                .padding(.horizontal, Theme.Space.md)
+                                .frame(minHeight: 32)
+                                .background(Theme.surfaceRaised, in: Capsule())
+                                .contentShape(VerticalHitArea(extra: 6))
+                        }
+                        .buttonStyle(.pressable(scale: 0.94))
+                    }
+                    .padding(.horizontal, Theme.Space.md)
+                    .padding(.vertical, Theme.Space.sm + 2)
+                    .background(Theme.tileTint, in: RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous))
+                } else {
+                    VStack(alignment: .leading, spacing: Theme.Space.sm) {
+                        HStack(spacing: Theme.Space.md) {
+                            ProgressView()
+                                .controlSize(.small)
+                                .accessibilityLabel("正在补全演员")
+                            Text(
+                                metadata.performerEnrichmentState == .waiting
+                                    ? "封面完成后自动补全演员"
+                                    : "正在自动补全演员 · \(metadata.performerEnrichmentProcessed) / \(metadata.performerEnrichmentTotal)"
+                            )
+                            .font(Theme.Typo.meta.weight(.medium).monospacedDigit())
+                            .foregroundStyle(Theme.textPrimary)
+                            .lineLimit(1)
+                            Spacer(minLength: Theme.Space.sm)
+                            Button {
+                                Haptics.tap()
+                                metadata.stopPerformerEnrichment()
+                            } label: {
+                                Text("停止")
+                                    .font(Theme.Typo.meta.weight(.semibold))
+                                    .foregroundStyle(Theme.danger)
+                                    .padding(.horizontal, Theme.Space.md)
+                                    .frame(minHeight: 32)
+                                    .background(Theme.danger.opacity(0.12), in: Capsule())
+                                    .contentShape(VerticalHitArea(extra: 6))
+                            }
+                            .buttonStyle(.pressable(scale: 0.94))
+                        }
+                        if metadata.performerEnrichmentState == .running, metadata.performerEnrichmentTotal > 0 {
+                            ThinProgressBar(
+                                fraction: Double(metadata.performerEnrichmentProcessed) / Double(metadata.performerEnrichmentTotal)
+                            )
+                        }
+                    }
+                    .padding(.horizontal, Theme.Space.md)
+                    .padding(.vertical, Theme.Space.sm + 2)
+                    .background(Theme.tileTint, in: RoundedRectangle(cornerRadius: Theme.Radius.tile, style: .continuous))
+                }
+            }
         }
     }
 
@@ -669,10 +715,8 @@ private struct LibraryConsoleCard: View {
     }
 }
 
-// MARK: - 演员资料补全行（合入「封面与资料」组）
+// MARK: - 演员资料补全行（合入「资料与匹配」组，精简单行无副标题）
 
-/// 将原本独立占满半屏的「演员资料」卡片精炼为「封面与资料」组内的一行：
-/// 显示覆盖数量与实时补全进度，右侧直接一键开始或停止。
 private struct PerformerEnrichmentRow: View {
     @EnvironmentObject private var metadata: MediaMetadataStore
     let stats: (have: Int, total: Int)
@@ -685,77 +729,48 @@ private struct PerformerEnrichmentRow: View {
         active || metadata.isMatching || stats.have < stats.total
     }
 
-    private var subtitleText: String {
-        switch metadata.performerEnrichmentState {
-        case .waiting:
-            return "封面匹配完成后自动开始补全"
-        case .running:
-            return "正在补全 · 已处理 \(metadata.performerEnrichmentProcessed) / \(metadata.performerEnrichmentTotal) 个番号"
-        case .failed:
-            return "部分资料暂时无法获取，请检查网络后重试"
-        case .completed:
-            return metadata.performerEnrichmentFailures > 0
-                ? "补全结束（部分失败），已有 \(stats.have) / \(stats.total) 部"
-                : "补全完成 · 已有 \(stats.have) / \(stats.total) 部"
-        case .stopped:
-            return "已停止 · 已有 \(stats.have) / \(stats.total) 部"
-        case .idle:
-            return stats.total == 0
-                ? "尚无已识别的番号影片"
-                : "已有 \(stats.have) / \(stats.total) 部 · 可补查缺失演员"
-        }
-    }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.sm) {
-            HStack(spacing: 14) {
-                RowIcon(icon: .people, tint: metadata.performerEnrichmentState == .failed ? Theme.warning : Theme.textPrimary)
-                    .accessibilityHidden(true)
+        HStack(spacing: 14) {
+            RowIcon(icon: .people, tint: metadata.performerEnrichmentState == .failed ? Theme.warning : Theme.textPrimary)
+                .accessibilityHidden(true)
 
-                VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                    Text("演员资料")
-                        .font(Theme.Typo.row)
-                        .foregroundStyle(Theme.textPrimary)
-                        .lineLimit(1)
-                    Text(subtitleText)
-                        .font(Theme.Typo.caption.monospacedDigit())
-                        .foregroundStyle(metadata.performerEnrichmentState == .failed ? Theme.warning : Theme.textSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+            Text("演员资料")
+                .font(Theme.Typo.row)
+                .foregroundStyle(Theme.textPrimary)
+                .lineLimit(1)
 
-                Spacer(minLength: Theme.Space.sm)
+            Spacer(minLength: Theme.Space.sm)
 
-                Button {
-                    Haptics.tap()
-                    if active {
-                        metadata.stopPerformerEnrichment()
-                    } else {
-                        metadata.startPerformerEnrichment(force: true)
-                    }
-                } label: {
-                    Text(active ? "停止" : "补全")
-                        .font(Theme.Typo.meta.weight(.semibold))
-                        .foregroundStyle(active ? Theme.danger : (canStart ? Theme.onPrimary : Theme.textMuted))
-                        .padding(.horizontal, Theme.Space.md)
-                        .frame(minHeight: 32)
-                        .background(
-                            active ? Theme.danger.opacity(0.12) : (canStart ? Theme.primaryAction : Theme.tileTint),
-                            in: Capsule()
-                        )
-                        .contentShape(VerticalHitArea(extra: 6))
-                }
-                .buttonStyle(.pressable(scale: 0.94))
-                .disabled(!canStart)
-                .accessibilityLabel(active ? "停止补全演员" : "补全演员资料")
-                .accessibilityIdentifier("scan.enrichPerformers")
+            if stats.total > 0 {
+                Text("\(stats.have) / \(stats.total)")
+                    .font(Theme.Typo.meta.monospacedDigit())
+                    .foregroundStyle(Theme.textTertiary)
+                    .lineLimit(1)
             }
 
-            if metadata.performerEnrichmentState == .running, metadata.performerEnrichmentTotal > 0 {
-                ThinProgressBar(
-                    fraction: Double(metadata.performerEnrichmentProcessed) / Double(metadata.performerEnrichmentTotal)
-                )
-                .padding(.leading, 38)
+            Button {
+                Haptics.tap()
+                if active {
+                    metadata.stopPerformerEnrichment()
+                } else {
+                    metadata.startPerformerEnrichment(force: true)
+                }
+            } label: {
+                Text(active ? "停止" : "补全")
+                    .font(Theme.Typo.meta.weight(.semibold))
+                    .foregroundStyle(active ? Theme.danger : (canStart ? Theme.onPrimary : Theme.textMuted))
+                    .padding(.horizontal, Theme.Space.md)
+                    .frame(minHeight: 32)
+                    .background(
+                        active ? Theme.danger.opacity(0.12) : (canStart ? Theme.primaryAction : Theme.tileTint),
+                        in: Capsule()
+                    )
+                    .contentShape(VerticalHitArea(extra: 6))
             }
+            .buttonStyle(.pressable(scale: 0.94))
+            .disabled(!canStart)
+            .accessibilityLabel(active ? "停止补全演员" : "补全演员资料")
+            .accessibilityIdentifier("scan.enrichPerformers")
         }
         .padding(.horizontal, Theme.Space.lg)
         .padding(.vertical, Theme.Space.md)

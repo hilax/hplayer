@@ -15,17 +15,16 @@ struct LibraryManagementView: View {
 
     var body: some View {
         HomeLibraryScanView(
-            onStart: { restart in start(restart, autoMatchCovers: !restart && scanner.scopeName != nil) },
-            onStartFolders: { targets in start(true, roots: targets, autoMatchCovers: true) },
+            onStart: { restart in start(restart) },
+            onStartFolders: { targets in start(true, roots: targets) },
             onRetryMatching: { metadata.retryFailed(files: files) },
             pushed: pushed
         )
     }
 
-    private func start(_ restart: Bool, roots: [ScanFolderTarget] = [], autoMatchCovers: Bool = false) {
+    private func start(_ restart: Bool, roots: [ScanFolderTarget] = []) {
         guard let accountID = appState.libraryAccountID, appState.isAuthenticated,
               let client = appState.directClient() else { return }
-        let shouldAutoMatch = autoMatchCovers || UserDefaults.standard.bool(forKey: CoverMatchingSettings.automaticKey)
         metadata.resumeAutomatic()
         let library = self.library
         let local = self.local
@@ -36,20 +35,16 @@ struct LibraryManagementView: View {
             guard appState.isAuthenticated, appState.libraryAccountID == accountID else { return }
             library.recordFolders(folders, for: appState)
         }
-        if shouldAutoMatch {
-            scanner.onComplete = {
+        scanner.onComplete = {
+            guard appState.isAuthenticated, appState.libraryAccountID == accountID else { return }
+            Task {
+                await metadata.waitUntilRestored()
                 guard appState.isAuthenticated, appState.libraryAccountID == accountID else { return }
-                Task {
-                    await metadata.waitUntilRestored()
-                    guard appState.isAuthenticated, appState.libraryAccountID == accountID else { return }
-                    let allFiles = HomeLibrary.media(local: local, cloud: library, appState: appState)
-                    await metadata.prewarmNames(allFiles.map(\.name), priority: .utility)
-                    guard appState.isAuthenticated, appState.libraryAccountID == accountID else { return }
-                    metadata.enqueueScanned(allFiles, in: allFiles)
-                }
+                let allFiles = HomeLibrary.media(local: local, cloud: library, appState: appState)
+                await metadata.prewarmNames(allFiles.map(\.name), priority: .utility)
+                guard appState.isAuthenticated, appState.libraryAccountID == accountID else { return }
+                metadata.enqueueScanned(allFiles, in: allFiles)
             }
-        } else {
-            scanner.onComplete = nil
         }
         scanner.start(
             accountID: accountID,
@@ -60,7 +55,7 @@ struct LibraryManagementView: View {
             onBatch: { batch in
                 guard appState.isAuthenticated, appState.libraryAccountID == accountID else { return }
                 library.add(batch, for: appState)
-                guard shouldAutoMatch, !batch.isEmpty else { return }
+                guard !batch.isEmpty else { return }
                 let newlyScanned = batch.filter { $0.isVideo && !$0.isDir && !$0.pickCode.isEmpty }.map(LibraryMedia.init(cloud:))
                 guard !newlyScanned.isEmpty else { return }
                 Task {

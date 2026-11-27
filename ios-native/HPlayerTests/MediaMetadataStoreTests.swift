@@ -603,6 +603,36 @@ final class MediaMetadataStoreTests: XCTestCase {
         XCTAssertNil(store.metadataByMediaID[extra.id])
     }
 
+    func testResumeAutomaticResetsPerformerStopAndChainsCoverMatchIntoPerformerEnrichment() async throws {
+        let (defaults, suite) = makeDefaults()
+        UserDefaults.standard.set(true, forKey: AdultMetadataSettings.enabledKey)
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            UserDefaults.standard.removeObject(forKey: AdultMetadataSettings.enabledKey)
+        }
+        let performers = PerformerLookupStub(results: ["ABC-123": .found(["演员甲"])])
+        let file = codedFile("ABC-123")
+        let store = MediaMetadataStore(
+            defaults: defaults,
+            performerLookup: { code, contentID in await performers.lookup(code, contentID) },
+            lookup: { parsed in parsed.catalogCode.map(makeR18Match) }
+        )
+
+        // 先模拟用户曾经手动停止过演员补全
+        store.stopPerformerEnrichment()
+        XCTAssertEqual(store.performerEnrichmentState, .stopped)
+
+        // 重新发起扫描（方案 1）：恢复自动流水线 → 封面匹配完成后自动接力补全演员
+        store.resumeAutomatic()
+        store.enqueueScanned([file], in: [file])
+        try await waitForScan(store)
+        try await waitForEnrichment(store)
+
+        XCTAssertEqual(store.metadataByMediaID[file.id]?.imdbID, "r18dev:ABC-123")
+        XCTAssertEqual(store.metadataByMediaID[file.id]?.performers, ["演员甲"])
+        XCTAssertEqual(store.performerEnrichmentState, .completed)
+    }
+
     private func waitForEnrichment(_ store: MediaMetadataStore) async throws {
         for _ in 0..<400 {
             if !store.isEnrichingPerformers { return }
