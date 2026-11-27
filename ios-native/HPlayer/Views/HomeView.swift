@@ -6,6 +6,7 @@ struct LibraryStoreRefs {
     let mediaLibrary: MediaLibraryStore
     let localStore: LocalMediaStore
     let metadataStore: MediaMetadataStore
+    let scanner: CloudLibraryScanner
 }
 
 private struct LibraryStoreRefsKey: EnvironmentKey {
@@ -54,7 +55,7 @@ private final class HomeStoreBag: ObservableObject {
     }
 
     var storeRefs: LibraryStoreRefs {
-        LibraryStoreRefs(mediaLibrary: mediaLibrary, localStore: localStore, metadataStore: metadataStore)
+        LibraryStoreRefs(mediaLibrary: mediaLibrary, localStore: localStore, metadataStore: metadataStore, scanner: scanner)
     }
 }
 

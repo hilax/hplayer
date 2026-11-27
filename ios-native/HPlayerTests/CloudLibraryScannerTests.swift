@@ -239,4 +239,36 @@ final class CloudLibraryScannerTests: XCTestCase {
         await waitUntil { restored.phase == .completed }
         XCTAssertTrue(batches.isEmpty)
     }
+
+    func testRemovingPickCodesPersistsAcrossRestartAndDoesNotDamageCheckpoint() async {
+        let first = scanner()
+        first.start(accountID: "device:1", fetchPage: { [self] _, offset in
+            if offset == 0 {
+                return Direct115FilePage(files: [file("1"), file("2")], nextOffset: 2)
+            }
+            return Direct115FilePage(files: [file("3")], nextOffset: nil)
+        }, onBatch: { _ in }, restart: true)
+        await waitUntil { first.phase == .completed }
+        XCTAssertEqual(first.discoveredFiles.map(\.id), ["1", "2", "3"])
+
+        first.remove(pickCodes: ["pc2"])
+        XCTAssertEqual(first.discoveredFiles.map(\.id), ["1", "3"])
+        XCTAssertEqual(first.progress.discoveredVideos, 2)
+
+        let relaunched = scanner()
+        relaunched.selectAccount("device:1")
+        XCTAssertEqual(relaunched.phase, .completed)
+        XCTAssertEqual(relaunched.discoveredFiles.map(\.id), ["1", "3"])
+        XCTAssertEqual(relaunched.progress.discoveredVideos, 2)
+
+        relaunched.remove(pickCodes: ["pc1", "pc3"])
+        XCTAssertTrue(relaunched.discoveredFiles.isEmpty)
+        XCTAssertEqual(relaunched.progress.discoveredVideos, 0)
+
+        let emptyRelaunched = scanner()
+        emptyRelaunched.selectAccount("device:1")
+        XCTAssertEqual(emptyRelaunched.phase, .completed)
+        XCTAssertTrue(emptyRelaunched.discoveredFiles.isEmpty)
+        XCTAssertEqual(emptyRelaunched.progress.discoveredVideos, 0)
+    }
 }

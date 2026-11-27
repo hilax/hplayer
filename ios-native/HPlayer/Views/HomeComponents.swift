@@ -383,6 +383,7 @@ struct PosterCard: View {
     let onPlay: () -> Void
     let onDelete: () -> Void
     let onMatch: () -> Void
+    var onDeleteCloud: (() -> Void)? = nil
 
     var body: some View {
         Button(action: onPlay) {
@@ -408,7 +409,16 @@ struct PosterCard: View {
         .contextMenu {
             Button("播放", icon: AppIcon.play.name, action: onPlay)
             Button("匹配封面", icon: AppIcon.poster.name, action: onMatch)
-            Button(item.isCloud ? "从媒体库移除" : "删除本地文件", icon: AppIcon.trash.name, role: .destructive, action: onDelete)
+            if item.isCloud {
+                Section {
+                    Button("从媒体库移除", icon: AppIcon.remove.name, action: onDelete)
+                    if let onDeleteCloud {
+                        Button("删除 115 网盘影片", icon: AppIcon.trash.name, role: .destructive, action: onDeleteCloud)
+                    }
+                }
+            } else {
+                Button("删除本地文件", icon: AppIcon.trash.name, role: .destructive, action: onDelete)
+            }
         }
     }
 }

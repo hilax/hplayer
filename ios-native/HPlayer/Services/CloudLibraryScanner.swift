@@ -48,7 +48,7 @@ final class CloudLibraryScanner: ObservableObject {
 
     private struct Checkpoint: Codable {
         let accountID: String
-        let scanID: String
+        var scanID: String
         var phase: Phase = .paused
         var pendingFolders = [Folder(id: "0", name: "115 网盘")]
         var completedFolders: [String] = []
@@ -207,6 +207,35 @@ final class CloudLibraryScanner: ObservableObject {
         saved.phase = .paused
         checkpoint = saved
         try? persist(saved)
+        publish(saved)
+    }
+
+    /// 从扫描缓存和落盘清单中移除已删除或已移出片库的视频，避免下次启动恢复检查点时重新加回片库。
+    func remove(pickCodes: Set<String>) {
+        guard !pickCodes.isEmpty else { return }
+        let before = discoveredFiles.count
+        discoveredFiles.removeAll { !$0.pickCode.isEmpty && pickCodes.contains($0.pickCode) }
+        guard discoveredFiles.count != before else { return }
+        knownVideos = Set(discoveredFiles.map(Self.videoID))
+        guard var saved = checkpoint else { return }
+        let previous = saved
+        let remaining = discoveredFiles
+        let chunks = stride(from: 0, to: remaining.count, by: 500).map {
+            Array(remaining[$0..<min($0 + 500, remaining.count)])
+        }
+        saved.scanID = UUID().uuidString
+        saved.inventoryChunks = chunks.count
+        saved.videoCount = remaining.count
+        for (index, chunk) in chunks.enumerated() {
+            persistChunk(chunk, key: inventoryKey(saved, index: index))
+        }
+        try? persist(saved, background: true)
+        let defaults = self.defaults
+        let obsoleteKeys = (0..<previous.inventoryChunks).map { inventoryKey(previous, index: $0) }
+        Self.ioQueue.async {
+            for key in obsoleteKeys { defaults.removeObject(forKey: key) }
+        }
+        checkpoint = saved
         publish(saved)
     }
 

@@ -30,6 +30,8 @@ struct HomeTab: View {
     @State private var playError = ""
     @State private var showCloudBrowser = false
     @State private var matching: MatchRequest?
+    @State private var cloudDelete: CloudDeleteRequest?
+    @State private var cloudDeleteProblem: String?
     @State private var magnetLaunch: MagnetLaunch?
     /// 继续观看里的磁力记录：直接打开播放窗口续播
     @State private var magnetPlay: MagnetPlaybackRequest?
@@ -175,6 +177,7 @@ struct HomeTab: View {
             .hudHost(.sheet)
             .environmentObject(appState)
         }
+        .cloudVideoDelete(request: $cloudDelete, problem: $cloudDeleteProblem)
     }
 
     // MARK: 顶栏、搜索、轮播
@@ -217,6 +220,13 @@ struct HomeTab: View {
                 }
                 Button("更多选项", icon: AppIcon.more.name) {
                     afterMenu { actionItem = item }
+                }
+                if item.isCloud {
+                    Section {
+                        Button("删除 115 网盘影片", icon: AppIcon.trash.name, role: .destructive) {
+                            requestCloudDelete(item)
+                        }
+                    }
                 }
             } preview: {
                 HomeSlidePreview(slide: slide)
@@ -513,13 +523,15 @@ struct HomeTab: View {
     }
 
     private func posterCard(_ item: HomeMediaItem, library: HomeSnapshot, width: CGFloat) -> some View {
-        PosterCard(item: item, width: width) {
+        PosterCard(item: item, width: width, onPlay: {
             playing = HomeLibrary.queue(for: item, in: library.items)
-        } onDelete: {
+        }, onDelete: {
             delete(item)
-        } onMatch: {
+        }, onMatch: {
             matching = MatchRequest(item: item)
-        }
+        }, onDeleteCloud: item.isCloud ? {
+            requestCloudDelete(item)
+        } : nil)
     }
 
     private func performerShelf(_ library: HomeSnapshot) -> some View {
@@ -592,6 +604,13 @@ struct HomeTab: View {
             Button("匹配封面", icon: AppIcon.poster.name) {
                 matching = MatchRequest(group: group)
             }
+            if group.episodes.contains(where: \.isCloud) {
+                Section {
+                    Button("删除 115 网盘影片", icon: AppIcon.trash.name, role: .destructive) {
+                        requestCloudDelete(group)
+                    }
+                }
+            }
         }
     }
 
@@ -601,7 +620,34 @@ struct HomeTab: View {
             localStore.delete(local)
         } else {
             storeRefs?.mediaLibrary.remove(pickCode: item.media.pickCode, for: appState)
+            storeRefs?.scanner.remove(pickCodes: [item.media.pickCode])
         }
+    }
+
+    private func requestCloudDelete(_ item: HomeMediaItem) {
+        guard appState.isAuthenticated, appState.directClient() != nil else {
+            afterMenu { cloudDeleteProblem = "请先登录 115 账号后再删除网盘影片" }
+            return
+        }
+        guard let library = storeRefs?.mediaLibrary,
+              let request = CloudLibraryDeletion.request(for: item, library: library, appState: appState) else {
+            afterMenu { cloudDeleteProblem = "未找到对应的 115 网盘文件记录，请刷新片库后重试" }
+            return
+        }
+        afterMenu { cloudDelete = request }
+    }
+
+    private func requestCloudDelete(_ group: SeriesGroup) {
+        guard appState.isAuthenticated, appState.directClient() != nil else {
+            afterMenu { cloudDeleteProblem = "请先登录 115 账号后再删除网盘影片" }
+            return
+        }
+        guard let library = storeRefs?.mediaLibrary,
+              let request = CloudLibraryDeletion.request(for: group, library: library, appState: appState) else {
+            afterMenu { cloudDeleteProblem = "未找到对应的 115 网盘文件记录，请刷新片库后重试" }
+            return
+        }
+        afterMenu { cloudDelete = request }
     }
 
     // MARK: 空状态

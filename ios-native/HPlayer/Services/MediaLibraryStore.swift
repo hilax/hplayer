@@ -126,6 +126,38 @@ final class MediaLibraryStore: ObservableObject {
         return Set((cloudByAccount[scope] ?? []).map(\.pickCode))
     }
 
+    /// 按提取码查出片库里记着的原始 115 文件记录（包含删除等网盘操作所需的 fid）。
+    func file(pickCode: String, for appState: AppState) -> P115File? {
+        guard !pickCode.isEmpty, appState.isAuthenticated, let scope = appState.libraryAccountID,
+              let list = cloudByAccount[scope] else { return nil }
+        let indices = indexMap(for: scope, in: list)
+        if let index = indices[pickCode], index < list.count, list[index].pickCode == pickCode {
+            return list[index]
+        }
+        return list.first { $0.pickCode == pickCode }
+    }
+
+    /// 按提取码列表查出片库里对应的原始 115 文件记录，保留顺序并按文件编号去重。
+    func files(pickCodes: [String], for appState: AppState) -> [P115File] {
+        guard !pickCodes.isEmpty, appState.isAuthenticated, let scope = appState.libraryAccountID,
+              let list = cloudByAccount[scope] else { return [] }
+        let indices = indexMap(for: scope, in: list)
+        var seen = Set<String>()
+        var result: [P115File] = []
+        for code in pickCodes where !code.isEmpty {
+            let matched: P115File?
+            if let index = indices[code], index < list.count, list[index].pickCode == code {
+                matched = list[index]
+            } else {
+                matched = list.first { $0.pickCode == code }
+            }
+            if let matched, seen.insert(matched.id).inserted {
+                result.append(matched)
+            }
+        }
+        return result
+    }
+
     /// 片库里已有的视频在网盘里被改名或移动后，更新记录（提取码不变，封面和观看记录跟着提取码走）。
     /// 不在片库里的视频不会被加进来。
     func update(_ files: [P115File], for appState: AppState) {

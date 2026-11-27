@@ -163,6 +163,154 @@ final class LibraryFileSyncTests: XCTestCase {
         let signedOut = AppState(cookieLoader: { nil })
         XCTAssertTrue(store.pickCodes(for: signedOut).isEmpty)
     }
+
+    func testLookupFilesByPickCodePreservesOrderAndDeduplicates() {
+        let (store, state, _) = makeStore()
+        let first = makeFile("101", parent: "10", pick: "pc-101")
+        let second = makeFile("102", parent: "10", pick: "pc-102")
+        store.add([first, second], for: state)
+
+        XCTAssertEqual(store.file(pickCode: "pc-101", for: state), first)
+        XCTAssertNil(store.file(pickCode: "missing", for: state))
+        XCTAssertEqual(store.files(pickCodes: ["pc-102", "pc-101", "pc-102", ""], for: state), [second, first])
+    }
+}
+
+// MARK: - 片库卡片删除 115 网盘影片
+
+@MainActor
+final class CloudLibraryDeletionTests: XCTestCase {
+    private func makeEnv() -> (MediaLibraryStore, RecentStore, CloudLibraryScanner, AppState, UserDefaults) {
+        let suite = "CloudLibraryDeletionTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        addTeardownBlock { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        let state = AppState(cookieLoader: { "UID=12345_99; CID=local-session" })
+        let store = MediaLibraryStore(defaults: defaults)
+        let recents = RecentStore(defaults: defaults)
+        let scanner = CloudLibraryScanner(defaults: defaults, minimumRequestInterval: 0, persistInterval: 0, retryBaseDelay: 0)
+        return (store, recents, scanner, state, defaults)
+    }
+
+    private func makeClient() -> Direct115Client {
+        Direct115Client(cookie: "UID=12345_99; CID=local-session", protocolClasses: [RoutedURLProtocol.self])
+    }
+
+    private func seriesMetadata() -> MediaMetadata {
+        MediaMetadata(imdbID: "tt999", type: "series", title: "测试剧集", year: "2025",
+                      posterURL: "https://example.test/poster.jpg", backgroundURL: "", logoURL: "",
+                      overview: "", rating: "8.5", genres: ["剧情"], country: "China")
+    }
+
+    func testRequestResolvesCloudMovieAndIgnoresLocalVideo() {
+        let (store, _, _, state, _) = makeEnv()
+        let cloudFile = makeFile("1001", parent: "10", size: 2048, pick: "pc-1001")
+        store.add([cloudFile], for: state)
+
+        let cloudItem = HomeMediaItem(media: LibraryMedia(cloud: cloudFile), metadata: nil)
+        let request = CloudLibraryDeletion.request(for: cloudItem, library: store, appState: state)
+        XCTAssertEqual(request?.files, [cloudFile])
+        XCTAssertEqual(request?.confirmTitle, "删除 115 网盘影片？")
+
+        let local = LocalMedia(url: URL(fileURLWithPath: "/tmp/local.mp4"), size: 1024, modified: Date())
+        let localItem = HomeMediaItem(media: LibraryMedia(local: local), metadata: nil)
+        XCTAssertNil(CloudLibraryDeletion.request(for: localItem, library: store, appState: state))
+    }
+
+    func testRequestForSeriesCollectsOnlyCloudEpisodesInOrder() {
+        let (store, _, _, state, _) = makeEnv()
+        let ep1 = makeFile("2001", parent: "20", pick: "pc-ep1")
+        let ep2 = makeFile("2002", parent: "20", pick: "pc-ep2")
+        store.add([ep1, ep2], for: state)
+
+        let localEp = HomeMediaItem(
+            media: LibraryMedia(local: LocalMedia(url: URL(fileURLWithPath: "/tmp/S01E03.mp4"), size: 500, modified: Date())),
+            metadata: seriesMetadata()
+        )
+        let group = SeriesGroup(
+            id: "tt999",
+            metadata: seriesMetadata(),
+            episodes: [
+                HomeMediaItem(media: LibraryMedia(cloud: ep1), metadata: seriesMetadata()),
+                localEp,
+                HomeMediaItem(media: LibraryMedia(cloud: ep2), metadata: seriesMetadata()),
+            ]
+        )
+
+        let request = CloudLibraryDeletion.request(for: group, library: store, appState: state)
+        XCTAssertEqual(request?.files, [ep1, ep2])
+        XCTAssertEqual(request?.confirmTitle, "删除 2 个 115 网盘视频？")
+        XCTAssertEqual(request?.successText, "已将 2 个视频移入 115 回收站，并从片库移除")
+    }
+
+    func testExecuteMovesToRecycleBinAndCleansLibraryScannerAndRecents() async throws {
+        let (store, recents, scanner, state, defaults) = makeEnv()
+        let target = makeFile("3001", parent: "10", pick: "pc-target")
+        let keeper = makeFile("3002", parent: "10", pick: "pc-keeper")
+        store.add([target, keeper], for: state)
+        recents.record(.p115(title: target.name, pickCode: target.pickCode))
+        recents.record(.p115(title: keeper.name, pickCode: keeper.pickCode))
+
+        scanner.start(accountID: "device:12345", fetchPage: { _, _ in
+            Direct115FilePage(files: [target, keeper], nextOffset: nil)
+        }, onBatch: { _ in }, restart: true)
+        for _ in 0..<500 where scanner.phase == .running {
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+        XCTAssertEqual(scanner.phase, .completed)
+
+        RoutedURLProtocol.install { _ in .json(["state": true]) }
+        let item = HomeMediaItem(media: LibraryMedia(cloud: target), metadata: nil)
+        let request = try XCTUnwrap(CloudLibraryDeletion.request(for: item, library: store, appState: state))
+
+        let message = try await CloudLibraryDeletion.execute(
+            request,
+            client: makeClient(),
+            library: store,
+            recents: recents,
+            scanner: scanner,
+            appState: state
+        )
+
+        XCTAssertEqual(message, "已移入 115 回收站，并从片库移除")
+        let sent = try XCTUnwrap(RoutedURLProtocol.requests().first)
+        XCTAssertEqual(sent.url?.absoluteString, "https://webapi.115.com/rb/delete")
+        XCTAssertEqual(RoutedURLProtocol.form(of: sent), ["fid[0]": "3001"])
+        XCTAssertEqual(store.files(for: state).map(\.pickCode), ["pc-keeper"])
+        XCTAssertEqual(recents.items.compactMap(\.pickCode), ["pc-keeper"])
+        XCTAssertEqual(scanner.discoveredFiles.map(\.pickCode), ["pc-keeper"])
+
+        let restoredScanner = CloudLibraryScanner(defaults: defaults, minimumRequestInterval: 0, persistInterval: 0, retryBaseDelay: 0)
+        restoredScanner.selectAccount("device:12345")
+        XCTAssertEqual(restoredScanner.discoveredFiles.map(\.pickCode), ["pc-keeper"])
+    }
+
+    func testExecuteFailureLeavesLibraryAndRecentsUntouched() async throws {
+        let (store, recents, scanner, state, _) = makeEnv()
+        let target = makeFile("4001", parent: "10", pick: "pc-4001")
+        store.add([target], for: state)
+        recents.record(.p115(title: target.name, pickCode: target.pickCode))
+
+        RoutedURLProtocol.install { _ in .json(["state": false, "errno": 99, "error": "登录已失效"]) }
+        let item = HomeMediaItem(media: LibraryMedia(cloud: target), metadata: nil)
+        let request = try XCTUnwrap(CloudLibraryDeletion.request(for: item, library: store, appState: state))
+
+        do {
+            _ = try await CloudLibraryDeletion.execute(
+                request,
+                client: makeClient(),
+                library: store,
+                recents: recents,
+                scanner: scanner,
+                appState: state
+            )
+            XCTFail("远端删除失败时应该抛出错误")
+        } catch {
+            XCTAssertEqual(error as? Direct115FileError, .notLoggedIn)
+        }
+
+        XCTAssertEqual(store.files(for: state).map(\.pickCode), ["pc-4001"])
+        XCTAssertEqual(recents.items.compactMap(\.pickCode), ["pc-4001"])
+    }
 }
 
 // MARK: - 文件模型与提示文字

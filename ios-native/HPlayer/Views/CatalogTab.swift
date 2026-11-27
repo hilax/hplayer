@@ -197,6 +197,8 @@ struct CatalogTab: View {
     @State private var sort: CatalogSort = .recentlyAdded
     @State private var playing: PlaybackQueue?
     @State private var matching: MatchRequest?
+    @State private var cloudDelete: CloudDeleteRequest?
+    @State private var cloudDeleteProblem: String?
 
     init(onSearch: @escaping () -> Void = {}, preset: Binding<CatalogPreset?> = .constant(nil), filterRequest: Int = 0) {
         self.onSearch = onSearch
@@ -231,6 +233,7 @@ struct CatalogTab: View {
                 for target in request.targets { await metadataStore.unmatch(target) }
             })
         }
+        .cloudVideoDelete(request: $cloudDelete, problem: $cloudDeleteProblem)
     }
 
     // MARK: 片库页
@@ -293,6 +296,16 @@ struct CatalogTab: View {
                 }
                 Button("匹配封面", icon: AppIcon.poster.name) {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { matching = MatchRequest(item: item) }
+                }
+                if item.isCloud {
+                    Section {
+                        Button("从媒体库移除", icon: AppIcon.remove.name) {
+                            delete(item)
+                        }
+                        Button("删除 115 网盘影片", icon: AppIcon.trash.name, role: .destructive) {
+                            requestCloudDelete(item)
+                        }
+                    }
                 }
             } preview: {
                 HomeSlidePreview(slide: slide)
@@ -477,13 +490,15 @@ struct CatalogTab: View {
     private func card(_ entry: CatalogEntry, width: CGFloat) -> some View {
         switch entry.payload {
         case .movie(let item):
-            PosterCard(item: item, width: width) {
+            PosterCard(item: item, width: width, onPlay: {
                 playing = HomeLibrary.queue(for: item, in: snapshot.items)
-            } onDelete: {
+            }, onDelete: {
                 delete(item)
-            } onMatch: {
+            }, onMatch: {
                 matching = MatchRequest(item: item)
-            }
+            }, onDeleteCloud: item.isCloud ? {
+                requestCloudDelete(item)
+            } : nil)
         case .series(let group):
             NavigationLink {
                 SeriesDetailView(seriesID: group.id)
@@ -494,6 +509,13 @@ struct CatalogTab: View {
             .accessibilityIdentifier("catalog.series.\(group.id)")
             .contextMenu {
                 Button("匹配封面", icon: AppIcon.poster.name) { matching = MatchRequest(group: group) }
+                if group.episodes.contains(where: \.isCloud) {
+                    Section {
+                        Button("删除 115 网盘影片", icon: AppIcon.trash.name, role: .destructive) {
+                            requestCloudDelete(group)
+                        }
+                    }
+                }
             }
         case .performer(let group):
             PerformerNavigationLink(group: group) {
@@ -519,6 +541,45 @@ struct CatalogTab: View {
             localStore.delete(local)
         } else {
             storeRefs?.mediaLibrary.remove(pickCode: item.media.pickCode, for: appState)
+            storeRefs?.scanner.remove(pickCodes: [item.media.pickCode])
+        }
+    }
+
+    private func requestCloudDelete(_ item: HomeMediaItem) {
+        guard appState.isAuthenticated, appState.directClient() != nil else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                cloudDeleteProblem = "请先登录 115 账号后再删除网盘影片"
+            }
+            return
+        }
+        guard let library = storeRefs?.mediaLibrary,
+              let request = CloudLibraryDeletion.request(for: item, library: library, appState: appState) else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                cloudDeleteProblem = "未找到对应的 115 网盘文件记录，请刷新片库后重试"
+            }
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            cloudDelete = request
+        }
+    }
+
+    private func requestCloudDelete(_ group: SeriesGroup) {
+        guard appState.isAuthenticated, appState.directClient() != nil else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                cloudDeleteProblem = "请先登录 115 账号后再删除网盘影片"
+            }
+            return
+        }
+        guard let library = storeRefs?.mediaLibrary,
+              let request = CloudLibraryDeletion.request(for: group, library: library, appState: appState) else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                cloudDeleteProblem = "未找到对应的 115 网盘文件记录，请刷新片库后重试"
+            }
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            cloudDelete = request
         }
     }
 }

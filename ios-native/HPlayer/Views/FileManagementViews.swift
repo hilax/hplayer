@@ -192,6 +192,9 @@ struct DeleteConfirmSheet: View {
     /// 其中已经在 HPlayer 资料库里的视频数（包括所选文件夹下记录过的）
     let libraryVideoCount: Int
     @Binding var removeFromLibrary: Bool
+    var titleOverride: String? = nil
+    var explanationOverride: String? = nil
+    var confirmTitle = "移入回收站"
     let onConfirm: () -> Void
     @Environment(\.dismiss) private var dismiss
 
@@ -219,6 +222,7 @@ struct DeleteConfirmSheet: View {
     }
 
     private var explanation: String {
+        if let explanationOverride { return explanationOverride }
         if summary.folders > 0 {
             return "文件会移入 115 回收站，可在回收站中还原。\n夹内的文件会一并移入。"
         }
@@ -233,7 +237,7 @@ struct DeleteConfirmSheet: View {
                 .frame(width: 48, height: 48)
                 .background(Theme.danger.opacity(0.14), in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
                 .padding(.bottom, 6)
-            Text("删除 \(files.count) 项？")
+            Text(titleOverride ?? "删除 \(files.count) 项？")
                 .font(.scaled(18, weight: .semibold))
                 .accessibilityAddTraits(.isHeader)
             Text(explanation)
@@ -310,7 +314,7 @@ struct DeleteConfirmSheet: View {
 
     private var buttons: some View {
         VStack(spacing: 10) {
-            Button("移入回收站") {
+            Button(confirmTitle) {
                 dismiss()
                 onConfirm()
             }
@@ -323,6 +327,80 @@ struct DeleteConfirmSheet: View {
         .padding(.horizontal, 20)
         .padding(.top, 12)
         .padding(.bottom, 14)
+    }
+}
+
+/// 片库卡片删除 115 网盘影片的统一确认弹层、进度遮罩与错误提示。
+private struct CloudVideoDeleteModifier: ViewModifier {
+    @Binding var request: CloudDeleteRequest?
+    @Binding var problem: String?
+    @EnvironmentObject private var appState: AppState
+    @Environment(\.libraryStoreRefs) private var storeRefs
+    @State private var operation: String?
+
+    func body(content: Content) -> some View {
+        content
+            .hudProgress(operation)
+            .sheet(item: $request) { current in
+                DeleteConfirmSheet(
+                    files: current.files,
+                    libraryVideoCount: 0,
+                    removeFromLibrary: .constant(true),
+                    titleOverride: current.confirmTitle,
+                    explanationOverride: current.explanation,
+                    confirmTitle: "移入 115 回收站"
+                ) {
+                    perform(current)
+                }
+            }
+            .alert("删除失败", isPresented: Binding(
+                get: { problem != nil },
+                set: { if !$0 { problem = nil } }
+            )) {
+                Button("好", role: .cancel) { problem = nil }
+            } message: {
+                Text(problem ?? "")
+            }
+    }
+
+    private func perform(_ request: CloudDeleteRequest) {
+        guard operation == nil else { return }
+        guard let client = appState.directClient() else {
+            Haptics.warning()
+            problem = "请先登录 115 账号后再删除网盘影片"
+            return
+        }
+        guard let refs = storeRefs else {
+            Haptics.warning()
+            problem = "媒体库尚未就绪，请稍后重试"
+            return
+        }
+        operation = request.progressText
+        Task {
+            defer { operation = nil }
+            do {
+                let done = try await CloudLibraryDeletion.execute(
+                    request,
+                    client: client,
+                    library: refs.mediaLibrary,
+                    recents: RecentStore.shared,
+                    scanner: refs.scanner,
+                    appState: appState
+                )
+                HUD.show(done, .success)
+            } catch is CancellationError {
+                return
+            } catch {
+                Haptics.warning()
+                problem = error.userMessage
+            }
+        }
+    }
+}
+
+extension View {
+    func cloudVideoDelete(request: Binding<CloudDeleteRequest?>, problem: Binding<String?>) -> some View {
+        modifier(CloudVideoDeleteModifier(request: request, problem: problem))
     }
 }
 

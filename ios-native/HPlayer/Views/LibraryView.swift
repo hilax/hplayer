@@ -78,6 +78,7 @@ struct DirectoryView: View {
 
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var mediaLibrary: MediaLibraryStore
+    @Environment(\.libraryStoreRefs) private var storeRefs
     /// 一级页面导航栏的状态：根目录多选时要正常的系统导航栏
     @Environment(\.rootNavigationBarState) private var rootBar
     @AppStorage("hplayer.library.sortKey") private var sortKey: FileSortKey = .name
@@ -866,7 +867,7 @@ struct DirectoryView: View {
         runOperation("正在移入回收站…") { client in
             try await client.moveToRecycleBin(chosen.map { $0.id })
             let removed = LibraryFileSync.didDelete(chosen, removeFromLibrary: alsoLibrary, library: mediaLibrary,
-                                                    recents: RecentStore.shared, appState: appState)
+                                                    recents: RecentStore.shared, scanner: storeRefs?.scanner, appState: appState)
             if removed > 0 { return "已移入回收站，并从资料库移除 \(removed) 个视频" }
             return "已移入回收站"
         }

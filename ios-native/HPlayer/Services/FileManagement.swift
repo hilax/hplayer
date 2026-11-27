@@ -101,7 +101,8 @@ enum LibraryFileSync {
     /// 删除之后：如果用户选择同时清理资料库，移除受影响的视频及其续播记录，返回移除的视频数。
     @discardableResult
     static func didDelete(_ selected: [P115File], removeFromLibrary: Bool, library: MediaLibraryStore,
-                          recents: RecentStore?, appState: AppState) -> Int {
+                          recents: RecentStore?, scanner: CloudLibraryScanner? = nil,
+                          appState: AppState) -> Int {
         guard removeFromLibrary else { return 0 }
         let videos = affectedVideos(selected, library: library, appState: appState)
         let codes = Set(videos.map { $0.pickCode })
@@ -109,8 +110,77 @@ enum LibraryFileSync {
         let tree = FolderTree.descendants(of: folderIDs, recorded: library.folders(for: appState))
         library.remove(pickCodes: codes, for: appState)
         library.forgetFolders(tree, for: appState)
+        scanner?.remove(pickCodes: codes)
         recents?.removeCloud(pickCodes: codes)
+        if recents === RecentStore.shared {
+            for code in codes where !code.isEmpty {
+                PlaybackFrameStore.shared.remove("recent|p115|\(code)")
+            }
+        }
         return codes.count
+    }
+}
+
+/// 片库卡片删除 115 网盘影片的请求：单个视频（电影）或一部剧在 115 网盘中的全部分集。
+struct CloudDeleteRequest: Identifiable, Equatable {
+    let id = UUID()
+    let title: String
+    let files: [P115File]
+
+    var isSingle: Bool { files.count == 1 }
+
+    var confirmTitle: String {
+        isSingle ? "删除 115 网盘影片？" : "删除 \(files.count) 个 115 网盘视频？"
+    }
+
+    var explanation: String {
+        "文件将移入 115 回收站，并同步从片库和继续观看中移除。\n可在「网盘 › 回收站」中还原。"
+    }
+
+    var progressText: String {
+        isSingle ? "正在删除 115 网盘影片…" : "正在删除 \(files.count) 个网盘视频…"
+    }
+
+    var successText: String {
+        isSingle ? "已移入 115 回收站，并从片库移除" : "已将 \(files.count) 个视频移入 115 回收站，并从片库移除"
+    }
+}
+
+/// 片库卡片直接删除 115 网盘文件：先请求 115 移入回收站，成功后再同步清理本机片库与续播记录。
+@MainActor
+enum CloudLibraryDeletion {
+    /// 为片库中的单个影片构建 115 网盘删除请求；本地视频或找不到记录时返回 nil。
+    static func request(for item: HomeMediaItem, library: MediaLibraryStore, appState: AppState) -> CloudDeleteRequest? {
+        guard item.isCloud, let file = library.file(pickCode: item.media.pickCode, for: appState) else { return nil }
+        return CloudDeleteRequest(title: item.title, files: [file])
+    }
+
+    /// 为片库中的剧集构建 115 网盘删除请求（包含该剧在 115 网盘中的所有分集）。
+    static func request(for group: SeriesGroup, library: MediaLibraryStore, appState: AppState) -> CloudDeleteRequest? {
+        let codes = group.episodes.filter(\.isCloud).map(\.media.pickCode)
+        let files = library.files(pickCodes: codes, for: appState)
+        guard !files.isEmpty else { return nil }
+        return CloudDeleteRequest(title: group.title, files: files)
+    }
+
+    /// 将对应文件移入 115 回收站，成功后同步清理本机片库、扫描缓存与续播记录。
+    /// 远端删除失败时不改动本机片库，保持状态一致。
+    @discardableResult
+    static func execute(
+        _ request: CloudDeleteRequest,
+        client: Direct115Client,
+        library: MediaLibraryStore,
+        recents: RecentStore?,
+        scanner: CloudLibraryScanner?,
+        appState: AppState
+    ) async throws -> String {
+        let sessionID = appState.sessionID
+        try await client.moveToRecycleBin(request.files.map(\.id))
+        guard sessionID == appState.sessionID else { throw CancellationError() }
+        LibraryFileSync.didDelete(request.files, removeFromLibrary: true, library: library,
+                                  recents: recents, scanner: scanner, appState: appState)
+        library.flush(background: true)
+        return request.successText
     }
 }
 
