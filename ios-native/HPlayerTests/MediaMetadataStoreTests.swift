@@ -554,6 +554,55 @@ final class MediaMetadataStoreTests: XCTestCase {
         XCTAssertNil(malformed.catalogCode, "Anything that does not look like a catalog code is ignored")
     }
 
+    func testEnqueueScannedMatchesIncrementallyWhileRunningAndRespectsUserStop() async throws {
+        let (defaults, suite) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let movieMeta = MediaMetadata(
+            imdbID: "tt2222", type: "movie", title: "Other Movie", year: "2024",
+            posterURL: "https://example.test/other.jpg", backgroundURL: "", logoURL: "",
+            overview: "", rating: "8.1", genres: ["剧情"], country: "USA"
+        )
+        let lookup = MetadataLookupStub(responses: [seriesMetadata(), movieMeta], pauseFirst: true)
+        let store = MediaMetadataStore(defaults: defaults, concurrency: 2, lookup: { _ in await lookup.lookup() })
+
+        let ep1 = cloud(name: "凡人修仙传.S01E01.mkv", pickCode: "inc-ep1")
+        let ep2 = cloud(name: "凡人修仙传.S01E02.mkv", pickCode: "inc-ep2")
+        let movie = LibraryMedia(cloud: P115File(
+            id: "inc-movie", parentId: "0", name: "Other.Movie.2024.mkv", isDir: false, kind: "video",
+            size: 500, pickCode: "inc-movie", sha1: String(repeating: "c", count: 40), updatedAt: "", thumbUrl: ""
+        ))
+
+        // 第一批扫描结果触发自动匹配
+        store.enqueueScanned([ep1], in: [ep1])
+        for _ in 0..<200 {
+            if await lookup.calls > 0 { break }
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        XCTAssertTrue(store.isMatching)
+
+        // 匹配进行中：追加另一部电影和同一剧集的第二集
+        store.enqueueScanned([movie, ep2], in: [ep1, movie, ep2])
+        await lookup.releaseFirst()
+        try await waitForScan(store)
+
+        XCTAssertEqual(store.metadataByMediaID[ep1.id]?.imdbID, seriesMetadata().imdbID)
+        XCTAssertEqual(store.metadataByMediaID[ep2.id]?.imdbID, seriesMetadata().imdbID,
+                       "Same-title episode discovered mid-flight should hydrate via follow-up sync")
+        XCTAssertEqual(store.metadataByMediaID[movie.id]?.imdbID, movieMeta.imdbID)
+        let totalCalls = await lookup.calls
+        XCTAssertEqual(totalCalls, 2, "Duplicate title key should reuse cached lookup without extra network request")
+
+        // 用户手动停止后，后续扫描批次不再重启自动匹配
+        store.stopByUser()
+        let extra = LibraryMedia(cloud: P115File(
+            id: "inc-extra", parentId: "0", name: "Another.Film.2025.mkv", isDir: false, kind: "video",
+            size: 500, pickCode: "inc-extra", sha1: String(repeating: "d", count: 40), updatedAt: "", thumbUrl: ""
+        ))
+        store.enqueueScanned([extra], in: [ep1, movie, ep2, extra])
+        XCTAssertFalse(store.isMatching)
+        XCTAssertNil(store.metadataByMediaID[extra.id])
+    }
+
     private func waitForEnrichment(_ store: MediaMetadataStore) async throws {
         for _ in 0..<400 {
             if !store.isEnrichingPerformers { return }

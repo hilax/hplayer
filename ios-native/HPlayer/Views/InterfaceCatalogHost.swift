@@ -104,7 +104,7 @@ struct InterfaceCatalogHost: View {
                 DownloadsView(manager: fixture.downloads, initialTab: "active", fixedStorage: fixture.downloadStorage)
             }
         case "local": NavigationStack { LocalVideosView() }
-        case "manage": HomeLibraryScanView(onStart: { _ in }, onStartFolder: { _, _ in }, onRetryMatching: {})
+        case "manage": HomeLibraryScanView(onStart: { _ in }, onStartFolders: { _ in }, onRetryMatching: {})
         case "folder-picker": ScanFolderPicker(onSelect: { _, _ in }, initialFolders: fixture.directory.filter(\.isDir))
         case "unmatched": NavigationStack { HomeUnmatchedMediaView() }
         case "match": MetadataMatchView(file: fixture.unmatched, current: nil, onMatch: { _ in }, initialQuery: "Arrival", initialResults: [fixture.movies[3], fixture.movies[0]])

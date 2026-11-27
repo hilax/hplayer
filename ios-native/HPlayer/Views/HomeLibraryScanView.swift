@@ -20,7 +20,7 @@ struct HomeLibraryScanView: View {
     @AppStorage(CoverMatchingSettings.automaticKey) private var automaticMatching = false
 
     let onStart: (Bool) -> Void
-    let onStartFolder: (String, String) -> Void
+    let onStartFolders: ([ScanFolderTarget]) -> Void
     let onRetryMatching: () -> Void
     /// 从「我的」或片库频道压进公共导航栈时为 true：用系统返回键，和其他二级页面一样从右侧推入。
     /// 单独作为根页面（界面截图、扫描页测试）时为 false：自带导航栈和返回键。
@@ -78,7 +78,7 @@ struct HomeLibraryScanView: View {
         .navigationButtonTint()
         .designScreen("manage")
         .sheet(isPresented: $pickingFolder) {
-            ScanFolderPicker(onSelect: onStartFolder).environmentObject(appState)
+            ScanFolderPicker(onSelectFolders: onStartFolders).environmentObject(appState)
         }
         .sheet(isPresented: $showCleanup) {
             LibraryCleanupView(appState: appState, library: library).environmentObject(appState)
@@ -448,7 +448,7 @@ private struct LibraryConsoleCard: View {
             }
             .foregroundStyle(Theme.textSecondary)
             .padding(.horizontal, Theme.Space.sm)
-            .frame(minHeight: 24)
+            .frame(maxWidth: 160, minHeight: 24)
             .background(Theme.surfaceRaised, in: Capsule())
             .contentShape(VerticalHitArea(extra: 10))
         }

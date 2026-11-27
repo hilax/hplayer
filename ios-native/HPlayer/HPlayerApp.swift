@@ -218,7 +218,7 @@ private struct ScanUITestHost: View {
     @StateObject private var snapshots = LibrarySnapshotStore()
 
     var body: some View {
-        HomeLibraryScanView(onStart: { _ in }, onStartFolder: { _, _ in }, onRetryMatching: {})
+        HomeLibraryScanView(onStart: { _ in }, onStartFolders: { _ in }, onRetryMatching: {})
             .environmentObject(snapshots)
             .environmentObject(scanner)
             .environmentObject(metadata)

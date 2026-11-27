@@ -36,6 +36,8 @@ final class CloudLibraryScanner: ObservableObject {
     @Published private(set) var scopeName: String?
     /// 每读完一页，把这一页里的子文件夹交出去（文件夹编号 → 上一级和名字），在这一页的视频和进度发布之前调用。
     var onFolders: (@MainActor ([String: CloudFolderEntry]) -> Void)?
+    /// 整个扫描队列完成时调用（例如触发一次收尾封面匹配）。
+    var onComplete: (@MainActor () -> Void)?
 
     var canResume: Bool { phase == .paused || phase == .failed }
 
@@ -150,9 +152,35 @@ final class CloudLibraryScanner: ObservableObject {
         }
     }
 
+    /// 多文件夹扫描范围的摘要文案：单个文件夹显示名称，多个文件夹显示「首个名称 等 N 个文件夹」。
+    static func scopeSummary(for roots: [(id: String, name: String)]) -> String? {
+        guard let first = roots.first else { return nil }
+        return roots.count == 1 ? first.name : "\(first.name) 等 \(roots.count) 个文件夹"
+    }
+
+    /// 规范化选中的根目录：去重并过滤无效编号；为空或包含根目录 "0" 时视为扫描整个网盘（返回空数组）。
+    static func normalizedRoots(_ raw: [(id: String, name: String)]) -> [(id: String, name: String)] {
+        guard !raw.isEmpty else { return [] }
+        if raw.contains(where: { $0.id == "0" }) { return [] }
+        var seen = Set<String>()
+        var valid: [(id: String, name: String)] = []
+        for entry in raw {
+            let id = entry.id.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !id.isEmpty, id.allSatisfy(\.isNumber), id != "0", seen.insert(id).inserted else { continue }
+            let name = entry.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            valid.append((id: id, name: name.isEmpty ? "文件夹 \(id)" : name))
+        }
+        return valid
+    }
+
     /// Starts a new scan or resumes its last committed page. Replays saved inventory first:
     /// a process exit between saving a page and updating the poster library cannot lose videos.
     func start(accountID: String, root: (id: String, name: String)? = nil, fetchPage: @escaping FetchPage, onBatch: @escaping BatchHandler, restart: Bool = false, replayInventory: Bool = true) {
+        start(accountID: accountID, roots: root.map { [$0] } ?? [], fetchPage: fetchPage, onBatch: onBatch, restart: restart, replayInventory: replayInventory)
+    }
+
+    /// 支持一次扫描多个选定的 115 文件夹；传入空数组或包含根目录 `"0"` 时扫描整个网盘。
+    func start(accountID: String, roots: [(id: String, name: String)], fetchPage: @escaping FetchPage, onBatch: @escaping BatchHandler, restart: Bool = false, replayInventory: Bool = true) {
         selectAccount(accountID)
         guard self.accountID == accountID, !accountID.isEmpty else { return }
         if phase == .running && !restart { return }
@@ -162,9 +190,10 @@ final class CloudLibraryScanner: ObservableObject {
             if checkpoint == nil || restart {
                 let old = checkpoint
                 var fresh = Checkpoint(accountID: accountID, scanID: UUID().uuidString)
-                if let root, !root.id.isEmpty, root.id.allSatisfy(\.isNumber), root.id != "0" {
-                    fresh.pendingFolders = [Folder(id: root.id, name: root.name)]
-                    fresh.scopeName = root.name
+                let normalized = Self.normalizedRoots(roots)
+                if !normalized.isEmpty {
+                    fresh.pendingFolders = normalized.map { Folder(id: $0.id, name: $0.name) }
+                    fresh.scopeName = Self.scopeSummary(for: normalized)
                 }
                 try persist(fresh)
                 checkpoint = fresh
@@ -280,6 +309,7 @@ final class CloudLibraryScanner: ObservableObject {
                 checkpoint = saved
                 publish(saved)
                 task = nil
+                onComplete?()
                 return
             }
             while isCurrent(token, accountID), let folder = checkpoint?.pendingFolders.first {
@@ -339,7 +369,11 @@ final class CloudLibraryScanner: ObservableObject {
                 guard isCurrent(token, accountID) else { return }
                 if !newVideos.isEmpty { onBatch(newVideos) }
                 guard isCurrent(token, accountID) else { return }
-                if saved.phase == .completed { task = nil; return }
+                if saved.phase == .completed {
+                    task = nil
+                    onComplete?()
+                    return
+                }
             }
         } catch is CancellationError {
             // pause/selectAccount already committed the state; a stale task must not change it.

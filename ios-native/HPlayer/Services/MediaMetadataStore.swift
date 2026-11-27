@@ -249,14 +249,63 @@ final class MediaMetadataStore: ObservableObject {
             publishBuffered()
             clearPending()
             syncTask = nil
+            if let followUp = followUpFiles, !stoppedByUser {
+                followUpFiles = nil
+                sync(files: followUp)
+                return
+            }
+            followUpFiles = nil
             finishScan()
         }
+    }
+
+    /// 文件夹扫描过程中发现新视频后立即加入封面匹配队列：
+    /// - 当前空闲时直接启动完整匹配；
+    /// - 正在并发匹配时仅将尚未入队的新片名追加到队尾，不重置 `pendingIndex` 也不打断其他正在工作的线程；
+    /// - 尊重用户手动「停止 / 暂停」状态（`stoppedByUser`）。
+    func enqueueScanned(_ newFiles: [LibraryMedia], in allFiles: [LibraryMedia]) {
+        guard !stoppedByUser else { return }
+        guard syncTask != nil else {
+            sync(files: allFiles)
+            return
+        }
+        validMediaIDs = Set(allFiles.map(\.id))
+        var queuedKeys = Set(pendingKeys[min(pendingIndex, pendingKeys.count)...])
+        var hydrated = false
+        var hadInFlightOverlap = false
+        for file in newFiles {
+            if metadataByMediaID[file.id] != nil || bufferedResults[file.id] != nil || resolvingIDs.contains(file.id) {
+                continue
+            }
+            if let cached = cachedMetadata(for: file) {
+                bufferedResults[file.id] = cached
+                hydrated = true
+                continue
+            }
+            guard shouldResolve(file) else { continue }
+            let key = titleKey(file.name)
+            if inFlightKeys.contains(key) {
+                hadInFlightOverlap = true
+                continue
+            }
+            if queuedKeys.insert(key).inserted {
+                pendingKeys.append(key)
+            }
+            if !(pendingGroups[key]?.contains(where: { $0.id == file.id }) ?? false) {
+                pendingGroups[key, default: []].append(file)
+                pendingMedia.append(file)
+            }
+        }
+        if hydrated { publishBuffered() }
+        if hadInFlightOverlap { followUpFiles = allFiles }
     }
 
     private var inFlightKeys = Set<String>()
     /// 待匹配的文件按片名分组：同一片名只查一次网络，其余文件直接用结果。
     private var pendingKeys: [String] = []
     private var pendingGroups: [String: [LibraryMedia]] = [:]
+    /// 同片名正在请求时又扫到新文件（如同一剧集的其他集），本轮结束后补跑一次 `sync` 使其直接命中缓存。
+    private var followUpFiles: [LibraryMedia]?
 
     private func clearPending() {
         pendingMedia = []
@@ -316,6 +365,7 @@ final class MediaMetadataStore: ObservableObject {
         cancelEnrichment()
         publishPerformers()
         clearPending()
+        followUpFiles = nil
         inFlightKeys = []
         resolvingIDs = []
         isMatching = false

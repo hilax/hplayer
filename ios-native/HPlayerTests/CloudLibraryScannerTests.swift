@@ -271,4 +271,45 @@ final class CloudLibraryScannerTests: XCTestCase {
         XCTAssertTrue(emptyRelaunched.discoveredFiles.isEmpty)
         XCTAssertEqual(emptyRelaunched.progress.discoveredVideos, 0)
     }
+
+    func testScansMultipleSelectedFoldersWithoutDuplicatesAndCallsOnComplete() async {
+        let scanner = scanner()
+        var requests: [String] = []
+        var completedCalls = 0
+        scanner.onComplete = { completedCalls += 1 }
+        scanner.start(
+            accountID: "device:1",
+            roots: [(id: "10", name: "电影"), (id: "20", name: "剧集"), (id: "11", name: "子目录"), (id: "10", name: "电影")],
+            fetchPage: { [self] cid, offset in
+                requests.append("\(cid):\(offset)")
+                switch cid {
+                case "10": return Direct115FilePage(files: [file("1", parent: "10"), file("11", parent: "10", directory: true)], nextOffset: nil)
+                case "20": return Direct115FilePage(files: [file("2", parent: "20"), file("21", parent: "20", directory: true)], nextOffset: nil)
+                case "11": return Direct115FilePage(files: [file("3", parent: "11")], nextOffset: nil)
+                case "21": return Direct115FilePage(files: [file("4", parent: "21")], nextOffset: nil)
+                default: return Direct115FilePage(files: [], nextOffset: nil)
+                }
+            },
+            onBatch: { _ in },
+            restart: true
+        )
+        await waitUntil { scanner.phase == .completed }
+
+        XCTAssertEqual(requests, ["10:0", "20:0", "11:0", "21:0"], "Nested folder already in selected roots must only be scanned once")
+        XCTAssertEqual(scanner.discoveredFiles.map(\.id), ["1", "2", "3", "4"])
+        XCTAssertEqual(scanner.scopeName, "电影 等 3 个文件夹")
+        XCTAssertEqual(completedCalls, 1)
+
+        let restored = self.scanner()
+        restored.selectAccount("device:1")
+        XCTAssertEqual(restored.scopeName, "电影 等 3 个文件夹")
+        XCTAssertEqual(restored.discoveredFiles.map(\.id), ["1", "2", "3", "4"])
+    }
+
+    func testNormalizedRootsTreatsRootZeroAsWholeDriveAndFormatsScopeSummary() {
+        XCTAssertTrue(CloudLibraryScanner.normalizedRoots([(id: "10", name: "电影"), (id: "0", name: "115 网盘")]).isEmpty)
+        XCTAssertEqual(CloudLibraryScanner.scopeSummary(for: [(id: "10", name: "电影")]), "电影")
+        XCTAssertEqual(CloudLibraryScanner.scopeSummary(for: [(id: "10", name: "电影"), (id: "20", name: "剧集")]), "电影 等 2 个文件夹")
+        XCTAssertNil(CloudLibraryScanner.scopeSummary(for: []))
+    }
 }
