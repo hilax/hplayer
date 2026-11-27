@@ -286,7 +286,7 @@ struct AnimeSignInSheet: View {
                 notice = kind == .email ? "验证码已发到邮箱" : "验证码已发到手机"
                 startCountdown()
             } catch {
-                self.error = error.localizedDescription
+                self.error = error.userMessage
             }
             // 验证码只能用一次，用过就换一张
             answer = ""
@@ -326,7 +326,7 @@ struct AnimeSignInSheet: View {
                     mode = .signIn
                 }
             } catch {
-                self.error = error.localizedDescription
+                self.error = error.userMessage
                 Haptics.warning()
                 if mode == .signUp {
                     answer = ""
@@ -519,7 +519,7 @@ struct AnimeTasksView: View {
         signing = true
         Task {
             defer { signing = false }
-            do { try await account.signToday() } catch { self.error = error.localizedDescription }
+            do { try await account.signToday() } catch { self.error = error.userMessage }
         }
     }
 }
@@ -729,7 +729,7 @@ struct AnimeMessagesView: View {
             exhausted = next.count < 20
         } catch {
             guard requested == kind else { return }
-            self.error = error.localizedDescription
+            self.error = error.userMessage
             exhausted = true
         }
     }
@@ -788,7 +788,7 @@ struct AnimeDiagnosticsView: View {
                     let envelope = try await AnimeClient.shared.call(probe.path)
                     results[probe.path] = Self.pretty(envelope.raw)
                 } catch {
-                    results[probe.path] = "请求失败：\(error.localizedDescription)"
+                    results[probe.path] = "请求失败：\(error.userMessage)"
                 }
             }
         }

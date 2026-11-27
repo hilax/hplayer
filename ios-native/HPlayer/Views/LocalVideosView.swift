@@ -57,7 +57,7 @@ struct LocalVideosView: View {
             case .success(let urls):
                 Task { importError = await localStore.importFiles(urls).joined(separator: "\n") }
             case .failure(let error):
-                importError = error.localizedDescription
+                importError = error.userMessage
             }
         }
         .alert("导入失败", isPresented: Binding(

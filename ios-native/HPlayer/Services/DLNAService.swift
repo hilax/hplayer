@@ -453,7 +453,7 @@ final class DLNASoapClient: @unchecked Sendable {
         do {
             (data, response) = try await session.data(for: request)
         } catch {
-            throw DLNAError.networkFailure("无法连接到电视：\(error.localizedDescription)")
+            throw DLNAError.networkFailure("无法连接到电视：\(error.userMessage)")
         }
         guard let http = response as? HTTPURLResponse else {
             throw DLNAError.invalidResponse
@@ -462,7 +462,8 @@ final class DLNASoapClient: @unchecked Sendable {
         let parsed = SOAPResponseParser.parse(data)
         if !(200..<300).contains(http.statusCode) || parsed["Fault"] != nil || parsed["faultstring"] != nil || parsed["errorCode"] != nil {
             let code = parsed["errorCode"]
-            let message = parsed["errorDescription"] ?? parsed["faultstring"] ?? "HTTP \(http.statusCode)"
+            let rawMessage = parsed["errorDescription"] ?? parsed["faultstring"] ?? "HTTP \(http.statusCode)"
+            let message = NetworkErrorFormatter.translateDLNAFault(rawMessage)
             throw DLNAError.soapFault(code: code, message: message)
         }
         return parsed

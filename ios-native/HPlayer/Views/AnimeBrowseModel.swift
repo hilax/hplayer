@@ -261,7 +261,7 @@ final class AnimeBrowseModel: ObservableObject {
                 }
             } catch {
                 guard current == generation else { return }
-                if items.isEmpty { errorMessage = error.localizedDescription }
+                if items.isEmpty { errorMessage = error.userMessage }
                 hasMore = false
                 return
             }

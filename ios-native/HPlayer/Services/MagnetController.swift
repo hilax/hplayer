@@ -1101,8 +1101,8 @@ final class MagnetController: ObservableObject {
             case .server(let message): return "115 离线：\(message)"
             }
         }
-        if let value = error as? APIError { return "115 离线：\(value.localizedDescription)" }
-        return "115 离线没有成功：\(error.localizedDescription)"
+        if let value = error as? APIError { return "115 离线：\(value.userMessage)" }
+        return "115 离线没有成功：\(error.userMessage)"
     }
 
     // MARK: 工具
@@ -1127,21 +1127,14 @@ final class MagnetController: ObservableObject {
     }
 
     private static func describe(_ error: Error) -> String {
-        if let value = error as? APIError { return value.localizedDescription }
-        let message = (error as? NuvioEngineError)?.message ?? error.localizedDescription
-        let lower = message.lowercased()
-        if lower.contains("info hash") || lower.contains("info_hash") {
-            return "链接里的信息哈希无效，请确认复制完整。"
-        }
-        if lower.contains("closed") {
-            return "BT 引擎已经关闭，请重试。"
-        }
+        if let value = error as? APIError { return value.userMessage }
+        let message = error.userMessage
         return "解析失败：\(message)"
     }
 
     private static func describePlayback(_ error: Error) -> String {
-        if let value = error as? APIError { return value.localizedDescription }
-        let message = (error as? NuvioEngineError)?.message ?? error.localizedDescription
+        if let value = error as? APIError { return value.userMessage }
+        let message = error.userMessage
         return "视频准备失败：\(message)"
     }
 }

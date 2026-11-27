@@ -43,7 +43,7 @@ class SearchQueryStore<Item>: ObservableObject {
             searchedKeyword = text
         } catch {
             guard request == current, !Task.isCancelled else { return }
-            self.error = error.localizedDescription
+            self.error = error.userMessage
         }
     }
 }

@@ -135,7 +135,7 @@ final class P115AccountInfoStore: ObservableObject {
             } catch {
                 guard let self, !Task.isCancelled, self.sessionID == session, self.statusRequestID == request,
                       !(error is CancellationError) else { return }
-                self.statusError = error.localizedDescription
+                self.statusError = error.userMessage
             }
         }
     }

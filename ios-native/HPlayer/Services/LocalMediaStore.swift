@@ -123,7 +123,7 @@ final class LocalMediaStore: ObservableObject {
                     }
                 }
             } catch {
-                failures.append("\(source.lastPathComponent)：\(error.localizedDescription)")
+                failures.append("\(source.lastPathComponent)：\(error.userMessage)")
             }
         }
         return failures

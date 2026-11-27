@@ -195,7 +195,7 @@ final class AirPlayCastController: ObservableObject {
                         self.player?.play()
                     }
                 case .failed:
-                    self.errorMessage = item.error?.localizedDescription ?? "隔空播放加载失败"
+                    self.errorMessage = item.error?.userMessage ?? "隔空播放加载失败"
                     self.isBuffering = false
                 default:
                     break
@@ -237,7 +237,7 @@ final class AirPlayCastController: ObservableObject {
         ) { [weak self] note in
             Task { @MainActor [weak self] in
                 let err = note.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
-                self?.errorMessage = err?.localizedDescription ?? "隔空播放中断"
+                self?.errorMessage = err?.userMessage ?? "隔空播放中断"
                 self?.isBuffering = false
             }
         }

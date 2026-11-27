@@ -253,7 +253,7 @@ struct CookieWebLoginView: View {
             }
         } catch {
             guard isCurrentQR(request), !(error is CancellationError) else { return }
-            qrPhase = .ended("扫码登录没有成功：\(error.localizedDescription)。点上面刷新再试，或改用网页登录。")
+            qrPhase = .ended("扫码登录没有成功：\(error.userMessage)。点上面刷新再试，或改用网页登录。")
         }
     }
 
@@ -308,7 +308,7 @@ struct CookieWebLoginView: View {
                 showingWeb = false
             } catch {
                 guard !Task.isCancelled, connectionID == request, !(error is CancellationError) else { return }
-                self.error = "暂时无法验证登录状态，请确认已登录后重试：\(error.localizedDescription)"
+                self.error = "暂时无法验证登录状态，请确认已登录后重试：\(error.userMessage)"
             }
         }
     }

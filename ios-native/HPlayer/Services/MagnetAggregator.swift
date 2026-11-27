@@ -9,15 +9,22 @@ final class MagnetAggregator: @unchecked Sendable {
     private let javbus: JavBusSource
     private let sukebei: SukebeiSource
     private let sukebeiSoftTimeout: TimeInterval
+    private let isSukebeiEnabled: @Sendable () -> Bool
 
     init(
         javbus: JavBusSource = .shared,
         sukebei: SukebeiSource = .shared,
-        sukebeiSoftTimeout: TimeInterval = 3.5
+        sukebeiSoftTimeout: TimeInterval = 3.5,
+        isSukebeiEnabled: @escaping @Sendable () -> Bool = { SukebeiSettings.isEnabled }
     ) {
         self.javbus = javbus
         self.sukebei = sukebei
         self.sukebeiSoftTimeout = sukebeiSoftTimeout
+        self.isSukebeiEnabled = isSukebeiEnabled
+    }
+
+    var sukebeiEnabled: Bool {
+        isSukebeiEnabled()
     }
 
     // MARK: - 合并与排序辅助
@@ -180,14 +187,16 @@ final class MagnetAggregator: @unchecked Sendable {
 
     /// 同步读取磁盘/内存缓存的 Sukebei 最新出种列表，用于首屏秒开后再后台更新。
     func cachedFreshLatest() -> [MagnetSearchItem] {
-        sukebei.cachedLatest()
+        guard isSukebeiEnabled() else { return [] }
+        return sukebei.cachedLatest()
     }
 
     func fetchFreshLatest() async throws -> [MagnetSearchItem] {
-        try await sukebei.fetchLatest()
+        guard isSukebeiEnabled() else { return [] }
+        return try await sukebei.fetchLatest()
     }
 
-    /// 片商第 1 页渐进加载：JavBus 先返回即先通过 `onUpdate` 渲染，Sukebei 在后台软超时内到达后合并新种。
+    /// 片商第 1 页渐进加载：JavBus 先返回即先通过 `onUpdate` 渲染，Sukebei 开启时在后台软超时内到达后合并新种。
     func loadStudioPage1(
         _ studio: MagnetStudio,
         onUpdate: @MainActor @escaping ([MagnetSearchItem]) -> Void
@@ -199,6 +208,12 @@ final class MagnetAggregator: @unchecked Sendable {
         _ studio: MagnetStudio,
         onUpdate: @MainActor @escaping ([MagnetSearchItem]) -> Void
     ) async throws -> [MagnetSearchItem] {
+        guard isSukebeiEnabled() else {
+            let jbItems = try await javbus.fetchStudio(studio, page: 1)
+            try Task.checkCancellation()
+            await onUpdate(jbItems)
+            return jbItems
+        }
         let jbTask = Task<Result<[MagnetSearchItem], Error>, Never> {
             do { return .success(try await self.javbus.fetchStudio(studio, page: 1)) }
             catch { return .failure(error) }
@@ -256,11 +271,17 @@ final class MagnetAggregator: @unchecked Sendable {
         return try await loadStudioPage1Internal(studio) { _ in }
     }
 
-    /// 搜索第 1 页渐进加载：JavBus 与女优先到先显示，Sukebei 在软超时内抵达后再增量合并。
+    /// 搜索第 1 页渐进加载：JavBus 与女优先到先显示，Sukebei 开启时在软超时内抵达后再增量合并。
     func searchAllProgressive(
         keyword: String,
         onUpdate: @MainActor @escaping ((movies: [MagnetSearchItem], stars: [MagnetStarItem])) -> Void
     ) async throws -> (movies: [MagnetSearchItem], stars: [MagnetStarItem]) {
+        guard isSukebeiEnabled() else {
+            let jbValue = try await javbus.searchAll(keyword: keyword, page: 1)
+            try Task.checkCancellation()
+            await onUpdate(jbValue)
+            return jbValue
+        }
         let jbTask = Task<Result<(movies: [MagnetSearchItem], stars: [MagnetStarItem]), Error>, Never> {
             do { return .success(try await self.javbus.searchAll(keyword: keyword, page: 1)) }
             catch { return .failure(error) }
@@ -320,11 +341,19 @@ final class MagnetAggregator: @unchecked Sendable {
         return try await searchAllProgressive(keyword: keyword) { _ in }
     }
 
-    /// 影片详情渐进加载：JavBus 拿到女优与磁力立即合并已有预取返回，Sukebei 到后再补充做种数与新资源。
+    /// 影片详情渐进加载：JavBus 拿到女优与磁力立即合并已有预取返回，Sukebei 开启时到达后再补充做种数与新资源。
     func loadDetailInfo(
         for item: MagnetSearchItem,
         onUpdate: @MainActor @escaping ((stars: [MagnetStarItem], magnets: [MagnetTorrentItem])) -> Void
     ) async throws -> (stars: [MagnetStarItem], magnets: [MagnetTorrentItem]) {
+        guard isSukebeiEnabled() else {
+            let jbValue = try await javbus.fetchDetailInfo(for: item)
+            try Task.checkCancellation()
+            let merged = Self.mergeMagnets(javbus: jbValue.magnets, sukebei: [], prefetched: [])
+            let result = (stars: jbValue.stars, magnets: merged)
+            await onUpdate(result)
+            return result
+        }
         let jbTask = Task<Result<(stars: [MagnetStarItem], magnets: [MagnetTorrentItem]), Error>, Never> {
             do { return .success(try await self.javbus.fetchDetailInfo(for: item)) }
             catch { return .failure(error) }

@@ -208,7 +208,7 @@ final class RangeDownloader: NSObject, URLSessionDataDelegate, @unchecked Sendab
             fail(error)
             completionHandler(.cancel)
         } catch {
-            fail(.writeFailed(error.localizedDescription))
+            fail(.writeFailed(error.userMessage))
             completionHandler(.cancel)
         }
     }
@@ -356,20 +356,18 @@ final class RangeDownloader: NSObject, URLSessionDataDelegate, @unchecked Sendab
             || (nsError.domain == NSPOSIXErrorDomain && nsError.code == Int(ENOSPC)) {
             return .diskFull
         }
-        return .writeFailed(nsError.localizedDescription)
+        return .writeFailed(error.userMessage)
     }
 
     static func describe(_ error: NSError) -> String {
-        guard error.domain == NSURLErrorDomain else { return error.localizedDescription }
-        switch error.code {
-        case NSURLErrorTimedOut: return "连接超时"
-        case NSURLErrorNotConnectedToInternet: return "网络未连接"
-        case NSURLErrorNetworkConnectionLost: return "网络连接中断"
-        case NSURLErrorCannotConnectToHost, NSURLErrorCannotFindHost, NSURLErrorDNSLookupFailed: return "无法连接到下载服务器"
-        case NSURLErrorSecureConnectionFailed, NSURLErrorServerCertificateUntrusted, NSURLErrorServerCertificateHasBadDate,
-             NSURLErrorServerCertificateHasUnknownRoot, NSURLErrorServerCertificateNotYetValid:
-            return "安全连接失败"
-        default: return error.localizedDescription
+        if error.domain == NSURLErrorDomain {
+            switch error.code {
+            case NSURLErrorCannotConnectToHost, NSURLErrorCannotFindHost, NSURLErrorDNSLookupFailed:
+                return "无法连接到下载服务器"
+            default:
+                break
+            }
         }
+        return NetworkErrorFormatter.describe(error)
     }
 }

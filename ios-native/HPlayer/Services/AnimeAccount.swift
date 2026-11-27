@@ -321,7 +321,7 @@ final class AnimeAccount: ObservableObject {
                 signedDay = UserDefaults.standard.string(forKey: signedDayKey) ?? ""
             }
         } catch {
-            if isSignedIn { lastError = error.localizedDescription }
+            if isSignedIn { lastError = error.userMessage }
         }
     }
 
@@ -383,7 +383,7 @@ final class AnimeAccount: ObservableObject {
             try await AnimeClient.shared.perform("/app/task/sign", method: "POST", body: [:])
             Haptics.success()
         } catch {
-            let text = error.localizedDescription
+            let text = error.userMessage
             guard text.contains("已被完成") || text.contains("已签到") || text.contains("已经签到") else { throw error }
         }
         rememberSignedToday()

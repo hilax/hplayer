@@ -434,7 +434,7 @@ struct CastDevicePickerView: View {
                 withAnimation(Motion.snappy) { showManualForm = false }
                 onSelectDLNA(device)
             } catch {
-                manualError = error.localizedDescription
+                manualError = error.userMessage
             }
         }
     }

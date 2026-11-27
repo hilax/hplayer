@@ -318,7 +318,7 @@ final class CloudLibraryScanner: ObservableObject {
             guard isCurrent(token, accountID), var saved = checkpoint else { return }
             saved.phase = .failed
             let name = saved.pendingFolders.first?.name ?? "115 网盘"
-            saved.lastError = "\(name)：\(error.localizedDescription)"
+            saved.lastError = "\(name)：\(error.userMessage)"
             checkpoint = saved
             try? persist(saved)
             publish(saved)

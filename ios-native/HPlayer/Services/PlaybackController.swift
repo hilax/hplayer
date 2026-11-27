@@ -2422,7 +2422,8 @@ final class PlaybackController: ObservableObject {
                 torrentRecoveryCount += 1
                 recover(reason: "连接短暂中断")
             } else {
-                giveUp(message.map { "播放失败：\($0)" } ?? "播放失败，请尝试其他画质或检查网络")
+                let reasonText = message.map { NetworkErrorFormatter.translateMediaEngineMessage($0) }
+                giveUp(reasonText.map { "播放失败：\($0)" } ?? "播放失败，请尝试其他画质或检查网络")
             }
         } else if reason == eof {
             if pendingSeek != nil || seekAwaitingRestart || seeking || opening {
@@ -2741,7 +2742,7 @@ final class PlaybackController: ObservableObject {
         opening = false
         loaded = false
         let proxyProblem = LocalStreamProxy.shared.problem
-        errorDetail = proxyProblem.isEmpty ? Self.shortReason(from: logLines) : proxyProblem
+        errorDetail = proxyProblem.isEmpty ? Self.shortReason(from: logLines) : Self.cleanProxyProblem(proxyProblem)
         error = resumePoint > 1
             ? "\(reason)，自动重连几次都没成功。点「重试」会从 \(Self.clock(resumePoint)) 接着播放。"
             : (currentTorrentStream ? "\(reason)，请点「重试」，或换一个节点较多的链接。" : "\(reason)，请点「重试」，或换一个画质。")
@@ -2753,11 +2754,22 @@ final class PlaybackController: ObservableObject {
         if eventLines.count > 40 { eventLines.removeFirst(eventLines.count - 40) }
     }
 
-    /// 从内核日志里挑最后一条错误，截短后给用户看
+    /// 去掉中转错误信息里的系统英文错误域前缀，只保留给用户看的中文说明与错误码。
+    private static func cleanProxyProblem(_ text: String) -> String {
+        let cleaned = text.replacingOccurrences(
+            of: #"（(?:NSURLErrorDomain|NSPOSIXErrorDomain|kCFErrorDomainCFNetwork)\s+(-?\d+)[^）]*）"#,
+            with: "（错误码 $1）",
+            options: .regularExpression
+        )
+        return NetworkErrorFormatter.localizeRawMessage(cleaned)
+    }
+
+    /// 从内核日志里挑最后一条错误，转成中文提示给用户看
     private static func shortReason(from lines: [String]) -> String {
         let line = lines.last(where: { $0.contains("] error:") || $0.contains("] fatal:") }) ?? lines.last ?? ""
-        let text = line.replacingOccurrences(of: "\n", with: " ")
-        return text.count > 120 ? String(text.prefix(120)) + "…" : text
+        let text = line.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return "" }
+        return NetworkErrorFormatter.translateMediaEngineMessage(text)
     }
 
     /// 播放出问题时复制给开发者的诊断信息：地址类型、状态和内核最近的警告错误

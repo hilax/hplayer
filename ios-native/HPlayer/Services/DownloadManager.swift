@@ -423,7 +423,7 @@ final class DownloadManager: ObservableObject {
                     try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                     continue
                 }
-                fail(id, token: token, failure.localizedDescription)
+                fail(id, token: token, failure.userMessage)
                 return
             } catch {
                 if Self.isTransient(error), attempt < retryDelays.count {
@@ -433,7 +433,7 @@ final class DownloadManager: ObservableObject {
                     try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                     continue
                 }
-                fail(id, token: token, error.localizedDescription)
+                fail(id, token: token, error.userMessage)
                 return
             }
         }
@@ -510,7 +510,7 @@ final class DownloadManager: ObservableObject {
             if inLibrary { media?.refresh() }
         } catch {
             items[index].state = .failed
-            items[index].message = "保存文件失败：\(error.localizedDescription)"
+            items[index].message = "保存文件失败：\(error.userMessage)"
         }
         save()
     }

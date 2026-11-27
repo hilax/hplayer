@@ -416,7 +416,7 @@ final class PlayerPictureInPicture {
 
     fileprivate func failedToStart(_ error: Error) {
         playback?.pictureInPictureDidStop(resume: true)
-        playback?.notice = "小窗没有打开：\(error.localizedDescription)"
+        playback?.notice = "小窗没有打开：\(error.userMessage)"
     }
 
     fileprivate func restore() {

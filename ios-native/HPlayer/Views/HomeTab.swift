@@ -90,7 +90,7 @@ struct HomeTab: View {
                         Task { importError = await localStore.importFiles(urls).joined(separator: "\n") }
                     }
                 case .failure(let error):
-                    importError = error.localizedDescription
+                    importError = error.userMessage
                 }
             }
             .alert("导入失败", isPresented: Binding(

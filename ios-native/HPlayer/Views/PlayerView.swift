@@ -210,7 +210,7 @@ struct PlayerView: View {
                 directQualities = streams
                 directQualitiesFetchedAt = ProcessInfo.processInfo.systemUptime
             case .failure(let error):
-                directQualityListError = error.localizedDescription
+                directQualityListError = error.userMessage
             }
         }
         directQualityListTask = task
@@ -320,12 +320,12 @@ struct PlayerView: View {
                 } catch {
                     guard isCurrentRequest(request, source: source, session: session), !Task.isCancelled else { return }
                     loadDirectQualities()
-                    throw APIError.server("原画无法打开：\(error.localizedDescription)。请重试或手动选择其他画质")
+                    throw APIError.server("原画无法打开：\(error.userMessage)。请重试或手动选择其他画质")
                 }
             }
         } catch {
             if isCurrentRequest(request, source: source, session: session), !Task.isCancelled {
-                self.error = error.localizedDescription
+                self.error = error.userMessage
             }
         }
     }
@@ -494,7 +494,7 @@ struct PlayerView: View {
             return request
         } catch {
             if isCurrentRequest(request, source: source, session: session), !Task.isCancelled {
-                self.error = error.localizedDescription
+                self.error = error.userMessage
             }
             return nil
         }

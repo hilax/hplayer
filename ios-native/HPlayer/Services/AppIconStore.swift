@@ -141,7 +141,7 @@ final class AppIconStore: ObservableObject {
                         && icon.matchesCurrentName(self.systemName())
                     if !appliedDespiteError {
                         self.selected = previous
-                        let detail = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let detail = error.userMessage.trimmingCharacters(in: .whitespacesAndNewlines)
                         let message = detail.isEmpty ? "更换失败，已保留原图标" : "更换失败：\(detail)"
                         self.showHUD(message, .error)
                         return

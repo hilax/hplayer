@@ -1,6 +1,24 @@
 import CryptoKit
 import Foundation
 
+/// Sukebei 聚合开关设置，默认关闭。
+enum SukebeiSettings {
+    static let enabledKey = "hplayer.magnet.sukebei.enabled"
+
+    static var isEnabled: Bool {
+        get { isEnabled(in: .standard) }
+        set { setEnabled(newValue, in: .standard) }
+    }
+
+    static func isEnabled(in defaults: UserDefaults) -> Bool {
+        defaults.bool(forKey: enabledKey)
+    }
+
+    static func setEnabled(_ enabled: Bool, in defaults: UserDefaults) {
+        defaults.set(enabled, forKey: enabledKey)
+    }
+}
+
 enum SukebeiError: LocalizedError {
     case invalidURL
     case serverError(Int)
@@ -12,9 +30,9 @@ enum SukebeiError: LocalizedError {
         case .invalidURL:
             return "无效的 Sukebei 请求地址"
         case let .serverError(code):
-            return "Sukebei 服务器响应异常 (\(code))"
+            return "Sukebei 服务器响应异常（\(code)）"
         case let .network(err):
-            return "Sukebei 网络请求失败: \(err.localizedDescription)"
+            return "Sukebei 网络请求失败：\(err.userMessage)"
         case .parseFailed:
             return "Sukebei RSS 解析失败"
         }

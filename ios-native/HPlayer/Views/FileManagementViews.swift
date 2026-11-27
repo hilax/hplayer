@@ -640,7 +640,7 @@ struct FolderPickerSheet: View {
             loading = false
         } catch {
             guard !Task.isCancelled, cid == current.cid else { return }
-            self.error = error.localizedDescription
+            self.error = error.userMessage
             folders = []
             loading = false
         }
@@ -657,7 +657,7 @@ struct FolderPickerSheet: View {
                 folders.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
                 error = ""
             } catch {
-                self.error = error.localizedDescription
+                self.error = error.userMessage
             }
         }
     }
@@ -955,7 +955,7 @@ struct FileInfoSheet: View {
             loading = false
         } catch {
             guard !Task.isCancelled else { return }
-            self.error = error.localizedDescription
+            self.error = error.userMessage
             loading = false
         }
     }

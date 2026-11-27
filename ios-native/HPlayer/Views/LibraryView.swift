@@ -810,7 +810,7 @@ struct DirectoryView: View {
             } catch is CancellationError {
                 failure = nil
             } catch {
-                failure = error.localizedDescription
+                failure = error.userMessage
             }
             operation = nil
             guard sessionID == appState.sessionID else { return }
@@ -984,7 +984,7 @@ struct DirectoryView: View {
             }
         } catch {
             guard !Task.isCancelled, sessionID == appState.sessionID, requestID == loadRequestID else { return }
-            if showsSpinner { self.error = error.localizedDescription }
+            if showsSpinner { self.error = error.userMessage }
         }
     }
 }

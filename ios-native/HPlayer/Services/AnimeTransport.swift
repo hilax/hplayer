@@ -51,12 +51,14 @@ enum AnimeTransportError: LocalizedError {
     case invalidURL
     case allNodesFailed(String)
     case badStatus(Int)
+    case network(Error)
 
     var errorDescription: String? {
         switch self {
         case .invalidURL: return "请求地址无效"
-        case .allNodesFailed(let host): return "\(host) 的所有节点都连不上"
+        case .allNodesFailed(let host): return "\(host) 的所有节点都连不上，请检查网络后重试"
         case .badStatus(let code): return "服务器返回异常状态（\(code)）"
+        case .network(let error): return error.userMessage
         }
     }
 }
@@ -157,7 +159,17 @@ struct AnimeTransport {
         request.setValue(host, forHTTPHeaderField: "Host")
 
         let session = (target == host) ? Self.proxiedSession : Self.directSession
-        let (data, response) = try await session.data(for: request)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let urlError as URLError where urlError.code == .cancelled {
+            throw CancellationError()
+        } catch {
+            throw AnimeTransportError.network(error)
+        }
         guard let http = response as? HTTPURLResponse else {
             throw AnimeTransportError.badStatus(-1)
         }

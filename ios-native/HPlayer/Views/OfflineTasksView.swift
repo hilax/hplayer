@@ -471,7 +471,7 @@ struct OfflineTasksView: View {
             do {
                 done = try await work(client)
             } catch {
-                failure = error.localizedDescription
+                failure = error.userMessage
             }
             operation = nil
             guard sessionID == appState.sessionID else { return }
@@ -527,7 +527,7 @@ struct OfflineTasksView: View {
                     onShowFolder(trail)
                 }
             } catch {
-                if sessionID == appState.sessionID { problem = error.localizedDescription }
+                if sessionID == appState.sessionID { problem = error.userMessage }
             }
         }
     }
@@ -618,7 +618,7 @@ struct OfflineTasksView: View {
             }
         } catch {
             guard !Task.isCancelled, sessionID == appState.sessionID, requestID == loadRequestID else { return }
-            if !silent && tasks.isEmpty { self.error = error.localizedDescription }
+            if !silent && tasks.isEmpty { self.error = error.userMessage }
             loading = false
         }
     }
@@ -913,7 +913,7 @@ struct OfflineAddSheet: View {
             } catch {
                 submitting = false
                 Haptics.warning()
-                notice = error.localizedDescription
+                notice = error.userMessage
             }
         }
     }
@@ -1113,7 +1113,7 @@ struct SaveFolderPickerSheet: View {
             loading = false
         } catch {
             guard !Task.isCancelled, cid == current.cid else { return }
-            self.error = error.localizedDescription
+            self.error = error.userMessage
             folders = []
             loading = false
         }
@@ -1130,7 +1130,7 @@ struct SaveFolderPickerSheet: View {
                 folders.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
                 error = ""
             } catch {
-                self.error = error.localizedDescription
+                self.error = error.userMessage
             }
         }
     }

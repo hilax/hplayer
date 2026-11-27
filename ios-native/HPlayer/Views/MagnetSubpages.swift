@@ -271,7 +271,7 @@ struct StarMoviesView: View {
             // 页面被关闭时任务会被取消，不用再更新界面。
             if error is CancellationError { return }
             guard requested == mode else { return }
-            errorText = error.localizedDescription
+            errorText = error.userMessage
             isLoading = false
         }
     }
@@ -317,6 +317,7 @@ struct StarMoviesView: View {
 struct StudioMoviesView: View {
     let studio: MagnetStudio
 
+    @AppStorage(SukebeiSettings.enabledKey) private var sukebeiEnabled = false
     @State private var movies: [MagnetSearchItem] = []
     @State private var isLoading = true
     @State private var errorText: String?
@@ -351,6 +352,9 @@ struct StudioMoviesView: View {
         .task {
             guard movies.isEmpty, errorText == nil else { return }
             await loadFirstPage()
+        }
+        .onChange(of: sukebeiEnabled) { _ in
+            Task { await loadFirstPage() }
         }
     }
 
@@ -418,7 +422,7 @@ struct StudioMoviesView: View {
             isLoading = false
         } catch {
             if error is CancellationError { return }
-            errorText = error.localizedDescription
+            errorText = error.userMessage
             isLoading = false
         }
     }
@@ -523,6 +527,7 @@ struct MagnetDetailView: View {
     let item: MagnetSearchItem
 
     @EnvironmentObject private var appState: AppState
+    @AppStorage(SukebeiSettings.enabledKey) private var sukebeiEnabled = false
     @State private var magnets: [MagnetTorrentItem]
     @State private var stars: [MagnetStarItem] = []
     @State private var isLoading: Bool
@@ -533,8 +538,9 @@ struct MagnetDetailView: View {
 
     init(item: MagnetSearchItem) {
         self.item = item
-        _magnets = State(initialValue: item.prefetchedMagnets)
-        _isLoading = State(initialValue: item.prefetchedMagnets.isEmpty)
+        let initialMagnets = SukebeiSettings.isEnabled ? item.prefetchedMagnets : []
+        _magnets = State(initialValue: initialMagnets)
+        _isLoading = State(initialValue: initialMagnets.isEmpty)
     }
 
     var body: some View {
@@ -583,6 +589,13 @@ struct MagnetDetailView: View {
             // 从女优页返回时页面会再次出现，已经拉完详情就不再重复请求。
             guard !hasLoadedDetails, errorText == nil else { return }
             await fetchDetails()
+        }
+        .onChange(of: sukebeiEnabled) { enabled in
+            hasLoadedDetails = false
+            if !enabled {
+                magnets = []
+            }
+            Task { await fetchDetails() }
         }
     }
 
@@ -686,7 +699,7 @@ struct MagnetDetailView: View {
                         .foregroundStyle(Theme.textSecondary)
                 }
 
-                Text("已按中文字幕、高清、做种优先排序")
+                Text(sukebeiEnabled ? "已按中文字幕、高清、做种优先排序" : "已按中文字幕、高清优先排序")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .padding(.top, 4)
@@ -738,7 +751,7 @@ struct MagnetDetailView: View {
             // 页面被关闭时任务会被取消，不用再更新界面。
             if error is CancellationError { return }
             if magnets.isEmpty {
-                errorText = error.localizedDescription
+                errorText = error.userMessage
             }
             isLoading = false
         }

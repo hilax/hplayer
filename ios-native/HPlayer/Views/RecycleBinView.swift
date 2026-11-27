@@ -395,7 +395,7 @@ struct RecycleBinView: View {
             do {
                 try await client.restoreFromRecycleBin(ids)
             } catch {
-                failure = error.localizedDescription
+                failure = error.userMessage
             }
             operation = nil
             guard sessionID == appState.sessionID else { return }
@@ -453,12 +453,12 @@ struct RecycleBinView: View {
             if case .needsSecurityKey(let text) = fileError {
                 return .wrongKey(text)
             }
-            return .failed(fileError.localizedDescription)
+            return .failed(fileError.userMessage)
         } catch {
             guard sessionID == appState.sessionID else {
                 return .failed("登录状态已变更，请重试")
             }
-            return .failed(error.localizedDescription)
+            return .failed(error.userMessage)
         }
     }
 
@@ -495,7 +495,7 @@ struct RecycleBinView: View {
                 )
             }
         } else {
-            problem = failure.localizedDescription
+            problem = failure.userMessage
         }
     }
 
@@ -542,7 +542,7 @@ struct RecycleBinView: View {
             loading = false
         } catch {
             guard !Task.isCancelled, sessionID == appState.sessionID, requestID == loadRequestID else { return }
-            if !silent { self.error = error.localizedDescription }
+            if !silent { self.error = error.userMessage }
             loading = false
         }
     }
@@ -563,7 +563,7 @@ struct RecycleBinView: View {
                     nextOffset = page.nextOffset
                 }
             } catch {
-                if sessionID == appState.sessionID { HUD.show(error.localizedDescription, .error) }
+                if sessionID == appState.sessionID { HUD.show(error.userMessage, .error) }
             }
             loadingMore = false
         }

@@ -635,7 +635,7 @@ struct SocialInputBar: View {
                 if AnimeSocial.needsCaptcha(error) && captcha == nil {
                     self.error = "发得有点快，先答一下验证码"
                 } else {
-                    self.error = error.localizedDescription
+                    self.error = error.userMessage
                 }
                 answer = ""
                 if captcha != nil || AnimeSocial.needsCaptcha(error) { loadCaptcha() }

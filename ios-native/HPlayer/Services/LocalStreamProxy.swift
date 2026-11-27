@@ -447,7 +447,7 @@ final class LocalStreamProxy: NSObject, @unchecked Sendable {
     /// 排查「连不上 115」到底是被拒绝、不可达还是超时，要看后面这几个数字。
     static func summary(of error: Error) -> String {
         let nsError = error as NSError
-        var text = "\(nsError.localizedDescription)（\(nsError.domain) \(nsError.code)"
+        var text = "\(NetworkErrorFormatter.message(for: error))（\(nsError.domain) \(nsError.code)"
         if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError {
             text += "，底层 \(underlying.domain) \(underlying.code)"
         }

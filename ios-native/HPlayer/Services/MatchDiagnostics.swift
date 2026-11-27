@@ -36,7 +36,7 @@ final class MatchDiagnostics: @unchecked Sendable {
 
     static func describe(_ error: Error) -> String {
         let value = error as NSError
-        return "\(value.domain)(\(value.code)) \(value.localizedDescription)"
+        return "\(value.domain)(\(value.code)) \(error.userMessage)"
     }
 
     /// 返回内容的顶层字段名，接口改了格式时一眼能看出来。

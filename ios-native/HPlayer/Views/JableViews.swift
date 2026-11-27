@@ -96,7 +96,7 @@ final class JableFeed: ObservableObject {
             var updated = shelf(category)
             updated.loading = false
             if !(error is CancellationError) {
-                updated.error = error.localizedDescription
+                updated.error = error.userMessage
             }
             shelves[category] = updated
         }
@@ -720,7 +720,7 @@ struct JableDetailView: View {
             detail = try await JableClient.shared.detail(videoId: route.id, pageUrl: route.url)
         } catch {
             if !(error is CancellationError) {
-                self.error = error.localizedDescription
+                self.error = error.userMessage
             }
         }
         loading = false

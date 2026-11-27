@@ -8,6 +8,7 @@ enum MissAVError: LocalizedError {
     case timeout
     case challengeCancelled
     case serverError(Int)
+    case network(Error)
     case parsingFailed(String)
 
     var errorDescription: String? {
@@ -17,7 +18,8 @@ enum MissAVError: LocalizedError {
         case .timeout: return "页面加载超时，请检查网络或完成安全验证"
         case .challengeCancelled: return "已取消安全验证"
         case .serverError(let status): return "MissAV 服务器响应异常（\(status)）"
-        case .parsingFailed(let msg): return "解析页面失败: \(msg)"
+        case .network(let err): return "网络请求失败：\(err.userMessage)"
+        case .parsingFailed(let msg): return "解析页面失败：\(NetworkErrorFormatter.localizeRawMessage(msg))"
         }
     }
 }
@@ -269,8 +271,10 @@ final class MissAVClient: NSObject, ObservableObject {
                 complete(task.id, with: .failure(CancellationError()))
             } else if error is WKError {
                 loadWebPage(for: task)
-            } else {
+            } else if error is MissAVError {
                 complete(task.id, with: .failure(error))
+            } else {
+                complete(task.id, with: .failure(MissAVError.network(error)))
             }
         }
     }
@@ -365,7 +369,7 @@ final class MissAVClient: NSObject, ObservableObject {
             self.webView.evaluateJavaScript(task.extractorJS) { [weak self] res, err in
                 guard let self, self.currentTask?.id == id else { return }
                 if let err {
-                    self.complete(id, with: .failure(MissAVError.parsingFailed(err.localizedDescription)))
+                    self.complete(id, with: .failure(MissAVError.parsingFailed(err.userMessage)))
                 } else if let jsonString = res as? String {
                     self.complete(id, with: .success(jsonString))
                 } else {
@@ -744,7 +748,7 @@ extension MissAVClient: WKNavigationDelegate {
         if (error as NSError).code == NSURLErrorCancelled { return }
         // 用户在验证页里操作时页面出错：留着验证页让他刷新重试，不直接判失败
         guard loadingWebPage, let id = currentTask?.id, challengeController == nil else { return }
-        complete(id, with: .failure(error))
+        complete(id, with: .failure(MissAVError.network(error)))
     }
 }
 

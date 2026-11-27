@@ -111,7 +111,7 @@ private struct FolderList: View {
         } catch is CancellationError {
         } catch {
             guard !Task.isCancelled, requestID == request, session == appState.sessionID else { return }
-            self.error = "读取文件夹失败：\(error.localizedDescription)"
+            self.error = "读取文件夹失败：\(error.userMessage)"
         }
     }
 }

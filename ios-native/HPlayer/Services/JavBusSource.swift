@@ -19,11 +19,11 @@ enum JavBusError: LocalizedError {
         case .ageVerificationRequired:
             return "站点要求年龄验证，自动验证未通过，请稍后重试"
         case .notFound:
-            return "未找到对应页面 (404)"
+            return "未找到对应页面（404）"
         case let .serverError(code):
-            return "服务器响应异常 (\(code))"
+            return "服务器响应异常（\(code)）"
         case let .network(err):
-            return "网络请求失败: \(err.localizedDescription)"
+            return "网络请求失败：\(err.userMessage)"
         case .parseFailed:
             return "页面解析失败，可能站点结构已改变"
         case .emptyMagnets:

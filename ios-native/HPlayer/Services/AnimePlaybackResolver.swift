@@ -9,7 +9,7 @@ enum AnimePlaybackError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidPlayCode: return "无效的播放凭证"
-        case .parserFailed(let msg): return "解析服务失败: \(msg)"
+        case .parserFailed(let msg): return "解析服务失败：\(NetworkErrorFormatter.localizeRawMessage(msg))"
         case .decryptUrlFailed: return "媒体地址解密失败"
         case .noPlayableURL: return "未找到有效的播放地址"
         }
@@ -169,7 +169,7 @@ final class AnimePlaybackResolver {
             let result = try await transport.send(path: path, headers: headers)
             return result.data
         } catch {
-            throw AnimePlaybackError.parserFailed(error.localizedDescription)
+            throw AnimePlaybackError.parserFailed(error.userMessage)
         }
     }
 
@@ -181,7 +181,7 @@ final class AnimePlaybackResolver {
               let dataDict = json["data"] as? [String: Any],
               let playAddrs = dataDict["playAddr"] as? [[String: Any]],
               !playAddrs.isEmpty else {
-            throw AnimePlaybackError.parserFailed("解析响应数据为空或 code != 0")
+            throw AnimePlaybackError.parserFailed("解析响应数据为空或接口返回异常")
         }
 
         // 使用互换密钥解密: key = md5AesIv, iv = md5AesKey

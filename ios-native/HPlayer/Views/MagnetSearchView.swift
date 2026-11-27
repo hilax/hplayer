@@ -63,6 +63,7 @@ struct MagnetSearchView: View {
     @EnvironmentObject private var appState: AppState
     @State private var playLaunch: MagnetPlaybackRequest?
     @ObservedObject private var favoriteStars = FavoriteStarStore.shared
+    @AppStorage(SukebeiSettings.enabledKey) private var sukebeiEnabled = false
 
     @State private var keyword = ""
     @State private var selectedCategory: MagnetCategory = .latest
@@ -141,10 +142,23 @@ struct MagnetSearchView: View {
                 clearSearch()
             }
         }
+        .onChange(of: sukebeiEnabled) { enabled in
+            if enabled {
+                if selectedCategory == .latest || movies[.latest] != nil {
+                    loadFreshLatest()
+                }
+            } else {
+                clearFreshLatest()
+            }
+            if inSearchMode && !activeQuery.isEmpty {
+                runSearch(activeQuery)
+            }
+        }
     }
 
     private var displayedFreshMovies: [MagnetSearchItem] {
-        MagnetAggregator.enrichSukebeiShelf(freshMovies, with: movies[.latest] ?? [])
+        guard sukebeiEnabled else { return [] }
+        return MagnetAggregator.enrichSukebeiShelf(freshMovies, with: movies[.latest] ?? [])
     }
 
     // MARK: - 头部
@@ -164,6 +178,15 @@ struct MagnetSearchView: View {
                 .buttonStyle(.pressable(scale: 0.88))
                 .accessibilityLabel("磁力播放记录")
                 .accessibilityIdentifier("magnet.history")
+
+                NavigationLink {
+                    MagnetSettingsView()
+                } label: {
+                    topIcon(.settings)
+                }
+                .buttonStyle(.pressable(scale: 0.88))
+                .accessibilityLabel("磁力设置")
+                .accessibilityIdentifier("magnet.settings")
             }
         }
         .padding(.leading, Theme.contentInset)
@@ -340,9 +363,9 @@ struct MagnetSearchView: View {
 
         return Group {
             if fresh.isEmpty && list.isEmpty {
-                if isLatestLoading || freshLoading {
+                if isLatestLoading || (sukebeiEnabled && freshLoading) {
                     VStack(alignment: .leading, spacing: 24) {
-                        if freshLoading {
+                        if sukebeiEnabled && freshLoading {
                             MagnetFreshShelfSkeleton()
                         }
                         MagnetLoadingView(style: .grid)
@@ -354,10 +377,12 @@ struct MagnetSearchView: View {
                 }
             } else {
                 VStack(alignment: .leading, spacing: 24) {
-                    if !fresh.isEmpty {
-                        MagnetFreshShelf(movies: fresh)
-                    } else if freshLoading {
-                        MagnetFreshShelfSkeleton()
+                    if sukebeiEnabled {
+                        if !fresh.isEmpty {
+                            MagnetFreshShelf(movies: fresh)
+                        } else if freshLoading {
+                            MagnetFreshShelfSkeleton()
+                        }
                     }
 
                     VStack(alignment: .leading, spacing: 12) {
@@ -462,7 +487,11 @@ struct MagnetSearchView: View {
         errors[category] = nil
         loading.insert(category)
         if category == .latest {
-            loadFreshLatest()
+            if sukebeiEnabled {
+                loadFreshLatest()
+            } else {
+                clearFreshLatest()
+            }
         }
         tasks[category] = Task { @MainActor in
             do {
@@ -483,13 +512,17 @@ struct MagnetSearchView: View {
                 loading.remove(category)
             } catch {
                 guard !Task.isCancelled, !(error is CancellationError) else { return }
-                errors[category] = error.localizedDescription
+                errors[category] = error.userMessage
                 loading.remove(category)
             }
         }
     }
 
     private func loadFreshLatest() {
+        guard sukebeiEnabled else {
+            clearFreshLatest()
+            return
+        }
         freshTask?.cancel()
         if freshMovies.isEmpty {
             let cached = MagnetAggregator.shared.cachedFreshLatest()
@@ -501,7 +534,7 @@ struct MagnetSearchView: View {
         freshTask = Task { @MainActor in
             do {
                 let items = try await MagnetAggregator.shared.fetchFreshLatest()
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, sukebeiEnabled else { return }
                 freshMovies = items
                 freshLoading = false
             } catch {
@@ -509,6 +542,13 @@ struct MagnetSearchView: View {
                 freshLoading = false
             }
         }
+    }
+
+    private func clearFreshLatest() {
+        freshTask?.cancel()
+        freshTask = nil
+        freshLoading = false
+        freshMovies = []
     }
 
     private func loadMore(_ category: MagnetCategory) {
@@ -584,7 +624,7 @@ struct MagnetSearchView: View {
                 isSearching = false
             } catch {
                 guard !Task.isCancelled, !(error is CancellationError) else { return }
-                searchError = error.localizedDescription
+                searchError = error.userMessage
                 isSearching = false
             }
         }

@@ -145,7 +145,7 @@ final class CastManager: ObservableObject {
             isPlaying = false
             isBuffering = false
             statusText = ""
-            errorMessage = error.localizedDescription
+            errorMessage = error.userMessage
             return
         }
 
@@ -248,7 +248,7 @@ final class CastManager: ObservableObject {
                         try await self.soap.play(device: device)
                     }
                 } catch {
-                    self.errorMessage = error.localizedDescription
+                    self.errorMessage = error.userMessage
                 }
             }
         case .airplay:
@@ -273,7 +273,7 @@ final class CastManager: ObservableObject {
                 do {
                     try await self.soap.seek(device: device, to: target)
                 } catch {
-                    self.errorMessage = error.localizedDescription
+                    self.errorMessage = error.userMessage
                 }
             }
         case .airplay:
@@ -493,7 +493,7 @@ final class CastManager: ObservableObject {
                 } catch {
                     consecutiveFailures += 1
                     if consecutiveFailures >= 5 {
-                        self.errorMessage = "与电视连接不稳定：\(error.localizedDescription)"
+                        self.errorMessage = "与电视连接不稳定：\(error.userMessage)"
                     }
                 }
             }

@@ -9,8 +9,8 @@ enum AnimeClientError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidURL: return "无效的请求地址"
-        case .networkError(let msg): return "网络请求失败: \(msg)"
-        case .serverError(let code, let msg): return msg.isEmpty ? "接口返回错误（\(code)）" : msg
+        case .networkError(let msg): return "网络请求失败：\(NetworkErrorFormatter.localizeRawMessage(msg))"
+        case .serverError(let code, let msg): return msg.isEmpty ? "接口返回错误（\(code)）" : NetworkErrorFormatter.localizeRawMessage(msg)
         case .emptyData: return "接口返回数据为空"
         }
     }

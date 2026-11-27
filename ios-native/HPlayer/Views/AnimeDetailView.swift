@@ -512,7 +512,7 @@ struct AnimeDetailView: View {
             do {
                 try await AnimeLikeStore.shared.toggle(comment, vid: animeId)
             } catch {
-                HUD.show(error.localizedDescription, .error)
+                HUD.show(error.userMessage, .error)
             }
         }
     }
@@ -541,7 +541,7 @@ struct AnimeDetailView: View {
             self.detail = res
             restoreLastWatched(detail: res)
         } catch {
-            self.errorMessage = error.localizedDescription
+            self.errorMessage = error.userMessage
         }
         isLoading = false
     }

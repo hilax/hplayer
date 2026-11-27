@@ -2,6 +2,11 @@ name: HPlayer
 
 options:
   bundleIdPrefix: app.hplayer
+  developmentLanguage: zh-Hans
+  knownRegions:
+    - Base
+    - zh-Hans
+    - en
   deploymentTarget:
     iOS: "16.1"
   createIntermediateGroups: true
@@ -63,6 +68,9 @@ targets:
       path: HPlayer/Info.plist
       properties:
         CFBundleDisplayName: HPlayer
+        CFBundleDevelopmentRegion: zh-Hans
+        CFBundleLocalizations:
+          - zh-Hans
         CFBundleShortVersionString: "1.4"
         CFBundleVersion: "24"
         UILaunchScreen: {}

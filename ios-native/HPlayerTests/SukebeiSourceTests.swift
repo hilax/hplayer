@@ -1,3 +1,6 @@
+import AVFoundation
+import Network
+import WebKit
 import XCTest
 @testable import HPlayer
 
@@ -341,7 +344,7 @@ final class SukebeiSourceTests: XCTestCase {
             return .init(status: 404)
         }
         let session = RoutedURLProtocol.session()
-        let agg1 = MagnetAggregator(javbus: JavBusSource(session: session), sukebei: SukebeiSource(session: session))
+        let agg1 = MagnetAggregator(javbus: JavBusSource(session: session), sukebei: SukebeiSource(session: session), isSukebeiEnabled: { true })
         let item777 = MagnetSearchItem(code: "SONE-777", title: "t", coverURL: nil, detailPath: "/SONE-777")
         let detailFromSB = try await agg1.fetchDetailInfo(for: item777)
         XCTAssertTrue(detailFromSB.stars.isEmpty)
@@ -359,7 +362,7 @@ final class SukebeiSourceTests: XCTestCase {
             }
             return .init(status: 200, body: Data(jbDetail.utf8))
         }
-        let agg2 = MagnetAggregator(javbus: JavBusSource(session: session), sukebei: SukebeiSource(session: session))
+        let agg2 = MagnetAggregator(javbus: JavBusSource(session: session), sukebei: SukebeiSource(session: session), isSukebeiEnabled: { true })
         let detailFromJB = try await agg2.fetchDetailInfo(for: item777)
         XCTAssertEqual(detailFromJB.stars.map(\.name), ["三上悠亚"])
         XCTAssertEqual(detailFromJB.magnets.count, 1)
@@ -369,7 +372,7 @@ final class SukebeiSourceTests: XCTestCase {
         RoutedURLProtocol.install { _ in .init(status: 500) }
         let prefetched = MagnetTorrentItem(magnetURL: "magnet:?xt=urn:btih:\(h1)", name: "prefetched", size: "3.5 GiB", source: "Sukebei")
         let withPrefetch = MagnetSearchItem(code: "SONE-777", title: "t", coverURL: nil, detailPath: "/SONE-777", prefetchedMagnets: [prefetched])
-        let agg3 = MagnetAggregator(javbus: JavBusSource(session: session), sukebei: SukebeiSource(session: session))
+        let agg3 = MagnetAggregator(javbus: JavBusSource(session: session), sukebei: SukebeiSource(session: session), isSukebeiEnabled: { true })
         let fromPrefetch = try await agg3.fetchDetailInfo(for: withPrefetch)
         XCTAssertEqual(fromPrefetch.magnets, [prefetched])
 
@@ -380,7 +383,7 @@ final class SukebeiSourceTests: XCTestCase {
             }
             return .init(status: 500)
         }
-        let agg4 = MagnetAggregator(javbus: JavBusSource(session: session), sukebei: SukebeiSource(session: session))
+        let agg4 = MagnetAggregator(javbus: JavBusSource(session: session), sukebei: SukebeiSource(session: session), isSukebeiEnabled: { true })
         let studioFallback = try await agg4.fetchStudio(.s1, page: 1)
         XCTAssertEqual(studioFallback.map(\.code), ["SONE-777"])
         let searchFallback = try await agg4.searchAll(keyword: "SONE-777", page: 1)
@@ -456,7 +459,8 @@ final class SukebeiSourceTests: XCTestCase {
         let agg = MagnetAggregator(
             javbus: JavBusSource(session: jbSession),
             sukebei: SukebeiSource(session: sbSession),
-            sukebeiSoftTimeout: 0.15
+            sukebeiSoftTimeout: 0.15,
+            isSukebeiEnabled: { true }
         )
 
         var firstDeliveryElapsed: TimeInterval?
@@ -521,6 +525,193 @@ final class SukebeiSourceTests: XCTestCase {
         }
         XCTAssertEqual(detailResult.magnets.count, 2)
         XCTAssertLessThan(Date().timeIntervalSince(detailStart), 0.5)
+    }
+
+    // MARK: - Sukebei 开关（默认关闭）
+
+    func testSukebeiSettingsDefaultsToOffAndPersistsToggle() throws {
+        let suiteName = "hplayer.sukebei.toggle.tests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        XCTAssertFalse(SukebeiSettings.isEnabled(in: defaults), "Sukebei 默认必须关闭")
+
+        SukebeiSettings.setEnabled(true, in: defaults)
+        XCTAssertTrue(SukebeiSettings.isEnabled(in: defaults))
+
+        SukebeiSettings.setEnabled(false, in: defaults)
+        XCTAssertFalse(SukebeiSettings.isEnabled(in: defaults))
+    }
+
+    @MainActor
+    func testAggregatorSkipsAllSukebeiRequestsWhenDisabled() async throws {
+        let jbHTML = """
+        <a class="movie-box" href="/SONE-888">
+          <img src="https://pics.javbus.com/cover/888_b.jpg" title="JavBus 影片">
+          <date>SONE-888</date> / <date>2026-11-27</date>
+        </a>
+        """
+        let jbDetailHTML = """
+        <span class="genre"><a href="https://www.javbus.com/star/2js">三上悠亚</a></span>
+        <table><tr><td><a href="magnet:?xt=urn:btih:\(String(repeating: "f", count: 40))">jb.mp4</a></td><td>2.0GB</td><td>2026-11-27</td></tr></table>
+        """
+        let sbXML = rssDocument(items: [
+            (title: "SONE-999 Sukebei 新种", hash: String(repeating: "a", count: 40), size: "3.0 GiB", pubDate: "Fri, 27 Nov 2026 10:00:00 -0000", seeders: 99),
+        ])
+
+        let sbHits = Counter()
+        let jbHits = Counter()
+        RoutedURLProtocol.install { request in
+            if request.url?.host == "sukebei.nyaa.si" {
+                _ = sbHits.increment()
+                return .init(status: 200, body: Data(sbXML.utf8))
+            }
+            _ = jbHits.increment()
+            if request.url?.path == "/SONE-888" {
+                return .init(status: 200, body: Data(jbDetailHTML.utf8))
+            }
+            return .init(status: 200, body: Data(jbHTML.utf8))
+        }
+
+        let session = RoutedURLProtocol.session()
+        defer { session.invalidateAndCancel() }
+        let sbSource = SukebeiSource(session: session)
+        let agg = MagnetAggregator(
+            javbus: JavBusSource(session: session),
+            sukebei: sbSource,
+            isSukebeiEnabled: { false }
+        )
+
+        XCTAssertFalse(agg.sukebeiEnabled)
+        XCTAssertTrue(agg.cachedFreshLatest().isEmpty)
+        let fresh = try await agg.fetchFreshLatest()
+        XCTAssertTrue(fresh.isEmpty)
+        XCTAssertEqual(sbHits.value, 0, "关闭 Sukebei 时不应请求 Sukebei 最新出种")
+
+        let studio = try await agg.loadStudioPage1(.s1) { _ in }
+        XCTAssertEqual(studio.map(\.code), ["SONE-888"])
+        XCTAssertEqual(sbHits.value, 0, "关闭 Sukebei 时片商页不应请求 Sukebei")
+
+        let search = try await agg.searchAllProgressive(keyword: "SONE-888") { _ in }
+        XCTAssertEqual(search.movies.map(\.code), ["SONE-888"])
+        XCTAssertEqual(sbHits.value, 0, "关闭 Sukebei 时搜索页不应请求 Sukebei")
+
+        let prefetchedSB = MagnetTorrentItem(
+            magnetURL: "magnet:?xt=urn:btih:\(String(repeating: "a", count: 40))",
+            name: "sb.mp4",
+            size: "3.0 GiB",
+            source: "Sukebei"
+        )
+        let detailItem = MagnetSearchItem(
+            code: "SONE-888",
+            title: "JavBus 影片",
+            coverURL: nil,
+            detailPath: "/SONE-888",
+            prefetchedMagnets: [prefetchedSB]
+        )
+        let detail = try await agg.loadDetailInfo(for: detailItem) { _ in }
+        XCTAssertEqual(detail.stars.map(\.name), ["三上悠亚"])
+        XCTAssertEqual(detail.magnets.count, 1)
+        XCTAssertEqual(detail.magnets[0].source, "JavBus")
+        XCTAssertEqual(sbHits.value, 0, "关闭 Sukebei 时详情页不应请求 Sukebei")
+        XCTAssertGreaterThan(jbHits.value, 0)
+
+        // 当 JavBus 失败且 Sukebei 关闭时，直接抛出 JavBus 错误而不回退请求 Sukebei
+        RoutedURLProtocol.install { request in
+            if request.url?.host == "sukebei.nyaa.si" {
+                _ = sbHits.increment()
+                return .init(status: 200, body: Data(sbXML.utf8))
+            }
+            return .init(status: 500)
+        }
+        do {
+            _ = try await agg.fetchStudio(.s1, page: 1)
+            XCTFail("关闭 Sukebei 且 JavBus 失败时应抛出错误")
+        } catch {
+            XCTAssertEqual(sbHits.value, 0)
+            XCTAssertTrue(error.userMessage.contains("500"))
+        }
+    }
+
+    // MARK: - 网络与连接报错中文提示
+
+    func testNetworkErrorFormatterTranslatesSystemAndEngineErrorsToChinese() {
+        let urlCases: [(URLError.Code, String)] = [
+            (.timedOut, "超时"),
+            (.notConnectedToInternet, "无网络连接"),
+            (.networkConnectionLost, "中断"),
+            (.cannotFindHost, "找不到服务器"),
+            (.cannotConnectToHost, "无法连接到服务器"),
+            (.dnsLookupFailed, "域名解析失败"),
+            (.secureConnectionFailed, "安全连接"),
+            (.serverCertificateUntrusted, "证书"),
+            (.appTransportSecurityRequiresSecureConnection, "HTTPS"),
+            (.badServerResponse, "服务器响应异常"),
+            (.dataNotAllowed, "蜂窝网络"),
+        ]
+        for (code, expected) in urlCases {
+            let msg = URLError(code).userMessage
+            XCTAssertTrue(msg.contains(expected), "URLError(\(code)) 应翻译为中文并包含「\(expected)」，实际为：\(msg)")
+        }
+
+        // POSIX 错误
+        XCTAssertTrue(NSError(domain: NSPOSIXErrorDomain, code: Int(ECONNREFUSED)).userMessage.contains("拒绝连接"))
+        XCTAssertTrue(NSError(domain: NSPOSIXErrorDomain, code: Int(ETIMEDOUT)).userMessage.contains("超时"))
+        XCTAssertTrue(NSError(domain: NSPOSIXErrorDomain, code: Int(ECONNRESET)).userMessage.contains("重置"))
+        XCTAssertTrue(NSError(domain: NSPOSIXErrorDomain, code: Int(ENOSPC)).userMessage.contains("存储空间不足"))
+
+        // CFNetwork 代理/DNS 错误
+        XCTAssertTrue(NSError(domain: "kCFErrorDomainCFNetwork", code: 310).userMessage.contains("代理"))
+        XCTAssertTrue(NSError(domain: "kCFErrorDomainCFNetwork", code: 2).userMessage.contains("域名解析"))
+
+        // NWError
+        XCTAssertTrue(NWError.dns(0).userMessage.contains("域名解析"))
+        XCTAssertTrue(NWError.tls(0).userMessage.contains("安全连接"))
+
+        // WKError & AVFoundation 嵌套 URLError
+        let wkJS = NSError(domain: WKErrorDomain, code: WKError.javaScriptExceptionOccurred.rawValue)
+        XCTAssertTrue(wkJS.userMessage.contains("解析失败"))
+
+        let wrappedAV = NSError(
+            domain: AVFoundationErrorDomain,
+            code: AVError.unknown.rawValue,
+            userInfo: [NSUnderlyingErrorKey: URLError(.timedOut) as NSError]
+        )
+        XCTAssertTrue(wrappedAV.userMessage.contains("超时"))
+
+        // DecodingError
+        let decodingErr = DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "invalid json"))
+        XCTAssertTrue(decodingErr.userMessage.contains("数据格式异常"))
+
+        // NuvioEngineError
+        XCTAssertTrue(NuvioEngineError(message: "NuvioEngine is closed").userMessage.contains("已关闭"))
+        XCTAssertTrue(NuvioEngineError(message: "loopback preload ended before its target").userMessage.contains("中断"))
+
+        // mpv / FFmpeg 播放内核英文错误
+        XCTAssertTrue(NetworkErrorFormatter.translateMediaEngineMessage("loading failed").contains("加载失败"))
+        XCTAssertTrue(NetworkErrorFormatter.translateMediaEngineMessage("[ffmpeg] error: Connection timed out").contains("超时"))
+        XCTAssertTrue(NetworkErrorFormatter.translateMediaEngineMessage("HTTP error 403 Forbidden").contains("403"))
+        XCTAssertTrue(NetworkErrorFormatter.translateMediaEngineMessage("Failed to resolve hostname example.com").contains("域名解析"))
+
+        // DLNA SOAP 英文错误
+        XCTAssertTrue(NetworkErrorFormatter.translateDLNAFault("Illegal MIME-type").contains("不支持"))
+        XCTAssertTrue(NetworkErrorFormatter.translateDLNAFault("HTTP 500").contains("500"))
+
+        // 业务错误包装底层网络错误
+        XCTAssertTrue(JavBusError.network(URLError(.timedOut)).userMessage.contains("超时"))
+        XCTAssertTrue(SukebeiError.network(URLError(.notConnectedToInternet)).userMessage.contains("无网络连接"))
+        XCTAssertTrue(JableError.network(URLError(.cannotConnectToHost)).userMessage.contains("无法连接到服务器"))
+        XCTAssertTrue(MissAVError.network(URLError(.networkConnectionLost)).userMessage.contains("中断"))
+        XCTAssertTrue(AnimeTransportError.network(URLError(.dnsLookupFailed)).userMessage.contains("域名解析"))
+
+        // LocalStreamProxy & RangeDownloader 中文错误描述
+        XCTAssertTrue(LocalStreamProxy.summary(of: URLError(.timedOut)).contains("超时"))
+        XCTAssertTrue(RangeDownloader.describe(URLError(.cannotFindHost) as NSError).contains("下载服务器"))
+        XCTAssertTrue(RangeDownloader.describe(URLError(.appTransportSecurityRequiresSecureConnection) as NSError).contains("HTTPS"))
+
+        // 英文原始文案转中文，中文原文保持不变
+        XCTAssertTrue(APIError.server("The Internet connection appears to be offline.").userMessage.contains("无网络连接"))
+        XCTAssertEqual(APIError.server("自定义中文提示").userMessage, "自定义中文提示")
     }
 
     // MARK: - 辅助

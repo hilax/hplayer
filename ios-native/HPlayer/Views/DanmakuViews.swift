@@ -676,7 +676,7 @@ struct AnimeCommentsView: View {
             do {
                 try await AnimeLikeStore.shared.toggle(comment, vid: vid)
             } catch {
-                HUD.show(error.localizedDescription, .error)
+                HUD.show(error.userMessage, .error)
             }
         }
     }
@@ -849,7 +849,7 @@ struct AnimeCommentsView: View {
                     exhausted = true
                     repliesPartial = root.replies > root.children.count
                 } else {
-                    self.error = error.localizedDescription
+                    self.error = error.userMessage
                 }
             }
             return
@@ -873,7 +873,7 @@ struct AnimeCommentsView: View {
             first = try await AnimeClient.shared.fetchComments(.list, vid: vid, page: 1)
         } catch {
             _ = await (topPage, hotPage)
-            self.error = error.localizedDescription
+            self.error = error.userMessage
             return
         }
         let (top, hotList) = await (topPage, hotPage)

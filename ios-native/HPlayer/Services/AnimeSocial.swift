@@ -107,7 +107,7 @@ enum AnimeSocial {
 
     /// 服务端要求先过验证码（发得太频繁）
     static func needsCaptcha(_ error: Error) -> Bool {
-        let text = error.localizedDescription
+        let text = error.userMessage
         return text.contains("验证码") || text.contains("验证") || text.lowercased().contains("captcha")
     }
 

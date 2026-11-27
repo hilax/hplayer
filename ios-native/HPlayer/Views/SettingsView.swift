@@ -26,6 +26,7 @@ struct SettingsView: View {
     @AppStorage(DanmakuPrefs.enabled) private var danmakuEnabled = true
     @AppStorage(DanmakuPrefs.area) private var danmakuArea = 0.5
     @AppStorage(DanmakuPrefs.opacity) private var danmakuOpacity = 0.9
+    @AppStorage(SukebeiSettings.enabledKey) private var sukebeiEnabled = false
 
     var body: some View {
         ScrollView {
@@ -182,7 +183,7 @@ struct SettingsView: View {
                     signing = true
                     Task {
                         defer { signing = false }
-                        do { try await account.signToday() } catch { account.lastError = error.localizedDescription }
+                        do { try await account.signToday() } catch { account.lastError = error.userMessage }
                     }
                 } label: {
                     Text(signing ? "签到中" : "签到 +\(account.signCoin)")
@@ -285,6 +286,13 @@ struct SettingsView: View {
             }
             .buttonStyle(.pressable(scale: 0.985))
             .accessibilityIdentifier("settings.appearance")
+            NavigationLink { MagnetSettingsView() } label: {
+                LibraryActionRow(symbol: AppIcon.magnet.name, title: "磁力",
+                                 value: sukebeiEnabled ? "Sukebei 已开启" : "Sukebei 已关闭",
+                                 valueHighlighted: sukebeiEnabled)
+            }
+            .buttonStyle(.pressable(scale: 0.985))
+            .accessibilityIdentifier("mine.magnet")
             // 和其他二级页面一样从右侧推入，用系统返回键；资料来源在媒体库管理里
             NavigationLink { LibraryManagementView(pushed: true) } label: {
                 LibraryActionRow(symbol: AppIcon.folderSettings.name, title: "媒体库管理")
@@ -401,6 +409,52 @@ struct PlaybackSettingsView: View {
         .onChange(of: subtitleStyle) { SubtitleStyle.saved = $0 }
         .onChange(of: autoPictureInPicture) { PictureInPictureSettings.automatic = $0 }
         .onChange(of: autoOnlineSubtitle) { OnlineSubtitlePrefs.autoMatchEnabled = $0 }
+    }
+}
+
+// MARK: - 磁力设置
+
+/// 「我的 › 磁力」及磁力页右上角共用的磁力聚合来源设置。
+struct MagnetSettingsView: View {
+    @AppStorage(SukebeiSettings.enabledKey) private var sukebeiEnabled = false
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: Theme.Space.xl) {
+                SettingsSection(
+                    title: "聚合来源",
+                    footnote: "默认关闭。开启后将额外接入 Sukebei Nyaa RSS，在「最新」页显示「最新出种」货架，并在片商、搜索与影片详情中聚合 Sukebei 的新种与做种数。"
+                ) {
+                    LibraryActionRow(
+                        symbol: AppIcon.magnet.name,
+                        title: "JavBus",
+                        subtitle: "默认磁力浏览、女优与详情来源",
+                        value: "默认使用",
+                        showsChevron: false
+                    )
+                    SettingRow(
+                        icon: .network,
+                        title: "启用 Sukebei",
+                        subtitle: "接入最新出种货架、新种聚合与做种数"
+                    ) {
+                        Toggle("启用 Sukebei", isOn: $sukebeiEnabled)
+                            .labelsHidden()
+                            .tint(Theme.accentFill)
+                            .accessibilityIdentifier("magnet.settings.sukebei")
+                    }
+                }
+            }
+            .frame(maxWidth: 620)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, Theme.contentInset)
+            .padding(.vertical, Theme.Space.lg)
+        }
+        .scrollIndicators(.hidden)
+        .background(Theme.pageBackground.ignoresSafeArea())
+        .navigationTitle("磁力")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
+        .designScreen("magnet-settings")
     }
 }
 
